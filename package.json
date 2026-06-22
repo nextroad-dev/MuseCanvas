@@ -1,0 +1,15 @@
+{
+  "name": "muse-canvas",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel --if-present --filter './apps/*' dev",
+    "build": "pnpm -r --if-present build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "test:e2e:admin": "node tests/e2e/admin-panel.mjs",
+    "compose:up": "docker compose up --build -d",
+    "compose:down": "docker compose down"
+  }
+}

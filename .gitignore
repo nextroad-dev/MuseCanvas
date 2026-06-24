@@ -48,3 +48,14 @@ Desktop.ini
 *.pem
 *.key
 *.crt
+
+# Local AI agent instructions and development notes
+docs/
+AGENTS.md
+**/AGENTS.md
+CLAUDE.md
+**/CLAUDE.md
+.agents/
+.codex/
+.qoder/
+/skills/

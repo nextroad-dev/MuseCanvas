@@ -1,0 +1,98 @@
+export type GenerateInput = { adapter: 'openai' | 'seedream'; vendorModelId: string; baseUrl?: string; apiKey?: string; prompt: string; size: string; quality?: string; count: number; watermark: boolean }
+export type GeneratedImage = { data: Buffer; mimeType: string; width: number; height: number }
+export type ImageGenerationBody = Record<string, unknown>
+export type ProviderErrorDiagnostic = { adapter: GenerateInput['adapter']; status: number; statusText: string; endpoint: string; detail: string; occurredAt: string }
+const SEEDREAM_MAX_PIXELS = 16_777_216
+const SEEDREAM_MAX_ASPECT_RATIO = 16
+
+export class ProviderHttpError extends Error {
+  diagnostic: ProviderErrorDiagnostic
+  constructor(code: 'PROVIDER_TEMPORARY_ERROR' | 'PROVIDER_REJECTED', diagnostic: ProviderErrorDiagnostic) {
+    super(code)
+    this.name = 'ProviderHttpError'
+    this.diagnostic = diagnostic
+  }
+}
+
+export function providerEndpoint(adapter: GenerateInput['adapter'], configuredBaseUrl?: string): string {
+  const fallback = adapter === 'openai' ? process.env.OPENAI_BASE_URL || 'https://api.openai.com' : process.env.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com'
+  const base = (configuredBaseUrl || fallback).replace(/\/$/, '')
+  if (adapter === 'openai') return `${base.endsWith('/v1') ? base : `${base}/v1`}/images/generations`
+  return `${base.endsWith('/api/v3') ? base : `${base}/api/v3`}/images/generations`
+}
+
+export function providerModelsEndpoint(configuredBaseUrl?: string): string {
+  const base = (configuredBaseUrl || process.env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/$/, '')
+  return `${base.endsWith('/v1') ? base : `${base}/v1`}/models`
+}
+
+function dimensions(data: Buffer): { width: number; height: number } {
+  if (data.length > 24 && data.subarray(1, 4).toString() === 'PNG') return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) }
+  if (data[0] === 0xff && data[1] === 0xd8) {
+    let offset = 2
+    while (offset + 9 < data.length) { if (data[offset] !== 0xff) { offset++; continue }; const marker = data[offset + 1]; const length = data.readUInt16BE(offset + 2); if (marker >= 0xc0 && marker <= 0xc3) return { height: data.readUInt16BE(offset + 5), width: data.readUInt16BE(offset + 7) }; offset += 2 + length }
+  }
+  throw new Error('UNSUPPORTED_IMAGE_FORMAT')
+}
+async function checkedDownload(url: string): Promise<GeneratedImage> {
+  if (new URL(url).protocol !== 'https:') throw new Error('UNSAFE_PROVIDER_URL')
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(60_000) }); if (!response.ok) throw new Error('PROVIDER_DOWNLOAD_FAILED')
+  const declared = response.headers.get('content-type')?.split(';')[0] || ''; const data = Buffer.from(await response.arrayBuffer())
+  if (data.length === 0 || data.length > Number(process.env.MAX_IMAGE_BYTES || 25_000_000)) throw new Error('INVALID_IMAGE_SIZE')
+  const size = dimensions(data); const mimeType = declared === 'image/jpeg' || data[0] === 0xff ? 'image/jpeg' : 'image/png'
+  return { data, mimeType, ...size }
+}
+export async function generateImages(input: GenerateInput): Promise<GeneratedImage[]> {
+  const resolveApiKey = (envKey: string) => {
+    if (input.apiKey) return input.apiKey
+    if (process.env.ALLOW_PROVIDER_ENV_FALLBACK === 'true') return process.env[envKey] || ''
+    throw new Error('PROVIDER_NOT_CONFIGURED')
+  }
+  if (input.adapter === 'openai') {
+    const apiKey = resolveApiKey('OPENAI_API_KEY')
+    if (!apiKey) throw new Error('PROVIDER_NOT_CONFIGURED')
+    const endpoint = providerEndpoint('openai', input.baseUrl)
+    const response = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(imageGenerationBody(input)), signal: AbortSignal.timeout(Number(process.env.PROVIDER_TIMEOUT_MS || 300_000)) })
+    if (!response.ok) await throwProviderHttpError(response, input.adapter, endpoint)
+    const json = await response.json() as { data?: { b64_json?: string }[] }; if (!json.data?.length) throw new Error('PROVIDER_EMPTY_RESULT')
+    return json.data.map(item => { if (!item.b64_json) throw new Error('PROVIDER_EMPTY_RESULT'); const data = Buffer.from(item.b64_json, 'base64'); if (data.length > Number(process.env.MAX_IMAGE_BYTES || 25_000_000)) throw new Error('INVALID_IMAGE_SIZE'); return { data, mimeType: 'image/png', ...dimensions(data) } })
+  }
+  const apiKey = resolveApiKey('ARK_API_KEY')
+  if (!apiKey) throw new Error('PROVIDER_NOT_CONFIGURED')
+  const endpoint = providerEndpoint('seedream', input.baseUrl)
+  const response = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(imageGenerationBody(input)), signal: AbortSignal.timeout(Number(process.env.PROVIDER_TIMEOUT_MS || 300_000)) })
+  if (!response.ok) await throwProviderHttpError(response, input.adapter, endpoint)
+  const json = await response.json() as { data?: { url?: string }[] }; const urls = json.data?.map(item => item.url).filter((url): url is string => !!url); if (!urls?.length) throw new Error('PROVIDER_EMPTY_RESULT')
+  return Promise.all(urls.map(checkedDownload))
+}
+
+export function imageGenerationBody(input: GenerateInput): ImageGenerationBody {
+  if (input.adapter === 'openai') return { model: input.vendorModelId, prompt: input.prompt, size: input.size, ...(input.quality ? { quality: input.quality } : {}), output_format: 'png', n: input.count }
+  return { model: input.vendorModelId, prompt: input.prompt, size: normalizeSeedreamSize(input.size), response_format: 'url', watermark: input.watermark, stream: false, ...(input.count > 1 ? { sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: input.count } } : {}) }
+}
+
+export function normalizeSeedreamSize(size: string): string {
+  const match = size.match(/^(\d{3,4})x(\d{3,4})$/)
+  if (!match) return size
+  const width = Number(match[1])
+  const height = Number(match[2])
+  const pixels = width * height
+  const aspectRatio = Math.max(width / height, height / width)
+  if (width < 256 || height < 256 || width > 4096 || height > 4096 || pixels > SEEDREAM_MAX_PIXELS || aspectRatio > SEEDREAM_MAX_ASPECT_RATIO) throw new Error('INVALID_IMAGE_SIZE')
+  return size
+}
+
+function sanitizeProviderDetail(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+    .replace(/sk-[A-Za-z0-9_-]{16,}/g, '[redacted]')
+    .replace(/[A-Za-z0-9_-]{32,}/g, '[redacted]')
+    .slice(0, 1200)
+}
+
+async function throwProviderHttpError(response: Response, adapter: GenerateInput['adapter'], endpoint: string): Promise<never> {
+  const body = await response.text().catch(() => '')
+  const diagnostic = { adapter, status: response.status, statusText: response.statusText, endpoint: new URL(endpoint).pathname, detail: sanitizeProviderDetail(body), occurredAt: new Date().toISOString() }
+  console.warn('provider rejected request', diagnostic)
+  throw new ProviderHttpError(response.status === 429 || response.status >= 500 ? 'PROVIDER_TEMPORARY_ERROR' : 'PROVIDER_REJECTED', diagnostic)
+}

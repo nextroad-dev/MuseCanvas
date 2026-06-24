@@ -51,24 +51,21 @@ services:
       S3_BUCKET: musecanvas
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
-      ARK_API_KEY: ${ARK_API_KEY:-}
-      ARK_BASE_URL: ${ARK_BASE_URL:-https://ark.cn-beijing.volces.com}
       OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-http://localhost:8080}
-      OAUTH_GITHUB_CLIENT_ID: ${OAUTH_GITHUB_CLIENT_ID:-}
-      OAUTH_GITHUB_CLIENT_SECRET: ${OAUTH_GITHUB_CLIENT_SECRET:-}
-      OAUTH_GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID:-}
-      OAUTH_GOOGLE_CLIENT_SECRET: ${OAUTH_GOOGLE_CLIENT_SECRET:-}
+      OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:-}
       PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:-}
-      ALLOW_PROVIDER_ENV_FALLBACK: ${ALLOW_PROVIDER_ENV_FALLBACK:-false}
+      PROMPT_TEMPLATE_INDEX_PATH: ${PROMPT_TEMPLATE_CONTAINER_INDEX_PATH:-/opt/musecanvas/prompt-templates/index.json}
+    volumes:
+      - ${PROMPT_TEMPLATE_HOST_DIR:-./prompt-templates}:/opt/musecanvas/prompt-templates:ro
     healthcheck: { test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready], interval: 5s, timeout: 3s, retries: 30 }
   worker:
     build: { context: ., dockerfile: infra/docker/worker.Dockerfile }
     depends_on: { api: { condition: service_healthy } }
     environment: *backend-env
+    volumes:
+      - ${PROMPT_TEMPLATE_HOST_DIR:-./prompt-templates}:/opt/musecanvas/prompt-templates:ro
   web:
-    build: { context: ., dockerfile: infra/docker/web.Dockerfile, args: { VITE_API_BASE_URL: "", VITE_USE_MOCK: "false" } }
+    build: { context: ., dockerfile: infra/docker/web.Dockerfile, args: { VITE_API_BASE_URL: "" } }
   nginx:
     build: { context: ., dockerfile: infra/docker/nginx.Dockerfile }
     depends_on: { api: { condition: service_healthy }, web: { condition: service_started } }

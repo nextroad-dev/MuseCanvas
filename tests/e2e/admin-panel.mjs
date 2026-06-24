@@ -31,6 +31,7 @@ for (const endpoint of ['dashboard', 'registration', 'smtp', 'users', 'models', 
   const result = await json(`/api/admin/${endpoint}`, { headers: { cookie } })
   assert.equal(result.response.status, 200, endpoint)
   assert.equal(result.payload.success, true, endpoint)
+  if (endpoint === 'registration') assert.equal(typeof result.payload.data.requiresInvitation, 'boolean')
   if (endpoint === 'jobs') {
     const serialized = JSON.stringify(result.payload).toLowerCase()
     for (const forbidden of ['prompt', 'object_key', 'objectkey', 'imageurl', 'b64_json']) assert.equal(serialized.includes(forbidden), false, forbidden)
@@ -40,6 +41,12 @@ for (const endpoint of ['dashboard', 'registration', 'smtp', 'users', 'models', 
     for (const preset of result.payload.data) assert.ok(preset.baseUrl.startsWith('https://'))
   }
 }
+
+const invitation = await json('/api/admin/invitations', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ email: 'ignored@example.com', count: 5 }) })
+assert.equal(invitation.response.status, 200)
+assert.equal(invitation.payload.success, true)
+assert.equal(typeof invitation.payload.data.code, 'string')
+assert.equal('email' in invitation.payload.data, false)
 
 const anonymous = await json('/api/admin/dashboard')
 assert.equal(anonymous.response.status, 401)

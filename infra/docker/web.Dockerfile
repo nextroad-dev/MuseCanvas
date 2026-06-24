@@ -14,8 +14,7 @@ RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
 COPY infra/nginx/web.conf infra/nginx/web.conf
 ARG VITE_API_BASE_URL=
-ARG VITE_USE_MOCK=false
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL VITE_USE_MOCK=$VITE_USE_MOCK
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN pnpm --filter @musecanvas/web build
 FROM nginx:1.27-alpine
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html

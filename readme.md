@@ -1,30 +1,123 @@
 # MuseCanvas
-**多生图模型接入&创作平台**
 
-MuseCanvas是一个用于接入多生图模型API，在一个地方创作，同时使用LLM进行提示词优化+前置思考的生图平台。
+**多生图模型接入与创作平台**
 
-## 当前进度
+MuseCanvas 是一个面向多图像生成模型的创作平台。它把用户创作、模型配置、供应商凭据、提示词预处理、任务队列和作品历史放在同一个工作流里，后端负责鉴权、凭据加密、任务持久化与异步处理，前端只消费安全过滤后的接口数据。
 
-- 已完成邮箱 OTP、邀请注册、GitHub / Google OAuth 登录、第三方账户绑定与解绑。
-- 已完成管理员后台的供应商凭据管理页与 OAuth 配置页，生图凭据与 OAuth Client Secret 都只写不读。
-- 已将模型管理与供应商凭据职责拆分，模型页只保留模型参数和凭据关联。
-- 已通过 `pnpm typecheck`、`pnpm test`、`pnpm build` 和 `docker compose up --build -d`。
-- 真实 GitHub / Google 第三方登录验收仍待接入可用的外部应用凭据。
+## 当前能力
+
+- 邮箱 OTP、邀请注册、GitHub / Google OAuth 登录，以及第三方账户绑定与解绑。
+- 用户创作台、生成任务进度、历史记录和结果详情。
+- 管理员后台：用户管理、OAuth Provider 配置、模型管理、供应商凭据管理和任务查看。
+- 多供应商图像生成适配，供应商 API Key、Base URL、模型协议等通过管理员后台配置，敏感字段只写不读。
+- LLM 提示词预处理模板，运行时由 API / Worker 读取外部模板索引。
+- PostgreSQL 持久化核心数据，Redis 处理队列状态、限流和临时缓存，S3 兼容对象存储保存生成结果。
+
+## 技术栈
+
+- 前端：Vue 3、TypeScript、Vite、Pinia、Vue Router、Tailwind CSS。
+- API：Next.js API Routes、TypeScript、PostgreSQL、Redis。
+- Worker：独立 TypeScript 进程，消费生成队列和后台任务。
+- 部署：Docker Compose、Nginx 反向代理、S3 兼容对象存储。
+
+## 目录结构
+
+```text
+apps/
+  web/       Vue 3 前端应用
+  api/       Next.js API 应用
+  worker/    后台任务 Worker
+packages/
+  config/    服务端环境变量读取与校验
+  contracts/ 浏览器可安全使用的 DTO、共享类型和错误码
+  database/  migration、事务和数据访问
+  domain/    框架无关的业务规则和状态机
+  providers/ 图像生成、对象存储和邮件服务适配器
+docs/        功能设计、实现记录和设计系统
+infra/       Docker 与 Nginx 配置
+scripts/     本地和部署辅助脚本
+```
 
 ## 本地运行
 
-1. 从 `.env.example` 创建本地 `.env`，生成数据库、会话、SMTP 加密和 MinIO 凭据。
-2. 设置 `ADMIN_EMAIL`。如需真实生图，再设置 `OPENAI_API_KEY` 或 `ARK_API_KEY`。
-3. 执行 `docker compose up --build -d`。
-4. 打开 `http://localhost:8080`；本地 OTP 邮件在 `http://localhost:8025` 查看，MinIO 控制台位于 `http://localhost:9001`。
+1. 安装依赖：
 
-API 容器启动时会执行幂等 migration，并通过 `ADMIN_EMAIL` 创建或恢复首个管理员。管理员登录后可在 `/admin/providers` 配置生图供应商凭据，在 `/admin/oauth` 配置 GitHub / Google OAuth 应用，再在模型管理中把模型关联到对应凭据。未配置供应商密钥时，任务会安全地失败为 `PROVIDER_NOT_CONFIGURED`，不会用占位图片伪装成功。
+```bash
+pnpm install
+```
 
-常用验证命令：
+2. 从 `.env.example` 创建 `.env`，至少填写：
+
+```bash
+POSTGRES_PASSWORD=
+SESSION_SECRET=
+ADMIN_EMAIL=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+OAUTH_CREDENTIALS_ENCRYPTION_KEY=
+PROVIDER_CREDENTIALS_ENCRYPTION_KEY=
+PROMPT_TEMPLATE_INDEX_PATH=
+```
+
+3. 启动完整本地环境：
+
+```bash
+pnpm compose:up
+```
+
+4. 访问服务：
+
+- Web：`http://localhost:8080`
+- Mailpit：`http://localhost:8025`
+- MinIO Console：`http://localhost:9001`
+
+API 容器启动时会执行幂等 migration，并根据 `ADMIN_EMAIL` 创建或恢复首个管理员。管理员登录后，可在后台配置 OAuth 应用、供应商凭据和模型参数。未配置可用供应商凭据时，生成任务会失败为明确错误，不会用占位图片伪装成功。
+
+停止本地环境：
+
+```bash
+pnpm compose:down
+```
+
+## 常用命令
+
+```bash
+pnpm dev                  # 并行启动 apps 下的开发服务
+pnpm build                # 递归构建
+pnpm lint                 # 递归运行 lint
+pnpm typecheck            # 递归类型检查
+pnpm test                 # 递归运行测试
+pnpm test:e2e:admin       # 管理后台端到端验证脚本
+pnpm prepare:prompt-templates
+pnpm compose:up
+pnpm compose:down
+```
+
+也可以只运行单个应用：
+
+```bash
+pnpm --filter @musecanvas/web dev
+pnpm --filter @musecanvas/api dev
+pnpm --filter @musecanvas/worker dev
+```
+
+## 部署说明
+
+- `compose.yaml` 用于本地构建并启动完整环境。
+- `compose.images.yaml` 用于使用已构建镜像部署，默认通过 `18080:80` 暴露 Nginx。
+- 生产环境必须提供真实的 SMTP、S3、数据库、Redis、会话密钥和凭据加密密钥。
+- 所有密钥只允许放在服务端环境变量或管理员后台的加密配置中，禁止写入前端代码。
+
+## 提交前验证
+
+根据改动范围至少运行相关命令：
 
 ```bash
 pnpm typecheck
+pnpm lint
 pnpm test
 pnpm build
 docker compose ps
 ```
+
+涉及前端视觉、交互或组件时，先参考 `docs/design-system.md`。涉及 `docs/{序号}-{功能名}/design.md` 对应功能时，同目录 `impl.md` 和 `result.md` 也是交付物的一部分。

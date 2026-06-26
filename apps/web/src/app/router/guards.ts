@@ -5,18 +5,33 @@ export function setupGuards(router: Router) {
   router.beforeEach(async (to) => {
     const auth = useAuthStore()
 
-    // Initialize auth state on first navigation
+    // Public pages (e.g. legal) — accessible whether logged in or not
+    if (to.meta.public) {
+      return true
+    }
+
+    if (to.meta.guest) {
+      if (auth.initialized) {
+        return auth.isLoggedIn ? { path: auth.isAdmin ? '/admin' : '/generate' } : true
+      }
+
+      void auth.init().then(() => {
+        const current = router.currentRoute.value
+        if (current.meta.guest && auth.isLoggedIn) {
+          void router.replace({ path: auth.isAdmin ? '/admin' : '/generate' })
+        }
+      })
+
+      return true
+    }
+
+    // Initialize auth state before entering protected pages.
     if (!auth.initialized) {
       await auth.init()
     }
 
     const isLoggedIn = auth.isLoggedIn
     const isAdmin = auth.isAdmin
-
-    // Guest-only pages (login)
-    if (to.meta.guest && isLoggedIn) {
-      return { path: isAdmin ? '/admin' : '/generate' }
-    }
 
     // Pages requiring auth
     if (to.matched.some((r) => !r.meta.guest && !r.meta.requiresAdmin) && !isLoggedIn) {

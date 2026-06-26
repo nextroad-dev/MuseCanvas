@@ -38,7 +38,6 @@ services:
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
       REDIS_URL: redis://redis:6379
       SESSION_SECRET: ${SESSION_SECRET}
-      SMTP_ENCRYPTION_KEY: ${SMTP_ENCRYPTION_KEY}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       COOKIE_SECURE: "false"
       SMTP_HOST: mailpit
@@ -54,16 +53,16 @@ services:
       OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-http://localhost:8080}
       OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:-}
       PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:-}
-      PROMPT_TEMPLATE_INDEX_PATH: ${PROMPT_TEMPLATE_CONTAINER_INDEX_PATH:-/opt/musecanvas/prompt-templates/index.json}
+      PROMPT_TEMPLATE_INDEX_PATH: /opt/musecanvas/prompt-templates/index.json
     volumes:
-      - ${PROMPT_TEMPLATE_HOST_DIR:-./prompt-templates}:/opt/musecanvas/prompt-templates:ro
+      - ./.runtime/prompt-templates:/opt/musecanvas/prompt-templates:ro
     healthcheck: { test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready], interval: 5s, timeout: 3s, retries: 30 }
   worker:
     build: { context: ., dockerfile: infra/docker/worker.Dockerfile }
     depends_on: { api: { condition: service_healthy } }
     environment: *backend-env
     volumes:
-      - ${PROMPT_TEMPLATE_HOST_DIR:-./prompt-templates}:/opt/musecanvas/prompt-templates:ro
+      - ./.runtime/prompt-templates:/opt/musecanvas/prompt-templates:ro
   web:
     build: { context: ., dockerfile: infra/docker/web.Dockerfile, args: { VITE_API_BASE_URL: "" } }
   nginx:

@@ -3,7 +3,7 @@ import { createClient } from 'redis'
 import { NextResponse, type NextRequest } from 'next/server'
 import { db, transaction } from '../../../../../packages/database/src/index'
 import { validateModelInput } from '../../../../../packages/domain/src/index'
-import { actorFrom, decryptOAuthSecret, encryptOAuthSecret, encryptSecret, hashOtp, hashToken, randomToken, safeEqual, encryptApiKey, decryptApiKey, fingerprintApiKey, type Actor } from '../../../src/auth/security'
+import { actorFrom, decryptOAuthSecret, encryptOAuthSecret, hashOtp, hashToken, randomToken, safeEqual, encryptApiKey, decryptApiKey, fingerprintApiKey, type Actor } from '../../../src/auth/security'
 import { body, emailValid, fail, mutationOriginValid, ok } from '../../../src/shared/http'
 import { adminJobDto, jobDto, modelDto, publicModelDto, userDto, providerCredentialDto, oauthIdentityDto } from '../../../src/shared/dto'
 import { sendMail, signedAssetUrl } from '../../../src/shared/services'
@@ -199,7 +199,6 @@ export async function GET(request: NextRequest, context: Context) {
     return ok({ items: rows.map(adminJobDto), total: total.rows[0].total, hasMore, nextCursor: hasMore && rows.length ? encodeCursor(rows[rows.length - 1]) : undefined })
   }
   if (path === 'admin/invitations') { const r = await db().query('SELECT id,consumed_at,revoked_at,created_at FROM invitations ORDER BY created_at DESC LIMIT 100'); return ok({ items: r.rows.map(row => ({ id: row.id, used: !!row.consumed_at, revoked: !!row.revoked_at, createdAt: row.created_at.toISOString() })), total: r.rowCount, hasMore: false }) }
-  if (path === 'admin/smtp') { const r = await db().query('SELECT host,port,tls_mode,from_address,from_name,username,password_encrypted FROM smtp_settings WHERE singleton=true'); const x = r.rows[0]; return ok(x ? { host: x.host, port: x.port, secure: x.tls_mode, from: x.from_address, fromName: x.from_name, user: x.username, hasPassword: !!x.password_encrypted } : { host: '', port: 465, secure: 'implicit_tls', from: '', fromName: '', user: '', hasPassword: false }) }
   if (path === 'admin/oauth-providers') return ok(await adminOAuthSettings())
   if (path === 'admin/provider-credentials') { const r = await db().query('SELECT * FROM provider_credentials WHERE deleted_at IS NULL ORDER BY created_at DESC'); return ok(r.rows.map(providerCredentialDto)) }
   return fail('NOT_FOUND', '接口不存在', 404)
@@ -255,7 +254,7 @@ export async function POST(request: NextRequest, context: Context) {
     if (typeof input.prompt !== 'string' || input.prompt.trim().length < 1 || input.prompt.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(input.prompt) || typeof input.modelId !== 'string' || typeof input.size !== 'string') return fail('INVALID_INPUT', '生成参数无效')
     if (await limited(`generate:${actor.id}`, 20, 60)) return fail('RATE_LIMITED', '提交过于频繁，请稍后再试', 429)
     const modelResult = await db().query("SELECT * FROM model_configs WHERE id=$1 AND model_kind='image' AND enabled=true AND deleted_at IS NULL", [input.modelId]); const model = modelResult.rows[0]; if (!model) return fail('MODEL_NOT_AVAILABLE', '模型当前不可用')
-    const count = Number(input.count || 1); const validation = validateModelInput({ adapter: model.adapter, sizes: model.sizes, qualityOptions: model.quality_options, maxCount: model.max_count }, { size: input.size, quality: typeof input.quality === 'string' ? input.quality : undefined, count }); if (validation) return fail(validation, '模型参数不受支持')
+    const count = Number(input.count || 1); const validation = validateModelInput({ adapter: model.adapter, vendorModelId: model.vendor_model_id, sizes: model.sizes, qualityOptions: model.quality_options, maxCount: model.max_count }, { size: input.size, quality: typeof input.quality === 'string' ? input.quality : undefined, count }); if (validation) return fail(validation, '模型参数不受支持')
     const idempotencyKey = request.headers.get('idempotency-key') || (typeof input.idempotencyKey === 'string' ? input.idempotencyKey : randomUUID()); const prompt = input.prompt.trim(); const size = input.size
     let row: any
     try { row = await transaction(async client => { const existing = await client.query('SELECT * FROM generation_jobs WHERE created_by=$1 AND idempotency_key=$2', [actor.id, idempotencyKey]); if (existing.rows[0]) return existing.rows[0];
@@ -290,7 +289,7 @@ export async function POST(request: NextRequest, context: Context) {
       if (!job) return null
       const preparation = retryPreparation(job)
       if (preparation.resetOptimization) await client.query("UPDATE prompt_optimizations SET status='pending',attempt=0,error_code=NULL,started_at=NULL,completed_at=NULL,updated_at=now() WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL", [job.prompt_optimization_id, actor.id])
-      const updated = await client.query("UPDATE generation_jobs SET status='queued',phase=$3,attempt=0,error_code=NULL,provider_error=NULL,started_at=NULL,completed_at=NULL,updated_at=now() WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL RETURNING *", [retry[1], actor.id, preparation.phase])
+      const updated = await client.query("UPDATE generation_jobs SET status='queued',phase=$3,attempt=0,error_code=NULL,provider_error=NULL,provider_reference_id=NULL,started_at=NULL,completed_at=NULL,updated_at=now() WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL RETURNING *", [retry[1], actor.id, preparation.phase])
       await client.query("INSERT INTO outbox_events(event_type,aggregate_id,payload) VALUES('generation.retry.manual',$1,$2)", [retry[1], { jobId: retry[1] }])
       return updated.rows[0]
     })
@@ -306,7 +305,6 @@ export async function POST(request: NextRequest, context: Context) {
   if (path === 'admin/provider-credentials') return createProviderCredential(actor, input)
   const credTest = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)\/test$/)
   if (credTest) return testProviderCredential(actor, credTest[1])
-  if (path === 'admin/smtp/test') { try { await sendMail(actor.email, 'MuseCanvas SMTP 测试', 'SMTP 配置工作正常。'); await audit(db(), actor, 'smtp.test', 'smtp', 'singleton'); return ok({ sent: true }) } catch { return fail('SMTP_TEST_FAILED', '测试邮件发送失败', 502) } }
   return fail('NOT_FOUND', '接口不存在', 404)
 }
 
@@ -368,6 +366,7 @@ async function upsertModel(actor: Actor, input: Record<string, unknown>, id?: st
 
 async function updatePromptOptimizationSettings(actor: Actor, input: Record<string, unknown>) {
   if ('maxOutputChars' in input) return fail('INVALID_INPUT', '前处理设置已移除最大输出字符参数')
+  if ('timeoutMs' in input) return fail('INVALID_INPUT', '前处理超时已固定为 600 秒')
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean' || input.allowUserReadFinalPrompt !== undefined && typeof input.allowUserReadFinalPrompt !== 'boolean') return fail('INVALID_INPUT', '前处理设置无效')
   const current = (await db().query('SELECT * FROM prompt_optimization_settings WHERE singleton=true')).rows[0]
   const modelId = input.languageModelConfigId === undefined ? current.language_model_config_id : input.languageModelConfigId
@@ -378,8 +377,7 @@ async function updatePromptOptimizationSettings(actor: Actor, input: Record<stri
     if (!model.rows[0]) return fail('LANGUAGE_MODEL_CONFIG_INVALID', '请选择已启用且凭据完整的语言模型')
   }
   if (enabled && !modelId) return fail('PROMPT_MODEL_NOT_CONFIGURED', '启用前请先选择语言模型')
-  const timeoutMs = input.timeoutMs === undefined ? current.timeout_ms : Number(input.timeoutMs)
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300000) return fail('INVALID_INPUT', '超时设置无效')
+  const timeoutMs = 600_000
   const updated = await transaction(async client => {
     const r = await client.query(`UPDATE prompt_optimization_settings SET enabled=$1,allow_user_read_final_prompt=$2,language_model_config_id=$3,timeout_ms=$4,updated_by=$5,updated_at=now() WHERE singleton=true RETURNING *`, [enabled, input.allowUserReadFinalPrompt === undefined ? current.allow_user_read_final_prompt : input.allowUserReadFinalPrompt, modelId, timeoutMs, actor.id])
     await audit(client, actor, 'prompt_optimization_settings.update', 'prompt_optimization_settings', 'singleton', { enabledBefore: current.enabled, enabledAfter: enabled, allowUserReadFinalPromptBefore: current.allow_user_read_final_prompt, allowUserReadFinalPromptAfter: r.rows[0].allow_user_read_final_prompt, languageModelConfigId: modelId })
@@ -405,13 +403,8 @@ async function testLanguageModel(actor: Actor, id: string) {
 }
 
 export async function PUT(request: NextRequest, context: Context) {
-  if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403); const path = await cleanPath(context); const input = await body(request); const actor = await requireActor(request, true); if (isResponse(actor)) return actor
-  if (path !== 'admin/smtp') return fail('NOT_FOUND', '接口不存在', 404)
-  if (typeof input.host !== 'string' || !emailValid(input.from) || !Number.isInteger(input.port) || !['implicit_tls','starttls','none'].includes(String(input.secure))) return fail('INVALID_INPUT', 'SMTP 配置无效')
-  if (process.env.NODE_ENV === 'production' && input.secure === 'none' && process.env.ALLOW_INSECURE_SMTP !== 'true') return fail('INSECURE_SMTP', '生产环境必须启用 SMTP 加密')
-  const password = typeof input.password === 'string' && input.password ? encryptSecret(input.password) : null
-  await transaction(async client => { await client.query('INSERT INTO smtp_settings(singleton,host,port,tls_mode,from_address,from_name,username,password_encrypted,updated_by) VALUES(true,$1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(singleton) DO UPDATE SET host=EXCLUDED.host,port=EXCLUDED.port,tls_mode=EXCLUDED.tls_mode,from_address=EXCLUDED.from_address,from_name=EXCLUDED.from_name,username=EXCLUDED.username,password_encrypted=COALESCE(EXCLUDED.password_encrypted,smtp_settings.password_encrypted),updated_by=EXCLUDED.updated_by,updated_at=now()', [input.host, input.port, input.secure, input.from, String(input.fromName || 'MuseCanvas'), String(input.user || ''), password, actor.id]); await audit(client, actor, 'smtp.update', 'smtp', 'singleton') })
-  return ok({ host: input.host, port: input.port, secure: input.secure, from: input.from, fromName: input.fromName, user: input.user, hasPassword: !!password })
+  if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403); void context; const actor = await requireActor(request, true); if (isResponse(actor)) return actor
+  return fail('NOT_FOUND', '接口不存在', 404)
 }
 
 export async function DELETE(request: NextRequest, context: Context) {
@@ -505,11 +498,11 @@ async function testProviderCredential(actor: Actor, id: string) {
       if (!response.ok) throw new Error(`HTTP_${response.status}`)
     } else {
       const probe = await db().query('SELECT vendor_model_id,sizes FROM model_configs WHERE provider_credential_id=$1 AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1', [id])
-      const probeModelId = typeof probe.rows[0]?.vendor_model_id === 'string' && probe.rows[0].vendor_model_id ? probe.rows[0].vendor_model_id : 'seedream-5-0-260128'
+      const probeModelId = typeof probe.rows[0]?.vendor_model_id === 'string' && probe.rows[0].vendor_model_id ? probe.rows[0].vendor_model_id : 'doubao-seedream-4-5-251128'
       const response = await fetch(providerEndpoint('seedream', baseUrl), {
         method: 'POST',
         headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: probeModelId, prompt: 'MuseCanvas provider connectivity test', size: '1024x1024', response_format: 'url', watermark: false, stream: false }),
+        body: JSON.stringify({ model: probeModelId, prompt: 'MuseCanvas provider connectivity test', size: '2048x2048', response_format: 'url', watermark: false, stream: false }),
         signal: AbortSignal.timeout(90_000),
       })
       if (!response.ok) throw new Error(`HTTP_${response.status}`)

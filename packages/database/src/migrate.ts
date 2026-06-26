@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS registration_settings (singleton boolean PRIMARY KEY 
 INSERT INTO registration_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS invitations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),email text,code_hash text NOT NULL UNIQUE,expires_at timestamptz NOT NULL,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),consumed_at timestamptz,revoked_at timestamptz);
 ALTER TABLE invitations ALTER COLUMN email DROP NOT NULL;
-CREATE TABLE IF NOT EXISTS smtp_settings (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),host text NOT NULL,port integer NOT NULL CHECK(port BETWEEN 1 AND 65535),tls_mode text NOT NULL CHECK(tls_mode IN ('implicit_tls','starttls','none')),from_address text NOT NULL,from_name text NOT NULL,username text NOT NULL,password_encrypted text,updated_by uuid REFERENCES users(id),updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS model_configs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),display_name text NOT NULL,adapter model_adapter NOT NULL,vendor_model_id text NOT NULL,sizes jsonb NOT NULL,quality_options jsonb NOT NULL DEFAULT '[]',max_count integer NOT NULL CHECK(max_count BETWEEN 1 AND 10),watermark boolean NOT NULL DEFAULT false,concurrency_limit integer NOT NULL CHECK(concurrency_limit > 0),enabled boolean NOT NULL DEFAULT false,sort_order integer NOT NULL DEFAULT 0,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz);
 CREATE TABLE IF NOT EXISTS generation_jobs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),created_by uuid NOT NULL REFERENCES users(id),model_id uuid NOT NULL REFERENCES model_configs(id),model_name text NOT NULL,adapter model_adapter NOT NULL,vendor_model_id text NOT NULL,prompt text,size text NOT NULL,quality text,count integer NOT NULL,watermark boolean NOT NULL DEFAULT false,status job_status NOT NULL DEFAULT 'queued',idempotency_key text NOT NULL,attempt integer NOT NULL DEFAULT 0,error_code text,provider_reference_id text,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),started_at timestamptz,completed_at timestamptz,deleted_at timestamptz,UNIQUE(created_by,idempotency_key));
 ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS base_url text;
@@ -70,15 +69,18 @@ CREATE TABLE IF NOT EXISTS prompt_optimization_settings (
   enabled boolean NOT NULL DEFAULT false,
   allow_user_read_final_prompt boolean NOT NULL DEFAULT false,
   language_model_config_id uuid REFERENCES model_configs(id),
-  timeout_ms integer NOT NULL DEFAULT 300000 CHECK(timeout_ms BETWEEN 1000 AND 300000),
+  timeout_ms integer NOT NULL DEFAULT 600000 CHECK(timeout_ms = 600000),
   updated_by uuid REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE prompt_optimization_settings DROP COLUMN IF EXISTS max_output_chars;
+ALTER TABLE prompt_optimization_settings DROP CONSTRAINT IF EXISTS prompt_optimization_settings_timeout_ms_check;
 INSERT INTO prompt_optimization_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
-UPDATE prompt_optimization_settings SET timeout_ms=300000,updated_at=now() WHERE singleton=true AND timeout_ms=60000;
-UPDATE model_configs SET sizes='["1024x1024","1280x720","720x1280","1280x960","960x1280","1536x1024","1024x1536","2048x2048","2304x1296","1296x2304","2048x1536","1536x2048","2496x1664","1664x2496","3072x3072","3072x1728","1728x3072","3072x2304","2304x3072","4096x4096","4096x2304","2304x4096","4096x3072","3072x4096"]'::jsonb,updated_at=now() WHERE preset_id IN ('seedream-4-0','seedream-4-5','seedream-5-lite') AND model_kind='image';
+UPDATE prompt_optimization_settings SET timeout_ms=600000,updated_at=now() WHERE singleton=true AND timeout_ms<>600000;
+ALTER TABLE prompt_optimization_settings ADD CONSTRAINT prompt_optimization_settings_timeout_ms_check CHECK(timeout_ms = 600000);
+UPDATE model_configs SET sizes='["1024x1024","1152x864","864x1152","1280x720","720x1280","1248x832","832x1248","1512x648","2048x2048","2304x1728","1728x2304","2848x1600","1600x2848","2496x1664","1664x2496","3136x1344","4096x4096","4704x3520","3520x4704","5504x3040","3040x5504","4992x3328","3328x4992","6240x2656"]'::jsonb,updated_at=now() WHERE preset_id='seedream-4-0' AND model_kind='image';
+UPDATE model_configs SET sizes='["2048x2048","2304x1728","1728x2304","2848x1600","1600x2848","2496x1664","1664x2496","3136x1344","4096x4096","4704x3520","3520x4704","5504x3040","3040x5504","4992x3328","3328x4992","6240x2656"]'::jsonb,updated_at=now() WHERE preset_id='seedream-4-5' AND model_kind='image';
 
 CREATE TABLE IF NOT EXISTS prompt_optimizations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -102,6 +104,7 @@ CREATE TABLE IF NOT EXISTS prompt_optimizations (
   language_model_max_output_tokens_snapshot integer NOT NULL,
   language_model_temperature_snapshot numeric,
   language_model_reasoning_effort_snapshot text,
+  optimizer_prompt_version text,
   provider_credential_id uuid REFERENCES provider_credentials(id),
   provider_credential_name_snapshot text,
   attempt integer NOT NULL DEFAULT 0,
@@ -114,6 +117,7 @@ CREATE TABLE IF NOT EXISTS prompt_optimizations (
 );
 CREATE INDEX IF NOT EXISTS prompt_optimizations_owner_idx ON prompt_optimizations(created_by,created_at DESC) WHERE deleted_at IS NULL;
 ALTER TABLE prompt_optimizations ADD COLUMN IF NOT EXISTS language_model_reasoning_effort_snapshot text;
+ALTER TABLE prompt_optimizations ADD COLUMN IF NOT EXISTS optimizer_prompt_version text;
 ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS phase text;
 ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS optimization_mode text NOT NULL DEFAULT 'disabled';
 ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS prompt_optimization_id uuid REFERENCES prompt_optimizations(id);
@@ -122,5 +126,6 @@ ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS provider_error jsonb;
 DO $$ BEGIN ALTER TABLE generation_jobs ADD CONSTRAINT generation_jobs_optimization_mode_check CHECK(optimization_mode IN ('disabled','enabled')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 `
 await db().query(sql)
+await db().query('DROP TABLE IF EXISTS smtp_settings')
 console.log('database migration complete')
 await db().end()

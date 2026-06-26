@@ -22,6 +22,17 @@ const showReuseMenu = ref(false)
 const originalPrompt = computed(() => props.job.inputPrompt || props.job.prompt || '')
 const optimizedPrompt = computed(() => props.job.finalPrompt || '')
 const canUseOptimizedPrompt = computed(() => !!props.job.canReadFinalPrompt && !!optimizedPrompt.value)
+const optimizedPromptNotice = computed(() => {
+  if (props.job.optimizationMode !== 'enabled' || optimizedPrompt.value) return ''
+  if (!props.job.canReadFinalPrompt) return '管理员已关闭优化后提示词查看。'
+  if (props.job.optimizationStatus === 'failed' || props.job.phase === 'optimization_failed' || props.job.phase === 'template_failed') {
+    return '提示词优化失败，未生成优化后的提示词。'
+  }
+  if (props.job.status === 'queued' || props.job.status === 'running' || props.job.status === 'retry_wait') {
+    return '提示词优化尚未完成，完成后会显示优化后的提示词。'
+  }
+  return '该任务没有可显示的优化后提示词。'
+})
 
 function handleReuse(kind: 'original' | 'optimized') {
   showReuseMenu.value = false
@@ -108,10 +119,10 @@ const fields = computed(() => [
         </div>
 
         <p
-          v-else-if="job.optimizationMode === 'enabled'"
+          v-else-if="optimizedPromptNotice"
           class="mt-3 rounded-[var(--radius-control)] bg-surface-subtle px-3 py-2 text-xs leading-relaxed text-muted-foreground"
         >
-          管理员已关闭优化后提示词查看。
+          {{ optimizedPromptNotice }}
         </p>
       </div>
     </div>

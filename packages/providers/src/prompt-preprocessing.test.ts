@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { buildLanguageModelRequest, generateImages, imageGenerationBody, loadPromptTemplateIndex, normalizeSeedreamSize, parseExactJsonString, parseLanguageModelResponse, ProviderHttpError, providerModelsEndpoint, renderPromptTemplate } from './index'
+import { buildLanguageModelRequest, callLanguageModel, generateImages, imageGenerationBody, LanguageModelHttpError, limitGeneratedImages, loadPromptTemplateIndex, normalizeSeedreamSize, parseExactJsonString, parseLanguageModelResponse, ProviderHttpError, providerModelsEndpoint, renderPromptTemplate } from './index'
 
 async function fixture(index: unknown, files: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'muse-templates-'))
@@ -60,10 +60,15 @@ test('builds image generation bodies with provider-specific fields only', () => 
   assert.equal('watermark' in openai, false)
   assert.equal('stream' in openai, false)
 
-  const seedream = imageGenerationBody({ adapter: 'seedream', vendorModelId: 'doubao-seedream-4-5-251128', prompt: 'prompt', size: '2K', quality: 'high', count: 3, watermark: false })
-  assert.deepEqual(seedream, { model: 'doubao-seedream-4-5-251128', prompt: 'prompt', size: '2K', response_format: 'url', watermark: false, stream: false, sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: 3 } })
+  const seedream = imageGenerationBody({ adapter: 'seedream', vendorModelId: 'doubao-seedream-4-5-251128', prompt: 'prompt', size: '2048x2048', quality: 'high', count: 3, watermark: false })
+  assert.deepEqual(seedream, { model: 'doubao-seedream-4-5-251128', prompt: 'prompt', size: '2048x2048', response_format: 'url', watermark: false, stream: false, sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: 3 } })
   assert.equal('quality' in seedream, false)
   assert.equal('n' in seedream, false)
+})
+
+test('caps provider image results to the requested count', () => {
+  assert.deepEqual(limitGeneratedImages(['a', 'b'], 1), ['a'])
+  assert.deepEqual(limitGeneratedImages(['a', 'b', 'c'], 2), ['a', 'b'])
 })
 
 test('provider http errors carry sanitized upstream diagnostics', async () => {
@@ -71,7 +76,7 @@ test('provider http errors carry sanitized upstream diagnostics', async () => {
   globalThis.fetch = async () => new Response('bad key sk-abcdefghijklmnopqrstuvwxyz0123456789 and upstream message', { status: 400, statusText: 'Bad Request' })
   try {
     await assert.rejects(
-      () => generateImages({ adapter: 'seedream', vendorModelId: 'seedream', prompt: 'prompt', size: '2K', count: 1, watermark: false, apiKey: 'secret' }),
+      () => generateImages({ adapter: 'seedream', vendorModelId: 'seedream', prompt: 'prompt', size: '2048x2048', count: 1, watermark: false, apiKey: 'secret' }),
       (error: unknown) => {
         assert.equal(error instanceof ProviderHttpError, true)
         const diagnostic = (error as ProviderHttpError).diagnostic
@@ -87,17 +92,42 @@ test('provider http errors carry sanitized upstream diagnostics', async () => {
   }
 })
 
-test('keeps Seedream explicit width-height sizes unchanged', () => {
-  assert.equal(normalizeSeedreamSize('2K'), '2K')
-  assert.equal(normalizeSeedreamSize('2048x2048'), '2048x2048')
-  assert.equal(normalizeSeedreamSize('1024x1024'), '1024x1024')
-  assert.equal(normalizeSeedreamSize('1280x720'), '1280x720')
-  assert.equal(normalizeSeedreamSize('720x1280'), '720x1280')
-  assert.throws(() => normalizeSeedreamSize('9999x9999'), /INVALID_IMAGE_SIZE/)
-  assert.throws(() => normalizeSeedreamSize('9999x500'), /INVALID_IMAGE_SIZE/)
+test('language model http errors carry sanitized upstream diagnostics', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response('bad key sk-abcdefghijklmnopqrstuvwxyz0123456789 and upstream unavailable', { status: 503, statusText: 'Service Unavailable', headers: { 'x-request-id': 'req-language-1' } })
+  try {
+    await assert.rejects(
+      () => callLanguageModel({ protocol: 'openai_responses', vendorModelId: 'gpt', apiKey: 'secret', system: 'system', user: 'user', maxOutputTokens: 100, timeoutMs: 1000 }),
+      (error: unknown) => {
+        assert.equal(error instanceof LanguageModelHttpError, true)
+        const diagnostic = (error as LanguageModelHttpError).diagnostic
+        assert.equal(diagnostic.status, 503)
+        assert.equal(diagnostic.endpoint, '/v1/responses')
+        assert.equal(diagnostic.providerReferenceId, 'req-language-1')
+        assert.equal(diagnostic.detail.includes('sk-abcdefghijklmnopqrstuvwxyz0123456789'), false)
+        assert.equal(diagnostic.detail.includes('upstream unavailable'), true)
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
 
-  const body = imageGenerationBody({ adapter: 'seedream', vendorModelId: 'seedream', prompt: 'prompt', size: '1024x1024', count: 1, watermark: false })
-  assert.equal(body.size, '1024x1024')
+test('validates Seedream way-two pixel sizes by model', () => {
+  assert.equal(normalizeSeedreamSize('1024x1024', 'doubao-seedream-4-0-250828'), '1024x1024')
+  assert.equal(normalizeSeedreamSize('1280x720', 'doubao-seedream-4-0-250828'), '1280x720')
+  assert.equal(normalizeSeedreamSize('2048x2048', 'doubao-seedream-4-5-251128'), '2048x2048')
+  assert.equal(normalizeSeedreamSize('5504x3040', 'doubao-seedream-4-5-251128'), '5504x3040')
+  assert.equal(normalizeSeedreamSize('4096x2304', 'doubao-seedream-5-0-lite'), '4096x2304')
+  assert.throws(() => normalizeSeedreamSize('2K', 'doubao-seedream-4-5-251128'), /INVALID_IMAGE_SIZE/)
+  assert.throws(() => normalizeSeedreamSize('800x800', 'doubao-seedream-4-0-250828'), /INVALID_IMAGE_SIZE/)
+  assert.throws(() => normalizeSeedreamSize('1024x1024', 'doubao-seedream-4-5-251128'), /INVALID_IMAGE_SIZE/)
+  assert.throws(() => normalizeSeedreamSize('4096x4096', 'doubao-seedream-5-0-lite'), /INVALID_IMAGE_SIZE/)
+  assert.throws(() => normalizeSeedreamSize('16001x1000', 'doubao-seedream-4-5-251128'), /INVALID_IMAGE_SIZE/)
+
+  const body = imageGenerationBody({ adapter: 'seedream', vendorModelId: 'doubao-seedream-4-5-251128', prompt: 'prompt', size: '2048x2048', count: 1, watermark: false })
+  assert.equal(body.size, '2048x2048')
 })
 
 test('normalizes OpenAI compatible models endpoint without duplicating v1', () => {

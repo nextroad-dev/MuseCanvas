@@ -9,6 +9,7 @@ interface Props {
   optimizationMode?: string
   createdAt?: string
   compact?: boolean
+  inline?: boolean
 }
 
 const props = defineProps<Props>()
@@ -47,7 +48,14 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div :class="cn('flex flex-col items-center text-center', compact ? 'py-4' : 'py-8')">
+  <div v-if="inline" class="inline-flex items-center gap-2 text-sm text-foreground">
+    <Loader2 v-if="!isFailed && !isCanceled && status !== 'succeeded'" class="h-4 w-4 animate-spin text-primary" />
+    <AlertCircle v-else-if="isFailed || isCanceled" class="h-4 w-4 text-danger" />
+    <Check v-else class="h-4 w-4 text-success" />
+    <span>{{ statusText }}</span>
+  </div>
+
+  <div v-else :class="cn('flex flex-col items-center text-center', compact ? 'py-4' : 'py-8')">
     <!-- Status graphic -->
     <div v-if="!isFailed && !isCanceled" class="relative mb-6 flex h-24 w-24 items-center justify-center">
       <div class="absolute inset-0 rounded-full border-2 border-primary/20" />
@@ -64,9 +72,6 @@ const statusText = computed(() => {
     <h3 :class="['font-semibold text-foreground', compact ? 'text-sm' : 'text-base']">
       {{ statusText }}
     </h3>
-    <p v-if="phase && status !== 'succeeded'" class="mt-1 text-xs text-muted-foreground">
-      {{ phase }}
-    </p>
 
     <!-- Stepper -->
     <div v-if="!compact" class="mt-6 flex w-full max-w-md items-center gap-2">

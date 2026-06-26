@@ -1,39 +1,41 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 
-interface FlowLine {
+interface GridNode {
   x: number
   y: number
-  length: number
-  angle: number
-  speed: number
-  opacity: number
-  width: number
-  amplitude: number
-  phase: number
-  phaseSpeed: number
-  layer: number
+  basePhase: number
+  activity: number
 }
 
 interface Props {
   /** Base color. 'primary' reads the CSS --color-primary token. Any valid CSS color string works. */
   color?: string
-  /** Density multiplier relative to the viewport area. 0.5 = sparse, 1.5 = dense. */
-  density?: number
-  /** Global speed multiplier for drift and undulation. 0 renders one static frame. */
+  /** Distance in px between grid nodes. */
+  gridSpacing?: number
+  /** Base dot radius in px. */
+  dotSize?: number
+  /** Stroke opacity for grid connections. */
+  lineOpacity?: number
+  /** Fill opacity for inactive nodes. */
+  dotOpacity?: number
+  /** Speed of the computation pulse wave. */
+  pulseSpeed?: number
+  /** Global animation speed multiplier. 0 renders one static frame. */
   speed?: number
-  /** Number of depth layers. Back layers move slower and are thinner/more transparent. */
-  layers?: number
-  /** Base stroke width in px. */
-  lineWidth?: number
+  /** Whether to connect diagonal neighbors as well. */
+  connectDiagonals?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   color: 'primary',
-  density: 1,
+  gridSpacing: 40,
+  dotSize: 1.5,
+  lineOpacity: 0.12,
+  dotOpacity: 0.45,
+  pulseSpeed: 1,
   speed: 1,
-  layers: 3,
-  lineWidth: 1,
+  connectDiagonals: false,
 })
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -107,39 +109,24 @@ function resolveColor(): { r: number; g: number; b: number } {
   return { r: 22, g: 138, b: 73 }
 }
 
-function createLines(width: number, height: number): FlowLine[] {
-  const area = width * height
-  const baseCount = Math.floor((area / 22000) * props.density)
-  const count = clamp(baseCount, 20, 180)
-  const lines: FlowLine[] = []
+function createGrid(width: number, height: number): GridNode[] {
+  const spacing = clamp(props.gridSpacing, 12, 200)
+  const cols = Math.ceil(width / spacing) + 1
+  const rows = Math.ceil(height / spacing) + 1
+  const nodes: GridNode[] = []
 
-  for (let i = 0; i < count; i++) {
-    const layer = Math.floor(Math.random() * props.layers)
-    const depth = props.layers <= 1 ? 1 : layer / (props.layers - 1)
-
-    // Depth 0 = far/background (slow, thin, transparent)
-    // Depth 1 = near/foreground (faster, thicker, more opaque)
-    const length = 350 + Math.random() * 650
-    // Keep lines almost horizontal for a calm, left-to-right flow.
-    const angle = (Math.random() - 0.5) * 0.08
-
-    lines.push({
-      x: Math.random() * width,
-      y: Math.random() * height,
-      length,
-      angle,
-      speed: (0.15 + depth * 0.45) * (0.8 + Math.random() * 0.4),
-      opacity: 0.04 + depth * 0.18,
-      width: (0.3 + depth * 1.4) * props.lineWidth,
-      amplitude: 30 + Math.random() * 60,
-      phase: Math.random() * Math.PI * 2,
-      phaseSpeed: 0.005 + Math.random() * 0.01,
-      layer,
-    })
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      nodes.push({
+        x: col * spacing,
+        y: row * spacing,
+        basePhase: Math.random() * Math.PI * 2,
+        activity: 0,
+      })
+    }
   }
 
-  // Draw far layers first.
-  return lines.sort((a, b) => a.layer - b.layer)
+  return nodes
 }
 
 onMounted(() => {
@@ -153,7 +140,7 @@ onMounted(() => {
   const dpr = window.devicePixelRatio || 1
   let width = canvas.offsetWidth
   let height = canvas.offsetHeight
-  let lines = createLines(width, height)
+  let nodes = createGrid(width, height)
   let time = 0
 
   reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -168,60 +155,91 @@ onMounted(() => {
     canvas!.width = width * dpr
     canvas!.height = height * dpr
     ctx!.setTransform(dpr, 0, 0, dpr, 0, 0)
-    lines = createLines(width, height)
+    nodes = createGrid(width, height)
   }
 
-  function drawLine(line: FlowLine) {
-    const speedMultiplier = props.speed
-    const segments = 5
-    const dx = Math.cos(line.angle) * line.length
-    const dy = Math.sin(line.angle) * line.length
+  function updateActivity() {
+    if (isStatic()) return
 
-    const points: { x: number; y: number }[] = []
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments
-      // Apply the undulation perpendicular to the (nearly horizontal) line.
-      const wave = Math.sin(time * line.phaseSpeed + line.phase + t * Math.PI * 2) * line.amplitude
-      points.push({
-        x: line.x + dx * t,
-        y: line.y + dy * t + wave * speedMultiplier,
-      })
+    const waveSpeed = 0.015 * props.pulseSpeed * props.speed
+    const cols = Math.ceil(width / props.gridSpacing) + 1
+
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]
+      const col = i % cols
+      const row = Math.floor(i / cols)
+
+      // Traveling diagonal wave across the grid.
+      const wave = Math.sin((col + row) * 0.25 + time * waveSpeed + node.basePhase)
+      const pulse = Math.max(0, wave)
+
+      // Target activity is driven by the wave; current activity decays toward it.
+      const target = pulse * pulse * 0.85
+      node.activity += (target - node.activity) * 0.08 * props.speed
     }
+  }
 
-    const start = points[0]
-    const end = points[points.length - 1]
-    const gradient = ctx!.createLinearGradient(start.x, start.y, end.x, end.y)
-    gradient.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`)
-    gradient.addColorStop(0.25, `rgba(${color.r}, ${color.g}, ${color.b}, ${line.opacity})`)
-    gradient.addColorStop(0.75, `rgba(${color.r}, ${color.g}, ${color.b}, ${line.opacity})`)
-    gradient.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`)
+  function drawLine(a: GridNode, b: GridNode) {
+    const avgActivity = (a.activity + b.activity) / 2
+    const dynamicOpacity = props.lineOpacity + avgActivity * 0.35
+    const dynamicWidth = 0.5 + avgActivity * 1.2
 
     ctx!.beginPath()
-    ctx!.moveTo(start.x, start.y)
-    for (let i = 1; i < points.length - 1; i++) {
-      const midX = (points[i].x + points[i + 1].x) / 2
-      const midY = (points[i].y + points[i + 1].y) / 2
-      ctx!.quadraticCurveTo(points[i].x, points[i].y, midX, midY)
-    }
-    ctx!.lineTo(end.x, end.y)
-    ctx!.strokeStyle = gradient
-    ctx!.lineWidth = line.width
-    ctx!.lineCap = 'round'
-    ctx!.lineJoin = 'round'
+    ctx!.moveTo(a.x, a.y)
+    ctx!.lineTo(b.x, b.y)
+    ctx!.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${clamp(dynamicOpacity, 0, 0.9)})`
+    ctx!.lineWidth = dynamicWidth
     ctx!.stroke()
   }
 
-  function updateLine(line: FlowLine) {
-    const speedMultiplier = props.speed
-    line.x += line.speed * speedMultiplier
-    line.y += Math.sin(line.angle) * line.speed * 0.15 * speedMultiplier
-    line.phase += line.phaseSpeed * speedMultiplier
+  function drawConnections() {
+    const cols = Math.ceil(width / props.gridSpacing) + 1
+    const rows = Math.ceil(height / props.gridSpacing) + 1
 
-    const margin = line.length + line.amplitude
-    if (line.x < -margin) line.x = width + margin
-    if (line.x > width + margin) line.x = -margin
-    if (line.y < -margin) line.y = height + margin
-    if (line.y > height + margin) line.y = -margin
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]
+      const col = i % cols
+      const row = Math.floor(i / cols)
+
+      // Right neighbor.
+      if (col < cols - 1) {
+        drawLine(node, nodes[i + 1])
+      }
+      // Bottom neighbor.
+      if (row < rows - 1) {
+        drawLine(node, nodes[i + cols])
+      }
+      // Diagonal neighbors.
+      if (props.connectDiagonals) {
+        if (col < cols - 1 && row < rows - 1) {
+          drawLine(node, nodes[i + cols + 1])
+        }
+        if (col > 0 && row < rows - 1) {
+          drawLine(node, nodes[i + cols - 1])
+        }
+      }
+    }
+  }
+
+  function drawNodes() {
+    for (const node of nodes) {
+      const pulse = node.activity
+      const currentOpacity = clamp(props.dotOpacity + pulse * 0.55, 0, 1)
+      const currentSize = props.dotSize * (1 + pulse * 0.8)
+
+      ctx!.beginPath()
+      ctx!.arc(node.x, node.y, currentSize, 0, Math.PI * 2)
+      ctx!.fillStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${currentOpacity})`
+      ctx!.fill()
+
+      // Soft glow for active nodes.
+      if (pulse > 0.05) {
+        ctx!.beginPath()
+        ctx!.arc(node.x, node.y, currentSize * 4, 0, Math.PI * 2)
+        ctx!.fillStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${pulse * 0.08})`
+        ctx!.fill()
+      }
+    }
   }
 
   function render() {
@@ -229,14 +247,11 @@ onMounted(() => {
 
     if (!isStatic()) {
       time++
-      for (const line of lines) {
-        updateLine(line)
-      }
+      updateActivity()
     }
 
-    for (const line of lines) {
-      drawLine(line)
-    }
+    drawConnections()
+    drawNodes()
   }
 
   function stopLoop() {

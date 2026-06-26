@@ -44,7 +44,7 @@ function resetFilters() {
 }
 
 function providerErrorLabel(row: AdminJob) {
-  if (!row.providerError) return '-'
+  if (!row.providerError) return row.errorCode && row.status === 'failed' ? '未记录上游详情' : '-'
   const status = row.providerError.status ? `HTTP ${row.providerError.status}` : '上游错误'
   return row.providerError.statusText ? `${status} ${row.providerError.statusText}` : status
 }
@@ -58,6 +58,10 @@ function providerErrorDetail(row: AdminJob) {
     error.occurredAt ? `time=${new Date(error.occurredAt).toLocaleString('zh-CN')}` : '',
     error.detail || '',
   ].filter(Boolean).join('\n')
+}
+
+function providerReferenceLabel(row: AdminJob) {
+  return row.providerReferenceId || row.providerError?.providerReferenceId || (row.providerError ? '未返回' : '-')
 }
 
 onMounted(() => {
@@ -96,7 +100,7 @@ const jobColumns: Column<AdminJob>[] = [
     class: 'w-64 max-w-64',
     render: providerErrorLabel,
   },
-  { key: 'providerReferenceId', label: '供应商引用', class: 'w-36 max-w-36 truncate', render: (row) => row.providerReferenceId || '-' },
+  { key: 'providerReferenceId', label: '供应商引用', class: 'w-36 max-w-36 truncate', render: providerReferenceLabel },
 ]
 </script>
 

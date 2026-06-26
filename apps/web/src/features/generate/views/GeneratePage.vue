@@ -3,7 +3,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useGenerationStore } from '@/features/generate/stores/generation'
 import { Image as ImageIcon, PanelLeftOpen, PanelLeftClose } from 'lucide-vue-next'
 import IdleConsole from '@/features/generate/components/IdleConsole.vue'
-import FlowLinesBg from '@/shared/components/FlowLinesBg.vue'
 import GeneratingView from '@/features/generate/components/GeneratingView.vue'
 import ResultView from '@/features/generate/components/ResultView.vue'
 import HistoryDetailView from '@/features/generate/components/HistoryDetailView.vue'
@@ -12,6 +11,8 @@ import JobDetailPanel from '@/shared/components/jobs/JobDetailPanel.vue'
 import ConfirmDialog from '@/shared/components/ui/ConfirmDialog.vue'
 import { toast } from '@/shared/composables/useToast'
 import Lightbox from '@/shared/components/ui/Lightbox.vue'
+import FlowLinesBg from '@/shared/components/FlowLinesBg.vue'
+import MatrixBg from '@/shared/components/MatrixBg.vue'
 import { useJobPolling } from '@/shared/composables/useJobPolling'
 import type { GenerationJob } from '@/shared/types'
 
@@ -28,6 +29,7 @@ const deleteConfirmOpen = ref(false)
 const selectedJob = computed(() => store.selectedJob)
 const detailJob = computed(() => store.jobs.find((j) => j.id === detailJobId.value) || null)
 const polling = useJobPolling(() => store.jobs, (id) => store.refreshJob(id))
+const selectedJobIsActive = computed(() => !!selectedJob.value && ['queued', 'running', 'retry_wait'].includes(selectedJob.value.status))
 
 // Active generation takes priority; otherwise an inspected history job shows in
 // the main area, then the generation result, then the idle console.
@@ -37,6 +39,17 @@ const mainView = computed<'idle' | 'generating' | 'result' | 'detail'>(() => {
   if (viewState.value === 'result' && selectedJob.value) return 'result'
   return 'idle'
 })
+
+function jobFailureMessage(job: GenerationJob) {
+  if (job.errorCode === 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR') return '提示词优化服务暂时不可用，请稍后重试'
+  if (job.errorCode === 'PROMPT_OPTIMIZATION_REJECTED') return '提示词优化请求被拒绝，请调整提示词后重试'
+  if (job.errorCode === 'PROMPT_MODEL_NOT_CONFIGURED') return '提示词优化模型配置不完整，请联系管理员'
+  if (job.errorCode === 'PROVIDER_NOT_CONFIGURED') return '生图供应商凭据未配置，请联系管理员'
+  if (job.errorCode === 'PROVIDER_BUSY') return '生成服务繁忙，系统已尝试自动重试'
+  if (job.phase === 'optimization_failed') return '提示词优化暂时不可用，请稍后重试'
+  if (job.phase === 'template_failed') return '提示词模板暂时不可用，请稍后重试'
+  return '生成失败，请检查模型参数或稍后重试'
+}
 
 async function handleGenerate() {
   const res = await store.createJob()
@@ -115,9 +128,10 @@ function handlePreview(url: string, prompt: string) {
   previewAsset.value = { url, prompt }
 }
 
-function handleSelectJob(job: GenerationJob) {
+async function handleSelectJob(job: GenerationJob) {
   detailJobId.value = job.id
   historyCollapsed.value = false
+  await store.refreshJob(job.id)
 }
 
 function toggleHistory() {
@@ -171,7 +185,7 @@ watch(
       if (newStatus === 'succeeded') {
         viewState.value = 'result'
       } else if (newStatus === 'failed') {
-        toast('生成失败', 'error')
+        toast(jobFailureMessage(job), 'error')
         viewState.value = 'result'
       } else if (newStatus === 'canceled') {
         toast('任务已取消', 'info')
@@ -239,10 +253,13 @@ onMounted(async () => {
     </div>
 
     <!-- Main content area -->
-    <main class="relative flex min-h-0 flex-1 flex-col overflow-auto bg-surface-dark">
-      <FlowLinesBg />
-      <div class="relative z-10 flex w-full flex-col items-start pt-[18vh]">
-        <!-- Idle state -->
+    <main class="relative flex min-h-0 flex-1 flex-col overflow-auto bg-canvas">
+      <FlowLinesBg class="opacity-35" :density="0.55" :speed="0.28" :layers="3" :line-width="0.85" />
+      <MatrixBg class="opacity-20" :grid-spacing="56" :dot-size="1" :line-opacity="0.04" :dot-opacity="0.16" :pulse-speed="0.45" :speed="0.45" />
+      <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,var(--color-primary-soft)_0%,transparent_34%),linear-gradient(to_bottom,var(--color-canvas)_0%,transparent_38%,var(--color-canvas)_100%)]" />
+
+      <div class="relative z-10 flex w-full flex-col items-center px-4 pb-16 pt-[10vh]">
+        <!-- Persistent creation console -->
         <Transition
           enter-active-class="transition-all duration-500 ease-out"
           enter-from-class="opacity-0 translate-y-4"
@@ -251,21 +268,25 @@ onMounted(async () => {
           leave-from-class="opacity-100 translate-y-0"
           leave-to-class="opacity-0 -translate-y-4"
         >
-          <div v-if="mainView === 'idle'" class="flex w-full justify-center">
-            <IdleConsole @generate="handleGenerate" />
+          <div v-if="mainView !== 'detail'" class="flex w-full justify-center">
+            <IdleConsole
+              :generating="selectedJobIsActive"
+              @generate="handleGenerate"
+              @cancel="handleCancel"
+            />
           </div>
         </Transition>
 
-        <!-- Generating state -->
+        <!-- Active generation state -->
         <Transition
           enter-active-class="transition-all duration-500 ease-out"
-          enter-from-class="opacity-0 scale-95"
-          enter-to-class="opacity-100 scale-100"
+          enter-from-class="opacity-0 translate-y-4"
+          enter-to-class="opacity-100 translate-y-0"
           leave-active-class="transition-all duration-300 ease-in"
-          leave-from-class="opacity-100 scale-100"
-          leave-to-class="opacity-0 scale-95"
+          leave-from-class="opacity-100 translate-y-0"
+          leave-to-class="opacity-0 -translate-y-4"
         >
-          <div v-if="mainView === 'generating'" class="flex w-full justify-center">
+          <div v-if="mainView === 'generating' && selectedJob" class="mt-5 flex w-full justify-center">
             <GeneratingView @cancel="handleCancel" />
           </div>
         </Transition>
@@ -296,7 +317,7 @@ onMounted(async () => {
           leave-from-class="opacity-100 translate-y-0"
           leave-to-class="opacity-0 -translate-y-6"
         >
-          <div v-if="mainView === 'result' && selectedJob" class="flex w-full justify-center">
+          <div v-if="mainView === 'result' && selectedJob" class="mt-6 flex w-full justify-center">
             <ResultView
               :job="selectedJob"
               @regenerate="handleRetry"

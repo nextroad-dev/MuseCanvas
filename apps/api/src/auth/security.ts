@@ -18,8 +18,7 @@ export async function actorFrom(request: NextRequest): Promise<Actor | null> {
   return row ? { id: row.id, email: row.email, role: row.role, status: row.status, createdAt: row.created_at.toISOString() } : null
 }
 
-function smtpEncryptionKey(): Buffer { return createHash('sha256').update(process.env.SMTP_ENCRYPTION_KEY || '').digest() }
-function oauthEncryptionKey(): Buffer { return createHash('sha256').update(process.env.OAUTH_CREDENTIALS_ENCRYPTION_KEY || process.env.SMTP_ENCRYPTION_KEY || '').digest() }
+function oauthEncryptionKey(): Buffer { return createHash('sha256').update(process.env.OAUTH_CREDENTIALS_ENCRYPTION_KEY || '').digest() }
 function encryptWithKey(value: string, key: Buffer): string {
   const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv)
   const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
@@ -28,12 +27,6 @@ function encryptWithKey(value: string, key: Buffer): string {
 function decryptWithKey(value: string, key: Buffer): string {
   const [iv, tag, encrypted] = value.split('.'); const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'))
   decipher.setAuthTag(Buffer.from(tag, 'base64')); return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64')), decipher.final()]).toString('utf8')
-}
-export function encryptSecret(value: string): string {
-  return encryptWithKey(value, smtpEncryptionKey())
-}
-export function decryptSecret(value: string): string {
-  return decryptWithKey(value, smtpEncryptionKey())
 }
 export const encryptOAuthSecret = (value: string) => encryptWithKey(value, oauthEncryptionKey())
 export const decryptOAuthSecret = (value: string) => decryptWithKey(value, oauthEncryptionKey())

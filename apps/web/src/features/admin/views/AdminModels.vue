@@ -8,7 +8,7 @@ import BaseDropdown from '@/shared/components/ui/BaseDropdown.vue'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
 import ConfirmDialog from '@/shared/components/ui/ConfirmDialog.vue'
 import { toast } from '@/shared/composables/useToast'
-import type { AdminModel, LanguageProtocol, ModelAdapter, ModelPreset, ReasoningEffort } from '@/shared/types'
+import type { AdminModel, LanguageProtocol, ModelAdapter, ModelPreset, PromptOptimizationSettings, ReasoningEffort } from '@/shared/types'
 import type { Column } from '@/shared/components/ui/DataTable.vue'
 import AppModal from '@/shared/components/ui/AppModal.vue'
 
@@ -21,7 +21,7 @@ const deleteDialogOpen = ref(false)
 const promptEnabled = ref(false)
 const promptAllowRead = ref(false)
 const promptLanguageModelId = ref('')
-const promptTimeoutMs = ref(60000)
+const promptSettingsSaving = ref(false)
 
 const promptLanguageModelOptions = computed(() => [
   { value: '', label: '请选择语言模型' },
@@ -80,13 +80,7 @@ const canSave = computed(() =>
 
 onMounted(async () => {
   await Promise.all([admin.fetchModels(), admin.fetchModelPresets(), admin.fetchProviderCredentials(), admin.fetchPromptOptimizationSettings()])
-  const settings = admin.promptOptimizationSettings
-  if (settings) {
-    promptEnabled.value = settings.enabled
-    promptAllowRead.value = settings.allowUserReadFinalPrompt
-    promptLanguageModelId.value = settings.languageModelConfigId || ''
-    promptTimeoutMs.value = settings.timeoutMs
-  }
+  if (admin.promptOptimizationSettings) syncPromptSettings(admin.promptOptimizationSettings)
 })
 
 // Credentials selectable for the current adapter (must match adapter & be enabled).
@@ -235,14 +229,40 @@ async function confirmDelete() {
   deleteTarget.value = null
 }
 
-async function savePromptSettings() {
-  const result = await admin.updatePromptOptimizationSettings({
-    enabled: promptEnabled.value,
-    allowUserReadFinalPrompt: promptAllowRead.value,
-    languageModelConfigId: promptLanguageModelId.value || null,
-    timeoutMs: promptTimeoutMs.value,
-  })
-  toast(result.success ? '前处理设置已保存' : result.error?.message || '保存失败', result.success ? 'success' : 'error')
+function syncPromptSettings(settings: PromptOptimizationSettings) {
+  promptEnabled.value = settings.enabled
+  promptAllowRead.value = settings.allowUserReadFinalPrompt
+  promptLanguageModelId.value = settings.languageModelConfigId || ''
+}
+
+async function savePromptSettings(patch: Partial<Pick<PromptOptimizationSettings, 'enabled' | 'allowUserReadFinalPrompt' | 'languageModelConfigId'>>) {
+  promptSettingsSaving.value = true
+  const result = await admin.updatePromptOptimizationSettings(patch)
+  promptSettingsSaving.value = false
+  if (result.success && result.data) {
+    syncPromptSettings(result.data)
+    return
+  }
+  if (admin.promptOptimizationSettings) syncPromptSettings(admin.promptOptimizationSettings)
+  toast(result.error?.message || '保存失败', 'error')
+}
+
+function handlePromptLanguageModelChange(value: string) {
+  if (value === promptLanguageModelId.value || promptSettingsSaving.value) return
+  promptLanguageModelId.value = value
+  void savePromptSettings({ languageModelConfigId: value || null })
+}
+
+function handlePromptEnabledChange(value: boolean) {
+  if (value === promptEnabled.value || promptSettingsSaving.value) return
+  promptEnabled.value = value
+  void savePromptSettings({ enabled: value })
+}
+
+function handlePromptAllowReadChange(value: boolean) {
+  if (value === promptAllowRead.value || promptSettingsSaving.value) return
+  promptAllowRead.value = value
+  void savePromptSettings({ allowUserReadFinalPrompt: value })
 }
 
 const modelColumns: Column<AdminModel>[] = [
@@ -305,14 +325,18 @@ const modelColumns: Column<AdminModel>[] = [
       </template>
     </DataTable>
 
-    <AppModal v-model:open="showCreateDialog" :title="editingModel ? '编辑模型' : '添加模型'" size="lg">
-      <div class="space-y-3">
-        <div>
+    <AppModal
+      v-model:open="showCreateDialog"
+      :title="editingModel ? '编辑模型' : '添加模型'"
+      size="lg"
+    >
+      <div class="grid gap-4 lg:grid-cols-2">
+        <div class="lg:col-span-2">
           <label class="mb-1 block text-xs font-medium text-foreground">模型预设</label>
           <BaseDropdown :model-value="form.presetId" :options="presetOptions" @update:model-value="applyPreset" />
         </div>
 
-        <div v-if="selectedPreset" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2">
+        <div v-if="selectedPreset" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 lg:row-span-2">
           <div class="mb-2 flex items-center justify-between gap-3">
             <span class="text-sm font-medium text-foreground">{{ selectedPreset.displayName }}</span>
             <span class="shrink-0 text-xs text-muted-foreground">{{ presetKindLabel(selectedPreset) }}</span>
@@ -349,9 +373,9 @@ const modelColumns: Column<AdminModel>[] = [
           <BaseDropdown v-model="form.reasoningEffort" :options="reasoningEffortOptions" />
         </div>
 
-        <p v-if="selectedPreset?.modelKind === 'image'" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 text-xs text-muted-foreground">尺寸、质量和生成张数由生成页统一提供常用预设，也支持用户自定义安全尺寸。</p>
+        <p v-if="selectedPreset?.modelKind === 'image'" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 text-xs text-muted-foreground lg:col-span-2">尺寸、质量和生成张数由生成页统一提供常用预设，也支持用户自定义安全尺寸。</p>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-2 gap-4 lg:col-span-2">
           <div>
             <label class="mb-1 block text-xs font-medium text-foreground">并发上限</label>
             <input
@@ -398,23 +422,30 @@ const modelColumns: Column<AdminModel>[] = [
       <div class="space-y-3">
         <div>
           <label class="mb-1 block text-xs font-medium text-foreground">语言模型</label>
-          <BaseDropdown v-model="promptLanguageModelId" :options="promptLanguageModelOptions" />
+          <BaseDropdown
+            :model-value="promptLanguageModelId"
+            :options="promptLanguageModelOptions"
+            :disabled="promptSettingsSaving"
+            @update:model-value="handlePromptLanguageModelChange"
+          />
         </div>
         <div class="grid gap-3 md:grid-cols-2">
           <div class="flex items-center gap-2">
-            <PillToggle v-model="promptEnabled" />
+            <PillToggle
+              :model-value="promptEnabled"
+              :disabled="promptSettingsSaving"
+              @update:model-value="handlePromptEnabledChange"
+            />
             <span class="text-sm text-foreground">启用提示词前处理</span>
           </div>
           <div class="flex items-center gap-2">
-            <PillToggle v-model="promptAllowRead" />
+            <PillToggle
+              :model-value="promptAllowRead"
+              :disabled="promptSettingsSaving"
+              @update:model-value="handlePromptAllowReadChange"
+            />
             <span class="text-sm text-foreground">允许用户读取最终提示词</span>
           </div>
-        </div>
-        <div class="grid gap-3 md:grid-cols-2">
-          <label class="text-xs font-medium text-foreground">超时（毫秒）<input v-model.number="promptTimeoutMs" type="number" min="1000" max="300000" class="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm" /></label>
-        </div>
-        <div class="flex gap-2">
-          <button class="inline-flex h-9 items-center rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white hover:bg-primary-hover" @click="savePromptSettings">保存前处理</button>
         </div>
       </div>
     </div>

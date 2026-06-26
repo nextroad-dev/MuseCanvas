@@ -2,9 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { useAdminStore } from '@/features/admin/stores/admin'
 import PageHeader from '@/shared/components/ui/PageHeader.vue'
-import { Github, ShieldCheck, Copy } from 'lucide-vue-next'
+import { Github, Copy } from 'lucide-vue-next'
 import { toast } from '@/shared/composables/useToast'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
+import GoogleIcon from '@/shared/components/ui/GoogleIcon.vue'
 import type { AdminOAuthProvider } from '@/shared/types'
 
 const admin = useAdminStore()
@@ -91,7 +92,7 @@ function copyRedirectUri(uri: string) {
           <div class="flex items-center gap-3">
             <span class="flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-surface-subtle text-foreground">
               <Github v-if="provider.provider === 'github'" class="h-5 w-5" />
-              <ShieldCheck v-else class="h-5 w-5" />
+              <GoogleIcon v-else class="h-5 w-5" />
             </span>
             <div>
               <h2 class="text-sm font-semibold text-foreground">{{ provider.label }}</h2>

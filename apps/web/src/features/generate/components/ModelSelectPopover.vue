@@ -8,28 +8,31 @@ import { useClickOutside } from '@/shared/composables/useClickOutside'
 const props = defineProps<{
   models: ModelConfig[]
   modelValue: string
+  open: boolean
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  'update:open': [value: boolean]
 }>()
 
-const open = ref(false)
 const containerRef = ref<HTMLElement>()
 
 const selectedModel = computed(() => props.models.find(m => m.id === props.modelValue))
 
 function toggle() {
-  open.value = !open.value
+  if (props.disabled) return
+  emit('update:open', !props.open)
 }
 
 function select(id: string) {
   emit('update:modelValue', id)
-  open.value = false
+  emit('update:open', false)
 }
 
 useClickOutside(containerRef, () => {
-  open.value = false
+  emit('update:open', false)
 })
 </script>
 
@@ -37,7 +40,8 @@ useClickOutside(containerRef, () => {
   <div ref="containerRef" class="relative">
     <button
       type="button"
-      class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border bg-surface px-3 text-sm font-medium text-foreground transition-colors"
+      :disabled="disabled"
+      class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border bg-surface px-3 text-sm font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       :class="open ? 'border-primary' : 'border-border hover:border-border-strong'"
       @click.stop="toggle"
     >
@@ -47,7 +51,7 @@ useClickOutside(containerRef, () => {
 
     <div
       v-if="open"
-      class="absolute left-0 top-full z-50 mt-1.5 w-72 rounded-[var(--radius-card)] border border-border bg-surface p-2 shadow-md"
+      class="absolute left-0 top-full z-[70] mt-1.5 w-72 rounded-[var(--radius-card)] border border-border bg-surface p-2 shadow-md"
     >
       <div class="px-3 pb-2 text-xs font-medium text-muted-foreground">选择模型</div>
       <div class="max-h-64 overflow-auto flex flex-col gap-1">

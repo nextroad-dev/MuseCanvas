@@ -21,6 +21,18 @@ const lightboxIndex = ref(-1)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const selectedJob = computed(() => store.selectedJob)
+const finalPromptNotice = computed(() => {
+  const job = selectedJob.value
+  if (!job || job.optimizationMode !== 'enabled' || job.finalPrompt) return ''
+  if (!job.canReadFinalPrompt) return '管理员已关闭最终提示词查看。'
+  if (job.optimizationStatus === 'failed' || job.phase === 'optimization_failed' || job.phase === 'template_failed') {
+    return '提示词优化失败，未生成最终提示词。'
+  }
+  if (job.status === 'queued' || job.status === 'running' || job.status === 'retry_wait') {
+    return '提示词优化尚未完成，完成后会显示最终提示词。'
+  }
+  return '该任务没有可显示的最终提示词。'
+})
 
 onMounted(async () => {
   await store.fetchJobs()
@@ -75,6 +87,11 @@ function reuseFinalPrompt() {
   toast('最终提示词已带入编辑器', 'success')
 }
 
+async function selectJob(id: string) {
+  store.selectedJobId = id
+  await store.refreshJob(id)
+}
+
 function previewOutput(url: string) {
   const index = selectedJob.value?.outputs.findIndex(o => o.imageUrl === url) ?? -1
   if (index >= 0) lightboxIndex.value = index
@@ -103,7 +120,7 @@ function taskTitle() {
           :key="job.id"
           :job="job"
           :selected="store.selectedJobId === job.id"
-          @select="store.selectedJobId = $event"
+          @select="selectJob"
         />
       </div>
     </aside>
@@ -124,7 +141,7 @@ function taskTitle() {
               store.selectedJobId === job.id && 'border-primary bg-primary-soft',
             )
           "
-          @click="store.selectedJobId = job.id"
+          @click="selectJob(job.id)"
         >
           <div class="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
             <img
@@ -158,12 +175,12 @@ function taskTitle() {
           <div v-if="selectedJob.outputs.length" class="p-4">
             <div
               v-if="selectedJob.outputs.length === 1"
-              class="overflow-hidden rounded-[var(--radius-card)] bg-surface-subtle"
+              class="flex justify-center rounded-[var(--radius-card)]"
             >
               <img
                 :src="selectedJob.outputs[0].imageUrl"
                 :alt="taskTitle()"
-                class="h-auto max-h-[50vh] w-full cursor-pointer object-contain"
+                class="h-auto w-auto max-h-[50vh] max-w-full cursor-pointer rounded-[var(--radius-card)] object-contain"
                 loading="lazy"
                 @click="previewOutput(selectedJob.outputs[0].imageUrl)"
               />
@@ -316,8 +333,8 @@ function taskTitle() {
               </p>
             </div>
 
-            <p v-else-if="selectedJob.optimizationMode === 'enabled' && !selectedJob.canReadFinalPrompt" class="text-xs text-muted-foreground">
-              管理员已关闭最终提示词查看。
+            <p v-else-if="finalPromptNotice" class="text-xs text-muted-foreground">
+              {{ finalPromptNotice }}
             </p>
 
             <button

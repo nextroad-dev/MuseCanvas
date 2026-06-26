@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { validateModelInput } from '../../../packages/domain/src/index'
-import { decryptSecret, encryptSecret, hashOtp, safeEqual } from './auth/security'
+import { hashOtp, safeEqual } from './auth/security'
 import { adminJobDto, jobDto } from './shared/dto'
 import { providerEndpoint, providerModelsEndpoint } from '../../../packages/providers/src/index'
 import { retryPreparation } from './generation/job-retry'
 import { modelPresets } from './admin/model-presets'
 
 process.env.SESSION_SECRET = 'test-session-secret-with-enough-entropy'
-process.env.SMTP_ENCRYPTION_KEY = 'test-encryption-key-with-enough-entropy'
 
 test('OTP hashes are scoped to the email and compare in constant time', () => {
   const hash = hashOtp('one@example.com', '123456')
@@ -16,29 +15,31 @@ test('OTP hashes are scoped to the email and compare in constant time', () => {
   assert.equal(safeEqual(hash, hashOtp('two@example.com', '123456')), false)
 })
 
-test('SMTP credentials round-trip through authenticated encryption', () => {
-  const encrypted = encryptSecret('smtp-password')
-  assert.notEqual(encrypted, 'smtp-password')
-  assert.equal(decryptSecret(encrypted), 'smtp-password')
-})
-
-test('generation input accepts safe custom sizes, fixed quality values, and one to four images', () => {
-  const model = { adapter: 'openai', sizes: ['1024x1024'], qualityOptions: ['medium'], maxCount: 2 }
+test('generation input accepts safe custom sizes, fixed quality values, and model-limited image counts', () => {
+  const model = { adapter: 'openai', sizes: ['1024x1024'], qualityOptions: ['medium'], maxCount: 4 }
+  const twoImageModel = { ...model, maxCount: 2 }
+  const seedream45 = { ...model, adapter: 'seedream', vendorModelId: 'doubao-seedream-4-5-251128' }
   assert.equal(validateModelInput(model, { size: '1280x720', quality: 'auto', count: 4 }), null)
   assert.equal(validateModelInput(model, { size: '2K', quality: 'medium', count: 1 }), null)
   assert.equal(validateModelInput(model, { size: '3K', quality: 'medium', count: 1 }), null)
   assert.equal(validateModelInput({ ...model, adapter: 'seedream' }, { size: '1024x1024', quality: 'high', count: 2 }), null)
+  assert.equal(validateModelInput(seedream45, { size: '2048x2048', quality: 'high', count: 2 }), null)
+  assert.equal(validateModelInput(seedream45, { size: '5504x3040', quality: 'high', count: 1 }), null)
+  assert.equal(validateModelInput(seedream45, { size: '1024x1024', quality: 'high', count: 1 }), 'INVALID_SIZE')
+  assert.equal(validateModelInput(seedream45, { size: '2K', quality: 'high', count: 1 }), 'INVALID_SIZE')
   assert.equal(validateModelInput(model, { size: 'abc', quality: 'medium', count: 1 }), 'INVALID_SIZE')
   assert.equal(validateModelInput(model, { size: '99999x99999', quality: 'medium', count: 1 }), 'INVALID_SIZE')
   assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'ultra', count: 1 }), 'INVALID_QUALITY')
+  assert.equal(validateModelInput(twoImageModel, { size: '1024x1024', quality: 'medium', count: 3 }), 'INVALID_COUNT')
   assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'medium', count: 5 }), 'INVALID_COUNT')
 })
 
 test('provider presets use verified model identifiers and reasoning output budgets', () => {
-  const seedream = modelPresets.find(preset => preset.id === 'seedream-5-lite')
-  assert.equal(seedream?.vendorModelId, 'seedream-5-0-260128')
-  assert.deepEqual(seedream?.modelKind === 'image' ? seedream.sizes.slice(0, 7) : [], ['1024x1024', '1280x720', '720x1280', '1280x960', '960x1280', '1536x1024', '1024x1536'])
-  assert.equal(seedream?.modelKind === 'image' ? seedream.sizes.includes('4096x2304') : false, true)
+  const seedream = modelPresets.find(preset => preset.id === 'seedream-4-5')
+  assert.equal(seedream?.vendorModelId, 'doubao-seedream-4-5-251128')
+  assert.deepEqual(seedream?.modelKind === 'image' ? seedream.sizes.slice(0, 7) : [], ['2048x2048', '2304x1728', '1728x2304', '2848x1600', '1600x2848', '2496x1664', '1664x2496'])
+  assert.equal(seedream?.modelKind === 'image' ? seedream.sizes.includes('1024x1024') : true, false)
+  assert.equal(seedream?.modelKind === 'image' ? seedream.sizes.includes('5504x3040') : false, true)
   for (const id of ['openai-gpt-5-5', 'openai-gpt-5-4']) {
     const preset = modelPresets.find(candidate => candidate.id === id)
     assert.equal(preset?.modelKind === 'language' ? preset.maxOutputTokens : 0, 25000)
@@ -49,12 +50,14 @@ test('provider presets use verified model identifiers and reasoning output budge
 test('admin job diagnostics exclude prompts, objects, and image data', () => {
   const dto = adminJobDto({
     id: 'job-id', created_by: 'user-id', model_id: 'model-id', model_name: 'Model', status: 'failed', error_code: 'SAFE_ERROR',
-    provider_error: { status: 400, detail: 'upstream rejected' },
+    provider_error: { status: 400, detail: 'upstream rejected', providerReferenceId: 'nested-ref' },
     provider_reference_id: 'provider-ref', created_at: new Date('2026-01-01T00:00:00Z'), started_at: new Date('2026-01-01T00:00:00Z'), completed_at: new Date('2026-01-01T00:00:01Z'),
     prompt: 'must-not-leak', object_key: 'must-not-leak', image_url: 'must-not-leak',
   })
   assert.equal(dto.durationMs, 1000)
   assert.equal(dto.providerError?.status, 400)
+  assert.equal(dto.providerReferenceId, 'provider-ref')
+  assert.equal(dto.providerError?.providerReferenceId, 'nested-ref')
   const serialized = JSON.stringify(dto)
   assert.equal(serialized.includes('must-not-leak'), false)
   assert.equal('prompt' in dto, false)

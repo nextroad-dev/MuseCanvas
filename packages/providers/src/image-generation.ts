@@ -1,9 +1,13 @@
 export type GenerateInput = { adapter: 'openai' | 'seedream'; vendorModelId: string; baseUrl?: string; apiKey?: string; prompt: string; size: string; quality?: string; count: number; watermark: boolean }
 export type GeneratedImage = { data: Buffer; mimeType: string; width: number; height: number }
 export type ImageGenerationBody = Record<string, unknown>
-export type ProviderErrorDiagnostic = { adapter: GenerateInput['adapter']; status: number; statusText: string; endpoint: string; detail: string; occurredAt: string }
-const SEEDREAM_MAX_PIXELS = 16_777_216
+export type ProviderErrorDiagnostic = { adapter: GenerateInput['adapter']; status: number; statusText: string; endpoint: string; detail: string; occurredAt: string; providerReferenceId?: string }
 const SEEDREAM_MAX_ASPECT_RATIO = 16
+const seedreamRules = {
+  '4.0': { minPixels: 1280 * 720, maxPixels: 4096 * 4096 },
+  '4.5': { minPixels: 2560 * 1440, maxPixels: 4096 * 4096 },
+  '5.0-lite': { minPixels: 2560 * 1440, maxPixels: 10_404_496 },
+}
 
 export class ProviderHttpError extends Error {
   diagnostic: ProviderErrorDiagnostic
@@ -55,7 +59,7 @@ export async function generateImages(input: GenerateInput): Promise<GeneratedIma
     const response = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(imageGenerationBody(input)), signal: AbortSignal.timeout(Number(process.env.PROVIDER_TIMEOUT_MS || 300_000)) })
     if (!response.ok) await throwProviderHttpError(response, input.adapter, endpoint)
     const json = await response.json() as { data?: { b64_json?: string }[] }; if (!json.data?.length) throw new Error('PROVIDER_EMPTY_RESULT')
-    return json.data.map(item => { if (!item.b64_json) throw new Error('PROVIDER_EMPTY_RESULT'); const data = Buffer.from(item.b64_json, 'base64'); if (data.length > Number(process.env.MAX_IMAGE_BYTES || 25_000_000)) throw new Error('INVALID_IMAGE_SIZE'); return { data, mimeType: 'image/png', ...dimensions(data) } })
+    return limitGeneratedImages(json.data.map(item => { if (!item.b64_json) throw new Error('PROVIDER_EMPTY_RESULT'); const data = Buffer.from(item.b64_json, 'base64'); if (data.length > Number(process.env.MAX_IMAGE_BYTES || 25_000_000)) throw new Error('INVALID_IMAGE_SIZE'); return { data, mimeType: 'image/png', ...dimensions(data) } }), input.count)
   }
   const apiKey = resolveApiKey('ARK_API_KEY')
   if (!apiKey) throw new Error('PROVIDER_NOT_CONFIGURED')
@@ -63,22 +67,41 @@ export async function generateImages(input: GenerateInput): Promise<GeneratedIma
   const response = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(imageGenerationBody(input)), signal: AbortSignal.timeout(Number(process.env.PROVIDER_TIMEOUT_MS || 300_000)) })
   if (!response.ok) await throwProviderHttpError(response, input.adapter, endpoint)
   const json = await response.json() as { data?: { url?: string }[] }; const urls = json.data?.map(item => item.url).filter((url): url is string => !!url); if (!urls?.length) throw new Error('PROVIDER_EMPTY_RESULT')
-  return Promise.all(urls.map(checkedDownload))
+  return limitGeneratedImages(await Promise.all(urls.map(checkedDownload)), input.count)
 }
 
 export function imageGenerationBody(input: GenerateInput): ImageGenerationBody {
   if (input.adapter === 'openai') return { model: input.vendorModelId, prompt: input.prompt, size: input.size, ...(input.quality ? { quality: input.quality } : {}), output_format: 'png', n: input.count }
-  return { model: input.vendorModelId, prompt: input.prompt, size: normalizeSeedreamSize(input.size), response_format: 'url', watermark: input.watermark, stream: false, ...(input.count > 1 ? { sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: input.count } } : {}) }
+  return { model: input.vendorModelId, prompt: input.prompt, size: normalizeSeedreamSize(input.size, input.vendorModelId), response_format: 'url', watermark: input.watermark, stream: false, ...(input.count > 1 ? { sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: input.count } } : {}) }
 }
 
-export function normalizeSeedreamSize(size: string): string {
-  const match = size.match(/^(\d{3,4})x(\d{3,4})$/)
-  if (!match) return size
+export function limitGeneratedImages<T>(images: T[], count: number): T[] {
+  return images.slice(0, Math.max(1, count))
+}
+
+function seedreamRule(vendorModelId?: string) {
+  const id = (vendorModelId || '').toLowerCase()
+  if ((id.includes('5-0') || id.includes('5.0')) && id.includes('lite')) return seedreamRules['5.0-lite']
+  if (id.includes('4-5') || id.includes('4.5')) return seedreamRules['4.5']
+  return seedreamRules['4.0']
+}
+
+function seedreamDimensions(size: string): { width: number; height: number } | null {
+  const match = size.match(/^([1-9]\d*)x([1-9]\d*)$/)
+  if (!match) return null
   const width = Number(match[1])
   const height = Number(match[2])
+  return Number.isSafeInteger(width) && Number.isSafeInteger(height) ? { width, height } : null
+}
+
+export function normalizeSeedreamSize(size: string, vendorModelId?: string): string {
+  const dimensions = seedreamDimensions(size)
+  if (!dimensions) throw new Error('INVALID_IMAGE_SIZE')
+  const { width, height } = dimensions
   const pixels = width * height
   const aspectRatio = Math.max(width / height, height / width)
-  if (width < 256 || height < 256 || width > 4096 || height > 4096 || pixels > SEEDREAM_MAX_PIXELS || aspectRatio > SEEDREAM_MAX_ASPECT_RATIO) throw new Error('INVALID_IMAGE_SIZE')
+  const rule = seedreamRule(vendorModelId)
+  if (pixels < rule.minPixels || pixels > rule.maxPixels || aspectRatio > SEEDREAM_MAX_ASPECT_RATIO) throw new Error('INVALID_IMAGE_SIZE')
   return size
 }
 
@@ -90,9 +113,17 @@ function sanitizeProviderDetail(value: string): string {
     .slice(0, 1200)
 }
 
+function providerReferenceId(headers: Headers): string | undefined {
+  return headers.get('x-request-id')
+    || headers.get('request-id')
+    || headers.get('x-correlation-id')
+    || headers.get('x-tt-logid')
+    || undefined
+}
+
 async function throwProviderHttpError(response: Response, adapter: GenerateInput['adapter'], endpoint: string): Promise<never> {
   const body = await response.text().catch(() => '')
-  const diagnostic = { adapter, status: response.status, statusText: response.statusText, endpoint: new URL(endpoint).pathname, detail: sanitizeProviderDetail(body), occurredAt: new Date().toISOString() }
+  const diagnostic = { adapter, status: response.status, statusText: response.statusText, endpoint: new URL(endpoint).pathname, detail: sanitizeProviderDetail(body), occurredAt: new Date().toISOString(), providerReferenceId: providerReferenceId(response.headers) }
   console.warn('provider rejected request', diagnostic)
   throw new ProviderHttpError(response.status === 429 || response.status >= 500 ? 'PROVIDER_TEMPORARY_ERROR' : 'PROVIDER_REJECTED', diagnostic)
 }

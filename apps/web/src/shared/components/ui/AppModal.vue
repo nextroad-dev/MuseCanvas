@@ -9,6 +9,9 @@ const props = defineProps<{
   title?: string
   description?: string
   size?: 'sm' | 'md' | 'lg' | 'xl'
+  panelClass?: string
+  bodyClass?: string
+  scrollBody?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,7 +25,7 @@ const sizeMap = {
   sm: 'max-w-sm',
   md: 'max-w-lg',
   lg: 'max-w-2xl',
-  xl: 'max-w-4xl',
+  xl: 'max-w-5xl',
 }
 
 watch(() => props.open, (val) => {
@@ -57,6 +60,7 @@ function handleKeydown(e: KeyboardEvent) {
           :class="cn(
             'relative z-10 flex max-h-[85vh] w-full flex-col rounded-[var(--radius-card)] border border-border bg-surface shadow-lg',
             sizeMap[size || 'md'],
+            panelClass,
           )"
           role="dialog"
           aria-modal="true"
@@ -74,7 +78,7 @@ function handleKeydown(e: KeyboardEvent) {
               <X class="h-4 w-4" />
             </button>
           </div>
-          <div class="flex-1 overflow-y-auto p-5">
+          <div :class="cn('flex-1 p-5', scrollBody === false ? 'overflow-visible' : 'overflow-y-auto', bodyClass)">
             <slot />
           </div>
           <div v-if="$slots.footer" class="flex shrink-0 justify-end gap-2 border-t border-border p-5">

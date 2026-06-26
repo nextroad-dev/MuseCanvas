@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { RouterView, RouterLink, useRoute } from 'vue-router'
 import { useAuthStore } from '@/features/auth/stores/auth'
 import {
-  LayoutDashboard, Mail, ShieldCheck, Users, Cpu, ListTodo, Key, FileText,
+  LayoutDashboard, ShieldCheck, Users, Cpu, ListTodo, Key, FileText,
   ArrowLeft, Menu,
 } from 'lucide-vue-next'
 import { cn } from '@/shared/lib/utils'
@@ -35,7 +35,6 @@ const navGroups: NavGroup[] = [
   {
     title: '系统设置',
     items: [
-      { name: 'admin-smtp', path: '/admin/smtp', label: 'SMTP', icon: Mail },
       { name: 'admin-oauth', path: '/admin/oauth', label: 'OAuth', icon: ShieldCheck },
     ],
   },

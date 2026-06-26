@@ -90,16 +90,6 @@ export interface Invitation {
   code?: string
 }
 
-export interface SmtpSettings {
-  host: string
-  port: number
-  secure: TLSMode
-  from: string
-  fromName: string
-  user: string
-  hasPassword: boolean
-}
-
 export interface AdminUser {
   id: string
   email: string
@@ -213,6 +203,7 @@ export interface AdminJob {
     endpoint?: string
     detail?: string
     occurredAt?: string
+    providerReferenceId?: string
   }
   providerReferenceId?: string
   durationMs?: number

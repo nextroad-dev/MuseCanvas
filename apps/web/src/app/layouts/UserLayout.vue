@@ -42,9 +42,10 @@ function goToAccount() {
   router.push('/account')
 }
 
-function handleLogout() {
+async function handleLogout() {
   closeUserMenu()
-  auth.logout()
+  await auth.logout()
+  router.push('/')
 }
 
 useClickOutside(userMenuRef, closeUserMenu)
@@ -55,7 +56,7 @@ useClickOutside(userMenuRef, closeUserMenu)
     <!-- Top bar -->
     <header class="flex h-16 shrink-0 items-center border-b border-border bg-surface px-4 sm:px-6">
       <RouterLink to="/generate" class="flex items-center gap-2">
-        <img src="/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/03_wordmark_transparent_trimmed.png" alt="MuseCanvas" class="h-5 w-auto" />
+        <img src="/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/03_wordmark_transparent_trimmed.png" alt="MuseCanvas" class="h-7 w-auto" />
       </RouterLink>
 
       <!-- Desktop nav -->

@@ -24,6 +24,17 @@ export const useGenerationStore = defineStore('generation', () => {
   const availableQualities = computed(() => selectedModel.value?.qualityOptions || [])
   const maxCount = computed(() => selectedModel.value?.maxCount || 1)
 
+  function removeJobLocally(id: string) {
+    const idx = jobs.value.findIndex((j) => j.id === id)
+    if (idx < 0) return
+
+    jobs.value.splice(idx, 1)
+
+    if (selectedJobId.value === id) {
+      selectedJobId.value = jobs.value[idx]?.id || jobs.value[idx - 1]?.id || null
+    }
+  }
+
   // Keep form state aligned with the active model's supported options.
   watch(selectedModel, (model) => {
     if (!model) {
@@ -57,6 +68,9 @@ export const useGenerationStore = defineStore('generation', () => {
     const res = await api<{ items: GenerationJob[] }>('/api/jobs')
     if (res.success && res.data) {
       jobs.value = res.data.items
+      if (selectedJobId.value && !jobs.value.some((job) => job.id === selectedJobId.value)) {
+        selectedJobId.value = jobs.value[0]?.id || null
+      }
     }
   }
 
@@ -108,8 +122,7 @@ export const useGenerationStore = defineStore('generation', () => {
   async function deleteJob(id: string) {
     const res = await api(`/api/jobs/${id}`, { method: 'DELETE' })
     if (res.success) {
-      jobs.value = jobs.value.filter((j) => j.id !== id)
-      if (selectedJobId.value === id) selectedJobId.value = null
+      removeJobLocally(id)
       await useLibraryStore().fetchAssets()
     }
     return res
@@ -120,6 +133,8 @@ export const useGenerationStore = defineStore('generation', () => {
     if (res.success && res.data) {
       const idx = jobs.value.findIndex((j) => j.id === id)
       if (idx >= 0) jobs.value[idx] = res.data
+    } else if (res.error?.code === 'NOT_FOUND') {
+      removeJobLocally(id)
     }
     return res
   }

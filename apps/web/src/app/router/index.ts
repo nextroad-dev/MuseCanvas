@@ -16,6 +16,18 @@ const routes: RouteRecordRaw[] = [
     meta: { guest: true },
   },
   {
+    path: '/terms',
+    name: 'terms',
+    component: () => import('@/features/legal/views/TermsPage.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/privacy',
+    name: 'privacy',
+    component: () => import('@/features/legal/views/PrivacyPage.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/',
     component: () => import('@/app/layouts/UserLayout.vue'),
     children: [
@@ -53,11 +65,6 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'registration',
         redirect: { name: 'admin-users' },
-      },
-      {
-        path: 'smtp',
-        name: 'admin-smtp',
-        component: () => import('@/features/admin/views/AdminSmtp.vue'),
       },
       {
         path: 'oauth',

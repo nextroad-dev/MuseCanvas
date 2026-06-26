@@ -2,6 +2,16 @@ export type LanguageProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_m
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 export type LanguageModelInput = { protocol: LanguageProtocol; vendorModelId: string; baseUrl?: string; apiKey: string; system: string; user: string; schemaName?: string; schema?: Record<string, unknown>; maxOutputTokens: number; temperature?: number; reasoningEffort?: ReasoningEffort | null; timeoutMs: number }
 export type LanguageModelResult = { text: string; providerReferenceId?: string; inputTokens?: number; outputTokens?: number }
+export type LanguageModelErrorDiagnostic = { adapter: 'openai' | 'anthropic'; status: number; statusText: string; endpoint: string; detail: string; occurredAt: string; providerReferenceId?: string }
+
+export class LanguageModelHttpError extends Error {
+  diagnostic: LanguageModelErrorDiagnostic
+  constructor(code: 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR' | 'PROMPT_OPTIMIZATION_REJECTED', diagnostic: LanguageModelErrorDiagnostic) {
+    super(code)
+    this.name = 'LanguageModelHttpError'
+    this.diagnostic = diagnostic
+  }
+}
 
 function endpoint(protocol: LanguageProtocol, configured?: string): string {
   const fallback = protocol === 'anthropic_messages' ? 'https://api.anthropic.com' : 'https://api.openai.com'
@@ -17,6 +27,41 @@ export function buildLanguageModelRequest(input: LanguageModelInput): { url: str
   if (input.protocol === 'openai_chat') return { url: endpoint(input.protocol, input.baseUrl), headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' }, body: { model: input.vendorModelId, messages: [{ role: 'developer', content: input.system }, { role: 'user', content: input.user }], ...(commonSchema ? { response_format: { type: 'json_schema', json_schema: commonSchema } } : {}), max_completion_tokens: input.maxOutputTokens, ...(input.temperature === undefined ? {} : { temperature: input.temperature }) } }
   if (input.protocol === 'openai_responses') return { url: endpoint(input.protocol, input.baseUrl), headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' }, body: { model: input.vendorModelId, instructions: input.system, input: input.user, ...(commonSchema ? { text: { format: { type: 'json_schema', ...commonSchema } } } : {}), max_output_tokens: input.maxOutputTokens, ...(input.temperature === undefined ? {} : { temperature: input.temperature }), ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}) } }
   return { url: endpoint(input.protocol, input.baseUrl), headers: { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: { model: input.vendorModelId, system: input.system, messages: [{ role: 'user', content: input.user }], max_tokens: input.maxOutputTokens, ...(commonSchema ? { output_config: { format: { type: 'json_schema', schema: input.schema } } } : {}), ...(input.temperature === undefined ? {} : { temperature: input.temperature }) } }
+}
+
+function adapterForProtocol(protocol: LanguageProtocol): LanguageModelErrorDiagnostic['adapter'] {
+  return protocol === 'anthropic_messages' ? 'anthropic' : 'openai'
+}
+
+function sanitizeProviderDetail(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+    .replace(/sk-[A-Za-z0-9_-]{16,}/g, '[redacted]')
+    .replace(/[A-Za-z0-9_-]{32,}/g, '[redacted]')
+    .slice(0, 1200)
+}
+
+function providerReferenceId(headers: Headers): string | undefined {
+  return headers.get('x-request-id')
+    || headers.get('request-id')
+    || headers.get('x-correlation-id')
+    || headers.get('anthropic-request-id')
+    || undefined
+}
+
+async function throwLanguageModelHttpError(response: Response, input: LanguageModelInput, requestUrl: string): Promise<never> {
+  const body = await response.text().catch(() => '')
+  const diagnostic = {
+    adapter: adapterForProtocol(input.protocol),
+    status: response.status,
+    statusText: response.statusText,
+    endpoint: new URL(requestUrl).pathname,
+    detail: sanitizeProviderDetail(body),
+    occurredAt: new Date().toISOString(),
+    providerReferenceId: providerReferenceId(response.headers),
+  }
+  console.warn('language model rejected request', diagnostic)
+  throw new LanguageModelHttpError(response.status === 408 || response.status === 429 || response.status >= 500 ? 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR' : 'PROMPT_OPTIMIZATION_REJECTED', diagnostic)
 }
 
 export function parseLanguageModelResponse(protocol: LanguageProtocol, raw: unknown): LanguageModelResult {
@@ -43,8 +88,7 @@ export async function callLanguageModel(input: LanguageModelInput): Promise<Lang
   try { response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body), redirect: 'error', signal: AbortSignal.timeout(input.timeoutMs) }) }
   catch { throw new Error('PROMPT_OPTIMIZATION_TEMPORARY_ERROR') }
   if (!response.ok) {
-    if (response.status === 408 || response.status === 429 || response.status >= 500) throw new Error('PROMPT_OPTIMIZATION_TEMPORARY_ERROR')
-    throw new Error('PROMPT_OPTIMIZATION_REJECTED')
+    await throwLanguageModelHttpError(response, input, request.url)
   }
   try { return parseLanguageModelResponse(input.protocol, await response.json()) } catch (error) { if (error instanceof Error && error.message === 'LANGUAGE_MODEL_RESPONSE_INVALID') throw error; throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID') }
 }

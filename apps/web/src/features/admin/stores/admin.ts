@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
   AdminUser, AdminModel, AdminJob, DashboardMetrics, JobStatus,
-  SmtpSettings, Invitation, ModelPreset,
+  Invitation, ModelPreset,
   ProviderCredential, ProviderCredentialInput,
   AdminOAuthProvider, OAuthProviderInput,
   PromptTemplateIndex, PromptOptimizationSettings,
@@ -30,9 +30,6 @@ export const useAdminStore = defineStore('admin', () => {
   // Registration
   const requiresInvitation = ref(false)
   const invitations = ref<Invitation[]>([])
-
-  // SMTP
-  const smtpSettings = ref<SmtpSettings | null>(null)
 
   // Provider credentials
   const providerCredentials = ref<ProviderCredential[]>([])
@@ -168,21 +165,6 @@ export const useAdminStore = defineStore('admin', () => {
     return res
   }
 
-  async function fetchSmtp() {
-    const res = await api<SmtpSettings>('/api/admin/smtp')
-    if (res.success && res.data) smtpSettings.value = res.data
-  }
-
-  async function updateSmtp(data: Partial<SmtpSettings>) {
-    const res = await api<SmtpSettings>('/api/admin/smtp', { method: 'PUT', body: data })
-    if (res.success && res.data) smtpSettings.value = res.data
-    return res
-  }
-
-  async function testSmtp() {
-    return api('/api/admin/smtp/test', { method: 'POST' })
-  }
-
   async function fetchProviderCredentials() {
     const res = await api<ProviderCredential[]>('/api/admin/provider-credentials')
     if (res.success && res.data) providerCredentials.value = res.data
@@ -258,12 +240,11 @@ export const useAdminStore = defineStore('admin', () => {
 
   return {
     metrics, users, usersTotal, usersNextCursor, models, modelPresets, jobs, jobsTotal, jobsNextCursor,
-    requiresInvitation, invitations, smtpSettings, providerCredentials, oauthProviders, promptTemplates, promptOptimizationSettings,
+    requiresInvitation, invitations, providerCredentials, oauthProviders, promptTemplates, promptOptimizationSettings,
     fetchDashboard, fetchUsers, updateUserStatus, deleteUser,
     fetchModels, fetchModelPresets, createModel, updateModel, deleteModel, fetchJobs,
     fetchRegistration, setRequiresInvitation,
     fetchInvitations, createInvitation, revokeInvitation,
-    fetchSmtp, updateSmtp, testSmtp,
     fetchProviderCredentials, createProviderCredential, updateProviderCredential, testProviderCredential, deleteProviderCredential,
     fetchOAuthProviders, updateOAuthProvider,
     fetchPromptTemplates, reloadPromptTemplates, fetchPromptOptimizationSettings, updatePromptOptimizationSettings,

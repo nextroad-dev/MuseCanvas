@@ -45,10 +45,12 @@ scripts/     本地和部署辅助脚本
 | 文件 | 用途 |
 | --- | --- |
 | `compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit。|
-| `compose.dev.yaml` | 开发环境兼容入口，保留给显式 `docker compose -f compose.dev.yaml` 使用。|
-| `compose.prod.yaml` | 从源码构建的生产风格模板，部署前需要替换真实 SMTP、S3、域名和安全密钥。|
-| `compose.images.yaml` | 使用 GHCR 已构建镜像部署，默认通过 `18080:80` 暴露 Nginx。|
+| `compose.dev.yaml` | 开发环境兼容入口，保留给显式 `docker compose -f compose.dev.yaml` 使用，同样面向本地开发。|
+| `compose.prod.yaml` | 从源码构建的部署模板，不包含 MinIO / Mailpit，必须接入外部 S3 兼容对象存储和 SMTP 邮件服务。|
+| `compose.images.yaml` | 使用 GHCR 已构建镜像部署，不包含 MinIO / Mailpit，默认通过 `18080:80` 暴露 Nginx。|
 | `infra/docker/*.Dockerfile` | `api`、`worker`、`web`、`nginx` 四个镜像定义。|
+
+> MinIO 和 Mailpit 只用于本地开发，方便模拟对象存储和邮件投递。公开部署或生产环境不要使用内嵌 MinIO / Mailpit，请接入真实的 S3 兼容对象存储与 SMTP 服务。
 
 ## 本地运行
 
@@ -95,6 +97,45 @@ API 容器启动时会执行幂等 migration，并根据 `ADMIN_EMAIL` 创建或
 pnpm compose:down
 ```
 
+## 部署环境要求
+
+`compose.prod.yaml` 和 `compose.images.yaml` 都不内置 S3 或邮件服务。部署前需要准备：
+
+- 一个可访问的 S3 兼容对象存储，例如 AWS S3、Cloudflare R2、MinIO 独立实例、阿里云 OSS S3 兼容层等。
+- 一个真实 SMTP 邮件服务，用于 OTP 登录、邀请注册和系统邮件。
+- 生产级随机密钥：`SESSION_SECRET`、`SMTP_ENCRYPTION_KEY`、`OAUTH_CREDENTIALS_ENCRYPTION_KEY`、`PROVIDER_CREDENTIALS_ENCRYPTION_KEY`。
+- 正确的公开访问地址：`OAUTH_REDIRECT_BASE_URL`，例如 `https://studio.example.com`。
+
+部署环境至少需要配置：
+
+```bash
+POSTGRES_PASSWORD=
+SESSION_SECRET=
+SMTP_ENCRYPTION_KEY=
+ADMIN_EMAIL=
+COOKIE_SECURE=true
+
+SMTP_HOST=
+SMTP_PORT=465
+SMTP_TLS_MODE=implicit_tls
+SMTP_FROM=
+SMTP_USER=
+SMTP_PASSWORD=
+
+S3_ENDPOINT=
+S3_PUBLIC_ENDPOINT=
+S3_REGION=us-east-1
+S3_BUCKET=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+
+OAUTH_REDIRECT_BASE_URL=
+OAUTH_CREDENTIALS_ENCRYPTION_KEY=
+PROVIDER_CREDENTIALS_ENCRYPTION_KEY=
+```
+
+所有密钥只允许放在服务端环境变量或管理员后台的加密配置中，禁止写入前端代码。
+
 ## 使用 GHCR 镜像部署
 
 `main` 分支推送后，`.github/workflows/docker-image.yml` 会构建并发布四个镜像：
@@ -128,7 +169,15 @@ PROMPT_TEMPLATE_CONTAINER_INDEX_PATH=/opt/musecanvas/prompt-templates/index.json
 echo GITHUB_TOKEN | docker login ghcr.io -u nextroad-dev --password-stdin
 ```
 
-生产环境必须提供真实的 SMTP、S3、数据库、Redis、会话密钥和凭据加密密钥。所有密钥只允许放在服务端环境变量或管理员后台的加密配置中，禁止写入前端代码。
+## 从源码构建部署
+
+如果部署机需要直接从仓库源码构建镜像，可以使用：
+
+```bash
+docker compose -f compose.prod.yaml up --build -d
+```
+
+这一路径同样要求外部 S3 和 SMTP。`compose.prod.yaml` 只负责应用、Nginx、PostgreSQL 与 Redis 的编排，不会启动 MinIO 或 Mailpit。
 
 ## 常用命令
 

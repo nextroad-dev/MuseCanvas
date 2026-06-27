@@ -12,13 +12,14 @@ MuseCanvas 是一个面向多图像生成模型的创作平台。它把用户创
 - 多供应商图像生成适配，供应商 API Key、Base URL、模型协议等通过管理员后台配置，敏感字段只写不读。
 - LLM 提示词预处理模板，运行时由 API / Worker 读取外部模板索引。
 - PostgreSQL 持久化核心数据，Redis 处理队列状态、限流和临时缓存，S3 兼容对象存储保存生成结果。
+- Docker Compose 本地全栈启动、GHCR 镜像部署，以及 GitHub Actions 镜像构建流水线。
 
 ## 技术栈
 
 - 前端：Vue 3、TypeScript、Vite、Pinia、Vue Router、Tailwind CSS。
 - API：Next.js API Routes、TypeScript、PostgreSQL、Redis。
 - Worker：独立 TypeScript 进程，消费生成队列和后台任务。
-- 部署：Docker Compose、Nginx 反向代理、S3 兼容对象存储。
+- 基础设施：Docker Compose、Nginx、GitHub Actions、GitHub Container Registry、S3 兼容对象存储。
 
 ## 目录结构
 
@@ -34,29 +35,41 @@ packages/
   domain/    框架无关的业务规则和状态机
   providers/ 图像生成、对象存储和邮件服务适配器
 docs/        功能设计、实现记录和设计系统
-infra/       Docker 与 Nginx 配置
+infra/       Dockerfile 与 Nginx 配置
 scripts/     本地和部署辅助脚本
+.github/     GitHub Actions 工作流
 ```
+
+## Docker / Compose 文件说明
+
+| 文件 | 用途 |
+| --- | --- |
+| `compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit。|
+| `compose.dev.yaml` | 开发环境兼容入口，保留给显式 `docker compose -f compose.dev.yaml` 使用。|
+| `compose.prod.yaml` | 从源码构建的生产风格模板，部署前需要替换真实 SMTP、S3、域名和安全密钥。|
+| `compose.images.yaml` | 使用 GHCR 已构建镜像部署，默认通过 `18080:80` 暴露 Nginx。|
+| `infra/docker/*.Dockerfile` | `api`、`worker`、`web`、`nginx` 四个镜像定义。|
 
 ## 本地运行
 
 1. 安装依赖：
 
 ```bash
+corepack enable
 pnpm install
 ```
 
-2. 从 `.env.example` 创建 `.env`，至少填写：
+2. 从 `.env.example` 创建 `.env`，本地至少填写：
 
 ```bash
 POSTGRES_PASSWORD=
 SESSION_SECRET=
+SMTP_ENCRYPTION_KEY=
 ADMIN_EMAIL=
 S3_ACCESS_KEY_ID=
 S3_SECRET_ACCESS_KEY=
 OAUTH_CREDENTIALS_ENCRYPTION_KEY=
 PROVIDER_CREDENTIALS_ENCRYPTION_KEY=
-PROMPT_TEMPLATE_INDEX_PATH=
 ```
 
 3. 启动完整本地环境：
@@ -65,10 +78,13 @@ PROMPT_TEMPLATE_INDEX_PATH=
 pnpm compose:up
 ```
 
+等价于先准备提示词模板，再执行默认的 `docker compose up --build -d`。
+
 4. 访问服务：
 
 - Web：`http://localhost:8080`
 - Mailpit：`http://localhost:8025`
+- MinIO API：`http://localhost:9000`
 - MinIO Console：`http://localhost:9001`
 
 API 容器启动时会执行幂等 migration，并根据 `ADMIN_EMAIL` 创建或恢复首个管理员。管理员登录后，可在后台配置 OAuth 应用、供应商凭据和模型参数。未配置可用供应商凭据时，生成任务会失败为明确错误，不会用占位图片伪装成功。
@@ -78,6 +94,41 @@ API 容器启动时会执行幂等 migration，并根据 `ADMIN_EMAIL` 创建或
 ```bash
 pnpm compose:down
 ```
+
+## 使用 GHCR 镜像部署
+
+`main` 分支推送后，`.github/workflows/docker-image.yml` 会构建并发布四个镜像：
+
+```text
+ghcr.io/nextroad-dev/musecanvas-api:latest
+ghcr.io/nextroad-dev/musecanvas-worker:latest
+ghcr.io/nextroad-dev/musecanvas-web:latest
+ghcr.io/nextroad-dev/musecanvas-nginx:latest
+```
+
+部署机可以使用 `compose.images.yaml`：
+
+```bash
+docker compose -f compose.images.yaml pull
+docker compose -f compose.images.yaml up -d
+```
+
+可选变量：
+
+```bash
+MUSECANVAS_IMAGE_TAG=latest
+MUSECANVAS_HTTP_PORT=18080
+PROMPT_TEMPLATE_HOST_DIR=./prompt-templates
+PROMPT_TEMPLATE_CONTAINER_INDEX_PATH=/opt/musecanvas/prompt-templates/index.json
+```
+
+如果 GHCR Package 还不是公开包，需要先在服务器登录：
+
+```bash
+echo GITHUB_TOKEN | docker login ghcr.io -u nextroad-dev --password-stdin
+```
+
+生产环境必须提供真实的 SMTP、S3、数据库、Redis、会话密钥和凭据加密密钥。所有密钥只允许放在服务端环境变量或管理员后台的加密配置中，禁止写入前端代码。
 
 ## 常用命令
 
@@ -100,13 +151,6 @@ pnpm --filter @musecanvas/web dev
 pnpm --filter @musecanvas/api dev
 pnpm --filter @musecanvas/worker dev
 ```
-
-## 部署说明
-
-- `compose.yaml` 用于本地构建并启动完整环境。
-- `compose.images.yaml` 用于使用已构建镜像部署，默认通过 `18080:80` 暴露 Nginx。
-- 生产环境必须提供真实的 SMTP、S3、数据库、Redis、会话密钥和凭据加密密钥。
-- 所有密钥只允许放在服务端环境变量或管理员后台的加密配置中，禁止写入前端代码。
 
 ## 提交前验证
 

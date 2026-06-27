@@ -304,7 +304,7 @@ onUnmounted(() => {
               @click="updateLogOpen = true"
               title="查看更新日志"
             >
-              v2026.06.27
+              v2026.06.28
             </button>
           <button
             class="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
@@ -521,12 +521,19 @@ onUnmounted(() => {
 
     <AppModal
       v-model:open="updateLogOpen"
-      title="更新日志 (v2026.06.27)"
+      title="更新日志 (v2026.06.28)"
       size="md"
     >
       <div class="space-y-4 text-sm text-foreground">
         <div>
-          <h3 class="font-semibold text-base mb-2 text-foreground">UI/UX 全面极简升级</h3>
+          <h3 class="font-semibold text-base mb-2 text-foreground">v2026.06.28 更新</h3>
+          <ul class="list-disc pl-5 space-y-1.5 text-muted-foreground">
+            <li>多图生成支持一键「全部下载图片」，并优化了并发下载防拦截和自动重命名机制。</li>
+            <li>任务详情面板顶部增加图片大尺寸预览区域，便于随时检视生成结果。</li>
+          </ul>
+        </div>
+        <div>
+          <h3 class="font-semibold text-base mb-2 text-foreground">v2026.06.27 极简升级</h3>
           <ul class="list-disc pl-5 space-y-1.5 text-muted-foreground">
             <li>历史画廊调整为底部横条式布局，支持折叠。</li>
             <li>各个组件大小放大，提升点击舒适度。</li>

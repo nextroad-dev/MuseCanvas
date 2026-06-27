@@ -91,6 +91,18 @@ function handleDownloadAll() {
     </div>
 
     <div class="flex-1 overflow-auto p-4">
+      <!-- Image Preview Section -->
+      <div v-if="job.outputs && job.outputs.length > 0" class="mb-5 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-subtle">
+        <img
+          :src="job.outputs[0].imageUrl"
+          alt="Preview"
+          class="block h-auto max-h-48 w-full object-cover"
+        />
+        <div v-if="job.outputs.length > 1" class="border-t border-border bg-surface/50 px-2 py-1 text-center text-xs text-muted-foreground backdrop-blur-sm">
+          共 {{ job.outputs.length }} 张图片（仅预览第一张）
+        </div>
+      </div>
+
       <div class="mb-5">
         <StatusBadge :status="job.status" variant="soft" />
         <p class="mt-2 line-clamp-2 text-sm font-medium text-foreground">{{ titleText }}</p>

@@ -1,12 +1,16 @@
 name: musecanvas
 
+# Image-based deployment stack.
+# This file intentionally does NOT start MinIO or Mailpit.
+# Production/staging deployments must provide external S3-compatible storage and SMTP.
+
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: musecanvas
       POSTGRES_USER: musecanvas
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -38,25 +42,25 @@ services:
       ALLOW_INSECURE_SMTP: ${ALLOW_INSECURE_SMTP:-false}
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
       REDIS_URL: redis://redis:6379
-      SESSION_SECRET: ${SESSION_SECRET}
-      SMTP_ENCRYPTION_KEY: ${SMTP_ENCRYPTION_KEY}
-      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      SMTP_ENCRYPTION_KEY: ${SMTP_ENCRYPTION_KEY:?SMTP_ENCRYPTION_KEY is required}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL is required}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      SMTP_HOST: ${SMTP_HOST}
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
       SMTP_PORT: ${SMTP_PORT:-465}
       SMTP_TLS_MODE: ${SMTP_TLS_MODE:-implicit_tls}
-      SMTP_FROM: ${SMTP_FROM:-no-reply@musecanvas.local}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM is required}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-${S3_ENDPOINT}}
       S3_REGION: ${S3_REGION:-us-east-1}
-      S3_BUCKET: ${S3_BUCKET:-musecanvas}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
-      OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-http://localhost:18080}
-      OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY}
-      PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+      OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:?OAUTH_REDIRECT_BASE_URL is required}
+      OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:?OAUTH_CREDENTIALS_ENCRYPTION_KEY is required}
+      PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:?PROVIDER_CREDENTIALS_ENCRYPTION_KEY is required}
       PROMPT_TEMPLATE_INDEX_PATH: ${PROMPT_TEMPLATE_CONTAINER_INDEX_PATH:-/opt/musecanvas/prompt-templates/index.json}
     volumes:
       - ${PROMPT_TEMPLATE_HOST_DIR:-./prompt-templates}:/opt/musecanvas/prompt-templates:ro

@@ -16,7 +16,7 @@ const PHASE_LABELS: Record<string, string> = {
   generation_failed: '图片生成失败',
 }
 
-const CANCELLABLE_STATUSES = new Set<JobStatus>(['queued', 'retry_wait'])
+const CANCELLABLE_STATUSES = new Set<JobStatus>(['queued', 'retry_wait', 'running'])
 
 export function phaseLabel(phase?: string | null) {
   return phase ? PHASE_LABELS[phase] || '正在处理' : '正在处理'

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { X, RotateCcw, Copy, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-vue-next'
+import { X, RotateCcw, Copy, Plus, Trash2, ChevronDown, Download } from 'lucide-vue-next'
 import StatusBadge from '@/shared/components/ui/StatusBadge.vue'
-import type { GenerationJob } from '@/shared/types'
+import type { GenerationJob, GenerationOutput } from '@/shared/types'
 
 const props = defineProps<{
   job: GenerationJob
+  hideHeader?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -14,9 +15,9 @@ const emit = defineEmits<{
   'new-generation': []
   retry: []
   delete: []
+  download: [url: string]
 }>()
 
-const showOptimizedPrompt = ref(false)
 const showReuseMenu = ref(false)
 
 const originalPrompt = computed(() => props.job.inputPrompt || props.job.prompt || '')
@@ -43,6 +44,7 @@ const titleText = computed(() => props.job.title || props.job.inputPrompt || pro
 const createdLabel = computed(() => new Date(props.job.createdAt).toLocaleString('zh-CN'))
 
 const isFailed = computed(() => props.job.status === 'failed')
+const isComplete = computed(() => props.job.status === 'succeeded' && (props.job.outputs?.length ?? 0) > 0)
 
 const durationLabel = computed(() => {
   const start = props.job.startedAt ? new Date(props.job.startedAt).getTime() : null
@@ -63,11 +65,22 @@ const fields = computed(() => [
   { label: '耗时', value: durationLabel.value, mono: false },
   { label: '选择模板', value: props.job.templateName || '无', mono: false },
 ])
+
+function handleDownloadAll() {
+  const outputs = props.job.outputs || []
+  if (outputs.length <= 1) {
+    if (outputs[0]?.imageUrl) emit('download', outputs[0].imageUrl)
+  } else {
+    outputs.forEach((o: GenerationOutput, i: number) => {
+      setTimeout(() => emit('download', o.imageUrl), i * 300)
+    })
+  }
+}
 </script>
 
 <template>
   <div class="flex h-full flex-col">
-    <div class="flex h-12 items-center justify-between border-b border-border/60 px-4">
+    <div v-if="!hideHeader" class="flex h-12 items-center justify-between border-b border-border/60 px-4">
       <span class="text-sm font-medium text-foreground">任务详情</span>
       <button
         class="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
@@ -100,20 +113,9 @@ const fields = computed(() => [
           {{ originalPrompt || '—' }}
         </p>
 
-        <div v-if="canUseOptimizedPrompt" class="mt-3">
-          <button
-            type="button"
-            class="flex w-full items-center justify-between rounded-[var(--radius-control)] px-1 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            @click="showOptimizedPrompt = !showOptimizedPrompt"
-          >
-            <span>{{ showOptimizedPrompt ? '隐藏优化后的提示词' : '显示优化后的提示词' }}</span>
-            <ChevronUp v-if="showOptimizedPrompt" class="h-4 w-4" />
-            <ChevronDown v-else class="h-4 w-4" />
-          </button>
-          <p
-            v-if="showOptimizedPrompt"
-            class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-[var(--radius-card)] border border-border bg-surface-subtle px-3 py-2 text-sm leading-relaxed text-foreground"
-          >
+        <div v-if="canUseOptimizedPrompt" class="mt-3 border-t border-border/40 pt-3">
+          <p class="text-xs font-medium text-muted-foreground">优化后提示词</p>
+          <p class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-[var(--radius-card)] border border-border bg-surface-subtle px-3 py-2 text-sm leading-relaxed text-foreground">
             {{ optimizedPrompt }}
           </p>
         </div>
@@ -129,6 +131,14 @@ const fields = computed(() => [
 
     <!-- Actions -->
     <div class="shrink-0 space-y-2 border-t border-border/60 p-4">
+      <button
+        v-if="isComplete"
+        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+        @click="handleDownloadAll"
+      >
+        <Download class="h-4 w-4" />
+        {{ (job.outputs?.length ?? 0) > 1 ? '全部下载图片' : '下载图片' }}
+      </button>
       <button
         v-if="isFailed"
         class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-hover"

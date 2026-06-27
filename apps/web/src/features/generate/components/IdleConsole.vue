@@ -21,6 +21,7 @@ const emit = defineEmits<{
 
 const store = useGenerationStore()
 const activePopover = ref<ToolbarPopover | null>(null)
+const isFocused = ref(false)
 
 const isSubmitting = computed(() => store.loading)
 const activeJob = computed(() => store.selectedJob)
@@ -65,20 +66,52 @@ function setPopover(name: ToolbarPopover, open: boolean) {
 </script>
 
 <template>
-  <div class="flex w-full flex-col items-center px-4 py-8">
-    <!-- Prompt input -->
-    <div class="relative z-20 flex w-full max-w-3xl flex-col overflow-visible rounded-[var(--radius-panel)] border border-border bg-surface/95 shadow-sm backdrop-blur-sm transition-shadow focus-within:border-primary focus-within:ring-1 focus-within:ring-primary-soft">
+  <div class="flex w-full flex-col items-center px-4 py-6">
+    <!-- Heading above console -->
+    <div class="mb-6 text-center">
+      <h2 class="text-2xl font-semibold tracking-tight text-foreground">
+        描述你想创作的画面
+      </h2>
+    </div>
+
+    <!-- Console card -->
+    <div
+      class="relative z-20 flex w-full max-w-3xl flex-col overflow-visible"
+      :class="isFocused || store.prompt.length > 0 ? 'console-focused' : ''"
+    >
+      <!-- Glow ring (decorative) -->
+      <div
+        class="pointer-events-none absolute -inset-px rounded-[calc(var(--radius-panel)+1px)] opacity-0 transition-opacity duration-500"
+        :class="isFocused ? 'opacity-100' : ''"
+        style="background: linear-gradient(135deg, var(--color-primary) 0%, transparent 50%, var(--color-primary-soft) 100%); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; padding: 1px;"
+        aria-hidden="true"
+      />
+
+      <!-- Main card -->
+      <div
+        class="relative flex flex-col overflow-visible rounded-[var(--radius-panel)] border bg-surface/95 shadow-md backdrop-blur-sm transition-all duration-300"
+        :class="isFocused
+          ? 'border-primary/50 shadow-[0_0_0_4px_var(--color-primary-soft),0_8px_32px_-4px_rgba(22,138,73,0.15)]'
+          : 'border-border hover:border-border-strong hover:shadow-lg'"
+      >
+        <!-- Textarea -->
         <textarea
           v-model="store.prompt"
           rows="5"
           :disabled="isSubmitting"
-          placeholder="继续描述下一张画面..."
-          class="w-full resize-none border-0 bg-transparent px-5 py-4 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
+          placeholder="描述画面内容、风格、光线、氛围..."
+          class="w-full resize-none border-0 bg-transparent px-6 py-6 text-lg leading-relaxed text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
+          @focus="isFocused = true"
+          @blur="isFocused = false"
           @keydown="(e) => { if (e.key === 'Enter' && e.ctrlKey && !isSubmitting) { e.preventDefault(); handleGenerate() } }"
         />
 
+        <!-- Divider -->
+        <div class="mx-4 h-px bg-border/60" />
+
         <!-- Bottom toolbar -->
-        <div class="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-transparent px-3 py-3">
+        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-4">
+          <!-- Parameter selectors -->
           <div class="flex flex-wrap items-center gap-2">
             <ModelSelectPopover
               v-model="store.selectedModelId"
@@ -113,31 +146,75 @@ function setPopover(name: ToolbarPopover, open: boolean) {
             />
           </div>
 
+          <!-- Right actions -->
           <div class="flex flex-wrap items-center justify-end gap-2">
-            <div v-if="props.generating && activeJob" class="flex min-h-9 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-subtle px-3">
-            <span class="h-1.5 w-1.5 rounded-full bg-primary" />
-            <span class="text-sm text-muted-foreground">{{ activeJobStatusText }}</span>
-            <button
-              v-if="canCancelActiveJob"
-              type="button"
-              class="inline-flex h-7 items-center justify-center gap-1 rounded-[var(--radius-control)] px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
-              @click="handleCancel"
+            <!-- Active job status pill -->
+            <div
+              v-if="props.generating && activeJob"
+              class="flex min-h-10 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-subtle px-4"
             >
-              <XCircle class="h-3.5 w-3.5" />
-              取消
-            </button>
+              <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+              <span class="text-sm text-muted-foreground">{{ activeJobStatusText }}</span>
+              <button
+                v-if="canCancelActiveJob"
+                type="button"
+                class="inline-flex h-7 items-center justify-center gap-1 rounded-[var(--radius-control)] px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+                @click="handleCancel"
+              >
+                <XCircle class="h-3.5 w-3.5" />
+                取消
+              </button>
             </div>
 
-          <button
-            :disabled="store.loading || !canGenerate"
-            class="inline-flex h-9 items-center justify-center rounded-[var(--radius-control)] border border-border bg-surface px-3 text-sm font-medium text-foreground transition-colors hover:bg-surface-subtle disabled:opacity-50 disabled:cursor-not-allowed"
-            :class="canGenerate && !store.loading ? 'border-primary bg-primary-soft text-primary hover:bg-primary-soft-hover' : ''"
-            @click="handleGenerate"
-          >
-            {{ generateLabel }}
-          </button>
+            <!-- Generate button with shimmer effect -->
+            <button
+              type="button"
+              class="generate-btn relative flex h-10 items-center gap-2 overflow-hidden rounded-[var(--radius-control)] px-6 text-base font-semibold transition-all duration-200"
+              :class="canGenerate && !store.loading
+                ? 'bg-primary text-white shadow-sm hover:bg-primary-hover hover:shadow-md active:scale-[0.97]'
+                : 'cursor-not-allowed bg-surface-subtle text-muted-foreground'"
+              :disabled="!canGenerate || store.loading"
+              @click="handleGenerate"
+            >
+              <!-- Shimmer overlay (only on active state) -->
+              <span
+                v-if="canGenerate && !store.loading"
+                class="shimmer-overlay pointer-events-none absolute inset-0"
+                aria-hidden="true"
+              />
+              <svg
+                v-if="store.loading"
+                class="relative z-10 h-4 w-4 shrink-0 animate-spin"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span class="relative z-10">{{ generateLabel }}</span>
+            </button>
           </div>
         </div>
       </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+/* Shimmer sweep animation on generate button */
+.shimmer-overlay {
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.25) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.4s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+</style>

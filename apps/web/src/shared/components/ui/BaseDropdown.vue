@@ -11,12 +11,19 @@ export interface DropdownOption<TValue extends string = string> {
 
 defineOptions({ inheritAttrs: false })
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: T
   options: DropdownOption<T>[]
   disabled?: boolean
   placeholder?: string
-}>()
+  /**
+   * 'default'  - 标准尺寸，带完整边框（用于表单区域）
+   * 'toolbar'  - 紧凑模式，无边框，用于工具栏中的控件
+   */
+  variant?: 'default' | 'toolbar'
+}>(), {
+  variant: 'default',
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: T]
@@ -33,7 +40,7 @@ const selectedLabel = computed(() => {
 })
 
 const selectedIndex = computed(() =>
-  props.options.findIndex(o => o.value === props.modelValue)
+  props.options.findIndex(o => o.value === props.modelValue),
 )
 
 function select(value: T) {
@@ -113,21 +120,42 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="relative w-full">
-    <button
-      v-bind="attrs"
-      type="button"
-      :disabled="disabled"
-      class="h-10 w-full appearance-none rounded-lg border border-neutral-200 bg-white px-3 pr-9 text-left text-sm text-neutral-900 transition-colors hover:border-neutral-300 hover:bg-neutral-50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400 disabled:opacity-70"
-      @click.stop="toggle"
-      @keydown="handleKeydown"
-    >
-      <span :class="modelValue ? 'text-neutral-900' : 'text-neutral-400'">{{ selectedLabel }}</span>
-    </button>
-    <ChevronDown
-      class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400 transition-transform duration-200"
-      :class="{ 'rotate-180': open }"
-    />
+  <div ref="containerRef" class="relative" :class="variant === 'default' ? 'w-full' : ''">
+    <!-- Default variant: full-width form dropdown -->
+    <template v-if="variant === 'default'">
+      <button
+        v-bind="attrs"
+        type="button"
+        :disabled="disabled"
+        class="h-10 w-full appearance-none rounded-[var(--radius-control)] border border-border bg-surface px-3 pr-9 text-left text-sm text-foreground transition-colors hover:border-border-strong hover:bg-surface-subtle focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+        @click.stop="toggle"
+        @keydown="handleKeydown"
+      >
+        <span :class="modelValue ? 'text-foreground' : 'text-muted-foreground'">{{ selectedLabel }}</span>
+      </button>
+      <ChevronDown
+        class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground transition-transform duration-200"
+        :class="{ 'rotate-180': open }"
+      />
+    </template>
+
+    <!-- Toolbar variant: compact, borderless -->
+    <template v-else>
+      <button
+        v-bind="attrs"
+        type="button"
+        :disabled="disabled"
+        class="inline-flex items-center gap-1 rounded-[var(--radius-control)] border border-transparent px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-50"
+        @click.stop="toggle"
+        @keydown="handleKeydown"
+      >
+        <span>{{ selectedLabel }}</span>
+        <ChevronDown
+          class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
+          :class="{ 'rotate-180': open }"
+        />
+      </button>
+    </template>
 
     <Transition
       enter-active-class="transition ease-out duration-100"
@@ -139,17 +167,21 @@ onUnmounted(() => {
     >
       <ul
         v-show="open"
-        class="absolute z-50 mt-1 max-h-96 w-full overflow-auto rounded-lg border border-neutral-200 bg-white py-1 text-sm shadow-lg"
+        role="listbox"
+        class="absolute right-0 z-50 mt-1 min-w-[120px] overflow-auto rounded-[var(--radius-card)] border border-border bg-surface p-1 text-sm shadow-md"
+        :class="variant === 'default' ? 'left-0 max-h-96 w-full' : 'max-h-64'"
       >
         <li
           v-for="(option, index) in options"
           :key="option.value"
+          role="option"
+          :aria-selected="option.value === modelValue"
           :class="[
-            'cursor-pointer px-3 py-2 transition-colors',
+            'flex w-full cursor-pointer items-center rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors',
             option.value === modelValue
-              ? 'bg-primary-soft text-primary font-medium'
-              : 'text-neutral-700 hover:bg-neutral-50',
-            index === activeIndex && option.value !== modelValue ? 'bg-neutral-50' : '',
+              ? 'bg-primary-soft font-medium text-primary'
+              : 'text-foreground hover:bg-surface-subtle',
+            index === activeIndex && option.value !== modelValue ? 'bg-surface-subtle' : '',
           ]"
           @click="select(option.value)"
         >

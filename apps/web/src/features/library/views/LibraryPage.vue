@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ChevronDown } from 'lucide-vue-next'
 import { useLibraryStore } from '@/features/library/stores/library'
 import { useGenerationStore } from '@/features/generate/stores/generation'
 import ImageCard from '@/shared/components/ui/ImageCard.vue'
@@ -8,8 +7,8 @@ import EmptyState from '@/shared/components/ui/EmptyState.vue'
 import ConfirmDialog from '@/shared/components/ui/ConfirmDialog.vue'
 import Lightbox from '@/shared/components/ui/Lightbox.vue'
 import SkeletonBlock from '@/shared/components/ui/SkeletonBlock.vue'
+import { ZoomIn, ZoomOut } from 'lucide-vue-next'
 import type { Asset } from '@/shared/types'
-import { useClickOutside } from '@/shared/composables/useClickOutside'
 
 /* ------------------------------------------------------------------ */
 /*  localStorage helpers                                               */
@@ -62,48 +61,16 @@ const photoSize = ref<PhotoSize>(
   readStorage<PhotoSize>(STORAGE_KEYS.photoSize, 'medium'),
 )
 
-/* dropdown open state */
-const openDropdown = ref<string | null>(null)
+
 
 /* ------------------------------------------------------------------ */
 /*  options                                                            */
 /* ------------------------------------------------------------------ */
-const columnOptions: { value: ColumnCount; label: string }[] = [
-  { value: 2, label: '2 列' },
-  { value: 3, label: '3 列' },
-  { value: 4, label: '4 列' },
-  { value: 5, label: '5 列' },
-  { value: 6, label: '6 列' },
-]
 
-const rowOptions: { value: RowCount; label: string }[] = [
-  { value: 'auto', label: '自动' },
-  { value: 2, label: '2 行' },
-  { value: 3, label: '3 行' },
-  { value: 4, label: '4 行' },
-  { value: 5, label: '5 行' },
-  { value: 'all', label: '全部显示' },
-]
-
-const photoSizeOptions: { value: PhotoSize; label: string }[] = [
-  { value: 'small', label: '小' },
-  { value: 'medium', label: '中' },
-  { value: 'large', label: '大' },
-  { value: 'xlarge', label: '超大' },
-]
 
 /* ------------------------------------------------------------------ */
 /*  computed                                                           */
 /* ------------------------------------------------------------------ */
-const rowCountLabel = computed(() => {
-  const found = rowOptions.find(o => o.value === rowCount.value)
-  return found?.label ?? '自动'
-})
-
-const photoSizeLabel = computed(() => {
-  const found = photoSizeOptions.find(o => o.value === photoSize.value)
-  return found?.label ?? '中'
-})
 
 /* responsive column classes: mobile caps at 2, tablet at 4 */
 const columnGridClass = computed(() => {
@@ -144,33 +111,13 @@ const lightboxImages = computed(() =>
 function selectColumn(val: ColumnCount) {
   columnCount.value = val
   writeStorage(STORAGE_KEYS.columnCount, val)
-  openDropdown.value = null
 }
 
-function selectRow(val: RowCount) {
-  rowCount.value = val
-  writeStorage(STORAGE_KEYS.rowCount, val)
-  openDropdown.value = null
-}
 
-function selectPhotoSize(val: PhotoSize) {
-  photoSize.value = val
-  writeStorage(STORAGE_KEYS.photoSize, val)
-  openDropdown.value = null
-}
-
-/* click outside to close dropdowns */
-function closeDropdowns() {
-  openDropdown.value = null
-}
 
 /* ------------------------------------------------------------------ */
 /*  lifecycle                                                          */
 /* ------------------------------------------------------------------ */
-const toolbarRef = ref<HTMLElement>()
-
-useClickOutside(toolbarRef, closeDropdowns)
-
 onMounted(() => {
   library.fetchAssets()
 })
@@ -185,11 +132,24 @@ function handleView(asset: Asset) {
   }
 }
 
-function handleDownload(asset: Asset) {
-  const a = document.createElement('a')
-  a.href = asset.imageUrl
-  a.download = `musecanvas-${asset.id}.png`
-  a.click()
+async function handleDownload(asset: Asset) {
+  try {
+    const response = await fetch(asset.imageUrl)
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `musecanvas-${asset.id}.png`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  } catch (error) {
+    console.error('Failed to download image:', error)
+    window.open(asset.imageUrl, '_blank')
+  }
 }
 
 function handleDelete(asset: Asset) {
@@ -211,103 +171,26 @@ async function confirmDelete() {
   <div class="flex h-full w-full flex-col">
     <h1 class="sr-only">图库</h1>
     <!-- Toolbar -->
-    <div
-      ref="toolbarRef"
-      class="flex min-h-12 shrink-0 items-center justify-end gap-2 border-b border-border px-4 py-2 sm:px-6"
-    >
-      <!-- Column count -->
-      <div class="relative">
+    <div class="flex min-h-12 shrink-0 items-center justify-end gap-2 border-b border-border px-4 py-2 sm:px-6">
+      <div class="flex items-center gap-1 rounded-[var(--radius-control)] border border-border bg-surface p-1 shadow-sm">
         <button
-          type="button"
-          class="inline-flex items-center gap-1 rounded-[var(--radius-control)] border border-transparent px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle"
-          @click.stop="openDropdown = openDropdown === 'column' ? null : 'column'"
+          class="inline-flex h-8 w-8 items-center justify-center rounded-[calc(var(--radius-control)-4px)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground disabled:opacity-50"
+          :disabled="columnCount >= 6"
+          @click="selectColumn(Math.min(6, columnCount + 1) as ColumnCount)"
+          title="缩小网格"
         >
-          列数 {{ columnCount }}
-          <ChevronDown
-            class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
-            :class="openDropdown === 'column' ? 'rotate-180' : ''"
-          />
+          <ZoomOut class="h-4 w-4" />
         </button>
-        <div
-          v-if="openDropdown === 'column'"
-          class="absolute right-0 top-full z-50 mt-1 min-w-[120px] rounded-[var(--radius-card)] border border-border bg-surface p-1 shadow-md"
-          @click.stop
-        >
-          <button
-            v-for="opt in columnOptions"
-            :key="opt.value"
-            type="button"
-            class="flex w-full items-center rounded-[var(--radius-control)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-subtle"
-            :class="columnCount === opt.value ? 'bg-primary-soft text-primary' : 'text-foreground'"
-            @click="selectColumn(opt.value)"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
-      </div>
-
-      <!-- Row count -->
-      <div class="relative">
+        <div class="h-4 w-px bg-border"></div>
         <button
-          type="button"
-          class="inline-flex items-center gap-1 rounded-[var(--radius-control)] border border-transparent px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle"
-          @click.stop="openDropdown = openDropdown === 'row' ? null : 'row'"
+          class="inline-flex h-8 w-8 items-center justify-center rounded-[calc(var(--radius-control)-4px)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground disabled:opacity-50"
+          :disabled="columnCount <= 2"
+          @click="selectColumn(Math.max(2, columnCount - 1) as ColumnCount)"
+          title="放大网格"
         >
-          行数 {{ rowCountLabel }}
-          <ChevronDown
-            class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
-            :class="openDropdown === 'row' ? 'rotate-180' : ''"
-          />
+          <ZoomIn class="h-4 w-4" />
         </button>
-        <div
-          v-if="openDropdown === 'row'"
-          class="absolute right-0 top-full z-50 mt-1 min-w-[120px] rounded-[var(--radius-card)] border border-border bg-surface p-1 shadow-md"
-          @click.stop
-        >
-          <button
-            v-for="opt in rowOptions"
-            :key="String(opt.value)"
-            type="button"
-            class="flex w-full items-center rounded-[var(--radius-control)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-subtle"
-            :class="rowCount === opt.value ? 'bg-primary-soft text-primary' : 'text-foreground'"
-            @click="selectRow(opt.value)"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
       </div>
-
-      <!-- Photo size -->
-      <div class="relative">
-        <button
-          type="button"
-          class="inline-flex items-center gap-1 rounded-[var(--radius-control)] border border-transparent px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle"
-          @click.stop="openDropdown = openDropdown === 'size' ? null : 'size'"
-        >
-          大小 {{ photoSizeLabel }}
-          <ChevronDown
-            class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
-            :class="openDropdown === 'size' ? 'rotate-180' : ''"
-          />
-        </button>
-        <div
-          v-if="openDropdown === 'size'"
-          class="absolute right-0 top-full z-50 mt-1 min-w-[120px] rounded-[var(--radius-card)] border border-border bg-surface p-1 shadow-md"
-          @click.stop
-        >
-          <button
-            v-for="opt in photoSizeOptions"
-            :key="opt.value"
-            type="button"
-            class="flex w-full items-center rounded-[var(--radius-control)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-subtle"
-            :class="photoSize === opt.value ? 'bg-primary-soft text-primary' : 'text-foreground'"
-            @click="selectPhotoSize(opt.value)"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
-      </div>
-
     </div>
 
     <!-- Content -->

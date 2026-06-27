@@ -5,6 +5,7 @@ import { useAuthStore } from '@/features/auth/stores/auth'
 import { Github } from 'lucide-vue-next'
 import SurfaceCard from '@/shared/components/ui/SurfaceCard.vue'
 import GoogleIcon from '@/shared/components/ui/GoogleIcon.vue'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -153,13 +154,16 @@ async function handleVerify() {
 
           <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
 
-          <button
-            :disabled="loading || !email.trim()"
-            class="flex h-10 w-full items-center justify-center rounded-[var(--radius-control)] bg-primary text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          <BaseButton
+            size="md"
+            type="button"
+            :loading="loading"
+            :disabled="!email.trim()"
+            class="w-full"
             @click="handleSendOtp"
           >
-            {{ loading ? '处理中...' : '继续' }}
-          </button>
+            继续
+          </BaseButton>
 
           <p class="mt-3 text-center text-xs text-muted-foreground">
             继续即表示你同意
@@ -176,24 +180,32 @@ async function handleVerify() {
               <div class="h-px flex-1 bg-border" />
             </div>
             <div class="space-y-2">
-              <button
+              <BaseButton
                 v-if="oauthEnabled('github')"
                 type="button"
-                class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface text-sm font-medium text-foreground transition-colors hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                variant="secondary"
+                size="md"
+                class="w-full"
                 @click="auth.startOAuth('github')"
               >
-                <Github class="h-4 w-4" />
+                <template #icon>
+                  <Github class="h-4 w-4" />
+                </template>
                 使用 GitHub 继续
-              </button>
-              <button
+              </BaseButton>
+              <BaseButton
                 v-if="oauthEnabled('google')"
                 type="button"
-                class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface text-sm font-medium text-foreground transition-colors hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                variant="secondary"
+                size="md"
+                class="w-full"
                 @click="auth.startOAuth('google')"
               >
-                <GoogleIcon class="h-4 w-4" />
+                <template #icon>
+                  <GoogleIcon class="h-4 w-4" />
+                </template>
                 使用 Google 继续
-              </button>
+              </BaseButton>
             </div>
           </template>
         </template>
@@ -218,13 +230,16 @@ async function handleVerify() {
             />
           </div>
           <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
-          <button
-            :disabled="loading || !invitationCode.trim()"
-            class="flex h-10 w-full items-center justify-center rounded-[var(--radius-control)] bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          <BaseButton
+            size="md"
+            type="button"
+            :loading="loading"
+            :disabled="!invitationCode.trim()"
+            class="w-full"
             @click="handleOAuthInvitation"
           >
-            {{ loading ? '注册中...' : '完成注册并登录' }}
-          </button>
+            完成注册并登录
+          </BaseButton>
           <button class="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground" @click="backToEmail">
             使用邮箱登录
           </button>
@@ -252,13 +267,16 @@ async function handleVerify() {
 
           <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
 
-          <button
-            :disabled="loading || !invitationCode.trim()"
-            class="flex h-10 w-full items-center justify-center rounded-[var(--radius-control)] bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          <BaseButton
+            size="md"
+            type="button"
+            :loading="loading"
+            :disabled="!invitationCode.trim()"
+            class="w-full"
             @click="handleInvitationOtp"
           >
-            {{ loading ? '发送中...' : '验证邀请码并发送验证码' }}
-          </button>
+            验证邀请码并发送验证码
+          </BaseButton>
 
           <button class="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground" @click="backToEmail">
             返回修改邮箱
@@ -286,13 +304,16 @@ async function handleVerify() {
 
           <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
 
-          <button
-            :disabled="loading || otpCode.trim().length < 4"
-            class="flex h-10 w-full items-center justify-center rounded-[var(--radius-control)] bg-primary text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          <BaseButton
+            size="md"
+            type="button"
+            :loading="loading"
+            :disabled="otpCode.trim().length < 4"
+            class="w-full"
             @click="handleVerify"
           >
-            {{ loading ? '验证中...' : '登录 / 注册' }}
-          </button>
+            登录 / 注册
+          </BaseButton>
 
           <button
             class="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"

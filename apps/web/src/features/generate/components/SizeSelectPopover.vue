@@ -45,12 +45,14 @@ useClickOutside(containerRef, () => {
     <button
       type="button"
       :disabled="disabled"
-      class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border bg-surface px-3 text-sm font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-control)] border bg-surface px-4 text-base font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       :class="open ? 'border-primary' : 'border-border hover:border-border-strong'"
       @click.stop="toggle"
     >
-      <span class="truncate">尺寸 · {{ selected?.label || '比例' }}</span>
-      <ChevronDown class="h-3.5 w-3.5 text-muted-foreground shrink-0" :class="open && 'rotate-180'" />
+      <span class="truncate">
+        {{ selected?.label || '比例' }}
+      </span>
+      <ChevronDown class="h-4 w-4 text-muted-foreground shrink-0" :class="open && 'rotate-180'" />
     </button>
 
     <div
@@ -63,16 +65,23 @@ useClickOutside(containerRef, () => {
           v-for="opt in options"
           :key="opt.value"
           type="button"
+          :title="opt.label"
           :class="cn(
-            'flex flex-col items-center justify-center rounded-[var(--radius-control)] border px-2 py-2 text-center transition-colors',
+            'flex items-center justify-center rounded-[var(--radius-control)] border h-10 transition-colors',
             opt.value === selectedRatioValue
               ? 'border-primary bg-primary-soft text-primary'
               : 'border-border bg-transparent text-foreground hover:bg-surface-subtle'
           )"
           @click="select(opt.value)"
         >
-          <span class="text-sm font-medium">{{ opt.label }}</span>
-          <span class="mt-0.5 text-[10px] text-muted-foreground">{{ opt.desc }}</span>
+          <div :class="[
+             'border-2 border-current rounded-[2px] opacity-80',
+             opt.label === '1:1' ? 'w-4 h-4' :
+             opt.label === '4:3' || opt.label === '3:2' ? 'w-5 h-3.5' :
+             opt.label === '3:4' || opt.label === '2:3' ? 'w-3.5 h-5' :
+             opt.label === '16:9' ? 'w-6 h-3.5' :
+             opt.label === '9:16' ? 'w-3.5 h-6' : 'w-4 h-4'
+           ]" />
         </button>
       </div>
     </div>

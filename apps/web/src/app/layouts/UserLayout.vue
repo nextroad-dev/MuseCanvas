@@ -93,7 +93,7 @@ useClickOutside(userMenuRef, closeUserMenu)
         <div ref="userMenuRef" class="relative">
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-full bg-primary-soft text-sm font-medium text-primary"
+            class="flex h-8 w-8 items-center justify-center rounded-full bg-primary-soft text-sm font-medium text-primary transition-all hover:ring-2 hover:ring-primary/30 hover:bg-primary/20 active:scale-95"
             :title="auth.user?.email"
             @click.stop="toggleUserMenu"
           >

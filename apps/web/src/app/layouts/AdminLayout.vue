@@ -68,7 +68,7 @@ const navGroups: NavGroup[] = [
       <div class="ml-auto hidden items-center gap-3 md:flex">
         <span class="text-xs text-muted-foreground">{{ auth.user?.email }}</span>
         <button
-          class="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground hover:bg-surface-subtle"
+          class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary-soft text-primary transition-all hover:ring-2 hover:ring-primary/30 hover:bg-primary/20 active:scale-95"
           :title="auth.user?.email"
         >
           <span class="text-sm font-medium">{{ auth.user?.email?.charAt(0).toUpperCase() }}</span>

@@ -53,6 +53,7 @@ function handleKeydown(e: KeyboardEvent) {
         <!-- Drawer -->
         <div
           ref="drawerRef"
+          :data-position="position || 'right'"
           :class="cn(
             'absolute top-0 h-full bg-surface shadow-lg',
             position === 'right' ? 'right-0' : 'left-0',
@@ -66,7 +67,7 @@ function handleKeydown(e: KeyboardEvent) {
               <h3 v-if="title" class="text-sm font-semibold text-foreground">{{ title }}</h3>
               <slot name="header" />
               <button
-                class="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-neutral-500 hover:bg-neutral-100"
+                class="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground hover:bg-surface-subtle"
                 aria-label="关闭"
                 @click="close"
               >

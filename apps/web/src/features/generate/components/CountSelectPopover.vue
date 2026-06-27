@@ -44,12 +44,12 @@ useClickOutside(containerRef, () => {
     <button
       type="button"
       :disabled="disabled"
-      class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border bg-surface px-3 text-sm font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-control)] border bg-surface px-4 text-base font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       :class="open ? 'border-primary' : 'border-border hover:border-border-strong'"
       @click.stop="toggle"
     >
-      <span class="truncate">数量 · {{ modelValue }}</span>
-      <ChevronDown class="h-3.5 w-3.5 text-muted-foreground shrink-0" :class="open && 'rotate-180'" />
+      <span class="truncate">{{ modelValue }}</span>
+      <ChevronDown class="h-4 w-4 text-muted-foreground shrink-0" :class="open && 'rotate-180'" />
     </button>
 
     <div

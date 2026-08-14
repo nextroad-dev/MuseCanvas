@@ -61,35 +61,30 @@ corepack enable
 pnpm install
 ```
 
-2. 从 `.env.example` 创建 `.env`，本地至少填写：
-
-```bash
-POSTGRES_PASSWORD=
-SESSION_SECRET=
-SMTP_ENCRYPTION_KEY=
-ADMIN_EMAIL=
-S3_ACCESS_KEY_ID=
-S3_SECRET_ACCESS_KEY=
-OAUTH_CREDENTIALS_ENCRYPTION_KEY=
-PROVIDER_CREDENTIALS_ENCRYPTION_KEY=
-```
-
-3. 启动完整本地环境：
+2. 启动完整本地环境（首次会自动生成密钥和随机密码）：
 
 ```bash
 pnpm compose:up
 ```
 
-等价于先准备提示词模板，再执行默认的 `docker compose up --build -d`。
+等价于自动生成 `.env` → 准备提示词模板 → `docker compose up --build -d`。
 
-4. 访问服务：
+3. 访问 `http://localhost:8080`，浏览器会自动进入**初始化引导页面**：
 
-- Web：`http://localhost:8080`
-- Mailpit：`http://localhost:8025`
-- MinIO API：`http://localhost:9000`
-- MinIO Console：`http://localhost:9001`
+- 设置管理员邮箱（OTP 验证码发送到 Mailpit：`http://localhost:8025`）
+- 可选配置供应商凭据、模型和 OAuth 登录
+- 完成引导后即可开始创作
 
-API 容器启动时会执行幂等 migration，并根据 `ADMIN_EMAIL` 创建或恢复首个管理员。管理员登录后，可在后台配置 OAuth 应用、供应商凭据和模型参数。未配置可用供应商凭据时，生成任务会失败为明确错误，不会用占位图片伪装成功。
+4. 其他服务：
+
+| 服务 | 地址 | 用途 |
+| --- | --- | --- |
+| Web | `http://localhost:8080` | 前端应用 |
+| Mailpit | `http://localhost:8025` | 邮件捕获（验证码） |
+| MinIO API | `http://localhost:9000` | 对象存储 |
+| MinIO Console | `http://localhost:9001` | 对象存储管理后台 |
+
+> 手动创建 `.env` 可以覆盖自动生成的配置。本地开发至少需要 `POSTGRES_PASSWORD`、`SESSION_SECRET`、`S3_ACCESS_KEY_ID`、`S3_SECRET_ACCESS_KEY`，其余由引导页面或容器默认值自动处理。
 
 停止本地环境：
 

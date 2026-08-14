@@ -19,6 +19,7 @@ import { deleteJobWithAssets } from '../../../src/modules/generations/handlers'
 import { createProviderCredential, updateProviderCredential, deleteProviderCredential, testProviderCredential } from '../../../src/modules/admin/provider-credentials'
 import { updateOAuthProvider } from '../../../src/modules/admin/oauth'
 import { updatePromptOptimizationSettings } from '../../../src/modules/admin/prompt-optimization'
+import { setupStatus, setupAdminRequest, setupAdminVerify } from '../../../src/modules/setup/handlers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest, context: Context) {
   const path = await cleanPath(context)
   if (path === 'health/live') return ok({ status: 'ok' })
   if (path === 'health/ready') { try { await db().query('SELECT 1'); return ok({ status: 'ready' }) } catch { return fail('DEPENDENCY_UNAVAILABLE', '服务尚未就绪', 503) } }
+  if (path === 'setup/status') return setupStatus()
   if (path === 'registration') { const r = await db().query('SELECT mode FROM registration_settings WHERE singleton=true'); return ok({ requiresInvitation: r.rows[0]?.mode === 'invite_only' }) }
   if (path === 'session') { const actor = await requireActor(request); return isResponse(actor) ? actor : ok({ user: actor }) }
 
@@ -115,6 +117,8 @@ export async function GET(request: NextRequest, context: Context) {
 export async function POST(request: NextRequest, context: Context) {
   if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403)
   const path = await cleanPath(context); const input = await body(request)
+  if (path === 'setup/admin/request') return setupAdminRequest(request)
+  if (path === 'setup/admin/verify') return setupAdminVerify(request)
   if (path === 'auth/otp/request') {
     if (!emailValid(input.email)) return fail('INVALID_INPUT', '邮箱格式不正确')
     const email = input.email.trim().toLowerCase(); const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown'

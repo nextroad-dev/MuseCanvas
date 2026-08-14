@@ -38,7 +38,7 @@ services:
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
       REDIS_URL: redis://redis:6379
       SESSION_SECRET: ${SESSION_SECRET}
-      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       COOKIE_SECURE: "false"
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"

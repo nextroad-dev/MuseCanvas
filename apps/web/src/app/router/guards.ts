@@ -1,13 +1,26 @@
 import type { Router } from 'vue-router'
 import { useAuthStore } from '@/features/auth/stores/auth'
+import { useSetupStore } from '@/features/setup/stores/setup'
 
 export function setupGuards(router: Router) {
+  let setupChecked = false
+
   router.beforeEach(async (to) => {
     const auth = useAuthStore()
 
-    // Public pages (e.g. legal) — accessible whether logged in or not
+    // Public pages (e.g. legal, setup) — accessible whether logged in or not
     if (to.meta.public) {
       return true
+    }
+
+    // Check setup status on first navigation (skip for /setup itself)
+    if (!setupChecked && to.name !== 'setup') {
+      const setup = useSetupStore()
+      await setup.checkStatus()
+      setupChecked = true
+      if (!setup.setupComplete && to.name !== 'setup') {
+        return { path: '/setup' }
+      }
     }
 
     if (to.meta.guest) {

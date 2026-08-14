@@ -10,7 +10,7 @@
     "test": "pnpm -r --if-present test",
     "test:e2e:admin": "node tests/e2e/admin-panel.mjs",
     "prepare:prompt-templates": "node scripts/prepare-prompt-templates.mjs",
-    "compose:up": "pnpm prepare:prompt-templates && docker compose up --build -d",
+    "compose:up": "node scripts/generate-env.mjs && pnpm prepare:prompt-templates && docker compose up --build -d",
     "compose:down": "docker compose down"
   }
 }

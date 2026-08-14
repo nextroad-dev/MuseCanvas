@@ -28,6 +28,12 @@ const routes: RouteRecordRaw[] = [
     meta: { public: true },
   },
   {
+    path: '/setup',
+    name: 'setup',
+    component: () => import('@/features/setup/views/SetupPage.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/',
     component: () => import('@/app/layouts/UserLayout.vue'),
     children: [

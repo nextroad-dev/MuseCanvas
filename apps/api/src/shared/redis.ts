@@ -1,0 +1,37 @@
+import { createClient } from 'redis'
+
+let redis: ReturnType<typeof createClient> | undefined
+
+export async function limited(key: string, max: number, seconds: number): Promise<boolean> {
+  try {
+    redis ??= createClient({ url: process.env.REDIS_URL })
+    if (!redis.isOpen) await redis.connect()
+    const count = await redis.incr(`rate:${key}`)
+    if (count === 1) await redis.expire(`rate:${key}`, seconds)
+    return count > max
+  } catch {
+    return false
+  }
+}
+
+async function redisClient() {
+  redis ??= createClient({ url: process.env.REDIS_URL })
+  if (!redis.isOpen) await redis.connect()
+  return redis
+}
+
+export async function redisSet(key: string, value: object, ttlSeconds: number): Promise<void> {
+  const client = await redisClient()
+  await client.set(key, JSON.stringify(value), { EX: ttlSeconds })
+}
+
+export async function redisGetDel<T>(key: string): Promise<T | null> {
+  const client = await redisClient()
+  const raw = await client.getDel(key)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return null
+  }
+}

@@ -6,8 +6,10 @@ export async function limited(key: string, max: number, seconds: number): Promis
   try {
     redis ??= createClient({ url: process.env.REDIS_URL })
     if (!redis.isOpen) await redis.connect()
-    const count = await redis.incr(`rate:${key}`)
-    if (count === 1) await redis.expire(`rate:${key}`, seconds)
+    const count = (await redis.eval(
+      "local current = redis.call('INCR', KEYS[1]); if current == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return current",
+      { keys: [`rate:${key}`], arguments: [String(seconds)] },
+    )) as number
     return count > max
   } catch {
     return false

@@ -31,14 +31,24 @@
   --color-neutral-status: #59615B;
   --color-neutral-soft: #F1F3F2;
 
-  /* Legacy aliases for compatibility */
+  /* Legacy aliases for compatibility — DO NOT ADD NEW USAGES */
   --color-muted: #f5f5f5;
   --color-danger-hover: #dc2626;
 
-  /* Dark surfaces (Lightbox only) */
+  /* Overlay / dark surfaces */
   --color-surface-dark: #050505;
   --color-surface-dark-muted: #111111;
   --color-surface-dark-border: #262626;
+  --color-overlay: #000000;
+
+  /* Z-Index scale */
+  --z-index-content: 10;
+  --z-index-dropdown: 20;
+  --z-index-popover: 30;
+  --z-index-sticky: 40;
+  --z-index-nav: 40;
+  --z-index-overlay: 50;
+  --z-index-toast: 100;
 
   /* Radius */
   --radius-control: 10px;

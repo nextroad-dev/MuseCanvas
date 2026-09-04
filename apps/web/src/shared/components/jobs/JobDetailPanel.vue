@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { X, RotateCcw, Copy, Plus, Trash2, ChevronDown, Download } from 'lucide-vue-next'
 import StatusBadge from '@/shared/components/ui/StatusBadge.vue'
 import type { GenerationJob, GenerationOutput } from '@/shared/types'
-
+import Lightbox from '@/shared/components/ui/Lightbox.vue'
 const props = defineProps<{
   job: GenerationJob
   hideHeader?: boolean
@@ -19,6 +19,21 @@ const emit = defineEmits<{
 }>()
 
 const showReuseMenu = ref(false)
+const lightboxOpen = ref(false)
+const lightboxIndex = ref(0)
+const lightboxImages = computed(() =>
+  (props.job.inputImages || []).map((img, idx) => ({
+    url: img.imageUrl,
+    prompt: `参考图 ${idx + 1}`,
+    alt: `参考图 ${idx + 1}`,
+  }))
+)
+
+function previewInputImage(idx: number) {
+  lightboxIndex.value = idx
+  lightboxOpen.value = true
+}
+
 
 const originalPrompt = computed(() => props.job.inputPrompt || props.job.prompt || '')
 const optimizedPrompt = computed(() => props.job.finalPrompt || '')
@@ -62,6 +77,7 @@ const durationLabel = computed(() => {
 const fields = computed(() => [
   { label: '任务 ID', value: props.job.id, mono: true },
   { label: '使用模型', value: props.job.modelName || '—', mono: false },
+  ...(props.job.quotedCredits != null ? [{ label: '消耗积分', value: `${props.job.quotedCredits} 积分`, mono: false }] : []),
   { label: '耗时', value: durationLabel.value, mono: false },
   { label: '选择模板', value: props.job.templateName || '无', mono: false },
 ])
@@ -69,13 +85,27 @@ const fields = computed(() => [
 function handleDownloadAll() {
   const outputs = props.job.outputs || []
   if (outputs.length <= 1) {
-    if (outputs[0]?.imageUrl) emit('download', outputs[0].imageUrl)
+    const first = outputs[0]
+    if (first) emit('download', first.url || first.imageUrl)
   } else {
     outputs.forEach((o: GenerationOutput, i: number) => {
-      setTimeout(() => emit('download', o.imageUrl), i * 300)
+      setTimeout(() => emit('download', o.url || o.imageUrl), i * 300)
     })
   }
 }
+const isVideoJob = computed(() =>
+  props.job.mediaKind === 'video'
+  || props.job.modelKind === 'video'
+  || (props.job.outputs || []).some((o) => o.mediaKind === 'video'),
+)
+const firstOutputUrl = computed(() => {
+  const first = props.job.outputs?.[0]
+  return first ? first.url || first.imageUrl : ''
+})
+const firstOutputPoster = computed(() => {
+  const first = props.job.outputs?.[0]
+  return first && first.mediaKind === 'video' ? first.metadata.posterUrl || undefined : undefined
+})
 </script>
 
 <template>
@@ -91,15 +121,25 @@ function handleDownloadAll() {
     </div>
 
     <div class="flex-1 overflow-auto p-4">
-      <!-- Image Preview Section -->
+      <!-- Media Preview Section -->
       <div v-if="job.outputs && job.outputs.length > 0" class="mb-5 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-subtle">
+        <video
+          v-if="job.outputs[0].mediaKind === 'video'"
+          :src="firstOutputUrl"
+          :poster="firstOutputPoster"
+          controls
+          preload="metadata"
+          playsinline
+          class="block max-h-48 w-full bg-black"
+        />
         <img
-          :src="job.outputs[0].imageUrl"
+          v-else
+          :src="firstOutputUrl"
           alt="Preview"
           class="block h-auto max-h-48 w-full object-cover"
         />
         <div v-if="job.outputs.length > 1" class="border-t border-border bg-surface/50 px-2 py-1 text-center text-xs text-muted-foreground backdrop-blur-sm">
-          共 {{ job.outputs.length }} 张图片（仅预览第一张）
+          共 {{ job.outputs.length }} {{ isVideoJob ? '个视频' : '张图片' }}（仅预览第一个）
         </div>
       </div>
 
@@ -139,6 +179,42 @@ function handleDownloadAll() {
           {{ optimizedPromptNotice }}
         </p>
       </div>
+
+      <!-- Reference Images Section -->
+      <div v-if="job.inputImages && job.inputImages.length > 0" class="mt-5 border-t border-border/60 pt-5">
+        <div class="flex items-center justify-between">
+          <p class="text-xs font-medium text-muted-foreground">输入参考图 ({{ job.inputImages.length }})</p>
+          <span class="text-[11px] text-muted-foreground">点击预览</span>
+        </div>
+        <div class="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <button
+            v-for="(img, idx) in job.inputImages"
+            :key="img.id || idx"
+            type="button"
+            class="group relative aspect-square overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface-subtle transition-all hover:border-primary hover:shadow-sm"
+            :aria-label="`查看参考图 ${idx + 1}`"
+            @click="previewInputImage(idx)"
+          >
+            <img
+              :src="img.imageUrl"
+              :alt="`参考图 ${idx + 1}`"
+              class="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+              loading="lazy"
+            />
+            <span
+              class="pointer-events-none absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/65 text-[10px] font-semibold text-white"
+            >
+              {{ idx + 1 }}
+            </span>
+            <span
+              v-if="img.width && img.height"
+              class="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/50 px-1 py-0.5 text-center text-[9px] text-white/90 backdrop-blur-xs"
+            >
+              {{ img.width }}x{{ img.height }}
+            </span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Actions -->
@@ -149,7 +225,7 @@ function handleDownloadAll() {
         @click="handleDownloadAll"
       >
         <Download class="h-4 w-4" />
-        {{ (job.outputs?.length ?? 0) > 1 ? '全部下载图片' : '下载图片' }}
+        {{ (job.outputs?.length ?? 0) > 1 ? (isVideoJob ? '全部下载视频' : '全部下载图片') : (isVideoJob ? '下载视频' : '下载图片') }}
       </button>
       <button
         v-if="isFailed"
@@ -215,5 +291,12 @@ function handleDownloadAll() {
         删除任务
       </button>
     </div>
+
+    <!-- Lightbox for reference images -->
+    <Lightbox
+      :images="lightboxImages"
+      v-model:open="lightboxOpen"
+      v-model="lightboxIndex"
+    />
   </div>
 </template>

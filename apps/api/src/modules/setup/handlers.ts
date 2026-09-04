@@ -57,6 +57,8 @@ export async function setupAdminVerify(request: NextRequest): Promise<NextRespon
     return fail('RATE_LIMITED', '验证尝试过多，请稍后再试', 429)
 
   const result = await transaction(async (client) => {
+    const adminCheck = await client.query("SELECT count(*)::int AS cnt FROM users WHERE role='admin' AND deleted_at IS NULL")
+    if (adminCheck.rows[0].cnt > 0) return null
     const challengeResult = await client.query(
       "SELECT * FROM otp_challenges WHERE lower(email)=$1 AND consumed_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
       [email],

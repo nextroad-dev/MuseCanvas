@@ -6,6 +6,7 @@ import type {
   ProviderCredential, ProviderCredentialInput,
   AdminOAuthProvider, OAuthProviderInput,
   PromptTemplateIndex, PromptOptimizationSettings,
+  BillingSettings, UpdateBillingSettingsInput, AdjustCreditsInput, CreditBalance,
 } from '@/shared/types'
 import { api } from '@/shared/services/api'
 
@@ -38,6 +39,7 @@ export const useAdminStore = defineStore('admin', () => {
   const oauthProviders = ref<AdminOAuthProvider[]>([])
   const promptTemplates = ref<PromptTemplateIndex | null>(null)
   const promptOptimizationSettings = ref<PromptOptimizationSettings | null>(null)
+  const billingSettings = ref<BillingSettings | null>(null)
 
   async function fetchDashboard() {
     const res = await api<DashboardMetrics>('/api/admin/dashboard')
@@ -238,15 +240,45 @@ export const useAdminStore = defineStore('admin', () => {
     return res
   }
 
+  async function fetchBillingSettings() {
+    const res = await api<BillingSettings>('/api/admin/billing-settings')
+    if (res.success && res.data) billingSettings.value = res.data
+    return res
+  }
+
+  async function updateBillingSettings(data: UpdateBillingSettingsInput) {
+    const res = await api<BillingSettings>('/api/admin/billing-settings', {
+      method: 'PATCH',
+      body: data,
+    })
+    if (res.success && res.data) billingSettings.value = res.data
+    return res
+  }
+
+  async function adjustUserCredits(id: string, data: AdjustCreditsInput) {
+    const res = await api<CreditBalance>(`/api/admin/users/${id}/adjust-credits`, {
+      method: 'POST',
+      body: data,
+    })
+    if (res.success && res.data) {
+      const u = users.value.find((item) => item.id === id)
+      if (u) {
+        u.credits = res.data
+      }
+    }
+    return res
+  }
+
   return {
     metrics, users, usersTotal, usersNextCursor, models, modelPresets, jobs, jobsTotal, jobsNextCursor,
-    requiresInvitation, invitations, providerCredentials, oauthProviders, promptTemplates, promptOptimizationSettings,
-    fetchDashboard, fetchUsers, updateUserStatus, deleteUser,
+    requiresInvitation, invitations, providerCredentials, oauthProviders, promptTemplates, promptOptimizationSettings, billingSettings,
+    fetchDashboard, fetchUsers, updateUserStatus, deleteUser, adjustUserCredits,
     fetchModels, fetchModelPresets, createModel, updateModel, deleteModel, fetchJobs,
     fetchRegistration, setRequiresInvitation,
     fetchInvitations, createInvitation, revokeInvitation,
     fetchProviderCredentials, createProviderCredential, updateProviderCredential, testProviderCredential, deleteProviderCredential,
     fetchOAuthProviders, updateOAuthProvider,
     fetchPromptTemplates, reloadPromptTemplates, fetchPromptOptimizationSettings, updatePromptOptimizationSettings,
+    fetchBillingSettings, updateBillingSettings,
   }
 })

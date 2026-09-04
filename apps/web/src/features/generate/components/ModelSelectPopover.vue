@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { ChevronDown } from 'lucide-vue-next'
+import { computed } from 'vue'
 import type { ModelConfig } from '@/shared/types'
-
-import { useClickOutside } from '@/shared/composables/useClickOutside'
+import SelectPopover from '@/shared/components/ui/SelectPopover.vue'
 
 const props = defineProps<{
   models: ModelConfig[]
@@ -17,42 +15,23 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
 }>()
 
-const containerRef = ref<HTMLElement>()
-
 const selectedModel = computed(() => props.models.find(m => m.id === props.modelValue))
-
-function toggle() {
-  if (props.disabled) return
-  emit('update:open', !props.open)
-}
 
 function select(id: string) {
   emit('update:modelValue', id)
   emit('update:open', false)
 }
-
-useClickOutside(containerRef, () => {
-  emit('update:open', false)
-})
 </script>
 
 <template>
-  <div ref="containerRef" class="relative">
-    <button
-      type="button"
-      :disabled="disabled"
-      class="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-control)] border bg-surface px-4 text-base font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-      :class="open ? 'border-primary' : 'border-border hover:border-border-strong'"
-      @click.stop="toggle"
-    >
-      <span class="truncate max-w-[140px]">{{ selectedModel?.displayName || '选择模型' }}</span>
-      <ChevronDown class="h-4 w-4 text-muted-foreground shrink-0" :class="open && 'rotate-180'" />
-    </button>
-
-    <div
-      v-if="open"
-      class="absolute left-0 top-full z-[70] mt-1.5 w-72 rounded-[var(--radius-card)] border border-border bg-surface p-2 shadow-md"
-    >
+  <SelectPopover
+    :open="open"
+    :disabled="disabled"
+    panel-class="left-0 top-full z-popover mt-1.5 w-72 p-2"
+    @update:open="emit('update:open', $event)"
+  >
+    <template #trigger-label>{{ selectedModel?.displayName || '选择模型' }}</template>
+    <template #default>
       <div class="px-3 pb-2 text-xs font-medium text-muted-foreground">选择模型</div>
       <div class="max-h-64 overflow-auto flex flex-col gap-1">
         <button
@@ -64,10 +43,23 @@ useClickOutside(containerRef, () => {
           @click="select(model.id)"
         >
           <div class="min-w-0 flex-1">
-            <p class="text-sm font-medium">{{ model.displayName }}</p>
+            <p class="flex items-center gap-1.5 text-sm font-medium">
+              <span class="truncate">{{ model.displayName }}</span>
+              <span
+                v-if="model.modelKind === 'video' || (model as any).mediaKind === 'video'"
+                class="shrink-0 rounded bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary"
+              >视频</span>
+              <span
+                v-else-if="model.modelKind === 'language'"
+                class="shrink-0 rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
+              >语言</span>
+            </p>
           </div>
+          <span class="ml-2 shrink-0 rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+            {{ model.pricing?.scheme === 'per_second_v1' ? `${(model.pricing as any).creditsPerSecond} 积分/秒` : `${model.creditsPerImage ?? 0} 积分/${model.modelKind === 'video' ? '次' : '张'}` }}
+          </span>
         </button>
       </div>
-    </div>
-  </div>
+    </template>
+  </SelectPopover>
 </template>

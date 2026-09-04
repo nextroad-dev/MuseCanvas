@@ -30,13 +30,6 @@ services:
       timeout: 3s
       retries: 20
 
-  db-migrate:
-    image: ghcr.io/nextroad-dev/musecanvas-api:${MUSECANVAS_IMAGE_TAG:-latest}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts"]
-    environment: *backend-env
   api:
     image: ghcr.io/nextroad-dev/musecanvas-api:${MUSECANVAS_IMAGE_TAG:-latest}
     depends_on:
@@ -83,6 +76,13 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+  db-migrate:
+    image: ghcr.io/nextroad-dev/musecanvas-api:${MUSECANVAS_IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts"]
+    environment: *backend-env
 
   worker:
     image: ghcr.io/nextroad-dev/musecanvas-worker:${MUSECANVAS_IMAGE_TAG:-latest}

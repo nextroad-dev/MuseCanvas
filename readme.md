@@ -35,7 +35,7 @@ packages/
   domain/    框架无关的业务规则和状态机
   providers/ 图像生成、对象存储和邮件服务适配器
 docs/        功能设计、实现记录和设计系统
-infra/       Dockerfile 与 Nginx 配置
+deploy/      Compose 编排、Dockerfile 与 Nginx 配置
 scripts/     本地和部署辅助脚本
 .github/     GitHub Actions 工作流
 ```
@@ -44,11 +44,11 @@ scripts/     本地和部署辅助脚本
 
 | 文件 | 用途 |
 | --- | --- |
-| `compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit。|
-| `compose.dev.yaml` | 开发环境兼容入口，保留给显式 `docker compose -f compose.dev.yaml` 使用，同样面向本地开发。|
-| `compose.prod.yaml` | 从源码构建的部署模板，不包含 MinIO / Mailpit，必须接入外部 S3 兼容对象存储和 SMTP 邮件服务。|
-| `compose.images.yaml` | 使用 GHCR 已构建镜像部署，不包含 MinIO / Mailpit，默认通过 `18080:80` 暴露 Nginx。|
-| `infra/docker/*.Dockerfile` | `api`、`worker`、`web`、`nginx` 四个镜像定义。|
+| `deploy/compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit。|
+| `deploy/compose.dev.yaml` | 开发环境兼容入口，保留给显式 `docker compose --project-directory . --env-file .env -f deploy/compose.dev.yaml` 使用，同样面向本地开发。|
+| `deploy/compose.prod.yaml` | 从源码构建的部署模板，不包含 MinIO / Mailpit，必须接入外部 S3 兼容对象存储和 SMTP 邮件服务。|
+| `deploy/compose.images.yaml` | 使用 GHCR 已构建镜像部署，不包含 MinIO / Mailpit，默认通过 `18080:80` 暴露 Nginx。|
+| `deploy/docker/*.Dockerfile` | `api`、`worker`、`web`、`nginx` 四个镜像定义。|
 
 > MinIO 和 Mailpit 只用于本地开发，方便模拟对象存储和邮件投递。公开部署或生产环境不要使用内嵌 MinIO / Mailpit，请接入真实的 S3 兼容对象存储与 SMTP 服务。
 
@@ -67,7 +67,7 @@ pnpm install
 pnpm compose:up
 ```
 
-等价于自动生成 `.env` → 准备提示词模板 → `docker compose up --build -d`。
+等价于自动生成 `.env` → 准备提示词模板 → `docker compose --project-directory . --env-file .env -f deploy/compose.yaml up --build -d`。
 
 3. 访问 `http://localhost:8080`，浏览器会自动进入**初始化引导页面**：
 
@@ -94,7 +94,7 @@ pnpm compose:down
 
 ## 部署环境要求
 
-`compose.prod.yaml` 和 `compose.images.yaml` 都不内置 S3 或邮件服务。部署前需要准备：
+`deploy/compose.prod.yaml` 和 `deploy/compose.images.yaml` 都不内置 S3 或邮件服务。部署前需要准备：
 
 - 一个可访问的 S3 兼容对象存储，例如 AWS S3、Cloudflare R2、MinIO 独立实例、阿里云 OSS S3 兼容层等。
 - 一个真实 SMTP 邮件服务，用于 OTP 登录、邀请注册和系统邮件。
@@ -187,11 +187,11 @@ ghcr.io/nextroad-dev/musecanvas-web:latest
 ghcr.io/nextroad-dev/musecanvas-nginx:latest
 ```
 
-部署机可以使用 `compose.images.yaml`：
+部署机可以使用 `deploy/compose.images.yaml`：
 
 ```bash
-docker compose -f compose.images.yaml pull
-docker compose -f compose.images.yaml up -d
+docker compose --project-directory . --env-file .env -f deploy/compose.images.yaml pull
+docker compose --project-directory . --env-file .env -f deploy/compose.images.yaml up -d
 ```
 
 可选变量：
@@ -214,10 +214,10 @@ echo GITHUB_TOKEN | docker login ghcr.io -u nextroad-dev --password-stdin
 如果部署机需要直接从仓库源码构建镜像，可以使用：
 
 ```bash
-docker compose -f compose.prod.yaml up --build -d
+docker compose --project-directory . --env-file .env -f deploy/compose.prod.yaml up --build -d
 ```
 
-这一路径同样要求外部 S3 和 SMTP。`compose.prod.yaml` 只负责应用、Nginx、PostgreSQL 与 Redis 的编排，不会启动 MinIO 或 Mailpit。
+这一路径同样要求外部 S3 和 SMTP。`deploy/compose.prod.yaml` 只负责应用、Nginx、PostgreSQL 与 Redis 的编排，不会启动 MinIO 或 Mailpit。
 
 ## 常用命令
 
@@ -250,7 +250,7 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
-docker compose ps
+docker compose --project-directory . --env-file .env -f deploy/compose.yaml ps
 ```
 
 涉及前端视觉、交互或组件时，先参考 `docs/design-system.md`。涉及 `docs/{序号}-{功能名}/design.md` 对应功能时，同目录 `impl.md` 和 `result.md` 也是交付物的一部分。

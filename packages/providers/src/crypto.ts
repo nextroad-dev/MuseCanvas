@@ -1,7 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
 
 function providerKey(): Buffer {
-  return createHash('sha256').update(process.env.PROVIDER_CREDENTIALS_ENCRYPTION_KEY || '').digest()
+  const key = process.env.PROVIDER_CREDENTIALS_ENCRYPTION_KEY
+  if (!key) throw new Error('PROVIDER_CREDENTIALS_ENCRYPTION_KEY is required')
+  return createHash('sha256').update(key).digest()
 }
 
 export function encryptApiKey(value: string): string {

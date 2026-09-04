@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { buildLanguageModelRequest, callLanguageModel, generateImages, imageGenerationBody, LanguageModelHttpError, limitGeneratedImages, loadPromptTemplateIndex, normalizeSeedreamSize, parseExactJsonString, parseLanguageModelResponse, ProviderHttpError, providerModelsEndpoint, renderPromptTemplate } from './index'
+import { buildLanguageModelRequest, callLanguageModel, generateImages, imageGenerationBody, inspectInputImage, LanguageModelHttpError, limitGeneratedImages, loadPromptTemplateIndex, MAX_UPLOAD_IMAGE_BYTES, normalizeSeedreamSize, parseExactJsonString, parseLanguageModelResponse, ProviderHttpError, providerEndpoint, providerModelsEndpoint, renderPromptTemplate, validateInputImages } from './index'
 
 async function fixture(index: unknown, files: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'muse-templates-'))
@@ -28,10 +28,21 @@ test('rejects duplicate names, unknown fields, traversal, invalid variables and 
   const root = await fixture({ templates: [{ name: 'A', description: 'one', path: 'a.md' }] }, { 'a.md': '{{unknown}}' }); try { assert.equal((await loadPromptTemplateIndex(path.join(root, 'index.json'))).valid, false) } finally { await rm(root, { recursive: true }) }
 })
 
-test('rejects symlinks resolving outside the template root', async () => {
+test('rejects symlinks resolving outside the template root', async (t) => {
   const outside = await mkdtemp(path.join(tmpdir(), 'muse-outside-')); await writeFile(path.join(outside, 'secret.md'), 'secret')
   const root = await fixture({ templates: [{ name: 'A', description: 'one', path: 'linked.md' }] })
-  try { await symlink(path.join(outside, 'secret.md'), path.join(root, 'linked.md')); const index = await loadPromptTemplateIndex(path.join(root, 'index.json')); assert.equal(index.valid, false); assert.equal(index.entries[0].errorCode, 'PROMPT_TEMPLATE_FILE_INVALID') } finally { await rm(root, { recursive: true }); await rm(outside, { recursive: true }) }
+  try {
+    try {
+      await symlink(path.join(outside, 'secret.md'), path.join(root, 'linked.md'))
+    } catch (err) {
+      if (process.platform === 'win32' && err instanceof Error && 'code' in err && err.code === 'EPERM') {
+        t.skip('Windows symlink creation requires elevated privileges')
+        return
+      }
+      throw err
+    }
+    const index = await loadPromptTemplateIndex(path.join(root, 'index.json')); assert.equal(index.valid, false); assert.equal(index.entries[0].errorCode, 'PROMPT_TEMPLATE_FILE_INVALID')
+  } finally { await rm(root, { recursive: true }); await rm(outside, { recursive: true }) }
 })
 
 const baseInput = { vendorModelId: 'model', apiKey: 'secret', system: 'system', user: 'user', schemaName: 'result', schema: { type: 'object' }, maxOutputTokens: 100, timeoutMs: 1000 }
@@ -69,6 +80,277 @@ test('builds image generation bodies with provider-specific fields only', () => 
 test('caps provider image results to the requested count', () => {
   assert.deepEqual(limitGeneratedImages(['a', 'b'], 1), ['a'])
   assert.deepEqual(limitGeneratedImages(['a', 'b', 'c'], 2), ['a', 'b'])
+})
+
+function createMockPng(width = 100, height = 100): Buffer {
+  const buf = Buffer.alloc(33)
+  buf.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+  buf.writeUInt32BE(13, 8)
+  buf.write('IHDR', 12, 'latin1')
+  buf.writeUInt32BE(width, 16)
+  buf.writeUInt32BE(height, 20)
+  buf[24] = 8
+  buf[25] = 6
+  return buf
+}
+
+function createMockJpeg(width = 100, height = 100): Buffer {
+  const buf = Buffer.alloc(14)
+  buf[0] = 0xff
+  buf[1] = 0xd8
+  buf[2] = 0xff
+  buf[3] = 0xc0
+  buf.writeUInt16BE(11, 4)
+  buf[6] = 8
+  buf.writeUInt16BE(height, 7)
+  buf.writeUInt16BE(width, 9)
+  buf[11] = 3
+  buf[12] = 0xff
+  buf[13] = 0xd9
+  return buf
+}
+
+test('inspectInputImage validates PNG/JPEG magic, dimension bounds, aspect ratio and size cap', () => {
+  const png = inspectInputImage(createMockPng(100, 100))
+  assert.deepEqual(png, { width: 100, height: 100, mimeType: 'image/png', sizeBytes: 33 })
+
+  const jpeg = inspectInputImage(createMockJpeg(200, 300))
+  assert.deepEqual(jpeg, { width: 200, height: 300, mimeType: 'image/jpeg', sizeBytes: 14 })
+
+  assert.equal(inspectInputImage(createMockPng(32, 32)).width, 32)
+  assert.equal(inspectInputImage(createMockPng(6000, 6000)).width, 6000)
+  assert.equal(inspectInputImage(createMockPng(1600, 100)).width, 1600)
+  assert.equal(inspectInputImage(createMockPng(100, 1600)).height, 1600)
+
+  assert.throws(() => inspectInputImage(Buffer.alloc(0)), /INVALID_INPUT_IMAGE/)
+  assert.throws(() => inspectInputImage(Buffer.from('not an image header at all')), /INVALID_INPUT_IMAGE/)
+  assert.throws(() => inspectInputImage(createMockPng(31, 100)), /INVALID_INPUT_IMAGE_SIZE/)
+  assert.throws(() => inspectInputImage(createMockPng(100, 31)), /INVALID_INPUT_IMAGE_SIZE/)
+  assert.throws(() => inspectInputImage(createMockPng(6001, 100)), /INVALID_INPUT_IMAGE_SIZE/)
+  assert.throws(() => inspectInputImage(createMockPng(100, 6001)), /INVALID_INPUT_IMAGE_SIZE/)
+  assert.throws(() => inspectInputImage(createMockPng(1700, 100)), /INVALID_INPUT_IMAGE_SIZE/)
+  assert.throws(() => inspectInputImage(createMockPng(100, 1700)), /INVALID_INPUT_IMAGE_SIZE/)
+
+  const oversizeSingle = Buffer.alloc(MAX_UPLOAD_IMAGE_BYTES + 1)
+  assert.throws(() => inspectInputImage(oversizeSingle), /INVALID_INPUT_IMAGE_SIZE/)
+
+  const img1 = { data: Buffer.alloc(MAX_UPLOAD_IMAGE_BYTES) }
+  img1.data.set(createMockPng(100, 100), 0)
+  const img2 = { data: Buffer.alloc(MAX_UPLOAD_IMAGE_BYTES) }
+  img2.data.set(createMockPng(100, 100), 0)
+  const img3 = { data: createMockPng(100, 100) }
+  assert.throws(() => validateInputImages([img1, img2, img3]), /INVALID_INPUT_IMAGE_SIZE/)
+
+  const five = [1, 2, 3, 4, 5].map(() => ({ data: createMockPng(100, 100) }))
+  assert.throws(() => validateInputImages(five), /INVALID_INPUT_IMAGE/)
+})
+
+test('routes endpoints and builds bodies for image inputs while preserving no-image compatibility', () => {
+  assert.equal(providerEndpoint('openai'), 'https://api.openai.com/v1/images/generations')
+  assert.equal(providerEndpoint('openai', 'https://proxy.example.com/v1'), 'https://proxy.example.com/v1/images/generations')
+  assert.equal(providerEndpoint('openai', undefined, 'edits'), 'https://api.openai.com/v1/images/edits')
+  assert.equal(providerEndpoint('openai', undefined, [{ data: createMockPng(100, 100) }]), 'https://api.openai.com/v1/images/edits')
+
+  assert.equal(providerEndpoint('seedream'), 'https://ark.cn-beijing.volces.com/api/v3/images/generations')
+  assert.equal(providerEndpoint('seedream', undefined, 'edits'), 'https://ark.cn-beijing.volces.com/api/v3/images/generations')
+
+  const mockPng = createMockPng(100, 100)
+  const mockJpeg = createMockJpeg(200, 200)
+
+  const seedreamSingle = imageGenerationBody({
+    adapter: 'seedream',
+    vendorModelId: 'doubao-seedream-4-5-251128',
+    prompt: 'blend picture',
+    size: '2048x2048',
+    count: 1,
+    watermark: false,
+    inputImages: [{ data: mockPng, mimeType: 'image/png' }],
+  })
+  assert.equal(typeof seedreamSingle.image, 'string')
+  assert.equal(String(seedreamSingle.image).startsWith('data:image/png;base64,'), true)
+  assert.equal(seedreamSingle.response_format, 'url')
+
+  const seedreamMulti = imageGenerationBody({
+    adapter: 'seedream',
+    vendorModelId: 'doubao-seedream-4-5-251128',
+    prompt: 'blend pictures',
+    size: '2048x2048',
+    count: 2,
+    watermark: false,
+    inputImages: [{ data: mockPng, mimeType: 'image/png' }, { data: mockJpeg, mimeType: 'image/jpeg' }],
+  })
+  const seedreamUrls = seedreamMulti.image as string[]
+  assert.equal(Array.isArray(seedreamUrls), true)
+  assert.equal(seedreamUrls.length, 2)
+  assert.equal(seedreamUrls[0].startsWith('data:image/png;base64,'), true)
+  assert.equal(seedreamUrls[1].startsWith('data:image/jpeg;base64,'), true)
+})
+
+test('generateImages routes OpenAI to edits endpoint and handles invalid input image bytes', async () => {
+  await assert.rejects(
+    () => generateImages({
+      adapter: 'openai',
+      vendorModelId: 'gpt-image-2',
+      prompt: 'p',
+      size: '1024x1024',
+      count: 1,
+      watermark: false,
+      apiKey: 'secret',
+      inputImages: [{ data: Buffer.from('bad bytes') }],
+    }),
+    /INVALID_INPUT_IMAGE/,
+  )
+
+  await assert.rejects(
+    () => generateImages({
+      adapter: 'seedream',
+      vendorModelId: 'doubao-seedream-4-0-250828',
+      prompt: 'p',
+      size: '1024x1024',
+      count: 1,
+      watermark: false,
+      apiKey: 'secret',
+      inputImages: [{ data: createMockPng(10, 10) }],
+    }),
+    /INVALID_INPUT_IMAGE_SIZE/,
+  )
+
+  const originalFetch = globalThis.fetch
+  let calledUrl = ''
+  const requests: RequestInit[] = []
+  const mockOutputPng = createMockPng(1024, 1024)
+
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    calledUrl = String(input)
+    requests.push(init || {})
+    return new Response(JSON.stringify({
+      data: [{ b64_json: mockOutputPng.toString('base64') }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+
+  try {
+    const images = await generateImages({
+      adapter: 'openai',
+      vendorModelId: 'gpt-image-2',
+      prompt: 'edit prompt',
+      size: '1024x1024',
+      count: 1,
+      watermark: false,
+      apiKey: 'test-key',
+      inputImages: [
+        { data: createMockPng(100, 100), mimeType: 'image/png' },
+        { data: createMockJpeg(120, 120), mimeType: 'image/jpeg' },
+      ],
+    })
+    assert.equal(calledUrl, 'https://api.openai.com/v1/images/edits')
+    const calledRequest = requests[0]
+    assert.ok(calledRequest)
+    assert.equal(new Headers(calledRequest.headers).get('content-type'), null)
+    assert.equal(calledRequest.body instanceof FormData, true)
+    const calledBody = calledRequest.body as FormData
+    assert.equal(calledBody.get('model'), 'gpt-image-2')
+    assert.equal(calledBody.get('prompt'), 'edit prompt')
+    assert.equal(calledBody.get('size'), '1024x1024')
+    assert.equal(calledBody.get('output_format'), 'png')
+    assert.equal(calledBody.get('n'), '1')
+    const sentImages = calledBody.getAll('image[]')
+    assert.equal(sentImages.length, 2)
+    assert.equal(sentImages[0] instanceof Blob, true)
+    assert.equal((sentImages[0] as File).type, 'image/png')
+    assert.equal(sentImages[1] instanceof Blob, true)
+    assert.equal((sentImages[1] as File).type, 'image/jpeg')
+    assert.equal(images.length, 1)
+    assert.equal(images[0].mimeType, 'image/png')
+    assert.equal(images[0].width, 1024)
+    assert.equal(images[0].height, 1024)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  let seedreamCalledUrl = ''
+  let seedreamCalledBody: Record<string, unknown> = {}
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input)
+    if (urlStr === 'https://cdn.volces.com/generated.png') {
+      return new Response(Uint8Array.from(mockOutputPng), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      })
+    }
+    seedreamCalledUrl = urlStr
+    seedreamCalledBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+    return new Response(JSON.stringify({
+      data: [{ url: 'https://cdn.volces.com/generated.png' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+
+  try {
+    const seedreamImages = await generateImages({
+      adapter: 'seedream',
+      vendorModelId: 'doubao-seedream-4-0-250828',
+      prompt: 'seedream edit',
+      size: '1024x1024',
+      count: 1,
+      watermark: false,
+      apiKey: 'test-key',
+      inputImages: [{ data: createMockPng(100, 100) }],
+    })
+    assert.equal(seedreamCalledUrl, 'https://ark.cn-beijing.volces.com/api/v3/images/generations')
+    assert.equal(typeof seedreamCalledBody.image, 'string')
+    assert.equal(seedreamImages.length, 1)
+    assert.equal(seedreamImages[0].mimeType, 'image/png')
+    assert.equal(seedreamImages[0].width, 1024)
+    assert.equal(seedreamImages[0].height, 1024)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  globalThis.fetch = async () => new Response('upstream edit error', { status: 400, statusText: 'Bad Request' })
+  try {
+    await assert.rejects(
+      () => generateImages({
+        adapter: 'openai',
+        vendorModelId: 'gpt-image-2',
+        prompt: 'p',
+        size: '1024x1024',
+        count: 1,
+        watermark: false,
+        apiKey: 'secret',
+        inputImages: [{ data: createMockPng(100, 100) }],
+      }),
+      (error: unknown) => {
+        assert.equal(error instanceof ProviderHttpError, true)
+        const diagnostic = (error as ProviderHttpError).diagnostic
+        assert.equal(diagnostic.status, 400)
+        assert.equal(diagnostic.endpoint, '/v1/images/edits')
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('provider transport failures remain retryable', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => {
+    throw new TypeError('fetch failed')
+  }
+  try {
+    await assert.rejects(
+      () => generateImages({
+        adapter: 'openai',
+        vendorModelId: 'gpt-image-2',
+        prompt: 'prompt',
+        size: '1024x1024',
+        count: 1,
+        watermark: false,
+        apiKey: 'secret',
+      }),
+      /PROVIDER_TEMPORARY_ERROR/,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('provider http errors carry sanitized upstream diagnostics', async () => {

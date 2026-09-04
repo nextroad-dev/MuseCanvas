@@ -7,13 +7,18 @@ const PHASE_LABELS: Record<string, string> = {
   template_skipped: '已使用默认优化流程',
   prompt_optimizing: '正在优化提示词表达',
   prompt_ready: '提示词已准备完成',
+  preprocessing: '正在预处理生成参数',
+  provider_submitting: '正在向模型供应商提交任务',
+  provider_waiting: '供应商正在生成，请耐心等待',
+  provider_canceling: '正在取消供应商任务',
+  artifact_importing: '生成完成，正在安全导入',
   image_generating: '模型正在生成图片',
-  asset_persisting: '图片已生成，正在安全保存',
+  asset_persisting: '媒体已生成，正在安全保存',
   completed: '生成完成',
   retry_wait: '服务短暂繁忙，系统正在自动重试',
   template_failed: '提示词模板暂时不可用',
   optimization_failed: '提示词优化暂时不可用',
-  generation_failed: '图片生成失败',
+  generation_failed: '生成失败',
 }
 
 const CANCELLABLE_STATUSES = new Set<JobStatus>(['queued', 'retry_wait', 'running'])

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { Trash2, Download, Maximize2 } from 'lucide-vue-next'
 import type { Asset } from '@/shared/types'
-
+import { assetPlaybackUrl, isVideoAsset } from '@/shared/types'
 const props = withDefaults(defineProps<{
   asset: Asset
   density?: 'compact' | 'comfortable' | 'spacious'
@@ -42,6 +42,9 @@ const densityClasses = computed(() => {
   }
 })
 
+const playbackUrl = computed(() => assetPlaybackUrl(props.asset))
+const showVideo = computed(() => isVideoAsset(props.asset))
+
 const aspectClass = computed(() => {
   if (props.photoSize === 'small') return 'aspect-[4/3]'
   if (props.photoSize === 'large') return 'aspect-[3/4]'
@@ -52,18 +55,29 @@ const aspectClass = computed(() => {
 
 <template>
   <div
-    class="group relative cursor-pointer overflow-hidden border border-neutral-200 bg-white transition-shadow hover:shadow-md"
+    class="group relative cursor-pointer overflow-hidden border border-border bg-surface transition-shadow hover:shadow-md"
     :class="densityClasses.container"
     @click="$emit('view', asset)"
   >
-    <!-- Image -->
-    <div class="overflow-hidden bg-neutral-100" :class="aspectClass">
+    <!-- Media -->
+    <div class="relative overflow-hidden bg-surface-subtle" :class="aspectClass">
+      <video
+        v-if="showVideo"
+        :src="playbackUrl"
+        :poster="asset.posterUrl || undefined"
+        preload="metadata"
+        muted
+        playsinline
+        class="h-full w-full object-cover"
+      />
       <img
+        v-else
         :src="asset.imageUrl"
         :alt="asset.prompt"
         class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
         loading="lazy"
       />
+      <span v-if="showVideo" class="absolute left-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white">视频</span>
     </div>
 
     <!-- Hover overlay: prompt + actions -->
@@ -77,7 +91,7 @@ const aspectClass = computed(() => {
       <div class="relative z-10 flex items-center justify-center gap-2 pb-3">
         <button
           :class="[
-            'flex items-center justify-center rounded-full bg-white/90 text-neutral-700 shadow-sm transition-colors hover:bg-white hover:text-neutral-950',
+            'flex items-center justify-center rounded-full bg-white/90 text-foreground shadow-sm transition-colors hover:bg-white hover:text-foreground',
             densityClasses.action,
           ]"
           @click.stop="$emit('view', asset)"
@@ -86,7 +100,7 @@ const aspectClass = computed(() => {
         </button>
         <button
           :class="[
-            'flex items-center justify-center rounded-full bg-white/90 text-neutral-700 shadow-sm transition-colors hover:bg-white hover:text-neutral-950',
+            'flex items-center justify-center rounded-full bg-white/90 text-foreground shadow-sm transition-colors hover:bg-white hover:text-foreground',
             densityClasses.action,
           ]"
           @click.stop="$emit('download', asset)"
@@ -95,7 +109,7 @@ const aspectClass = computed(() => {
         </button>
         <button
           :class="[
-            'flex items-center justify-center rounded-full bg-white/90 text-neutral-700 shadow-sm transition-colors hover:bg-white hover:text-danger',
+            'flex items-center justify-center rounded-full bg-white/90 text-foreground shadow-sm transition-colors hover:bg-white hover:text-danger',
             densityClasses.action,
           ]"
           @click.stop="$emit('delete', asset)"

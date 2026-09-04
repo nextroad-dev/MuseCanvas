@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
   "dependencies": {
     "pg": "^8.22.0"
   },

@@ -6,6 +6,8 @@ import StatusBadge from '@/shared/components/ui/StatusBadge.vue'
 import BaseDropdown from '@/shared/components/ui/BaseDropdown.vue'
 import PageHeader from '@/shared/components/ui/PageHeader.vue'
 import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import Field from '@/shared/components/ui/Field.vue'
+import TextInput from '@/shared/components/ui/TextInput.vue'
 import type { AdminJob, JobStatus } from '@/shared/types'
 import type { Column } from '@/shared/components/ui/DataTable.vue'
 
@@ -89,6 +91,12 @@ const jobColumns: Column<AdminJob>[] = [
     render: (row) => row.durationMs === undefined ? '-' : `${(row.durationMs / 1000).toFixed(1)}s`,
   },
   {
+    key: 'quotedCredits',
+    label: '消耗积分',
+    class: 'w-20 whitespace-nowrap',
+    render: (row) => row.quotedCredits != null ? `${row.quotedCredits}` : '-',
+  },
+  {
     key: 'errorCode',
     label: '错误码',
     class: 'w-36 max-w-36 truncate',
@@ -118,20 +126,17 @@ const jobColumns: Column<AdminJob>[] = [
           <label class="mb-1 block text-xs font-medium text-muted-foreground">模型</label>
           <BaseDropdown v-model="filters.modelId" :options="modelOptions" />
         </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">用户 ID</label>
-          <input v-model="filters.userId" type="text" placeholder="可选" class="h-9 w-48 rounded-[var(--radius-control)] border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" />
-        </div>
+        <Field label="用户 ID" class="w-48">
+          <TextInput v-model="filters.userId" placeholder="可选" />
+        </Field>
       </div>
       <div class="flex flex-wrap items-end gap-3">
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">开始时间</label>
-          <input v-model="filters.from" type="datetime-local" class="h-9 rounded-[var(--radius-control)] border border-border bg-surface px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" />
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">结束时间</label>
-          <input v-model="filters.to" type="datetime-local" class="h-9 rounded-[var(--radius-control)] border border-border bg-surface px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" />
-        </div>
+        <Field label="开始时间">
+          <TextInput v-model="filters.from" type="datetime-local" />
+        </Field>
+        <Field label="结束时间">
+          <TextInput v-model="filters.to" type="datetime-local" />
+        </Field>
         <div class="flex gap-2">
           <BaseButton size="sm" @click="applyFilters">筛选</BaseButton>
           <BaseButton size="sm" variant="secondary" @click="resetFilters">重置</BaseButton>

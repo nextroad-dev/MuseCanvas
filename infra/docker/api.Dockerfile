@@ -14,4 +14,4 @@ RUN pnpm install --frozen-lockfile
 COPY apps/api apps/api
 COPY packages packages
 RUN pnpm --filter @musecanvas/api build
-CMD ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts && pnpm --filter @musecanvas/api start"]
+CMD ["pnpm", "--filter", "@musecanvas/api", "start"]

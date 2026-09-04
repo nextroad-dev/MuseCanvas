@@ -5,7 +5,7 @@ import LegalShell from '@/features/legal/components/LegalShell.vue'
 <template>
   <LegalShell title="隐私政策" updated-at="2026-06-25">
     <section class="rounded-lg border border-amber-500/40 bg-amber-500/5 p-6">
-      <h2 class="!text-amber-700 dark:!text-amber-300">适用对象与地域限制</h2>
+      <h2 class="!text-amber-700 ">适用对象与地域限制</h2>
       <p><strong>本服务不面向中国大陆用户。</strong>我们不向位于中国大陆境内的用户提供本服务，亦不接受来自中国大陆的注册、访问与使用。</p>
       <p>如你位于中国大陆，请勿访问、使用本服务或向我们提供任何个人信息；本政策其他条款以本条适用对象范围为前提，对不属于本服务适用对象的用户不适用。</p>
     </section>

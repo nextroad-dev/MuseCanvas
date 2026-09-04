@@ -1,0 +1,109 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+process.env.PROVIDER_CREDENTIALS_ENCRYPTION_KEY ||= 'test-worker-encryption-key'
+
+const {
+  canAcquireLease,
+  decryptOpaqueState,
+  encryptOpaqueState,
+  ingestionStorageKey,
+  isCancelRequested,
+  isLeaseExpired,
+  manifestContainsSecrets,
+  nextActionAtForRetryAfter,
+  shouldCreateNewRun,
+  stripOutputManifest,
+} = await import('./provider-state')
+
+test('opaque state round-trips locator without leaking into manifest', () => {
+  const opaque = { remoteId: 'seedance-123', pollUrl: 'https://provider.example/jobs/seedance-123', cursor: 'abc' }
+  const payload = encryptOpaqueState(opaque)
+  assert.ok(payload && typeof payload === 'string')
+  assert.deepEqual(decryptOpaqueState(payload), opaque)
+  const manifest = stripOutputManifest([
+    { index: 0, mimeType: 'video/mp4', url: 'https://provider.example/signed/video.mp4?sig=secret', durationSeconds: 5, metadata: { poster: 'https://provider.example/signed/poster.jpg?sig=x', codec: 'h264' } },
+  ])
+  assert.ok(manifest)
+  assert.equal(manifestContainsSecrets({ outputs: [{ url: 'https://provider.example/signed/x?sig=1' }] }), true)
+  assert.equal(manifestContainsSecrets({ manifest }), false)
+  assert.equal((manifest as Array<Record<string, unknown>>)[0].mimeType, 'video/mp4')
+  assert.ok(!JSON.stringify(manifest).includes('https://'))
+})
+
+test('unknown submission never triggers a blind resubmit', () => {
+  assert.equal(shouldCreateNewRun('submission_unknown'), false)
+  assert.equal(shouldCreateNewRun('submitting'), false)
+  assert.equal(shouldCreateNewRun('waiting'), false)
+  assert.equal(shouldCreateNewRun('importing'), false)
+  assert.equal(shouldCreateNewRun('canceling'), false)
+  assert.equal(shouldCreateNewRun('succeeded'), true)
+  assert.equal(shouldCreateNewRun('failed'), true)
+  assert.equal(shouldCreateNewRun('canceled'), true)
+  assert.equal(shouldCreateNewRun(null), true)
+})
+
+test('stale lease can be reclaimed while active lease is protected', () => {
+  const now = Date.now()
+  const expired = new Date(now - 1000).toISOString()
+  const active = new Date(now + 60_000).toISOString()
+  assert.equal(isLeaseExpired(expired, now), true)
+  assert.equal(isLeaseExpired(active, now), false)
+  assert.equal(isLeaseExpired(null, now), true)
+  assert.equal(canAcquireLease('token-a', expired, 'token-b', now), true)
+  assert.equal(canAcquireLease('token-a', active, 'token-b', now), false)
+  assert.equal(canAcquireLease('token-a', active, 'token-a', now), true)
+  assert.equal(canAcquireLease(null, null, 'token-b', now), true)
+})
+
+test('retry-after schedules bounded future polling', () => {
+  const before = Date.now()
+  const soon = nextActionAtForRetryAfter(3000).getTime()
+  assert.ok(soon >= before + 2500 && soon <= before + 4000)
+  const floored = nextActionAtForRetryAfter(0).getTime()
+  assert.ok(floored >= before + 900)
+  const capped = nextActionAtForRetryAfter(10_000_000).getTime()
+  assert.ok(capped <= before + 600_000 + 50)
+  const fallback = nextActionAtForRetryAfter(undefined, 5000).getTime()
+  assert.ok(fallback >= before + 4000)
+})
+
+test('cancellation is detected from cancel_requested_at only', () => {
+  assert.equal(isCancelRequested({ cancel_requested_at: new Date().toISOString(), status: 'running' }), true)
+  assert.equal(isCancelRequested({ status: 'running' }), false)
+  assert.equal(isCancelRequested({ cancel_requested_at: null, status: 'running' }), false)
+})
+
+test('output ingestion keys are deterministic per output index', () => {
+  const a = ingestionStorageKey('user-1', 'run-1', 0, 'video/mp4')
+  const b = ingestionStorageKey('user-1', 'run-1', 0, 'video/mp4')
+  const c = ingestionStorageKey('user-1', 'run-1', 1, 'video/mp4')
+  const img = ingestionStorageKey('user-1', 'run-1', 0, 'image/png')
+  assert.equal(a, b)
+  assert.notEqual(a, c)
+  assert.ok(a.endsWith('.mp4'))
+  assert.ok(img.endsWith('.png'))
+  assert.ok(a.startsWith('user-1/run-1/'))
+})
+
+test('worker uses leases, XAUTOCLAIM, capacity reservation without sleep loops', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)))
+  const jobsSrc = readFileSync(join(root, 'jobs', 'index.ts'), 'utf8')
+  const queueSrc = readFileSync(join(root, 'queue', 'index.ts'), 'utf8')
+  const maintenanceSrc = readFileSync(join(root, 'maintenance', 'index.ts'), 'utf8')
+  assert.ok(!/setTimeout|setInterval|sleep\(/.test(jobsSrc), 'jobs must not sleep around provider operations')
+  assert.ok(!/setTimeout/.test(queueSrc), 'queue must not sleep around provider operations')
+  assert.ok(/xAutoClaim/i.test(queueSrc), 'queue must XAUTOCLAIM stale pending messages')
+  assert.ok(/xAck/i.test(queueSrc), 'queue must acknowledge each message')
+  assert.ok(/acquireModelCapacity/.test(jobsSrc), 'jobs must reserve capacity per model')
+  assert.ok(/acquireWorkerLease/.test(jobsSrc), 'jobs must use Postgres leases')
+  assert.ok(/encryptOpaqueState|decryptOpaqueState/.test(jobsSrc), 'jobs must encrypt opaque provider state')
+  assert.ok(/stripOutputManifest/.test(jobsSrc), 'jobs must strip signed URLs from manifests')
+  assert.ok(/openOutput/.test(jobsSrc), 'jobs must use bounded plugin.openOutput for ingestion')
+  assert.ok(/worker_lease_expires_at/.test(maintenanceSrc), 'maintenance must recover expired leases')
+  assert.ok(/next_action_at/.test(maintenanceSrc), 'maintenance must schedule due provider-run polling')
+  assert.ok(/cancel_requested_at/.test(maintenanceSrc), 'maintenance must handle cooperative cancellation')
+})

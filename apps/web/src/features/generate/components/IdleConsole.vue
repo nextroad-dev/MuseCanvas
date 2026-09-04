@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { XCircle } from 'lucide-vue-next'
-import { useGenerationStore } from '@/features/generate/stores/generation'
+import { XCircle, Coins } from 'lucide-vue-next'
 import { canCancelJob, phaseLabel } from '@/shared/lib/job'
+import { useGenerationStore } from '@/features/generate/stores/generation'
 import ModelSelectPopover from './ModelSelectPopover.vue'
 import SizeSelectPopover from './SizeSelectPopover.vue'
 import QualitySelectPopover from './QualitySelectPopover.vue'
-import CountSelectPopover from './CountSelectPopover.vue'
-
+import ReferenceImageUploader from './ReferenceImageUploader.vue'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
 type ToolbarPopover = 'model' | 'size' | 'quality' | 'count'
 
 const props = defineProps<{
@@ -30,11 +30,13 @@ const canCancelActiveJob = computed(() => canCancelJob(activeJob.value?.status))
 const canGenerate = computed(() =>
   store.prompt.trim().length > 0 &&
   store.selectedModelId !== '' &&
-  store.selectedSize !== ''
+  (store.isVideo || store.selectedSize !== '') &&
+  store.canSubmitWithImages &&
+  store.hasSufficientCredits
 )
-
 const generateLabel = computed(() => {
   if (store.loading) return '创建中...'
+  if (store.isBillingEnabled && !store.hasSufficientCredits) return '余额不足'
   return props.generating ? '添加任务' : '生成'
 })
 
@@ -70,10 +72,9 @@ function setPopover(name: ToolbarPopover, open: boolean) {
     <!-- Heading above console -->
     <div class="mb-6 text-center">
       <h2 class="text-2xl font-semibold tracking-tight text-foreground">
-        描述你想创作的画面
+        {{ store.isVideo ? '描述你想生成的视频' : '描述你想创作的画面' }}
       </h2>
     </div>
-
     <!-- Console card -->
     <div
       class="relative z-20 flex w-full max-w-3xl flex-col overflow-visible"
@@ -106,6 +107,12 @@ function setPopover(name: ToolbarPopover, open: boolean) {
           @keydown="(e) => { if (e.key === 'Enter' && e.ctrlKey && !isSubmitting) { e.preventDefault(); handleGenerate() } }"
         />
 
+        <!-- Reference image uploader (shown when model supports input images or images are staged) -->
+        <ReferenceImageUploader
+          v-if="store.isModelSupportingImages || store.stagedImages.length > 0"
+          :disabled="isSubmitting"
+        />
+
         <!-- Divider -->
         <div class="mx-4 h-px bg-border/60" />
 
@@ -121,6 +128,7 @@ function setPopover(name: ToolbarPopover, open: boolean) {
               @update:open="setPopover('model', $event)"
             />
             <SizeSelectPopover
+              v-if="!store.isVideo"
               v-model="store.selectedSize"
               :open="activePopover === 'size'"
               :sizes="store.availableSizes"
@@ -128,7 +136,7 @@ function setPopover(name: ToolbarPopover, open: boolean) {
               @update:open="setPopover('size', $event)"
             />
             <QualitySelectPopover
-              v-if="store.availableQualities.length > 0 || store.availableSizes.length > 0"
+              v-if="!store.isVideo && (store.availableQualities.length > 0 || store.availableSizes.length > 0)"
               v-model="store.selectedQuality"
               v-model:size="store.selectedSize"
               :open="activePopover === 'quality'"
@@ -137,6 +145,52 @@ function setPopover(name: ToolbarPopover, open: boolean) {
               :disabled="isSubmitting"
               @update:open="setPopover('quality', $event)"
             />
+            <!-- Video mode: duration / aspect ratio / resolution / audio -->
+            <template v-if="store.isVideo">
+              <div class="flex items-center gap-1" role="group" aria-label="视频时长">
+                <button
+                  v-for="d in store.videoDurations"
+                  :key="d"
+                  type="button"
+                  :disabled="isSubmitting"
+                  class="inline-flex h-10 items-center rounded-[var(--radius-control)] border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="store.videoDuration === d ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-surface text-foreground hover:border-border-strong'"
+                  @click="store.videoDuration = d"
+                >{{ d }}s</button>
+              </div>
+              <div class="flex items-center gap-1" role="group" aria-label="画面比例">
+                <button
+                  v-for="ratio in store.videoAspectRatios"
+                  :key="ratio"
+                  type="button"
+                  :disabled="isSubmitting"
+                  class="inline-flex h-10 items-center rounded-[var(--radius-control)] border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="store.videoAspectRatio === ratio ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-surface text-foreground hover:border-border-strong'"
+                  @click="store.videoAspectRatio = ratio"
+                >{{ ratio }}</button>
+              </div>
+              <div v-if="store.videoResolutions.length > 0" class="flex items-center gap-1" role="group" aria-label="分辨率">
+                <button
+                  v-for="res in store.videoResolutions"
+                  :key="res"
+                  type="button"
+                  :disabled="isSubmitting"
+                  class="inline-flex h-10 items-center rounded-[var(--radius-control)] border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="store.videoResolution === res ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-surface text-foreground hover:border-border-strong'"
+                  @click="store.videoResolution = res"
+                >{{ res }}</button>
+              </div>
+              <button
+                type="button"
+                :disabled="isSubmitting"
+                role="switch"
+                :aria-checked="store.videoAudio"
+                title="是否生成音频"
+                class="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-control)] border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                :class="store.videoAudio ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-surface text-muted-foreground hover:border-border-strong'"
+                @click="store.videoAudio = !store.videoAudio"
+              >{{ store.videoAudio ? '有声' : '静音' }}</button>
+            </template>
             <CountSelectPopover
               v-model="store.count"
               :open="activePopover === 'count'"
@@ -145,9 +199,17 @@ function setPopover(name: ToolbarPopover, open: boolean) {
               @update:open="setPopover('count', $event)"
             />
           </div>
-
           <!-- Right actions -->
           <div class="flex flex-wrap items-center justify-end gap-2">
+            <!-- Submit blocked hint if reference images have validation issues -->
+            <span
+              v-if="store.stagedImagesValidationError"
+              class="text-xs text-danger font-medium text-right max-w-xs"
+              role="alert"
+            >
+              {{ store.stagedImagesValidationError }}
+            </span>
+
             <!-- Active job status pill -->
             <div
               v-if="props.generating && activeJob"
@@ -155,25 +217,35 @@ function setPopover(name: ToolbarPopover, open: boolean) {
             >
               <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
               <span class="text-sm text-muted-foreground">{{ activeJobStatusText }}</span>
-              <button
+              <BaseButton
                 v-if="canCancelActiveJob"
-                type="button"
-                class="inline-flex h-7 items-center justify-center gap-1 rounded-[var(--radius-control)] px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+                variant="ghost"
+                size="sm"
                 @click="handleCancel"
               >
                 <XCircle class="h-3.5 w-3.5" />
                 取消
-              </button>
+              </BaseButton>
+            </div>
+
+            <!-- Estimated credits indicator -->
+            <div
+              v-if="store.isBillingEnabled && store.selectedModel"
+              class="flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium"
+              :class="!store.hasSufficientCredits
+                ? 'border border-danger/40 bg-danger/10 text-danger'
+                : 'border border-border/80 bg-surface-subtle text-muted-foreground'"
+            >
+              <Coins class="h-3.5 w-3.5" :class="!store.hasSufficientCredits ? 'text-danger' : 'text-warning'" />
+              <span>预计 {{ store.estimatedCredits }} 积分</span>
             </div>
 
             <!-- Generate button with shimmer effect -->
-            <button
-              type="button"
-              class="generate-btn relative flex h-10 items-center gap-2 overflow-hidden rounded-[var(--radius-control)] px-6 text-base font-semibold transition-all duration-200"
-              :class="canGenerate && !store.loading
-                ? 'bg-primary text-white shadow-sm hover:bg-primary-hover hover:shadow-md active:scale-[0.97]'
-                : 'cursor-not-allowed bg-surface-subtle text-muted-foreground'"
+            <BaseButton
+              variant="primary"
+              class="relative overflow-hidden px-6 text-base font-semibold active:scale-[0.97]"
               :disabled="!canGenerate || store.loading"
+              :loading="store.loading"
               @click="handleGenerate"
             >
               <!-- Shimmer overlay (only on active state) -->
@@ -182,17 +254,8 @@ function setPopover(name: ToolbarPopover, open: boolean) {
                 class="shimmer-overlay pointer-events-none absolute inset-0"
                 aria-hidden="true"
               />
-              <svg
-                v-if="store.loading"
-                class="relative z-10 h-4 w-4 shrink-0 animate-spin"
-                viewBox="0 0 24 24"
-                fill="none"
-              >
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
               <span class="relative z-10">{{ generateLabel }}</span>
-            </button>
+            </BaseButton>
           </div>
         </div>
       </div>

@@ -36,14 +36,14 @@ onMounted(() => {
       rows="6"
       :class="
         cn(
-          'w-full resize-none rounded-lg border border-neutral-200 bg-white px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 transition-colors',
+          'w-full resize-none rounded-[var(--radius-control)] border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/70 transition-colors',
           'focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary',
           disabled && 'cursor-not-allowed opacity-50',
         )
       "
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
     />
-    <div v-if="maxLength" class="flex justify-end text-xs text-neutral-400">
+    <div v-if="maxLength" class="flex justify-end text-xs text-muted-foreground">
       {{ charCount }} / {{ maxLength }}
     </div>
   </div>

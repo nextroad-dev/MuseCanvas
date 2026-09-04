@@ -1,0 +1,81 @@
+name: Media Quality CI
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "tests/integration/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
+      - ".github/workflows/media-quality.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "tests/integration/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
+      - ".github/workflows/media-quality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  media-quality:
+    name: Media quality (no external services)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js with pnpm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies with frozen lockfile (no external services)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck workspaces (no external services)
+        run: pnpm -r --if-present typecheck
+
+      - name: Test providers package incl. media contract (no external services)
+        run: pnpm --filter @musecanvas/providers test
+
+      - name: Test media provider contract integration (no external services)
+        run: pnpm --filter @musecanvas/providers exec tsx --test ../../tests/integration/media-provider-contract.test.ts
+
+      - name: Test domain package (no external services)
+        run: pnpm --filter @musecanvas/domain test
+
+      - name: Test database package (no external services)
+        run: pnpm --filter @musecanvas/database test
+
+      - name: Test API app where script exists (no external services)
+        run: pnpm --filter @musecanvas/api --if-present test
+
+      - name: Test worker app where script exists (no external services)
+        run: pnpm --filter @musecanvas/worker --if-present test
+
+      - name: Build workspaces (no external services)
+        run: pnpm -r --if-present build

@@ -51,8 +51,7 @@ const mainView = computed<'idle' | 'generating' | 'result'>(() => {
 function jobFailureMessage(job: GenerationJob) {
   if (job.errorCode === 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR') return '提示词优化服务暂时不可用，请稍后重试'
   if (job.errorCode === 'PROMPT_OPTIMIZATION_REJECTED') return '提示词优化请求被拒绝，请调整提示词后重试'
-  if (job.errorCode === 'PROMPT_MODEL_NOT_CONFIGURED') return '提示词优化模型配置不完整，请联系管理员'
-  if (job.errorCode === 'PROVIDER_NOT_CONFIGURED') return '生图供应商凭据未配置，请联系管理员'
+  if (job.errorCode === 'PROVIDER_NOT_CONFIGURED') return '生成供应商凭据未配置，请联系管理员'
   if (job.errorCode === 'PROVIDER_BUSY') return '生成服务繁忙，系统已尝试自动重试'
   if (job.phase === 'optimization_failed') return '提示词优化暂时不可用，请稍后重试'
   if (job.phase === 'template_failed') return '提示词模板暂时不可用，请稍后重试'
@@ -135,6 +134,10 @@ function handlePreview(url: string, prompt: string) {
   previewAsset.value = { url, prompt }
 }
 
+function handlePreviewOpenChange(open: boolean) {
+  if (!open) previewAsset.value = null
+}
+
 async function handleSelectJob(job: GenerationJob) {
   detailJobId.value = job.id
   detailSheetOpen.value = true
@@ -146,19 +149,20 @@ async function handleDownload(url: string) {
     const response = await fetch(url)
     const blob = await response.blob()
     const objectUrl = URL.createObjectURL(blob)
-    
-    const filename = url.split('/').pop()?.split('?')[0] || `musecanvas-${Date.now()}.png`
-    
+
+    const isVideo = /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url) || (blob.type || '').startsWith('video/')
+    const filename = url.split('/').pop()?.split('?')[0] || `musecanvas-${Date.now()}.${isVideo ? 'mp4' : 'png'}`
+
     const link = document.createElement('a')
     link.href = objectUrl
     link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-    
+
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
   } catch (error) {
-    console.error('Failed to download image:', error)
+    console.error('Failed to download asset:', error)
     // Fallback to opening in new tab
     window.open(url, '_blank')
   }
@@ -251,9 +255,17 @@ onUnmounted(() => {
             :title="job.prompt"
             @click="handleSelectJob(job)"
           >
+            <video
+              v-if="job.outputs?.[0]?.mediaKind === 'video'"
+              :src="job.outputs[0].url || job.outputs[0].imageUrl"
+              preload="metadata"
+              muted
+              playsinline
+              class="h-full w-full object-cover"
+            />
             <img
-              v-if="job.outputs?.[0]?.imageUrl"
-              :src="job.outputs[0].imageUrl"
+              v-else-if="job.outputs?.[0]?.imageUrl || job.outputs?.[0]?.url"
+              :src="job.outputs[0].url || job.outputs[0].imageUrl"
               class="h-full w-full object-cover"
               loading="lazy"
             />
@@ -515,8 +527,8 @@ onUnmounted(() => {
     <!-- Lightbox -->
     <Lightbox
       :images="previewAsset ? [{ url: previewAsset.url, prompt: previewAsset.prompt }] : []"
-      :model-value="previewAsset ? 0 : -1"
-      @update:model-value="previewAsset = null"
+      :open="!!previewAsset"
+      @update:open="handlePreviewOpenChange"
     />
 
     <AppModal

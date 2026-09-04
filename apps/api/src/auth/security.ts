@@ -18,7 +18,11 @@ export async function actorFrom(request: NextRequest): Promise<Actor | null> {
   return row ? { id: row.id, email: row.email, role: row.role, status: row.status, createdAt: row.created_at.toISOString() } : null
 }
 
-function oauthEncryptionKey(): Buffer { return createHash('sha256').update(process.env.OAUTH_CREDENTIALS_ENCRYPTION_KEY || '').digest() }
+function oauthEncryptionKey(): Buffer {
+  const key = process.env.OAUTH_CREDENTIALS_ENCRYPTION_KEY
+  if (!key) throw new Error('OAUTH_CREDENTIALS_ENCRYPTION_KEY is required')
+  return createHash('sha256').update(key).digest()
+}
 function encryptWithKey(value: string, key: Buffer): string {
   const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv)
   const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])

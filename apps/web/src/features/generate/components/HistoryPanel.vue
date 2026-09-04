@@ -6,21 +6,24 @@ import ConfirmDialog from '@/shared/components/ui/ConfirmDialog.vue'
 import EmptyState from '@/shared/components/ui/EmptyState.vue'
 import JobListItem from '@/shared/components/jobs/JobListItem.vue'
 import Lightbox from '@/shared/components/ui/Lightbox.vue'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
 import {
   Loader2, RefreshCw, XCircle, Image as ImageIcon, Trash2, Copy,
 } from 'lucide-vue-next'
 import { canCancelJob, phaseLabel } from '@/shared/lib/job'
 import { cn } from '@/shared/lib/utils'
 import { toast } from '@/shared/composables/useToast'
+import type { GenerationJob } from '@/shared/types'
 
 const store = useGenerationStore()
 const deleteTarget = ref<string | null>(null)
 const showDeleteConfirm = ref(false)
 const showPromptDetail = ref(false)
-const lightboxIndex = ref(-1)
+const lightboxOpen = ref(false)
+const lightboxIndex = ref(0)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-const selectedJob = computed(() => store.selectedJob)
+const selectedJob = computed<GenerationJob>(() => store.selectedJob as GenerationJob)
 const finalPromptNotice = computed(() => {
   const job = selectedJob.value
   if (!job || job.optimizationMode !== 'enabled' || job.finalPrompt) return ''
@@ -93,8 +96,11 @@ async function selectJob(id: string) {
 }
 
 function previewOutput(url: string) {
-  const index = selectedJob.value?.outputs.findIndex(o => o.imageUrl === url) ?? -1
-  if (index >= 0) lightboxIndex.value = index
+  const index = selectedJob.value?.outputs.findIndex(o => (o.url || o.imageUrl) === url) ?? -1
+  if (index >= 0) {
+    lightboxIndex.value = index
+    lightboxOpen.value = true
+  }
 }
 
 function taskTitle() {
@@ -143,10 +149,18 @@ function taskTitle() {
           "
           @click="selectJob(job.id)"
         >
-          <div class="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
+          <div class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
+            <video
+              v-if="job.outputs.length && job.outputs[0].mediaKind === 'video'"
+              :src="job.outputs[0].url || job.outputs[0].imageUrl"
+              preload="metadata"
+              muted
+              playsinline
+              class="h-full w-full object-cover"
+            />
             <img
-              v-if="job.outputs.length"
-              :src="job.outputs[0].imageUrl"
+              v-else-if="job.outputs.length"
+              :src="job.outputs[0].url || job.outputs[0].imageUrl"
               class="h-full w-full object-cover"
               loading="lazy"
             />
@@ -169,32 +183,55 @@ function taskTitle() {
       />
 
       <!-- Detail -->
-      <template v-else-if="selectedJob">
-        <!-- Image area -->
-        <div class="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface shadow-sm">
-          <div v-if="selectedJob.outputs.length" class="p-4">
+      <section v-if="selectedJob" class="space-y-4">
+        <div v-if="selectedJob.outputs.length > 0">
             <div
               v-if="selectedJob.outputs.length === 1"
               class="flex justify-center rounded-[var(--radius-card)]"
             >
+              <video
+                v-if="selectedJob.outputs[0].mediaKind === 'video'"
+                :src="selectedJob.outputs[0].url || selectedJob.outputs[0].imageUrl"
+                :poster="selectedJob.outputs[0].mediaKind === 'video' ? (selectedJob.outputs[0] as any).metadata?.posterUrl : undefined"
+                controls
+                preload="metadata"
+                playsinline
+                class="max-h-[50vh] w-auto max-w-full rounded-[var(--radius-card)] bg-black"
+              />
               <img
-                :src="selectedJob.outputs[0].imageUrl"
+                v-else
+                :src="selectedJob.outputs[0].url || selectedJob.outputs[0].imageUrl"
                 :alt="taskTitle()"
                 class="h-auto w-auto max-h-[50vh] max-w-full cursor-pointer rounded-[var(--radius-card)] object-contain"
                 loading="lazy"
-                @click="previewOutput(selectedJob.outputs[0].imageUrl)"
+                @click="previewOutput(selectedJob.outputs[0].url || selectedJob.outputs[0].imageUrl)"
               />
             </div>
             <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <button
+              <div
                 v-for="output in selectedJob.outputs"
                 :key="output.id"
-                type="button"
-                class="overflow-hidden rounded-[var(--radius-card)] bg-surface-subtle text-left transition-shadow hover:shadow-sm"
-                @click="previewOutput(output.imageUrl)"
+                class="relative overflow-hidden rounded-[var(--radius-card)] bg-surface-subtle text-left transition-shadow hover:shadow-sm"
               >
-                <img :src="output.imageUrl" :alt="taskTitle()" class="h-full w-full object-contain" loading="lazy" />
-              </button>
+                <video
+                  v-if="output.mediaKind === 'video'"
+                  :src="output.url || output.imageUrl"
+                  :poster="output.mediaKind === 'video' ? (output as any).metadata?.posterUrl : undefined"
+                  controls
+                  preload="metadata"
+                  playsinline
+                  class="h-full w-full bg-black"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="block w-full"
+                  @click="previewOutput(output.url || output.imageUrl)"
+                >
+                  <img :src="output.url || output.imageUrl" :alt="taskTitle()" class="h-full w-full object-contain" loading="lazy" />
+                </button>
+                <span v-if="output.mediaKind === 'video'" class="absolute left-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white">视频</span>
+              </div>
             </div>
           </div>
 
@@ -204,14 +241,14 @@ function taskTitle() {
               <span class="text-sm text-muted-foreground">
                 {{ selectedJob.status === 'queued' ? '排队中...' : phaseLabel(selectedJob.phase) }}
               </span>
-              <button
+              <BaseButton
                 v-if="canCancelJob(selectedJob.status)"
-                class="inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-surface-subtle"
+                variant="secondary"
                 @click="cancelJob(selectedJob.id)"
               >
                 <XCircle class="h-4 w-4" />
                 取消任务
-              </button>
+              </BaseButton>
             </div>
           </div>
 
@@ -221,13 +258,10 @@ function taskTitle() {
             <span v-if="selectedJob.errorCode" class="text-xs text-muted-foreground">
               {{ selectedJob.errorCode }}
             </span>
-            <button
-              class="inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
-              @click="retryJob(selectedJob.id)"
-            >
+            <BaseButton variant="primary" @click="retryJob(selectedJob.id)">
               <RefreshCw class="h-4 w-4" />
               重试任务
-            </button>
+            </BaseButton>
           </div>
 
           <div v-else-if="selectedJob.status === 'canceled'" class="flex min-h-48 flex-col items-center justify-center gap-3 p-6 text-center">
@@ -238,7 +272,6 @@ function taskTitle() {
           <div v-else class="flex min-h-48 items-center justify-center p-6 text-sm text-muted-foreground">
             任务已完成，结果会保留在这里。
           </div>
-        </div>
 
         <!-- Status & Actions -->
         <div class="rounded-[var(--radius-card)] border border-border bg-surface p-5 shadow-sm">
@@ -248,29 +281,28 @@ function taskTitle() {
               <span class="text-sm text-muted-foreground">{{ new Date(selectedJob.createdAt).toLocaleString('zh-CN') }}</span>
             </div>
             <div class="flex flex-wrap gap-2">
-              <button
+              <BaseButton
                 v-if="selectedJob.status === 'failed'"
-                class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+                variant="primary"
+                size="sm"
                 @click="retryJob(selectedJob.id)"
               >
                 <RefreshCw class="h-3.5 w-3.5" />
                 重试
-              </button>
-              <button
+              </BaseButton>
+              <BaseButton
                 v-if="canCancelJob(selectedJob.status)"
-                class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface-subtle"
+                variant="secondary"
+                size="sm"
                 @click="cancelJob(selectedJob.id)"
               >
                 <XCircle class="h-3.5 w-3.5" />
                 取消
-              </button>
-              <button
-                class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-red-200 px-3 text-xs font-medium text-danger transition-colors hover:bg-danger-soft"
-                @click="requestDelete(selectedJob.id)"
-              >
+              </BaseButton>
+              <BaseButton variant="danger-ghost" size="sm" @click="requestDelete(selectedJob.id)">
                 <Trash2 class="h-3.5 w-3.5" />
                 删除
-              </button>
+              </BaseButton>
             </div>
           </div>
         </div>
@@ -322,10 +354,10 @@ function taskTitle() {
               <div class="flex items-center justify-between">
                 <label class="mb-1 block text-xs font-medium text-muted-foreground">最终提示词</label>
                 <div class="flex gap-2">
-                  <button class="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-surface-subtle" @click="copyFinalPrompt">
+                  <BaseButton variant="secondary" size="sm" @click="copyFinalPrompt">
                     <Copy class="h-3 w-3" />
                     复制
-                  </button>
+                  </BaseButton>
                 </div>
               </div>
               <p class="mt-1 rounded-[var(--radius-card)] border border-border bg-surface-subtle px-3 py-2.5 text-sm whitespace-pre-wrap text-foreground">
@@ -337,16 +369,17 @@ function taskTitle() {
               {{ finalPromptNotice }}
             </p>
 
-            <button
+            <BaseButton
               v-if="selectedJob.canReadFinalPrompt && selectedJob.finalPrompt"
-              class="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface-subtle"
+              variant="secondary"
+              size="sm"
               @click="reuseFinalPrompt"
             >
               带入编辑器
-            </button>
+            </BaseButton>
           </div>
         </div>
-      </template>
+      </section>
 
       <div v-else class="flex min-h-[320px] items-center justify-center rounded-[var(--radius-panel)] border border-dashed border-border bg-surface px-6 text-center shadow-sm">
         <div class="max-w-sm">
@@ -357,7 +390,8 @@ function taskTitle() {
     </main>
 
     <Lightbox
-      :images="selectedJob?.outputs.map(o => ({ url: o.imageUrl, prompt: selectedJob?.inputPrompt || selectedJob?.prompt || '' })) || []"
+      :images="selectedJob?.outputs.map(o => ({ url: o.url || o.imageUrl, prompt: selectedJob?.inputPrompt || selectedJob?.prompt || '' })) || []"
+      v-model:open="lightboxOpen"
       v-model="lightboxIndex"
     />
 

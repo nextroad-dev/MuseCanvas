@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { RouterView, RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/features/auth/stores/auth'
-import { Menu, LogOut, Settings } from 'lucide-vue-next'
-import { cn } from '@/shared/lib/utils'
+import { useAccountStore } from '@/features/account/stores/account'
+import { Menu, LogOut, Settings, Coins } from 'lucide-vue-next'
 import { useClickOutside } from '@/shared/composables/useClickOutside'
 import AppDrawer from '@/shared/components/ui/AppDrawer.vue'
+import NavLink from '@/shared/components/ui/NavLink.vue'
 
 const auth = useAuthStore()
-const route = useRoute()
+const account = useAccountStore()
 const router = useRouter()
+const route = useRoute()
 const drawerOpen = ref(false)
 
 const navItems = [
@@ -49,6 +51,13 @@ async function handleLogout() {
 }
 
 useClickOutside(userMenuRef, closeUserMenu)
+
+onMounted(() => {
+  if (auth.user) {
+    account.fetchCredits()
+    account.fetchBillingSettings()
+  }
+})
 </script>
 
 <template>
@@ -61,26 +70,30 @@ useClickOutside(userMenuRef, closeUserMenu)
 
       <!-- Desktop nav -->
       <nav class="ml-6 hidden items-center gap-1 md:flex">
-        <RouterLink
+        <NavLink
           v-for="item in navItems"
           :key="item.name"
           :to="item.path"
-          :aria-current="route.name === item.name ? 'page' : undefined"
-          :class="cn(
-            'rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors',
-            route.name === item.name
-              ? 'bg-primary-soft text-primary'
-              : 'text-muted-foreground hover:bg-surface-subtle hover:text-foreground',
-          )"
+          :active="route.name === item.name"
         >
           {{ item.label }}
-        </RouterLink>
+        </NavLink>
       </nav>
 
       <!-- Mobile: page name + menu -->
       <span class="ml-3 text-sm font-medium text-foreground md:hidden">{{ currentPageName }}</span>
 
       <div class="ml-auto flex items-center gap-3">
+        <RouterLink
+          to="/account"
+          class="flex items-center gap-1.5 rounded-[var(--radius-control)] border border-border/80 bg-surface-subtle px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary-soft/30 hover:text-primary"
+          title="可用积分"
+        >
+          <Coins class="h-3.5 w-3.5 text-amber-500" />
+          <span>{{ account.creditBalance ? account.creditBalance.availableCredits : '—' }}</span>
+          <span class="text-[10px] text-muted-foreground">积分</span>
+        </RouterLink>
+
         <RouterLink
           v-if="auth.isAdmin"
           to="/admin"
@@ -146,19 +159,27 @@ useClickOutside(userMenuRef, closeUserMenu)
     @update:open="drawerOpen = $event"
   >
     <nav class="flex flex-col gap-1">
-      <RouterLink
+      <NavLink
         v-for="item in navItems"
         :key="item.name"
         :to="item.path"
-        :class="cn(
-          'rounded-[var(--radius-control)] px-3 py-2.5 text-sm font-medium transition-colors',
-          route.name === item.name
-            ? 'bg-primary-soft text-primary'
-            : 'text-muted-foreground hover:bg-surface-subtle',
-        )"
+        :active="route.name === item.name"
         @click="drawerOpen = false"
       >
         {{ item.label }}
+      </NavLink>
+      <RouterLink
+        to="/account"
+        class="flex items-center justify-between rounded-[var(--radius-control)] px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-surface-subtle"
+        @click="drawerOpen = false"
+      >
+        <span class="flex items-center gap-2">
+          <Coins class="h-4 w-4 text-amber-500" />
+          我的积分
+        </span>
+        <span class="text-xs font-semibold text-foreground">
+          {{ account.creditBalance ? `${account.creditBalance.availableCredits} 积分` : '—' }}
+        </span>
       </RouterLink>
 
       <div v-if="auth.isAdmin" class="mt-4 border-t border-border pt-4">

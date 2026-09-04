@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { validateModelInput } from '../../../packages/domain/src/index'
@@ -11,9 +14,12 @@ import {
   MAX_UPLOAD_TOTAL_BYTES,
   MAX_INPUT_IMAGES,
 } from './modules/generation-uploads'
-import { providerEndpoint, providerModelsEndpoint } from '../../../packages/providers/src/index'
 import { retryPreparation } from './generation/job-retry'
-import { modelPresets } from './admin/model-presets'
+import { globalProviderRegistry } from '../../../packages/providers/src/index'
+import { modelPresets, type VideoModelPreset } from './admin/model-presets'
+import { buildBuiltinProviderTemplates } from './admin/provider-templates'
+import { ACTIVE_IMAGE_PLUGIN_VERSION, buildCanonicalImageCapabilities, imageBaseUrlAllowed, isEmptyInputOverride, manifestSupportsVendorModel, presetMatchesPersistedModel, providerCredentialMatchesPluginTarget, validateImageModelContract, validatePluginSelection, videoPresetRevisionContract } from './modules/models/handlers'
+import { credentialTargetChanged, normalizeCredentialSchemaVersion, resolveCredentialPlugin, validateExplicitPluginCredential } from './modules/admin/provider-credentials'
 
 process.env.SESSION_SECRET = 'test-session-secret-with-enough-entropy'
 
@@ -86,16 +92,13 @@ test('manual retry resumes from the correct generation phase', () => {
   assert.deepEqual(retryPreparation({ optimization_mode: 'enabled', prompt_optimization_id: 'po' }), { phase: 'template_selecting', resetOptimization: true })
 })
 
-test('provider endpoints accept service roots and versioned compatible roots', () => {
-  assert.equal(providerEndpoint('openai', 'https://proxy.example.com'), 'https://proxy.example.com/v1/images/generations')
-  assert.equal(providerEndpoint('openai', 'https://proxy.example.com/openai/v1'), 'https://proxy.example.com/openai/v1/images/generations')
-  assert.equal(providerModelsEndpoint('https://proxy.example.com/openai/v1'), 'https://proxy.example.com/openai/v1/models')
-  assert.equal(providerEndpoint('seedream', 'https://ark.example.com'), 'https://ark.example.com/api/v3/images/generations')
-  assert.equal(providerEndpoint('seedream', 'https://ark.example.com/api/v3'), 'https://ark.example.com/api/v3/images/generations')
-})
-
-test('seedream provider test should use the image generation endpoint, not the chat/models endpoint', () => {
-  assert.equal(providerEndpoint('seedream', 'https://ark.cn-beijing.volces.com'), 'https://ark.cn-beijing.volces.com/api/v3/images/generations')
+test('image plugin manifests declare hardened host allowlists instead of adapter endpoints', () => {
+  const openai = globalProviderRegistry.get('openai-image', '1.1.0').manifest
+  assert.ok(openai.modalities.includes('image'))
+  assert.ok(openai.allowedHosts.includes('api.openai.com'))
+  const seedream = globalProviderRegistry.get('seedream-image', '1.1.0').manifest
+  assert.ok(seedream.modalities.includes('image'))
+  assert.ok(seedream.allowedHosts.includes('ark.cn-beijing.volces.com'))
 })
 
 test('upload constants match cross-slice specifications', () => {
@@ -267,4 +270,508 @@ test('validateAndAttachGenerationInputs checks ownership, status, TTL, and total
   const update2 = successQueries.find(q => q.sql.includes('UPDATE generation_input_images') && q.params[1] === id2)
   assert.ok(update1)
   assert.ok(update2)
+})
+
+test('image presets pin new configuration to the hardened 1.1.0 plugin keys', () => {
+  assert.equal(ACTIVE_IMAGE_PLUGIN_VERSION, '1.1.0')
+  const imagePresets = modelPresets.filter((preset) => preset.modelKind === 'image')
+  assert.ok(imagePresets.length >= 3)
+  for (const preset of imagePresets) {
+    if (!('pluginId' in preset)) continue
+    assert.ok(['openai-image', 'seedream-image'].includes(preset.pluginId as string))
+    assert.equal(preset.pluginVersion, '1.1.0')
+  }
+  for (const pluginId of ['openai-image', 'seedream-image']) {
+    assert.equal(globalProviderRegistry.has(pluginId, '1.1.0'), true)
+    // Exact historical keys stay registered so already-pinned revisions resolve.
+    assert.equal(globalProviderRegistry.has(pluginId, '1.0.0'), true)
+    const manifest = globalProviderRegistry.get(pluginId, '1.1.0').manifest
+    assert.ok(manifest.modalities.includes('image'))
+  }
+})
+
+test('plugin selection validates through the registry and manifest modality', () => {
+  assert.deepEqual(validatePluginSelection('openai-image', '1.1.0', 'image'), { ok: true, mediaKind: 'image' })
+  assert.deepEqual(validatePluginSelection('seedream-image', '1.1.0', 'image'), { ok: true, mediaKind: 'image' })
+  // Historical exact keys remain accepted for already-pinned revisions.
+  assert.deepEqual(validatePluginSelection('openai-image', '1.0.0', 'image'), { ok: true, mediaKind: 'image' })
+  assert.deepEqual(validatePluginSelection('seedream-image', '1.0.0', 'image'), { ok: true, mediaKind: 'image' })
+  assert.deepEqual(validatePluginSelection('does-not-exist', '9.9.9', 'image'), { ok: false, error: 'INVALID_PLUGIN' })
+  assert.deepEqual(validatePluginSelection('openai-image', '9.9.9', 'image'), { ok: false, error: 'INVALID_PLUGIN' })
+  // Manifest modality mismatch is rejected rather than adapter-routed.
+  assert.deepEqual(validatePluginSelection('openai-image', '1.1.0', 'video'), { ok: false, error: 'INVALID_MODALITY' })
+  assert.deepEqual(validatePluginSelection('seedream-image', '1.1.0', 'video'), { ok: false, error: 'INVALID_MODALITY' })
+})
+
+test('credential probe resolves explicit plugin identity and never guesses from provider', () => {
+  assert.deepEqual(
+    resolveCredentialPlugin({ plugin_id: 'seedream-image', plugin_version: '1.1.0' }, {}),
+    { pluginId: 'seedream-image', pluginVersion: '1.1.0' },
+  )
+  assert.deepEqual(
+    resolveCredentialPlugin(null, { configured_fields: { pluginId: 'openai-image', pluginVersion: '1.1.0' } }),
+    { pluginId: 'openai-image', pluginVersion: '1.1.0' },
+  )
+  assert.deepEqual(
+    resolveCredentialPlugin(null, { configured_fields: JSON.stringify({ pluginId: 'openai-image', pluginVersion: '1.0.0' }) }),
+    { pluginId: 'openai-image', pluginVersion: '1.0.0' },
+  )
+  // Linked identity wins over the credential's own configured identity.
+  assert.deepEqual(
+    resolveCredentialPlugin(
+      { plugin_id: 'seedream-image', plugin_version: '1.1.0' },
+      { configured_fields: { pluginId: 'openai-image', pluginVersion: '1.1.0' } },
+    ),
+    { pluginId: 'seedream-image', pluginVersion: '1.1.0' },
+  )
+  // An unlinked credential without plugin identity resolves to null so the
+  // probe can return a clear PLUGIN_NOT_LINKED error instead of guessing.
+  assert.equal(resolveCredentialPlugin(null, {}), null)
+  assert.equal(resolveCredentialPlugin(null, { configured_fields: {} }), null)
+  assert.equal(resolveCredentialPlugin({ plugin_id: 'seedream-image' }, {}), null)
+})
+
+test('historical 1.0.0 revision rows stay readable through the model DTOs', () => {
+  const legacyRow = {
+    id: 'model-legacy', display_name: 'Legacy', adapter: 'seedream', provider_id: 'volcengine',
+    plugin_id: 'seedream-image', plugin_version: '1.0.0', model_kind: 'image',
+    sizes: JSON.stringify(['1024x1024']), quality_options: JSON.stringify([]),
+    max_count: 4, max_input_images: 4, enabled: true, sort_order: 0, credits_per_image: 5,
+  }
+  assert.equal(publicModelDto(legacyRow).pluginVersion, '1.0.0')
+  assert.equal(modelDto(legacyRow).pluginVersion, '1.0.0')
+  assert.equal(modelDto(legacyRow).adapter, 'seedream')
+})
+
+test('image 1.1.0 cutover appends immutable revisions without rewriting history', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const source = readFileSync(join(here, '../../../packages/database/src/migrate.ts'), 'utf8')
+  const cutover = source.slice(source.indexOf('10. Image plugin 1.1.0 cutover'))
+  assert.ok(cutover.includes("'1.1.0'"))
+  assert.ok(cutover.includes('INSERT INTO model_config_revisions'))
+  assert.ok(cutover.includes('NOT EXISTS'))
+  assert.ok(cutover.includes('latest_revision_id'))
+  assert.equal(cutover.includes('UPDATE model_config_revisions'), false)
+  assert.equal(cutover.includes('DELETE FROM model_config_revisions'), false)
+  assert.equal(/ALTER TABLE model_configs DROP COLUMN/i.test(cutover), false)
+  // Nonterminal jobs pin the pre-cutover revision before models advance.
+  assert.ok(cutover.includes('UPDATE generation_jobs'))
+  assert.ok(cutover.includes('model_revision_id'))
+  for (const status of ['queued', 'running', 'retry_wait']) {
+    assert.ok(cutover.includes(`'${status}'`))
+  }
+  assert.ok(cutover.indexOf('UPDATE generation_jobs') < cutover.indexOf('UPDATE model_configs'))
+  // Only rows from the known current image presets advance, and only when
+  // persisted fields conform to the 1.1.0 contract.
+  for (const id of ['openai-gpt-image-2', 'seedream-4-0', 'seedream-4-5']) {
+    assert.ok(cutover.includes(id))
+  }
+  for (const column of ['max_count', 'max_input_images', 'quality_options', 'vendor_model_id', 'model_kind']) {
+    assert.ok(cutover.includes(column))
+  }
+  // The copied latest snapshot itself must agree: same plugin identity,
+  // 1.0.0 version, preset vendor, and independently null-or-official base
+  // URLs — never a COALESCE masked by the mutable model columns.
+  for (const fragment of [
+    'latest.plugin_id = m.plugin_id',
+    "latest.plugin_version = '1.0.0'",
+    'latest.vendor_model_id',
+    'latest.base_url IS NULL',
+    'r.vendor_model_id',
+    'r.base_url IS NULL',
+  ]) {
+    assert.ok(cutover.includes(fragment))
+  }
+  assert.equal(cutover.includes('COALESCE(m.base_url'), false)
+  // DALL-E-3 has no current preset and custom endpoints stay pinned to 1.0.0.
+  assert.equal(cutover.includes('dall-e-3'), false)
+  assert.ok(cutover.includes('https://api.openai.com'))
+  assert.ok(cutover.includes('https://ark.cn-beijing.volces.com'))
+  // Linked credentials must be absent or carry a null/official host.
+  for (const fragment of [
+    'LEFT JOIN provider_credentials cred',
+    'latest.credential_id IS NULL',
+    'r.credential_id IS NULL',
+    'cred.base_url IS NULL',
+  ]) {
+    assert.ok(cutover.includes(fragment))
+  }
+  // The 1.1.0 snapshot is canonical: capabilities rebuilt from validated
+  // columns, {} defaults, canonical normalized_config — never latest JSON.
+  for (const fragment of [
+    "'text_to_image'",
+    "'reference_image'",
+    "'{}'::jsonb",
+    "'concurrencyLimit'",
+    'canonical-v1',
+  ]) {
+    assert.ok(cutover.includes(fragment))
+  }
+  assert.equal(cutover.includes('latest.capabilities'), false)
+  assert.equal(cutover.includes('latest.defaults'), false)
+  assert.equal(cutover.includes('latest.pricing'), false)
+  for (const fragment of ['per_image_v1', 'creditsPerImage', '9007199254740991', 'canonical-v1']) {
+    assert.ok(cutover.includes(fragment))
+  }
+  // Host checks must apply to the currently linked credential: the copied
+  // revision credential must equal the mutable model link.
+  for (const fragment of [
+    'latest.credential_id IS NOT DISTINCT FROM m.provider_credential_id',
+    'r.credential_id IS NOT DISTINCT FROM m.provider_credential_id',
+  ]) {
+    assert.ok(cutover.includes(fragment))
+  }
+})
+
+test('active image upsert validates fields and endpoint hosts against the plugin contract', async () => {
+  const openai = globalProviderRegistry.get('openai-image', '1.1.0')
+  const seedream = globalProviderRegistry.get('seedream-image', '1.1.0')
+  assert.deepEqual(await validateImageModelContract(openai, {
+    vendorModelId: 'gpt-image-2',
+    sizes: ['1024x1024', '1280x720', '720x1280', '1536x1024', '1024x1536'],
+    qualityOptions: ['auto', 'low', 'medium', 'high'],
+    maxCount: 4,
+    maxInputImages: 4,
+  }), { ok: true })
+  assert.equal((await validateImageModelContract(openai, {
+    vendorModelId: 'gpt-image-2', sizes: ['9999x9999'], qualityOptions: [], maxCount: 1, maxInputImages: 0,
+  })).ok, false)
+  assert.equal((await validateImageModelContract(openai, {
+    vendorModelId: 'gpt-image-2', sizes: ['1024x1024'], qualityOptions: ['ultra'], maxCount: 1, maxInputImages: 0,
+  })).ok, false)
+  assert.equal((await validateImageModelContract(openai, {
+    vendorModelId: 'gpt-image-2', sizes: ['1024x1024'], qualityOptions: [], maxCount: 5, maxInputImages: 0,
+  })).ok, false)
+  assert.equal((await validateImageModelContract(openai, {
+    vendorModelId: 'gpt-image-2', sizes: ['1024x1024'], qualityOptions: [], maxCount: 1, maxInputImages: 5,
+  })).ok, false)
+  assert.equal((await validateImageModelContract(openai, {
+    vendorModelId: 'no-such-model', sizes: [], qualityOptions: [], maxCount: 1, maxInputImages: 0,
+  })).ok, false)
+  assert.deepEqual(await validateImageModelContract(seedream, {
+    vendorModelId: 'doubao-seedream-4-5-251128',
+    sizes: ['2048x2048'],
+    qualityOptions: [],
+    maxCount: 4,
+    maxInputImages: 4,
+  }), { ok: true })
+  assert.equal((await validateImageModelContract(seedream, {
+    vendorModelId: 'doubao-seedream-4-5-251128', sizes: ['1024x1024'], qualityOptions: [], maxCount: 1, maxInputImages: 0,
+  })).ok, false)
+  // DALL-E-3 declares maxInputImages 0: any reference image is rejected,
+  // while zero passes the per-model cap.
+  assert.deepEqual(await validateImageModelContract(openai, {
+    vendorModelId: 'dall-e-3', sizes: ['1024x1024'], qualityOptions: ['standard'], maxCount: 1, maxInputImages: 0,
+  }), { ok: true })
+  assert.equal((await validateImageModelContract(openai, {
+    vendorModelId: 'dall-e-3', sizes: ['1024x1024'], qualityOptions: ['standard'], maxCount: 1, maxInputImages: 1,
+  })).ok, false)
+  // Official endpoint hosts only; empty means the plugin default applies.
+  assert.equal(imageBaseUrlAllowed('openai-image', 'https://api.openai.com'), true)
+  assert.equal(imageBaseUrlAllowed('openai-image', null), true)
+  assert.equal(imageBaseUrlAllowed('openai-image', 'https://proxy.example.com'), false)
+  assert.equal(imageBaseUrlAllowed('seedream-image', 'https://ark.cn-beijing.volces.com'), true)
+  assert.equal(imageBaseUrlAllowed('seedream-image', 'https://api.openai.com'), false)
+  assert.equal(imageBaseUrlAllowed('openai-image', ''), true)
+})
+test('active image writes persist canonical capabilities and reject overrides', () => {
+  const canonical = buildCanonicalImageCapabilities({
+    sizes: ['1024x1024'],
+    qualityOptions: [],
+    maxCount: 2,
+    maxInputImages: 0,
+  })
+  assert.deepEqual(canonical.modes, ['text_to_image'])
+  assert.deepEqual(canonical.supportedMediaKinds, ['image'])
+  assert.equal(canonical.mediaKind, 'image')
+  assert.equal(canonical.maxCount, 2)
+  const parameters = canonical.parameters as Record<string, unknown>[]
+  assert.deepEqual(parameters.map((parameter) => parameter.name), ['size', 'count'])
+  assert.deepEqual((parameters[0] as Record<string, unknown>).options, ['1024x1024'])
+  assert.deepEqual(canonical.inputSlots, [])
+  const withQuality = buildCanonicalImageCapabilities({
+    sizes: ['1024x1024'],
+    qualityOptions: ['auto'],
+    maxCount: 4,
+    maxInputImages: 3,
+  })
+  assert.deepEqual(withQuality.modes, ['text_to_image', 'image_to_image'])
+  assert.deepEqual(withQuality.inputSlots, [
+    { role: 'reference_image', required: false, minCount: 0, maxCount: 3, allowedMediaKinds: ['image'] },
+  ])
+  // Omitted fields are fine; any content is a rejectable override.
+  for (const empty of [undefined, null, {}, [], '']) {
+    assert.equal(isEmptyInputOverride(empty), true)
+  }
+  for (const override of [{ modes: [] }, { count: 1 }, ['size'], 'custom', 0]) {
+    assert.equal(isEmptyInputOverride(override), false)
+  }
+})
+
+test('active image upsert inspects the attached credential base URL', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const source = readFileSync(join(here, './modules/models/handlers.ts'), 'utf8')
+  assert.ok(source.includes('SELECT id,base_url,provider_id,configured_fields FROM provider_credentials'))
+})
+
+test('credential schema versions stay positive safe integers', () => {
+  assert.deepEqual(normalizeCredentialSchemaVersion(undefined), { ok: true, version: undefined })
+  assert.deepEqual(normalizeCredentialSchemaVersion(undefined, 1), { ok: true, version: 1 })
+  assert.deepEqual(normalizeCredentialSchemaVersion(2), { ok: true, version: 2 })
+  assert.deepEqual(normalizeCredentialSchemaVersion('3'), { ok: true, version: 3 })
+  for (const bad of [0, -1, 1.5, Number.NaN, 'abc', null]) {
+    assert.deepEqual(normalizeCredentialSchemaVersion(bad), { ok: false })
+  }
+})
+
+test('credential host or plugin redirects require a newly supplied secret', () => {
+  const stored = { baseUrl: 'https://api.openai.com', pluginId: 'openai-image', pluginVersion: '1.1.0' }
+  assert.equal(credentialTargetChanged(stored, { ...stored }), false)
+  assert.equal(credentialTargetChanged(stored, { ...stored, baseUrl: 'https://proxy.example.com' }), true)
+  assert.equal(credentialTargetChanged(stored, { ...stored, pluginId: 'seedream-image' }), true)
+  assert.equal(credentialTargetChanged(stored, { ...stored, pluginVersion: '1.0.0' }), true)
+  assert.equal(credentialTargetChanged({ baseUrl: null }, { baseUrl: '' }), false)
+  assert.equal(credentialTargetChanged({ baseUrl: null }, { baseUrl: 'https://api.openai.com' }), true)
+})
+
+test('hardened 1.1.0 image manifests gate vendor models; custom IDs stay on 1.0.0', () => {
+  const openaiModels = globalProviderRegistry.get('openai-image', '1.1.0').manifest.models || []
+  const seedreamModels = globalProviderRegistry.get('seedream-image', '1.1.0').manifest.models || []
+  assert.ok(openaiModels.length > 0)
+  assert.ok(seedreamModels.length > 0)
+  for (const id of ['gpt-image-2', 'dall-e-3']) {
+    assert.equal(manifestSupportsVendorModel(openaiModels, id), true)
+  }
+  for (const id of ['doubao-seedream-4-0-250828', 'doubao-seedream-4-5-251128']) {
+    assert.equal(manifestSupportsVendorModel(seedreamModels, id), true)
+  }
+  assert.equal(manifestSupportsVendorModel(openaiModels, 'my-custom-model'), false)
+  assert.equal(manifestSupportsVendorModel(seedreamModels, 'gpt-image-2'), false)
+  // An empty model list means the plugin accepts any vendor model ID.
+  assert.equal(manifestSupportsVendorModel(undefined, 'anything'), true)
+  assert.equal(manifestSupportsVendorModel([], 'anything'), true)
+})
+
+test('builtin provider templates expose exactly the four current plugins', () => {
+  const templates = buildBuiltinProviderTemplates()
+  assert.deepEqual(templates.map((template) => template.key), ['openai-image', 'seedream-image', 'seedance-video', 'veo-video'])
+  const byKey = Object.fromEntries(templates.map((template) => [template.key, template]))
+  assert.deepEqual(
+    [byKey['openai-image'].pluginId, byKey['openai-image'].pluginVersion, byKey['openai-image'].providerId, byKey['openai-image'].adapter, byKey['openai-image'].modality, byKey['openai-image'].baseUrl],
+    ['openai-image', '1.1.0', 'openai', 'openai', 'image', 'https://api.openai.com'],
+  )
+  assert.deepEqual(
+    [byKey['seedream-image'].pluginId, byKey['seedream-image'].pluginVersion, byKey['seedream-image'].providerId, byKey['seedream-image'].adapter, byKey['seedream-image'].modality, byKey['seedream-image'].baseUrl],
+    ['seedream-image', '1.1.0', 'volcengine', 'seedream', 'image', 'https://ark.cn-beijing.volces.com'],
+  )
+  assert.deepEqual(
+    [byKey['seedance-video'].pluginId, byKey['seedance-video'].pluginVersion, byKey['seedance-video'].providerId, byKey['seedance-video'].adapter, byKey['seedance-video'].modality, byKey['seedance-video'].baseUrl],
+    ['seedance-video', '1.0.0', 'volcengine', 'seedream', 'video', 'https://ark.cn-beijing.volces.com/api/v3'],
+  )
+  assert.deepEqual(
+    [byKey['veo-video'].pluginId, byKey['veo-video'].pluginVersion, byKey['veo-video'].providerId, byKey['veo-video'].adapter, byKey['veo-video'].modality, byKey['veo-video'].baseUrl],
+    ['veo-video', '1.0.0', 'google', 'veo', 'video', 'https://us-central1-aiplatform.googleapis.com'],
+  )
+  assert.deepEqual(byKey['openai-image'].credential, {
+    schemaId: 'legacy-api-key-v1', schemaVersion: 1, kind: 'api_key',
+    label: 'OpenAI API Key', placeholder: 'sk-...',
+    helpText: 'Official OpenAI API key with image generation access.',
+  })
+  assert.equal(byKey['seedream-image'].credential.kind, 'api_key')
+  assert.equal(byKey['seedance-video'].credential.kind, 'api_key')
+  assert.deepEqual([byKey['veo-video'].credential.schemaId, byKey['veo-video'].credential.kind], ['json-v1', 'google_service_account'])
+  // No legacy image versions leak into the catalog.
+  for (const template of templates) {
+    if (template.modality === 'image') assert.equal(template.pluginVersion, '1.1.0')
+  }
+  // Models and preset membership resolve from the exact manifests.
+  for (const template of templates) {
+    const manifest = globalProviderRegistry.get(template.pluginId, template.pluginVersion).manifest
+    assert.deepEqual(template.models.map((model) => model.id), (manifest.models ?? []).map((model) => model.id))
+    assert.ok(template.presetIds.length > 0)
+  }
+  assert.deepEqual([...byKey['openai-image'].presetIds].sort(), ['openai-gpt-image-2'])
+  assert.deepEqual([...byKey['seedream-image'].presetIds].sort(), ['seedream-4-0', 'seedream-4-5'])
+  assert.deepEqual(byKey['seedance-video'].presetIds, ['seedance-1-0'])
+  assert.deepEqual(byKey['veo-video'].presetIds, ['veo-3-1'])
+  for (const template of buildBuiltinProviderTemplates()) {
+    const manifestIds = new Set((globalProviderRegistry.get(template.pluginId, template.pluginVersion).manifest.models ?? []).map((model) => model.id))
+    for (const presetId of template.presetIds) {
+      const preset = modelPresets.find((entry) => entry.id === presetId)
+      assert.ok(preset && 'vendorModelId' in preset && manifestIds.has(preset.vendorModelId))
+    }
+  }
+  // A stale vendor model ID fails loudly instead of serving a dead template.
+  const stalePreset: VideoModelPreset = {
+    id: 'stale-probe', modelKind: 'video', displayName: 'Stale', providerId: 'google',
+    pluginId: 'veo-video', pluginVersion: '1.0.0', vendorModelId: 'veo-retired-preview',
+    baseUrl: 'https://us-central1-aiplatform.googleapis.com', modes: ['text_to_video'],
+    parameters: [], inputSlots: [],
+    pricing: { scheme: 'per_second_v1', creditsPerSecond: 20 },
+    defaults: {}, maxCount: 1, concurrencyLimit: 1,
+  }
+  modelPresets.push(stalePreset)
+  try {
+    assert.throws(() => buildBuiltinProviderTemplates(), /absent from plugin/)
+  } finally {
+    modelPresets.pop()
+  }
+})
+
+test('video presets use manifest-supported vendor models, official hosts, and provider-accurate parameters', () => {
+  const seedance = modelPresets.find((preset) => preset.id === 'seedance-1-0')
+  if (!seedance || seedance.modelKind !== 'video') throw new Error('seedance preset missing')
+  assert.equal(seedance.vendorModelId, 'doubao-seedance-2-0-fast-260128')
+  assert.equal(seedance.baseUrl, 'https://ark.cn-beijing.volces.com/api/v3')
+  const seedanceDuration = seedance.parameters.find((parameter) => parameter.name === 'durationSeconds')
+  assert.deepEqual(seedanceDuration, { type: 'integer', name: 'durationSeconds', label: '时长（秒）', min: 1, max: 30, defaultValue: 5, required: false })
+  assert.deepEqual(seedance.pricing, { scheme: 'per_second_v1', creditsPerSecond: 10, minDurationSeconds: 1, maxDurationSeconds: 30 })
+  const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
+  if (!veo || veo.modelKind !== 'video') throw new Error('veo preset missing')
+  assert.equal(veo.vendorModelId, 'veo-3.1-generate-001')
+  assert.equal(veo.baseUrl, 'https://us-central1-aiplatform.googleapis.com')
+  // Enum strings so normalization can Number-convert them later.
+  assert.deepEqual(
+    veo.parameters.find((parameter) => parameter.name === 'durationSeconds'),
+    { type: 'enum', name: 'durationSeconds', label: '时长（秒）', options: ['4', '6', '8'], defaultValue: '8', required: false },
+  )
+  assert.deepEqual(
+    veo.parameters.find((parameter) => parameter.name === 'aspectRatio'),
+    { type: 'enum', name: 'aspectRatio', label: '宽高比', options: ['16:9', '9:16'], defaultValue: '16:9', required: false },
+  )
+  assert.deepEqual(veo.pricing, { scheme: 'per_second_v1', creditsPerSecond: 20, minDurationSeconds: 4, maxDurationSeconds: 8 })
+})
+
+test('video presets become complete immutable revision contracts', () => {
+  const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
+  const contract = videoPresetRevisionContract(veo)
+  assert.ok(contract)
+  assert.deepEqual(contract.pricing, {
+    scheme: 'per_second_v1',
+    creditsPerSecond: 20,
+    minDurationSeconds: 4,
+    maxDurationSeconds: 8,
+  })
+  assert.deepEqual(contract.defaults, {
+    durationSeconds: 8,
+    aspectRatio: '16:9',
+    resolution: '1080p',
+    audio: true,
+    count: 1,
+  })
+  assert.deepEqual(
+    (contract.capabilities.parameters as Array<{ name: string }>).map((parameter) => parameter.name),
+    ['durationSeconds', 'aspectRatio', 'resolution', 'audio', 'count'],
+  )
+  assert.deepEqual(contract.capabilities.supportedMediaKinds, ['video'])
+})
+
+test('model credentials require exact plugin identity with legacy provider fallback only', () => {
+  const target = { providerId: 'google', pluginId: 'veo-video', pluginVersion: '1.0.0' }
+  assert.equal(providerCredentialMatchesPluginTarget({
+    provider_id: 'google',
+    configured_fields: { pluginId: 'veo-video', pluginVersion: '1.0.0' },
+  }, target), true)
+  assert.equal(providerCredentialMatchesPluginTarget({
+    provider_id: 'google',
+    configured_fields: { pluginId: 'veo-video', pluginVersion: '2.0.0' },
+  }, target), false)
+  assert.equal(providerCredentialMatchesPluginTarget({
+    provider_id: 'google',
+    configured_fields: { pluginId: 'veo-video' },
+  }, target), false)
+  assert.equal(providerCredentialMatchesPluginTarget({
+    provider_id: 'google',
+    configured_fields: {},
+  }, target), true)
+  assert.equal(providerCredentialMatchesPluginTarget({
+    provider_id: 'volcengine',
+    configured_fields: {},
+  }, target), false)
+})
+
+test('stored preset lookup never upgrades an explicitly pinned plugin version', () => {
+  const preset = modelPresets.find((entry) => entry.id === 'openai-gpt-image-2')
+  assert.ok(preset)
+  assert.equal(presetMatchesPersistedModel(preset, {
+    plugin_id: 'openai-image',
+    plugin_version: '1.1.0',
+    vendor_model_id: 'gpt-image-2',
+  }), true)
+  assert.equal(presetMatchesPersistedModel(preset, {
+    plugin_id: 'openai-image',
+    plugin_version: '1.0.0',
+    vendor_model_id: 'gpt-image-2',
+  }), false)
+  assert.equal(presetMatchesPersistedModel(preset, {
+    plugin_id: null,
+    plugin_version: null,
+    vendor_model_id: 'gpt-image-2',
+  }), true)
+})
+
+test('admin provider templates route serves the registry-backed catalog', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const source = readFileSync(join(here, '../app/api/[...path]/route.ts'), 'utf8')
+  assert.ok(source.includes("admin/provider-templates"))
+  assert.ok(source.includes('buildBuiltinProviderTemplates'))
+})
+
+test('explicit plugin credentials validate the plugin, schema, catalog metadata, and secret', async () => {
+  const unknown = await validateExplicitPluginCredential({ pluginId: 'does-not-exist', pluginVersion: '9.9.9', secretPayload: 'sk-x' })
+  assert.equal(unknown.ok, false)
+  assert.equal(unknown.ok ? null : unknown.code, 'INVALID_PLUGIN')
+  const undeclaredSchema = await validateExplicitPluginCredential({
+    pluginId: 'veo-video', pluginVersion: '1.0.0', schemaId: 'legacy-api-key-v1', providerId: 'google', secretPayload: 'sk-x',
+  })
+  assert.equal(undeclaredSchema.ok, false)
+  assert.equal(undeclaredSchema.ok ? null : undeclaredSchema.code, 'INVALID_INPUT')
+  const malformedVeo = await validateExplicitPluginCredential({
+    pluginId: 'veo-video', pluginVersion: '1.0.0', schemaId: 'json-v1', providerId: 'google', secretPayload: '{broken json',
+  })
+  assert.equal(malformedVeo.ok, false)
+  assert.equal(malformedVeo.ok ? null : malformedVeo.code, 'INVALID_CREDENTIAL')
+  const incompleteServiceAccount = await validateExplicitPluginCredential({
+    pluginId: 'veo-video', pluginVersion: '1.0.0', schemaId: 'json-v1', providerId: 'google',
+    secretPayload: JSON.stringify({ type: 'service_account', project_id: 'demo', client_email: 'veo@demo.iam.gserviceaccount.com' }),
+  })
+  assert.equal(incompleteServiceAccount.ok, false)
+  assert.equal(incompleteServiceAccount.ok ? null : incompleteServiceAccount.code, 'INVALID_CREDENTIAL')
+  const wrongProvider = await validateExplicitPluginCredential({
+    pluginId: 'openai-image', pluginVersion: '1.1.0', providerId: 'volcengine', secretPayload: 'sk-test-key',
+  })
+  assert.equal(wrongProvider.ok, false)
+  assert.equal(wrongProvider.ok ? null : wrongProvider.code, 'INVALID_INPUT')
+  const wrongBaseUrl = await validateExplicitPluginCredential({
+    pluginId: 'openai-image', pluginVersion: '1.1.0', providerId: 'openai',
+    baseUrl: 'https://proxy.example.com', secretPayload: 'sk-test-key',
+  })
+  assert.equal(wrongBaseUrl.ok, false)
+  assert.equal(wrongBaseUrl.ok ? null : wrongBaseUrl.code, 'INVALID_BASE_URL')
+  // Built-in credentials resolve deterministically with catalog metadata.
+  const openai = await validateExplicitPluginCredential({
+    pluginId: 'openai-image', pluginVersion: '1.1.0', providerId: 'openai', secretPayload: 'sk-test-key-123',
+  })
+  assert.equal(openai.ok, true)
+  if (openai.ok) {
+    assert.deepEqual(
+      [openai.pluginId, openai.pluginVersion, openai.schemaId, openai.schemaVersion, openai.baseUrl],
+      ['openai-image', '1.1.0', 'legacy-api-key-v1', 1, 'https://api.openai.com'],
+    )
+  }
+  const serviceAccount = JSON.stringify({
+    type: 'service_account', project_id: 'demo-project',
+    client_email: 'veo@demo-project.iam.gserviceaccount.com',
+    private_key: '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n',
+  })
+  const veo = await validateExplicitPluginCredential({
+    pluginId: 'veo-video', pluginVersion: '1.0.0', schemaId: 'json-v1', providerId: 'google', secretPayload: serviceAccount,
+  })
+  assert.equal(veo.ok, true)
+  if (veo.ok) {
+    assert.deepEqual(
+      [veo.pluginId, veo.pluginVersion, veo.schemaId, veo.baseUrl],
+      ['veo-video', '1.0.0', 'json-v1', 'https://us-central1-aiplatform.googleapis.com'],
+    )
+  }
 })

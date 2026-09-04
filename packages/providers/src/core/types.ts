@@ -54,6 +54,7 @@ export type MediaProviderManifest = {
     modalities: ('image' | 'video')[]
     supportedAspectRatios?: string[]
     maxBatchSize?: number
+    maxInputImages?: number
   }[]
 }
 

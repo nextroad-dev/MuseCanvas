@@ -14,9 +14,11 @@ import {
   VEO_STANDARD_MODEL,
   globalProviderRegistry,
   openAiImageManifest,
+  openAiImagePlugin,
   seedanceVideoManifest,
   seedanceVideoPlugin,
   seedreamImageManifest,
+  seedreamImagePlugin,
   veoVideoManifest,
   veoVideoPlugin,
   type ExecutionContext,
@@ -126,24 +128,27 @@ function assertDiscriminatedOutputs(outputs: OutputDescriptor[] | undefined): vo
 }
 
 // ---------------------------------------------------------------------------
-// 1. Registry: all four exact plugin keys
+// 1. Registry: active and revision-pinned plugin keys
 // ---------------------------------------------------------------------------
 
-test('registry exposes openai-image@1.0.0, seedream-image@1.0.0, seedance-video@1.0.0, veo-video@1.0.0', () => {
-  for (const [id, version] of [
+test('registry exposes active image plugins, pinned image v1 plugins, and video plugins', () => {
+  const expected = [
     ['openai-image', '1.0.0'],
+    ['openai-image', '1.1.0'],
     ['seedream-image', '1.0.0'],
+    ['seedream-image', '1.1.0'],
     ['seedance-video', '1.0.0'],
     ['veo-video', '1.0.0'],
-  ] as const) {
+  ] as const
+  for (const [id, version] of expected) {
     assert.equal(globalProviderRegistry.has(id, version), true, `expected ${id}@${version} to be registered`)
     const plugin = globalProviderRegistry.get(id, version)
     assert.equal(plugin.manifest.id, id)
     assert.equal(plugin.manifest.version, version)
   }
   const keys = new Set(globalProviderRegistry.listManifests().map(m => `${m.id}@${m.version}`))
-  for (const key of ['openai-image@1.0.0', 'seedream-image@1.0.0', 'seedance-video@1.0.0', 'veo-video@1.0.0']) {
-    assert.ok(keys.has(key), `listManifests() must include ${key}`)
+  for (const [id, version] of expected) {
+    assert.ok(keys.has(`${id}@${version}`), `listManifests() must include ${id}@${version}`)
   }
 })
 
@@ -151,13 +156,13 @@ test('registry exposes openai-image@1.0.0, seedream-image@1.0.0, seedance-video@
 // 2. Manifests: modalities, versions, host allowlists
 // ---------------------------------------------------------------------------
 
-test('image manifests declare image modality, 1.0.0, and OpenAI/Ark host allowlists', () => {
-  assert.equal(openAiImageManifest.version, '1.0.0')
+test('active image manifests declare image modality, 1.1.0, and provider host allowlists', () => {
+  assert.equal(openAiImageManifest.version, '1.1.0')
   assert.deepEqual(openAiImageManifest.modalities, ['image'])
   assert.ok(openAiImageManifest.allowedHosts.includes('api.openai.com'))
   assert.ok(openAiImageManifest.credentialSchemas.includes('legacy-api-key-v1'))
 
-  assert.equal(seedreamImageManifest.version, '1.0.0')
+  assert.equal(seedreamImageManifest.version, '1.1.0')
   assert.deepEqual(seedreamImageManifest.modalities, ['image'])
   assert.ok(seedreamImageManifest.allowedHosts.includes('ark.cn-beijing.volces.com'))
   assert.ok(seedreamImageManifest.credentialSchemas.includes('json-v1'))
@@ -269,7 +274,103 @@ test('safe HTTP enforces the maxBytes body/size boundary', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 4. Seedance Ark fixtures: submit / poll / cancel
+// 4. Synchronous Image fixtures: submit / validation / output safety
+// ---------------------------------------------------------------------------
+
+// Genuinely decodable 64x64 solid PNG (header-only bytes would fail output inspection).
+const CONTRACT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAoUlEQVR4nO2SQQkAQRDDqqRKTkn8C1kR9wgDhQpIQtOP04tO0AmgV+wuxN1FJ+gE0Ct2F+LuohN0AugVuwtxd9EJOgH0it2FuLvoBJ0AesXuQtxddIJOAL1idyHuLjpBJ4BesbsQdxedoBNAr9hdiLuLTtAJoFfsLsTdRSfoBNArdhfi7qITdALoFbsLcXfRCToB9Irdhbi76ASdAHrFPxd6WAxApm1NYrAAAAAASUVORK5CYII=',
+  'base64',
+)
+
+const OPENAI_IMAGE_CONFIG: ProviderConfig = {
+  credential: { schema: 'legacy-api-key-v1', apiKey: 'openai-contract-key' },
+}
+
+const OPENAI_IMAGE_REQUEST: MediaRequest = {
+  modality: 'image',
+  vendorModelId: 'gpt-image-2',
+  prompt: 'a watercolor city at sunrise',
+  size: '1024x1024',
+  quality: 'high',
+  count: 1,
+}
+
+test('OpenAI Image submit uses the plugin endpoint and returns discriminated image output', async () => {
+  const { context, calls } = stubContext(openAiImageManifest.id, openAiImageManifest.version, () =>
+    jsonResponse(200, { data: [{ b64_json: Buffer.from('image-bytes').toString('base64') }] }),
+  )
+  const result = await openAiImagePlugin.submit(OPENAI_IMAGE_REQUEST, OPENAI_IMAGE_CONFIG, context)
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/images/generations')
+  assert.equal(calls[0].headers['authorization'], 'Bearer openai-contract-key')
+  const body = JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>
+  assert.equal(body['model'], OPENAI_IMAGE_REQUEST.vendorModelId)
+  assert.equal(body['size'], OPENAI_IMAGE_REQUEST.size)
+  assert.equal(result.status, 'succeeded')
+  assertDiscriminatedOutputs(result.outputs)
+  assert.equal(result.outputs?.[0].mimeType.startsWith('image/'), true)
+})
+
+test('Seedream Image submit maps reference input and returns HTTPS image output', async () => {
+  const config: ProviderConfig = {
+    credential: { schema: 'legacy-api-key-v1', apiKey: 'seedream-contract-key' },
+  }
+  const request: MediaRequest = {
+    modality: 'image',
+    vendorModelId: 'doubao-seedream-4-5-251128',
+    prompt: 'restyle the reference image',
+    size: '2048x2048',
+    count: 1,
+    inputImages: [{
+      data: CONTRACT_PNG,
+      mimeType: 'image/png',
+      sizeBytes: CONTRACT_PNG.length,
+      width: 64,
+      height: 64,
+    }],
+  }
+  const outputUrl = 'https://ark.cn-beijing.volces.com/outputs/fixture.png'
+  const { context, calls } = stubContext(seedreamImageManifest.id, seedreamImageManifest.version, () =>
+    jsonResponse(200, { data: [{ url: outputUrl }] }),
+  )
+  const result = await seedreamImagePlugin.submit(request, config, context)
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://ark.cn-beijing.volces.com/api/v3/images/generations')
+  const body = JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>
+  assert.equal(typeof body['image'], 'string')
+  assert.equal(result.status, 'succeeded')
+  assertDiscriminatedOutputs(result.outputs)
+  assert.equal(result.outputs?.[0].url, outputUrl)
+  assert.equal(result.outputs?.[0].mimeType.startsWith('image/'), true)
+})
+
+test('Image plugins surface transient HTTP failures and reject invalid output modality', async () => {
+  const transient = stubContext(openAiImageManifest.id, openAiImageManifest.version, () =>
+    jsonResponse(429, { error: { message: 'rate limited' } }),
+  )
+  await assert.rejects(
+    () => openAiImagePlugin.submit(OPENAI_IMAGE_REQUEST, OPENAI_IMAGE_CONFIG, transient.context),
+    (error: unknown) => error instanceof Error && error.message === 'PROVIDER_TEMPORARY_ERROR',
+  )
+
+  const outputContext = stubContext(openAiImageManifest.id, openAiImageManifest.version, () =>
+    jsonResponse(200, {}),
+  ).context
+  await assert.rejects(
+    () => openAiImagePlugin.openOutput(
+      { index: 0, mimeType: 'video/mp4', b64Json: Buffer.from('video').toString('base64') },
+      OPENAI_IMAGE_CONFIG,
+      outputContext,
+    ),
+    (error: unknown) => error instanceof Error && error.message === 'INVALID_REQUEST',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// 5. Seedance Ark fixtures: submit / poll / cancel
 // ---------------------------------------------------------------------------
 
 const SEEDANCE_CONFIG: ProviderConfig = {

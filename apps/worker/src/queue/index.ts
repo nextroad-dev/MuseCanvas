@@ -1,8 +1,13 @@
 import { db } from '../../../../packages/database/src/index'
 import { CONSUMER_BLOCK_MS, GENERATION_GROUP, GENERATION_STREAM, STALE_PENDING_IDLE_MS, consumer, redis } from '../shared/infra'
+import { resolveJobLeaseMs } from '../shared/runtime'
 
 export async function acquire(modelId: string, limit: number, owner: string): Promise<boolean> {
-  const key = `permit:${modelId}`; const now = Date.now(); const expires = now + Number(process.env.JOB_LEASE_MS || 600_000)
+  // Lease window comes from runtime settings (DB first, legacy JOB_LEASE_MS
+  // env second, contract default last); a resolver failure falls back to the
+  // contract default so queue pressure never wedges on a settings read.
+  const leaseMs = await resolveJobLeaseMs().catch(() => 600_000)
+  const key = `permit:${modelId}`; const now = Date.now(); const expires = now + leaseMs
   const result = await redis.eval(`redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',ARGV[1]); if redis.call('ZCARD',KEYS[1]) < tonumber(ARGV[2]) then redis.call('ZADD',KEYS[1],ARGV[3],ARGV[4]); redis.call('PEXPIRE',KEYS[1],tonumber(ARGV[3])-tonumber(ARGV[1])+60000); return 1 end; return 0`, { keys: [key], arguments: [String(now), String(limit), String(expires), owner] })
   return result === 1
 }

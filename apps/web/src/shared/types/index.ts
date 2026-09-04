@@ -539,26 +539,33 @@ export interface AdminJob {
   billingState?: BillingState | null
 }
 
-export interface PromptTemplateEntry {
-  name: string
-  description: string
-  path: string
-  resolvedPath: string
-  fileExists: boolean
-  valid: boolean
-  errorCode?: string
-}
-
-export interface PromptTemplateIndex {
-  indexPath: string
-  rootDirectory: string
-  readable: boolean
-  loadedAt: string
-  entryCount: number
-  valid: boolean
-  errorCode?: string
-  entries: PromptTemplateEntry[]
-}
+// ----- Prompt templates (canonical types live in `@musecanvas/contracts`) -----
+//
+// Versioned prompt-template sets are database-backed and managed through the
+// admin API (active detail, version history, import/export, preview). The
+// shapes below re-export the contract-owned vocabulary so the rest of the web
+// app imports from `@/shared/types` while the source of truth stays in
+// `packages/contracts`.
+export {
+  ALLOWED_PROMPT_TEMPLATE_VARS,
+  PROMPT_TEMPLATE_VAR_LOOKUP,
+  PromptTemplateErrorCode,
+} from '@musecanvas/contracts'
+export type {
+  PromptTemplateVar,
+  PromptTemplateEntryDto,
+  PromptTemplateSetSummaryDto,
+  PromptTemplateSetDetailDto,
+  ImportPromptTemplateItem,
+  ImportPromptTemplateSetInput,
+  ImportPromptTemplateSetResult,
+  CreatePromptTemplateEntryInput,
+  UpdatePromptTemplateEntryInput,
+  DeletePromptTemplateSetResult,
+  DeletePromptTemplateEntryResult,
+  RenderPromptTemplateInput,
+  RenderPromptTemplateResult,
+} from '@musecanvas/contracts'
 
 export interface PromptOptimizationSettings {
   enabled: boolean
@@ -590,6 +597,107 @@ export interface ApiResponse<T> {
 
 export interface SetupStatus {
   setupComplete: boolean
+}
+
+// ----- Onboarding / setup (canonical types live in `@musecanvas/contracts`) -----
+//
+// The wizard below re-exports the contract-owned onboarding vocabulary so the
+// rest of the web app imports from `@/shared/types` while the source of truth
+// stays in `packages/contracts`.
+export {
+  ONBOARDING_SECTION_KEYS,
+  RUNTIME_SETTINGS_DEFAULTS,
+  SetupErrorCode,
+} from '@musecanvas/contracts'
+import type {
+  SiteSettingsDto,
+  SmtpSettingsDto,
+  StorageSettingsDto,
+  RuntimeSettingsDto,
+} from '@musecanvas/contracts'
+export type {
+  OnboardingSectionKey,
+  OnboardingStatus,
+  OnboardingSectionStatus,
+  OnboardingSectionState,
+  OnboardingStateSnapshot,
+  BootstrapCheckKey,
+  BootstrapCheckStatus,
+  BootstrapCheck,
+  BootstrapDiagnostics,
+  SiteSettingsInput,
+  SiteSettingsDto,
+  SmtpTlsMode,
+  SmtpConnectionStatus,
+  SmtpSettingsInput,
+  SmtpSettingsDto,
+  StorageConnectionStatus,
+  StorageSettingsInput,
+  StorageSettingsDto,
+  RuntimeSettingsInput,
+  RuntimeSettingsDto,
+  SetupClaimInput,
+  SetupClaimResult,
+  SetupCompletionPayload,
+  SetupStatusResponse,
+} from '@musecanvas/contracts'
+
+/** Single prompt-template row surfaced by `GET /api/setup/config`. */
+export interface SetupConfigTemplateEntry {
+  name: string
+  description: string
+  path: string
+}
+
+/** Template summary surfaced by `GET /api/setup/config` (secrets never included). */
+export interface SetupConfigTemplates {
+  active: {
+    id: string
+    name: string
+    version: number
+    entryCount: number
+    updatedAt: string
+  } | null
+  entries: SetupConfigTemplateEntry[]
+}
+
+/** Redacted setup config: `{ site, smtp, storage, runtime, templates }`. */
+export interface SetupConfigResponse {
+  site: SiteSettingsDto
+  smtp: SmtpSettingsDto
+  storage: StorageSettingsDto
+  runtime: RuntimeSettingsDto
+  templates: SetupConfigTemplates
+}
+
+export interface SetupSmtpTestResult {
+  verified: boolean
+  settings: SmtpSettingsDto
+}
+
+export interface SetupStorageTestResult {
+  verified: boolean
+  settings: StorageSettingsDto
+}
+
+/** Client-parsed template entry. `path` is accepted on import files but only */
+/** `name`/`description`/`instruction` are posted to the import endpoint. */
+export interface SetupTemplateImportEntry {
+  name: string
+  description: string
+  instruction: string
+  path?: string
+}
+
+export interface SetupTemplateImportInput {
+  templates: Array<Pick<SetupTemplateImportEntry, 'name' | 'description' | 'instruction'>>
+}
+
+export interface SetupTemplateImportResult {
+  imported: boolean
+  setId: string
+  version: number
+  entryCount: number
 }
 
 export type BillingState = 'reserved' | 'settled' | 'released'

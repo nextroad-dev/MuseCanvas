@@ -48,9 +48,11 @@ import {
   MAX_UPLOAD_TOTAL_BYTES,
 } from '../../../../packages/providers/src/core/image-input'
 import { preprocessPrompt } from '../preprocessing'
-import { bucket, s3 } from '../shared/infra'
+import { getStorageClient, type StorageClientHandle } from '../shared/storage'
+import { resolveMaxOutputBytes as resolveRuntimeMaxOutputBytes, resolveProviderTimeoutMs } from '../shared/runtime'
 import {
   PROVIDER_LEASE_SECONDS,
+  PROVIDER_RUN_STATE_KEY_ID,
   SyncRetryPersistenceError,
   decryptOpaqueState,
   encryptOpaqueState,
@@ -68,7 +70,6 @@ import {
   submissionUnknownNextActionAt,
   syncNoRemotePollCode,
 } from '../provider-state'
-
 
 export function validateStoredInputImage(
   data: Buffer,
@@ -102,9 +103,15 @@ export async function loadAndValidateInputImages(
   const inputImages: Array<{ data: Buffer; mimeType: 'image/png' | 'image/jpeg' }> = []
 
   for (const row of rows.rows) {
+    let storage: StorageClientHandle
+    try {
+      storage = await getStorageClient()
+    } catch {
+      throw new Error('STORAGE_NOT_CONFIGURED')
+    }
     let s3Res
     try {
-      s3Res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: row.object_key }))
+      s3Res = await storage.s3.send(new GetObjectCommand({ Bucket: storage.bucket, Key: row.object_key }))
     } catch {
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
     }
@@ -172,9 +179,15 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
     for (const row of rows) {
       const mime = String(row.mime_type || '')
       if (!mime.startsWith('image/')) continue
+      let storage: StorageClientHandle
+      try {
+        storage = await getStorageClient()
+      } catch {
+        throw new Error('STORAGE_NOT_CONFIGURED')
+      }
       let s3Res
       try {
-        s3Res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: String(row.object_key) }))
+        s3Res = await storage.s3.send(new GetObjectCommand({ Bucket: storage.bucket, Key: String(row.object_key) }))
       } catch {
         throw new Error('INPUT_IMAGE_UNAVAILABLE')
       }
@@ -314,9 +327,16 @@ export async function persistJobFailure(
 }
 
 async function deleteUploadedObjects(uploaded: Array<{ key: string }>): Promise<void> {
+  let storage: StorageClientHandle | null = null
+  try {
+    storage = await getStorageClient()
+  } catch {
+    console.error('generated media cleanup skipped', { code: 'STORAGE_NOT_CONFIGURED' })
+    return
+  }
   for (const item of uploaded) {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: item.key }))
+      await storage.s3.send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: item.key }))
     } catch (error) {
       console.error('generated media cleanup failed', {
         key: item.key,
@@ -342,40 +362,51 @@ async function resolveSnapshot(job: Record<string, unknown>): Promise<ResolvedSn
   }
   if (!revision) throw new Error('INVALID_CONFIG')
   const credentialId = revision.credentialId || (job.provider_credential_id as string | undefined) || null
-  let rawCredential: unknown = undefined
-  let schemaHint: string | undefined
-  if (credentialId) {
-    const cred = await db().query(
-      'SELECT api_key_encrypted, payload_encrypted, schema_id, enabled FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL',
-      [credentialId],
-    )
-    const row = cred.rows[0] as Record<string, unknown> | undefined
-    if (!row || !row.enabled) throw new Error('PROVIDER_NOT_CONFIGURED')
-    const envelope = (row.payload_encrypted as string) || (row.api_key_encrypted as string)
-    if (!envelope) throw new Error('PROVIDER_NOT_CONFIGURED')
-    schemaHint = (row.schema_id as string) || undefined
-    try {
-      rawCredential = decryptApiKey(envelope)
-    } catch {
-      throw new Error('INVALID_CREDENTIAL')
-    }
-  } else if (process.env.ALLOW_PROVIDER_ENV_FALLBACK === 'true') {
-    rawCredential = undefined
-  } else {
-    throw new Error('PROVIDER_NOT_CONFIGURED')
+  // Fail closed: no ALLOW_PROVIDER_ENV_FALLBACK. A missing credential id or
+  // row is PROVIDER_NOT_CONFIGURED; an undecryptable envelope is
+  // INVALID_CREDENTIAL. The stored encryption_key_id selects the purpose key.
+  if (!credentialId) throw new Error('PROVIDER_NOT_CONFIGURED')
+  const cred = await db().query(
+    'SELECT api_key_encrypted, payload_encrypted, encryption_key_id, schema_id, enabled FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL',
+    [credentialId],
+  )
+  const row = cred.rows[0] as Record<string, unknown> | undefined
+  if (!row || !row.enabled) throw new Error('PROVIDER_NOT_CONFIGURED')
+  const envelope = (row.payload_encrypted as string | null) || (row.api_key_encrypted as string | null) || null
+  if (!envelope) throw new Error('PROVIDER_NOT_CONFIGURED')
+  const credentialKeyId = (row.encryption_key_id as string | null) || null
+  const schemaHint = (row.schema_id as string) || undefined
+  let rawCredential: unknown
+  try {
+    rawCredential = decryptApiKey(envelope, credentialKeyId)
+  } catch {
+    throw new Error('INVALID_CREDENTIAL')
   }
-  const decoded = rawCredential === undefined
-    ? { schema: schemaHint || 'legacy-api-key-v1' as string, apiKey: undefined as unknown as string }
-    : decodeCredential(rawCredential, schemaHint || 'legacy-api-key-v1', revision.pluginId, revision.pluginVersion)
+  const decoded = decodeCredential(rawCredential, schemaHint || 'legacy-api-key-v1', revision.pluginId, revision.pluginVersion)
   const baseUrl = revision.baseUrl || (job.provider_base_url as string | undefined) || undefined
   const normalized = revision.normalizedConfig || {}
+  // Provider timeout and output cap resolve from runtime settings (DB first,
+  // legacy env second, contract defaults last), never direct env reads here.
+  // normalize timeoutMs strictly: an explicitly invalid value fails
+  // INVALID_CONFIG instead of silently widening the provider wait.
+  const configuredTimeout = (normalized as Record<string, unknown>).timeoutMs
+  let timeoutMs: number
+  if (configuredTimeout === undefined || configuredTimeout === null || configuredTimeout === '') {
+    timeoutMs = await resolveProviderTimeoutMs().catch(() => 300_000)
+  } else {
+    const parsed = Number(configuredTimeout)
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('INVALID_CONFIG')
+    timeoutMs = parsed
+  }
+  const configuredMaxBytes = (normalized as Record<string, unknown>).maxBytes
+  const maxBytes = resolveOutputMaxBytes(
+    configuredMaxBytes ?? await resolveRuntimeMaxOutputBytes().catch(() => undefined),
+  )
   const config: ProviderConfig = {
     baseUrl,
     credential: decoded,
-    timeoutMs: Number((normalized as Record<string, unknown>).timeoutMs || process.env.PROVIDER_TIMEOUT_MS || 300_000),
-    maxBytes: resolveOutputMaxBytes(
-      (normalized as Record<string, unknown>).maxBytes ?? process.env.MAX_OUTPUT_BYTES ?? undefined,
-    ),
+    timeoutMs,
+    maxBytes,
   }
   return { revision, config }
 }
@@ -534,7 +565,7 @@ async function storeRunWaiting(run: ProviderRunEntity, result: OperationResult):
     remoteId: result.remoteId ?? null,
     nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs),
     encryptedStatePayload: encryptOpaqueState(result.opaqueState),
-    encryptedStateKeyId: result.opaqueState ? 'provider-credentials-key-v1' : null,
+    encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : null,
     outputManifest: (stripOutputManifest(result.outputs) as unknown as Record<string, unknown> | null) || null,
     providerAccepted: Boolean(result.remoteId),
   })
@@ -548,7 +579,7 @@ async function storeRunUnknown(run: ProviderRunEntity, result: OperationResult):
     remoteId: result.remoteId ?? null,
     nextActionAt: result.retryAfterMs ? nextActionAtForRetryAfter(result.retryAfterMs) : submissionUnknownNextActionAt(),
     encryptedStatePayload: encryptOpaqueState(result.opaqueState),
-    encryptedStateKeyId: result.opaqueState ? 'provider-credentials-key-v1' : null,
+    encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : null,
     outputManifest: (stripOutputManifest(result.outputs) as unknown as Record<string, unknown> | null) || null,
   })
 }
@@ -556,14 +587,15 @@ async function storeRunUnknown(run: ProviderRunEntity, result: OperationResult):
 async function uploadBufferToS3(key: string, data: Buffer, contentType: string): Promise<string | null> {
   const MULTIPART_THRESHOLD = 8_000_000
   const PART_SIZE = 5_000_000
+  const storage = await getStorageClient()
   if (data.length < MULTIPART_THRESHOLD) {
-    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: data, ContentType: contentType, Metadata: { checksum: createHash('sha256').update(data).digest('hex') } }))
+    await storage.s3.send(new PutObjectCommand({ Bucket: storage.bucket, Key: key, Body: data, ContentType: contentType, Metadata: { checksum: createHash('sha256').update(data).digest('hex') } }))
     return null
   }
-  const created = await s3.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: contentType }))
-  const uploadId = (created as unknown as Record<string, unknown>).UploadId as string | undefined
+  const created = await storage.s3.send(new CreateMultipartUploadCommand({ Bucket: storage.bucket, Key: key, ContentType: contentType }))
+  const uploadId = created.UploadId
   if (!uploadId) {
-    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: data, ContentType: contentType }))
+    await storage.s3.send(new PutObjectCommand({ Bucket: storage.bucket, Key: key, Body: data, ContentType: contentType }))
     return null
   }
   try {
@@ -571,13 +603,13 @@ async function uploadBufferToS3(key: string, data: Buffer, contentType: string):
     let partNumber = 1
     for (let offset = 0; offset < data.length; offset += PART_SIZE, partNumber += 1) {
       const chunk = data.subarray(offset, Math.min(offset + PART_SIZE, data.length))
-      const uploaded = await s3.send(new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: chunk }))
-      parts.push({ ETag: (uploaded as unknown as Record<string, unknown>).ETag as string, PartNumber: partNumber })
+      const uploaded = await storage.s3.send(new UploadPartCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: chunk }))
+      parts.push({ ETag: uploaded.ETag, PartNumber: partNumber })
     }
-    await s3.send(new CompleteMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId, MultipartUpload: { Parts: parts } }))
+    await storage.s3.send(new CompleteMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId, MultipartUpload: { Parts: parts } }))
     return uploadId
   } catch (error) {
-    try { await s3.send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId })) } catch {}
+    try { await storage.s3.send(new AbortMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId })) } catch {}
     throw error
   }
 }
@@ -730,7 +762,7 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
     }
     if (!isNonTerminalRunState(run.operationState)) return true
     const { revision, config } = await resolveSnapshot(job)
-    const opaque = decryptOpaqueState(run.encryptedStatePayload)
+    const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
     const plugin = globalProviderRegistry.get(revision.pluginId, revision.pluginVersion)
     const context = globalProviderRegistry.createExecutionContext(revision.pluginId, revision.pluginVersion, { config })
     if (!run.remoteId) {
@@ -779,7 +811,7 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
         remoteId: result.remoteId ?? run.remoteId,
         nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs),
         encryptedStatePayload: result.opaqueState ? encryptOpaqueState(result.opaqueState) : undefined,
-        encryptedStateKeyId: result.opaqueState ? 'provider-credentials-key-v1' : undefined,
+        encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : undefined,
         outputManifest: result.outputs ? (stripOutputManifest(result.outputs) as unknown as Record<string, unknown> | null) : undefined,
         providerAccepted: Boolean(result.remoteId),
       }).catch(() => null)
@@ -799,7 +831,7 @@ async function requestRemoteCancel(run: ProviderRunEntity, job: Record<string, u
     const { revision, config } = await resolveSnapshot(job)
     const plugin = globalProviderRegistry.get(revision.pluginId, revision.pluginVersion)
     const context = globalProviderRegistry.createExecutionContext(revision.pluginId, revision.pluginVersion, { config })
-    const opaque = decryptOpaqueState(run.encryptedStatePayload)
+    const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
     await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'canceling', nextActionAt: null }).catch(() => null)
     await db().query("UPDATE generation_jobs SET phase='provider_canceling',updated_at=now() WHERE id=$1", [job.id]).catch(() => {})
     if (run.remoteId && plugin.cancel) {
@@ -950,7 +982,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       return true
     }
     if (result.status === 'submitting') {
-      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'waiting', remoteId: result.remoteId ?? null, nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs), encryptedStatePayload: encryptOpaqueState(result.opaqueState), encryptedStateKeyId: result.opaqueState ? 'provider-credentials-key-v1' : null, providerAccepted: Boolean(result.remoteId) }).catch(() => null)
+      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'waiting', remoteId: result.remoteId ?? null, nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs), encryptedStatePayload: encryptOpaqueState(result.opaqueState), encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : null, providerAccepted: Boolean(result.remoteId) }).catch(() => null)
       return true
     }
     await handleTerminalResult(run, jobRow, revision, config, result, prompt)

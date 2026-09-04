@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto'
-import { decryptApiKey, encryptApiKey } from '../../../packages/providers/src/index'
+import { CURRENT_KEY_ID, decryptApiKey, decryptForPurpose, encryptForPurpose } from '../../../packages/providers/src/index'
 import type { OutputDescriptor } from '../../../packages/providers/src/index'
+
+/** Key id stamped on new provider-run opaque state rows. */
+export const PROVIDER_RUN_STATE_KEY_ID = CURRENT_KEY_ID
+/** Key id used by pre-migration rows encrypted under the provider key. Read only. */
+const LEGACY_OPAQUE_STATE_KEY_ID = 'provider-credentials-key-v1'
 
 export const PROVIDER_LEASE_SECONDS = 60
 export const SUBMISSION_UNKNOWN_DELAY_MS = 15_000
@@ -24,23 +29,39 @@ export function shouldCreateNewRun(latestState: string | null | undefined): bool
   return !isNonTerminalRunState(latestState)
 }
 
+/** New provider-run state writes use the isolated `provider-run-state` purpose key. */
 export function encryptOpaqueState(state: Record<string, unknown> | undefined): string | null {
   if (!state || Object.keys(state).length === 0) return null
-  return encryptApiKey(JSON.stringify(state))
+  return encryptForPurpose(JSON.stringify(state), 'provider-run-state').ciphertext
 }
 
-export function decryptOpaqueState(payload: string | null | undefined): Record<string, unknown> | undefined {
+/**
+ * Dual-read provider-run opaque state: current `provider-run-state` purpose
+ * first, then legacy `provider-credentials` ciphertext (encryptApiKey rows,
+ * including LEGACY_OPAQUE_STATE_KEY_ID stamps). Unknown key ids fail closed
+ * to undefined without throwing so poll/cancel paths stay retry-safe.
+ */
+export function decryptOpaqueState(payload: string | null | undefined, keyId?: string | null): Record<string, unknown> | undefined {
   if (!payload) return undefined
-  try {
-    const raw = decryptApiKey(payload)
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-    return undefined
-  } catch {
-    return undefined
+  const attempts: Array<() => string> = []
+  if (keyId === undefined || keyId === null || keyId === CURRENT_KEY_ID) {
+    attempts.push(() => decryptForPurpose(payload, 'provider-run-state', CURRENT_KEY_ID))
+  } else if (keyId !== LEGACY_OPAQUE_STATE_KEY_ID && keyId !== 'legacy') {
+    // Unknown stamp: still try the current purpose once before legacy fallback.
+    attempts.push(() => decryptForPurpose(payload, 'provider-run-state', CURRENT_KEY_ID))
   }
+  attempts.push(() => decryptApiKey(payload))
+  for (const attempt of attempts) {
+    try {
+      const parsed = JSON.parse(attempt()) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      continue
+    }
+  }
+  return undefined
 }
 
 export type StrippedOutputEntry = {

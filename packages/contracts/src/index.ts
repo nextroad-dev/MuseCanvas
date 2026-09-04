@@ -361,3 +361,325 @@ export interface BuiltinProviderTemplate {
   presetIds: string[]
   models: BuiltinProviderTemplateModel[]
 }
+
+// ---------------------------------------------------------------------------
+// Onboarding & setup foundation (contracts-first for the `/setup` flow)
+//
+// Explicit completion state replaces admin-count completion checks. Secrets are
+// write-only: read DTOs expose only hasSecret/fingerprint/status, never
+// plaintext or ciphertext.
+// ---------------------------------------------------------------------------
+
+export const ONBOARDING_SECTION_KEYS = [
+  'bootstrap',
+  'site',
+  'smtp',
+  'admin',
+  'storage',
+  'providers',
+  'models',
+  'oauth',
+  'templates',
+  'runtime',
+] as const
+
+export type OnboardingSectionKey = (typeof ONBOARDING_SECTION_KEYS)[number]
+
+export type OnboardingStatus = 'pending' | 'complete'
+
+export type OnboardingSectionStatus = 'pending' | 'complete'
+
+export interface OnboardingSectionState {
+  status: OnboardingSectionStatus
+  updatedAt: string
+}
+
+export interface OnboardingStateSnapshot {
+  status: OnboardingStatus
+  sections: Record<OnboardingSectionKey, OnboardingSectionState>
+  configRevision: number
+  completedAt: string | null
+  updatedAt: string
+}
+
+export type BootstrapCheckKey = 'database' | 'redis' | 'masterKey' | 'runtime'
+
+export type BootstrapCheckStatus = 'ok' | 'missing' | 'error'
+
+export interface BootstrapCheck {
+  key: BootstrapCheckKey
+  status: BootstrapCheckStatus
+  message?: string
+}
+
+export interface BootstrapDiagnostics {
+  checks: BootstrapCheck[]
+  ready: boolean
+  checkedAt: string
+}
+
+export interface SiteSettingsInput {
+  siteName?: string | null
+  siteUrl?: string | null
+}
+
+export interface SiteSettingsDto {
+  siteName: string | null
+  siteUrl: string | null
+  revision: number
+  updatedAt: string
+}
+
+export type SmtpTlsMode = 'none' | 'starttls' | 'implicit_tls'
+
+export type SmtpConnectionStatus = 'not_configured' | 'configured' | 'verified' | 'error'
+
+export interface SmtpSettingsInput {
+  host?: string | null
+  port?: number | null
+  tlsMode?: SmtpTlsMode
+  username?: string | null
+  /** Write-only plaintext secret. Never returned by any read DTO. */
+  password?: string | null
+  fromAddress?: string | null
+  fromName?: string | null
+}
+
+export interface SmtpSettingsDto {
+  host: string | null
+  port: number | null
+  tlsMode: SmtpTlsMode
+  username: string | null
+  fromAddress: string | null
+  fromName: string | null
+  hasSecret: boolean
+  secretFingerprint: string | null
+  encryptionKeyId: string | null
+  status: SmtpConnectionStatus
+  revision: number
+  updatedAt: string
+}
+
+export type StorageConnectionStatus = 'not_configured' | 'configured' | 'verified' | 'error'
+
+export interface StorageSettingsInput {
+  endpoint?: string | null
+  publicEndpoint?: string | null
+  region?: string | null
+  bucket?: string | null
+  accessKeyId?: string | null
+  /** Write-only plaintext secret. Never returned by any read DTO. */
+  secretAccessKey?: string | null
+  signedUrlTtlSeconds?: number | null
+}
+
+export interface StorageSettingsDto {
+  endpoint: string | null
+  publicEndpoint: string | null
+  region: string
+  bucket: string | null
+  accessKeyId: string | null
+  signedUrlTtlSeconds: number
+  hasSecret: boolean
+  secretFingerprint: string | null
+  encryptionKeyId: string | null
+  status: StorageConnectionStatus
+  revision: number
+  updatedAt: string
+}
+
+export const RUNTIME_SETTINGS_DEFAULTS = {
+  uploadTtlSeconds: 86400,
+  signedUrlTtlSeconds: 900,
+  maxImageBytes: 10_000_000,
+  maxTotalBytes: 20_000_000,
+  maxInputs: 4,
+  providerTimeoutMs: 300_000,
+  maxOutputBytes: 100_000_000,
+  jobLeaseMs: 600_000,
+} as const
+
+export interface RuntimeSettingsInput {
+  uploadTtlSeconds?: number | null
+  signedUrlTtlSeconds?: number | null
+  maxImageBytes?: number | null
+  maxTotalBytes?: number | null
+  maxInputs?: number | null
+  providerTimeoutMs?: number | null
+  maxOutputBytes?: number | null
+  jobLeaseMs?: number | null
+}
+
+export interface RuntimeSettingsDto {
+  uploadTtlSeconds: number
+  signedUrlTtlSeconds: number
+  maxImageBytes: number
+  maxTotalBytes: number
+  maxInputs: number
+  providerTimeoutMs: number
+  maxOutputBytes: number
+  jobLeaseMs: number
+  revision: number
+  updatedAt: string
+}
+
+export interface SetupClaimInput {
+  code: string
+}
+
+export interface SetupClaimResult {
+  claimed: boolean
+  expiresAt: string | null
+}
+
+export interface SetupCompletionPayload {
+  completed: boolean
+  completedAt: string | null
+  configRevision: number
+}
+
+export interface SetupStatusResponse {
+  setupComplete: boolean
+  status: OnboardingStatus
+  sections: Record<OnboardingSectionKey, OnboardingSectionState>
+  bootstrap: BootstrapDiagnostics | null
+  configRevision: number
+  completedAt: string | null
+}
+
+export const SetupErrorCode = {
+  SETUP_ALREADY_COMPLETE: 'SETUP_ALREADY_COMPLETE',
+  SETUP_SESSION_INVALID: 'SETUP_SESSION_INVALID',
+  SETUP_SESSION_EXPIRED: 'SETUP_SESSION_EXPIRED',
+  SETUP_SESSION_CONSUMED: 'SETUP_SESSION_CONSUMED',
+  SETUP_INCOMPLETE: 'SETUP_INCOMPLETE',
+  INVALID_INPUT: 'INVALID_INPUT',
+  INVALID_OTP: 'INVALID_OTP',
+  RATE_LIMITED: 'RATE_LIMITED',
+  EMAIL_DELIVERY_FAILED: 'EMAIL_DELIVERY_FAILED',
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  PUBLIC_ORIGIN_INVALID: 'PUBLIC_ORIGIN_INVALID',
+  SMTP_TEST_FAILED: 'SMTP_TEST_FAILED',
+  STORAGE_TEST_FAILED: 'STORAGE_TEST_FAILED',
+} as const
+
+export type SetupErrorCode = (typeof SetupErrorCode)[keyof typeof SetupErrorCode]
+
+// ============================================================================
+// Prompt Template Management Contracts
+// ============================================================================
+
+export const ALLOWED_PROMPT_TEMPLATE_VARS = [
+  'input_prompt',
+  'image_model_name',
+  'image_adapter',
+  'size',
+  'quality',
+  'count',
+  'input_language',
+] as const
+
+export type PromptTemplateVar = (typeof ALLOWED_PROMPT_TEMPLATE_VARS)[number]
+export const PROMPT_TEMPLATE_VAR_LOOKUP: Readonly<Record<PromptTemplateVar, true>> =
+  Object.freeze(Object.fromEntries(
+    ALLOWED_PROMPT_TEMPLATE_VARS.map((variable) => [variable, true]),
+  ) as Record<PromptTemplateVar, true>)
+
+export interface PromptTemplateEntryDto {
+  id: string
+  setId: string
+  name: string
+  description: string
+  path?: string
+  instruction: string
+  contentSha256?: string
+  sortOrder: number
+  createdAt: string
+}
+
+export interface PromptTemplateSetSummaryDto {
+  id: string
+  name: string
+  version: number
+  isActive: boolean
+  entryCount: number
+  contentDigest: string | null
+  createdBy?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PromptTemplateSetDetailDto extends PromptTemplateSetSummaryDto {
+  entries: PromptTemplateEntryDto[]
+}
+
+export interface ImportPromptTemplateItem {
+  name: string
+  description?: string
+  instruction: string
+  path?: string
+  sortOrder?: number
+}
+
+export interface ImportPromptTemplateSetInput {
+  name?: string
+  activate?: boolean
+  templates: ImportPromptTemplateItem[]
+}
+
+export interface ImportPromptTemplateSetResult {
+  imported: boolean
+  setId: string
+  name: string
+  version: number
+  entryCount: number
+  isActive: boolean
+}
+
+export interface CreatePromptTemplateEntryInput {
+  name: string
+  description?: string
+  instruction: string
+  sortOrder?: number
+}
+
+export interface UpdatePromptTemplateEntryInput {
+  name?: string
+  description?: string
+  instruction?: string
+  sortOrder?: number
+}
+export interface DeletePromptTemplateSetResult {
+  deleted: true
+}
+
+export interface DeletePromptTemplateEntryResult {
+  deleted: true
+  setId: string
+}
+
+
+export interface RenderPromptTemplateInput {
+  instruction: string
+  values?: Record<string, string | number>
+}
+
+export interface RenderPromptTemplateResult {
+  rendered: string
+  usedVariables: string[]
+  hasUnresolvedVariables: boolean
+}
+
+export const PromptTemplateErrorCode = {
+  TEMPLATE_SET_NOT_FOUND: 'TEMPLATE_SET_NOT_FOUND',
+  TEMPLATE_ENTRY_NOT_FOUND: 'TEMPLATE_ENTRY_NOT_FOUND',
+  TEMPLATE_SET_NOT_ACTIVE: 'TEMPLATE_SET_NOT_ACTIVE',
+  CANNOT_DELETE_ACTIVE_SET: 'CANNOT_DELETE_ACTIVE_SET',
+  DUPLICATE_TEMPLATE_NAME: 'DUPLICATE_TEMPLATE_NAME',
+  INVALID_TEMPLATE_VARIABLE: 'INVALID_TEMPLATE_VARIABLE',
+  TEMPLATE_INSTRUCTION_EMPTY: 'TEMPLATE_INSTRUCTION_EMPTY',
+  TEMPLATE_NAME_EMPTY: 'TEMPLATE_NAME_EMPTY',
+  NO_ACTIVE_TEMPLATE_SET: 'NO_ACTIVE_TEMPLATE_SET',
+} as const
+
+export type PromptTemplateErrorCode = (typeof PromptTemplateErrorCode)[keyof typeof PromptTemplateErrorCode]

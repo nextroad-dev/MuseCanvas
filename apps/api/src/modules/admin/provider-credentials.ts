@@ -6,7 +6,7 @@ import { providerCredentialDto } from '../../shared/dto'
 import { normalizedProviderBaseUrl } from '../../shared/model-helpers'
 import { builtinProviderTemplateForPlugin } from '../../admin/provider-templates'
 import { callLanguageModel, decodeCredential, globalProviderRegistry } from '../../../../../packages/providers/src/index'
-import { decryptApiKey, encryptApiKey, fingerprintApiKey } from '../../auth/security'
+import { decryptProviderCredential, encryptProviderCredential, fingerprintApiKey } from '../../auth/security'
 
 const LEGACY_ADAPTERS = ['openai', 'seedream', 'anthropic'] as const
 
@@ -257,8 +257,11 @@ export async function createProviderCredential(actor: Actor, input: Record<strin
   }
   const payload = secretPayload(secret)
   let encrypted: string
+  let credentialKeyId: string
   try {
-    encrypted = encryptApiKey(payload)
+    const envelope = encryptProviderCredential(payload)
+    encrypted = envelope.ciphertext
+    credentialKeyId = envelope.keyId
   } catch {
     return fail('CREDENTIAL_ENCRYPT_FAILED', '凭据加密失败，请检查加密配置', 500)
   }
@@ -274,12 +277,12 @@ export async function createProviderCredential(actor: Actor, input: Record<strin
   const enabled = input.enabled === true
   const r = await db().query(
     `INSERT INTO provider_credentials(display_name,adapter,base_url,api_key_encrypted,api_key_fingerprint,enabled,created_by,updated_by,
-      provider_id,schema_id,schema_version,payload_encrypted,configured_fields)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      provider_id,schema_id,schema_version,payload_encrypted,configured_fields,encryption_key_id)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
     [input.displayName.trim(), adapter, effectiveBaseUrl || null,
       secret.apiKey ? encrypted : (secretHasApiKey(secret) ? encrypted : null),
       fingerprint, enabled, actor.id,
-      providerId, schemaId, schemaVersion, encrypted, JSON.stringify(configuredFields)],
+      providerId, schemaId, schemaVersion, encrypted, JSON.stringify(configuredFields), credentialKeyId],
   )
   return ok(providerCredentialDto(r.rows[0]))
 }
@@ -296,16 +299,18 @@ export async function updateProviderCredential(
   if (!existing.rows[0]) return fail('NOT_FOUND', '供应商凭据不存在', 404)
   const current = existing.rows[0]
   const baseUrl = input.baseUrl !== undefined ? normalizedProviderBaseUrl(input.baseUrl) : undefined
-  if (baseUrl === null) return fail('INVALID_BASE_URL', 'Base URL 必须是安全的 HTTPS 地址')
-  const secret = extractSecret(input)
-  const hasNewSecret = Boolean(secret.apiKey || secret.payloadObject)
   let encrypted: string | null = null
+  let credentialKeyId: string | null = null
   let fingerprint: string | null = null
   let legacyEncrypted: string | null = null
+  const secret = extractSecret(input)
+  const hasNewSecret = Boolean(secret.apiKey || secret.payloadObject)
   if (hasNewSecret) {
     const payload = secretPayload(secret)
     try {
-      encrypted = encryptApiKey(payload)
+      const envelope = encryptProviderCredential(payload)
+      encrypted = envelope.ciphertext
+      credentialKeyId = envelope.keyId
     } catch {
       return fail('CREDENTIAL_ENCRYPT_FAILED', '凭据加密失败，请检查加密配置', 500)
     }
@@ -393,13 +398,14 @@ export async function updateProviderCredential(
     { baseUrl: current.base_url, pluginId: currentConfigured.pluginId, pluginVersion: currentConfigured.pluginVersion },
     redirectTo,
   )) {
-    return fail('INVALID_INPUT', '更换 Base URL 或插件身份时必须同时提供新的凭据内容')
+    return fail('SECRET_REQUIRED_FOR_REDIRECT', '更改凭据目标（主机/插件）时必须提供新密钥', 422)
   }
   const r = await db().query(
     `UPDATE provider_credentials SET display_name=COALESCE($1,display_name),base_url=CASE WHEN $2::text IS NULL AND $9::boolean THEN base_url ELSE COALESCE($2,base_url) END,
       api_key_encrypted=CASE WHEN $3::boolean THEN $4 ELSE api_key_encrypted END,
       api_key_fingerprint=CASE WHEN $3::boolean THEN $5 ELSE api_key_fingerprint END,
       payload_encrypted=CASE WHEN $3::boolean THEN $6 ELSE payload_encrypted END,
+      encryption_key_id=CASE WHEN $3::boolean THEN $15 ELSE encryption_key_id END,
       provider_id=COALESCE($7,provider_id),schema_id=COALESCE($8,schema_id),schema_version=COALESCE($10,schema_version),
       configured_fields=$11::jsonb,enabled=COALESCE($12,enabled),updated_at=now(),updated_by=$13
      WHERE id=$14 AND deleted_at IS NULL RETURNING *`,
@@ -418,6 +424,7 @@ export async function updateProviderCredential(
       typeof input.enabled === 'boolean' ? input.enabled : null,
       actor.id,
       id,
+      credentialKeyId,
     ],
   )
   if (!r.rows[0]) return fail('NOT_FOUND', '供应商凭据不存在', 404)
@@ -434,14 +441,16 @@ export async function deleteProviderCredential(id: string) {
     'UPDATE provider_credentials SET deleted_at=now(),enabled=false,updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id',
     [id],
   )
-  return r.rows[0] ? ok({ deleted: true }) : fail('NOT_FOUND', '供应商凭据不存在', 404)
+  if (!r.rows[0]) return fail('NOT_FOUND', '供应商凭据不存在', 404)
+  return ok({ deleted: true })
 }
 
 function decryptCredentialPayload(row: Record<string, unknown>): string {
+  const keyId = typeof row.encryption_key_id === 'string' ? row.encryption_key_id : null
   const payload = row.payload_encrypted as string | undefined
-  if (payload) return decryptApiKey(payload)
+  if (payload) return decryptProviderCredential(payload, keyId)
   const legacy = row.api_key_encrypted as string | undefined
-  if (legacy) return decryptApiKey(legacy)
+  if (legacy) return decryptProviderCredential(legacy, keyId)
   throw new Error('PROVIDER_NOT_CONFIGURED')
 }
 
@@ -590,7 +599,7 @@ export async function testProviderCredential(id: string) {
 
 async function testLanguageModel(id: string) {
   const r = await db().query(
-    `SELECT m.*,COALESCE(NULLIF(pc.payload_encrypted,''),pc.api_key_encrypted) effective_encrypted,COALESCE(pc.base_url,m.base_url) effective_base_url FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.deleted_at IS NULL AND pc.enabled=true`,
+    `SELECT m.*,COALESCE(NULLIF(pc.payload_encrypted,''),pc.api_key_encrypted) effective_encrypted,pc.encryption_key_id AS effective_key_id,COALESCE(pc.base_url,m.base_url) effective_base_url FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.deleted_at IS NULL AND pc.enabled=true`,
     [id],
   )
   const model = r.rows[0]
@@ -603,7 +612,7 @@ async function testLanguageModel(id: string) {
       protocol: model.language_protocol,
       vendorModelId: model.vendor_model_id,
       baseUrl: model.effective_base_url,
-      apiKey: decryptApiKey(model.effective_encrypted),
+      apiKey: decryptProviderCredential(model.effective_encrypted, typeof model.effective_key_id === 'string' ? model.effective_key_id : null),
       system: 'Return only the requested JSON.',
       user: 'MuseCanvas language model connectivity test. Return {"ok":"yes"}.',
       schemaName: 'connectivity_test',

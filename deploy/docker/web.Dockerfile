@@ -12,6 +12,7 @@ COPY packages/domain/package.json packages/domain/package.json
 COPY packages/providers/package.json packages/providers/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
+COPY packages/contracts packages/contracts
 COPY deploy/nginx/web.conf deploy/nginx/web.conf
 ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL

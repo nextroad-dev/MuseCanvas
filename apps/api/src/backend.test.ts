@@ -2,7 +2,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { validateModelInput } from '../../../packages/domain/src/index'
 import { hashOtp, safeEqual } from './auth/security'
-import { adminJobDto, jobDto } from './shared/dto'
+import { adminJobDto, jobDto, modelDto, publicModelDto } from './shared/dto'
+import {
+  validateInputImageIdsSyntax,
+  validateAndAttachGenerationInputs,
+  GenerationInputError,
+  MAX_UPLOAD_IMAGE_BYTES,
+  MAX_UPLOAD_TOTAL_BYTES,
+  MAX_INPUT_IMAGES,
+} from './modules/generation-uploads'
 import { providerEndpoint, providerModelsEndpoint } from '../../../packages/providers/src/index'
 import { retryPreparation } from './generation/job-retry'
 import { modelPresets } from './admin/model-presets'
@@ -88,4 +96,175 @@ test('provider endpoints accept service roots and versioned compatible roots', (
 
 test('seedream provider test should use the image generation endpoint, not the chat/models endpoint', () => {
   assert.equal(providerEndpoint('seedream', 'https://ark.cn-beijing.volces.com'), 'https://ark.cn-beijing.volces.com/api/v3/images/generations')
+})
+
+test('upload constants match cross-slice specifications', () => {
+  assert.equal(MAX_UPLOAD_IMAGE_BYTES, 10000000)
+  assert.equal(MAX_UPLOAD_TOTAL_BYTES, 20000000)
+  assert.equal(MAX_INPUT_IMAGES, 4)
+})
+
+test('publicModelDto and modelDto expose maxInputImages with 0 as default', () => {
+  const baseRow = { id: 'm1', display_name: 'Model 1', adapter: 'openai', sizes: ['1024x1024'], enabled: true, sort_order: 1 }
+  assert.equal(publicModelDto(baseRow).maxInputImages, 0)
+  assert.equal(modelDto(baseRow).maxInputImages, 0)
+
+  const rowWithMax = { ...baseRow, max_input_images: 4 }
+  assert.equal(publicModelDto(rowWithMax).maxInputImages, 4)
+  assert.equal(modelDto(rowWithMax).maxInputImages, 4)
+})
+
+test('jobDto exposes ordered inputImages and text-only jobs have empty inputImages', async () => {
+  const base = {
+    id: 'job-1',
+    created_by: 'user-1',
+    model_id: 'model-1',
+    model_name: 'Image Model',
+    prompt: 'test prompt',
+    size: '1024x1024',
+    count: 1,
+    status: 'succeeded',
+    created_at: new Date('2026-09-01T00:00:00Z'),
+  }
+
+  const textOnly = await jobDto(base)
+  assert.deepEqual(textOnly.inputImages, [])
+
+  const inputs = [
+    { id: 'img-1', imageUrl: 'https://s3.example.com/img1.png', mimeType: 'image/png', width: 512, height: 512, sizeBytes: 1000 },
+    { id: 'img-2', imageUrl: 'https://s3.example.com/img2.jpg', mimeType: 'image/jpeg', width: 1024, height: 768, sizeBytes: 2500 },
+  ]
+  const withInputs = await jobDto(base, [], inputs)
+  assert.equal(withInputs.inputImages.length, 2)
+  assert.equal(withInputs.inputImages[0].id, 'img-1')
+  assert.equal(withInputs.inputImages[0].imageUrl, 'https://s3.example.com/img1.png')
+  assert.equal(withInputs.inputImages[0].mimeType, 'image/png')
+  assert.equal(withInputs.inputImages[0].width, 512)
+  assert.equal(withInputs.inputImages[0].height, 512)
+  assert.equal(withInputs.inputImages[0].sizeBytes, 1000)
+  assert.equal(withInputs.inputImages[1].id, 'img-2')
+  assert.equal(withInputs.inputImages[1].imageUrl, 'https://s3.example.com/img2.jpg')
+})
+
+test('adminJobDto preserves leak discipline and excludes input image data', () => {
+  const dto = adminJobDto({
+    id: 'job-id',
+    created_by: 'user-id',
+    model_id: 'model-id',
+    model_name: 'Model',
+    status: 'succeeded',
+    created_at: new Date('2026-01-01T00:00:00Z'),
+    input_images: [{ id: 'input-1', object_key: 'secret-key' }],
+    inputImages: [{ id: 'input-1', imageUrl: 'secret-url' }],
+  })
+  assert.equal('inputImages' in dto, false)
+  assert.equal('input_images' in dto, false)
+  const serialized = JSON.stringify(dto)
+  assert.equal(serialized.includes('secret-key'), false)
+  assert.equal(serialized.includes('secret-url'), false)
+})
+
+test('validateInputImageIdsSyntax enforces product caps, model capability, duplicates and format', () => {
+  const validUuid1 = '11111111-1111-4111-8111-111111111111'
+  const validUuid2 = '22222222-2222-4222-8222-222222222222'
+  const validUuid3 = '33333333-3333-4333-8333-333333333333'
+  const validUuid4 = '44444444-4444-4444-8444-444444444444'
+  const validUuid5 = '55555555-5555-4555-8555-555555555555'
+
+  assert.deepEqual(validateInputImageIdsSyntax(undefined, 4), [])
+  assert.deepEqual(validateInputImageIdsSyntax(null, 4), [])
+  assert.deepEqual(validateInputImageIdsSyntax([], 4), [])
+  assert.deepEqual(validateInputImageIdsSyntax([validUuid1, validUuid2], 4), [validUuid1, validUuid2])
+
+  assert.throws(() => validateInputImageIdsSyntax('not-an-array', 4), (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT')
+  assert.throws(() => validateInputImageIdsSyntax(['not-a-uuid'], 4), (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT')
+  assert.throws(() => validateInputImageIdsSyntax(['------------------------------------'], 4), (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT')
+  assert.throws(() => validateInputImageIdsSyntax([validUuid1, validUuid1], 4), (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT')
+  assert.throws(() => validateInputImageIdsSyntax([validUuid1, validUuid2, validUuid3, validUuid4, validUuid5], 4), (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT')
+
+  assert.throws(() => validateInputImageIdsSyntax([validUuid1], 0), (err: unknown) => err instanceof GenerationInputError && err.code === 'MODEL_INPUT_IMAGES_NOT_SUPPORTED')
+  assert.throws(() => validateInputImageIdsSyntax([validUuid1, validUuid2, validUuid3], 2), (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT')
+})
+
+test('validateAndAttachGenerationInputs checks ownership, status, TTL, and total byte caps', async () => {
+  const actorId = 'user-1'
+  const jobId = 'job-1'
+  const id1 = '11111111-1111-4111-8111-111111111111'
+  const id2 = '22222222-2222-4222-8222-222222222222'
+
+  const queries: Array<{ sql: string; params: unknown[] }> = []
+  const makeMockClient = (rows: Record<string, unknown>[]) => ({
+    query: async (sql: string, params: unknown[]) => {
+      queries.push({ sql, params })
+      if (sql.includes('SELECT id, status')) return { rows }
+      return { rows: [] }
+    },
+  })
+
+  // Missing or foreign IDs (fewer rows returned than requested)
+  await assert.rejects(
+    validateAndAttachGenerationInputs(makeMockClient([{ id: id1, status: 'ready', size_bytes: 1000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null }]), actorId, jobId, [id1, id2]),
+    (err: unknown) => err instanceof GenerationInputError && err.code === 'INPUT_IMAGE_UNAVAILABLE'
+  )
+
+  // Deleted image
+  await assert.rejects(
+    validateAndAttachGenerationInputs(makeMockClient([{ id: id1, status: 'deleted', size_bytes: 1000, expires_at: new Date(Date.now() + 10000), deleted_at: new Date(), attached_job_id: null }]), actorId, jobId, [id1]),
+    (err: unknown) => err instanceof GenerationInputError && err.code === 'INPUT_IMAGE_UNAVAILABLE'
+  )
+
+  // Pending image
+  await assert.rejects(
+    validateAndAttachGenerationInputs(makeMockClient([{ id: id1, status: 'pending', size_bytes: 1000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null }]), actorId, jobId, [id1]),
+    (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT_IMAGE'
+  )
+
+  // Already attached image
+  await assert.rejects(
+    validateAndAttachGenerationInputs(makeMockClient([{ id: id1, status: 'ready', size_bytes: 1000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: 'other-job' }]), actorId, jobId, [id1]),
+    (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT_IMAGE'
+  )
+
+  // Expired image
+  await assert.rejects(
+    validateAndAttachGenerationInputs(makeMockClient([{ id: id1, status: 'ready', size_bytes: 1000, expires_at: new Date(Date.now() - 10000), deleted_at: null, attached_job_id: null }]), actorId, jobId, [id1]),
+    (err: unknown) => err instanceof GenerationInputError && err.code === 'INPUT_IMAGE_UNAVAILABLE'
+  )
+
+  // Exceeds total size cap (20,000,000 bytes)
+  await assert.rejects(
+    validateAndAttachGenerationInputs(makeMockClient([
+      { id: id1, status: 'ready', size_bytes: 11000000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null },
+      { id: id2, status: 'ready', size_bytes: 10000000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null },
+    ]), actorId, jobId, [id1, id2]),
+    (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT_IMAGE_SIZE'
+  )
+
+  // Valid attach
+  const successQueries: Array<{ sql: string; params: unknown[] }> = []
+  const successClient = {
+    query: async (sql: string, params: unknown[]) => {
+      successQueries.push({ sql, params })
+      if (sql.includes('SELECT id, status')) {
+        return {
+          rows: [
+            { id: id1, status: 'ready', size_bytes: 5000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null },
+            { id: id2, status: 'ready', size_bytes: 8000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null },
+          ],
+        }
+      }
+      return { rows: [] }
+    },
+  }
+  await validateAndAttachGenerationInputs(successClient, actorId, jobId, [id1, id2])
+  const insert1 = successQueries.find(q => q.sql.includes('INSERT INTO generation_job_inputs') && q.params[1] === id1)
+  const insert2 = successQueries.find(q => q.sql.includes('INSERT INTO generation_job_inputs') && q.params[1] === id2)
+  assert.ok(insert1)
+  assert.ok(insert2)
+  assert.equal(insert1.params[2], 0)
+  assert.equal(insert2.params[2], 1)
+  const update1 = successQueries.find(q => q.sql.includes('UPDATE generation_input_images') && q.params[1] === id1)
+  const update2 = successQueries.find(q => q.sql.includes('UPDATE generation_input_images') && q.params[1] === id2)
+  assert.ok(update1)
+  assert.ok(update2)
 })

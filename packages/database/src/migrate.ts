@@ -653,6 +653,174 @@ CREATE INDEX IF NOT EXISTS assets_poster_idx ON assets(poster_asset_id) WHERE po
 -- 9. outbox_events dedupe key and index
 ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS dedupe_key text;
 CREATE UNIQUE INDEX IF NOT EXISTS outbox_events_dedupe_key_idx ON outbox_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
+-- 10. Image plugin 1.1.0 cutover: new immutable latest revisions for active
+-- openai-image / seedream-image models still pinned to 1.0.0.
+-- Idempotent: models already carrying a 1.1.0 revision are skipped, and prior
+-- revision rows are never rewritten — only new rows are inserted and
+-- model_configs.latest_revision_id / plugin_version advances to them.
+-- Shared legacy columns (adapter, sizes, vendor_model_id, ...) are retained.
+-- Eligibility is conservative: only rows created from the known current image
+-- presets advance, and only when both the mutable model columns AND the
+-- pre-cutover latest snapshot agree (image kind, 1.0.0 plugin identity,
+-- preset vendor ID, null-or-official base URL on each side independently,
+-- and a null-or-official linked credential host). The new 1.1.0 revision
+-- carries canonical capabilities/defaults/normalized_config built from the
+-- validated columns — never copied latest JSON. Custom/manual configs,
+-- unknown vendor IDs, and custom endpoints stay pinned to 1.0.0 where
+-- permissive validation still accepts them.
+UPDATE generation_jobs j
+SET model_revision_id = m.latest_revision_id
+FROM model_configs m
+WHERE j.model_revision_id IS NULL
+  AND j.model_id = m.id
+  AND j.status IN ('queued', 'running', 'retry_wait')
+  AND j.deleted_at IS NULL
+  AND m.latest_revision_id IS NOT NULL;
+
+INSERT INTO model_config_revisions(
+  model_id, revision, provider_id, plugin_id, plugin_version,
+  vendor_model_id, base_url, credential_id, credential_schema_version,
+  capabilities, pricing, normalized_config, defaults, snapshot_digest, created_by, created_at
+)
+SELECT
+  m.id,
+  (SELECT COALESCE(MAX(revision), 0) + 1 FROM model_config_revisions WHERE model_id = m.id),
+  COALESCE(latest.provider_id, m.provider_id),
+  COALESCE(latest.plugin_id, m.plugin_id),
+  '1.1.0',
+  latest.vendor_model_id,
+  latest.base_url,
+  latest.credential_id,
+  latest.credential_schema_version,
+  jsonb_build_object(
+    'modes', CASE WHEN COALESCE(m.max_input_images, 0) > 0 THEN
+      jsonb_build_array('text_to_image', 'image_to_image')
+    ELSE jsonb_build_array('text_to_image') END,
+    'parameters', CASE WHEN COALESCE(m.quality_options, '[]'::jsonb) = '[]'::jsonb THEN
+      jsonb_build_array(
+        jsonb_build_object('type', 'enum', 'name', 'size', 'label', '尺寸', 'options', COALESCE(m.sizes, '[]'::jsonb)),
+        jsonb_build_object('type', 'integer', 'name', 'count', 'label', '数量', 'min', 1, 'max', COALESCE(m.max_count, 1), 'defaultValue', 1))
+    ELSE
+      jsonb_build_array(
+        jsonb_build_object('type', 'enum', 'name', 'size', 'label', '尺寸', 'options', COALESCE(m.sizes, '[]'::jsonb)),
+        jsonb_build_object('type', 'enum', 'name', 'quality', 'label', '质量', 'options', COALESCE(m.quality_options, '[]'::jsonb)),
+        jsonb_build_object('type', 'integer', 'name', 'count', 'label', '数量', 'min', 1, 'max', COALESCE(m.max_count, 1), 'defaultValue', 1))
+    END,
+    'inputSlots', CASE WHEN COALESCE(m.max_input_images, 0) > 0 THEN
+      jsonb_build_array(jsonb_build_object('role', 'reference_image', 'required', false, 'minCount', 0, 'maxCount', m.max_input_images, 'allowedMediaKinds', jsonb_build_array('image')))
+    ELSE '[]'::jsonb END,
+    'maxCount', COALESCE(m.max_count, 1),
+    'supportedMediaKinds', jsonb_build_array('image'),
+    'mediaKind', 'image'),
+  jsonb_build_object('scheme', 'per_image_v1', 'creditsPerImage', COALESCE(m.credits_per_image, 0)),
+  jsonb_strip_nulls(jsonb_build_object(
+    'vendorModelId', m.vendor_model_id,
+    'baseUrl', m.base_url,
+    'concurrencyLimit', m.concurrency_limit,
+    'watermark', m.watermark,
+    'modelKind', m.model_kind)),
+  '{}'::jsonb,
+  encode(digest(concat(m.id::text, ':', COALESCE(latest.provider_id, m.provider_id, ''), ':', COALESCE(latest.plugin_id, m.plugin_id, ''), ':1.1.0:canonical-v1:', COALESCE(latest.snapshot_digest, '')), 'sha256'), 'hex'),
+  m.created_by,
+  now()
+FROM model_configs m
+JOIN model_config_revisions latest ON latest.id = m.latest_revision_id
+LEFT JOIN provider_credentials cred ON cred.id = latest.credential_id AND cred.deleted_at IS NULL
+WHERE m.deleted_at IS NULL
+  AND m.plugin_id IN ('openai-image', 'seedream-image')
+  AND m.plugin_version = '1.0.0'
+  AND COALESCE(m.credits_per_image, 0) BETWEEN 0 AND 9007199254740991
+  AND latest.credential_id IS NOT DISTINCT FROM m.provider_credential_id
+  AND (
+    (m.preset_id = 'openai-gpt-image-2' AND m.model_kind = 'image' AND m.vendor_model_id = 'gpt-image-2'
+      AND latest.plugin_id = m.plugin_id AND latest.plugin_version = '1.0.0' AND latest.vendor_model_id = 'gpt-image-2'
+      AND (latest.base_url IS NULL OR latest.base_url IN ('https://api.openai.com', 'https://api.openai.com/'))
+      AND (latest.credential_id IS NULL OR (cred.id IS NOT NULL
+        AND (cred.base_url IS NULL OR cred.base_url IN ('https://api.openai.com', 'https://api.openai.com/'))))
+      AND COALESCE(m.max_count, 0) BETWEEN 1 AND 4 AND COALESCE(m.max_input_images, 0) BETWEEN 0 AND 4
+      AND jsonb_typeof(COALESCE(m.sizes, '[]'::jsonb)) = 'array' AND COALESCE(m.sizes, '[]'::jsonb) <> '[]'::jsonb
+      AND COALESCE(m.sizes, '[]'::jsonb) <@ '["1024x1024","1280x720","720x1280","1536x1024","1024x1536"]'::jsonb
+      AND COALESCE(m.quality_options, '[]'::jsonb) <> '[]'::jsonb
+      AND COALESCE(m.quality_options, '[]'::jsonb) <@ '["auto","low","medium","high"]'::jsonb
+      AND (m.base_url IS NULL OR m.base_url IN ('https://api.openai.com', 'https://api.openai.com/')))
+    OR (m.preset_id = 'seedream-4-0' AND m.model_kind = 'image' AND m.vendor_model_id = 'doubao-seedream-4-0-250828'
+      AND latest.plugin_id = m.plugin_id AND latest.plugin_version = '1.0.0' AND latest.vendor_model_id = 'doubao-seedream-4-0-250828'
+      AND (latest.credential_id IS NULL OR (cred.id IS NOT NULL
+        AND (cred.base_url IS NULL OR cred.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))))
+      AND (latest.base_url IS NULL OR latest.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))
+      AND COALESCE(m.max_count, 0) BETWEEN 1 AND 4 AND COALESCE(m.max_input_images, 0) BETWEEN 0 AND 4
+      AND jsonb_typeof(COALESCE(m.sizes, '[]'::jsonb)) = 'array' AND COALESCE(m.sizes, '[]'::jsonb) <> '[]'::jsonb
+      AND COALESCE(m.sizes, '[]'::jsonb) <@ '["1024x1024","1152x864","864x1152","1280x720","720x1280","1248x832","832x1248","1512x648","2048x2048","2304x1728","1728x2304","2848x1600","1600x2848","2496x1664","1664x2496","3136x1344","4096x4096","4704x3520","3520x4704","5504x3040","3040x5504","4992x3328","3328x4992","6240x2656"]'::jsonb
+      AND COALESCE(m.quality_options, '[]'::jsonb) = '[]'::jsonb
+      AND (m.base_url IS NULL OR m.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/')))
+    OR (m.preset_id = 'seedream-4-5' AND m.model_kind = 'image' AND m.vendor_model_id = 'doubao-seedream-4-5-251128'
+      AND latest.plugin_id = m.plugin_id AND latest.plugin_version = '1.0.0' AND latest.vendor_model_id = 'doubao-seedream-4-5-251128'
+      AND (latest.credential_id IS NULL OR (cred.id IS NOT NULL
+        AND (cred.base_url IS NULL OR cred.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))))
+      AND COALESCE(m.max_count, 0) BETWEEN 1 AND 4 AND COALESCE(m.max_input_images, 0) BETWEEN 0 AND 4
+      AND (latest.base_url IS NULL OR latest.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))
+      AND jsonb_typeof(COALESCE(m.sizes, '[]'::jsonb)) = 'array' AND COALESCE(m.sizes, '[]'::jsonb) <> '[]'::jsonb
+      AND COALESCE(m.sizes, '[]'::jsonb) <@ '["2048x2048","2304x1728","1728x2304","2848x1600","1600x2848","2496x1664","1664x2496","3136x1344","4096x4096","4704x3520","3520x4704","5504x3040","3040x5504","4992x3328","3328x4992","6240x2656"]'::jsonb
+      AND COALESCE(m.quality_options, '[]'::jsonb) = '[]'::jsonb
+      AND (m.base_url IS NULL OR m.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/')))
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM model_config_revisions r2
+    WHERE r2.model_id = m.id AND r2.plugin_id = m.plugin_id AND r2.plugin_version = '1.1.0'
+  );
+
+UPDATE model_configs m
+SET plugin_version = '1.1.0',
+    latest_revision_id = r.id,
+    updated_at = now()
+FROM model_config_revisions r
+LEFT JOIN provider_credentials cred ON cred.id = r.credential_id AND cred.deleted_at IS NULL
+WHERE r.model_id = m.id
+  AND r.plugin_id = m.plugin_id
+  AND r.plugin_version = '1.1.0'
+  AND r.id = (
+    SELECT r2.id FROM model_config_revisions r2
+    WHERE r2.model_id = m.id AND r2.plugin_id = m.plugin_id AND r2.plugin_version = '1.1.0'
+    ORDER BY r2.revision DESC, r2.created_at DESC LIMIT 1
+  )
+  AND m.deleted_at IS NULL
+  AND m.plugin_id IN ('openai-image', 'seedream-image')
+  AND m.plugin_version = '1.0.0'
+  AND r.credential_id IS NOT DISTINCT FROM m.provider_credential_id
+  AND COALESCE(m.credits_per_image, 0) BETWEEN 0 AND 9007199254740991
+  AND (
+    (m.preset_id = 'openai-gpt-image-2' AND m.model_kind = 'image' AND m.vendor_model_id = 'gpt-image-2'
+      AND r.vendor_model_id = 'gpt-image-2'
+      AND (r.base_url IS NULL OR r.base_url IN ('https://api.openai.com', 'https://api.openai.com/'))
+      AND COALESCE(m.max_count, 0) BETWEEN 1 AND 4 AND COALESCE(m.max_input_images, 0) BETWEEN 0 AND 4
+      AND jsonb_typeof(COALESCE(m.sizes, '[]'::jsonb)) = 'array' AND COALESCE(m.sizes, '[]'::jsonb) <> '[]'::jsonb
+      AND (r.credential_id IS NULL OR (cred.id IS NOT NULL
+        AND (cred.base_url IS NULL OR cred.base_url IN ('https://api.openai.com', 'https://api.openai.com/'))))
+      AND COALESCE(m.sizes, '[]'::jsonb) <@ '["1024x1024","1280x720","720x1280","1536x1024","1024x1536"]'::jsonb
+      AND COALESCE(m.quality_options, '[]'::jsonb) <> '[]'::jsonb
+      AND COALESCE(m.quality_options, '[]'::jsonb) <@ '["auto","low","medium","high"]'::jsonb
+      AND (m.base_url IS NULL OR m.base_url IN ('https://api.openai.com', 'https://api.openai.com/')))
+    OR (m.preset_id = 'seedream-4-0' AND m.model_kind = 'image' AND m.vendor_model_id = 'doubao-seedream-4-0-250828'
+      AND r.vendor_model_id = 'doubao-seedream-4-0-250828'
+      AND (r.base_url IS NULL OR r.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))
+      AND COALESCE(m.max_count, 0) BETWEEN 1 AND 4 AND COALESCE(m.max_input_images, 0) BETWEEN 0 AND 4
+      AND jsonb_typeof(COALESCE(m.sizes, '[]'::jsonb)) = 'array' AND COALESCE(m.sizes, '[]'::jsonb) <> '[]'::jsonb
+      AND COALESCE(m.sizes, '[]'::jsonb) <@ '["1024x1024","1152x864","864x1152","1280x720","720x1280","1248x832","832x1248","1512x648","2048x2048","2304x1728","1728x2304","2848x1600","1600x2848","2496x1664","1664x2496","3136x1344","4096x4096","4704x3520","3520x4704","5504x3040","3040x5504","4992x3328","3328x4992","6240x2656"]'::jsonb
+      AND (r.credential_id IS NULL OR (cred.id IS NOT NULL
+        AND (cred.base_url IS NULL OR cred.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))))
+      AND COALESCE(m.quality_options, '[]'::jsonb) = '[]'::jsonb
+      AND (m.base_url IS NULL OR m.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/')))
+    OR (m.preset_id = 'seedream-4-5' AND m.model_kind = 'image' AND m.vendor_model_id = 'doubao-seedream-4-5-251128'
+      AND r.vendor_model_id = 'doubao-seedream-4-5-251128'
+      AND (r.base_url IS NULL OR r.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))
+      AND COALESCE(m.max_count, 0) BETWEEN 1 AND 4 AND COALESCE(m.max_input_images, 0) BETWEEN 0 AND 4
+      AND jsonb_typeof(COALESCE(m.sizes, '[]'::jsonb)) = 'array' AND COALESCE(m.sizes, '[]'::jsonb) <> '[]'::jsonb
+      AND COALESCE(m.sizes, '[]'::jsonb) <@ '["2048x2048","2304x1728","1728x2304","2848x1600","1600x2848","2496x1664","1664x2496","3136x1344","4096x4096","4704x3520","3520x4704","5504x3040","3040x5504","4992x3328","3328x4992","6240x2656"]'::jsonb
+      AND (r.credential_id IS NULL OR (cred.id IS NOT NULL
+        AND (cred.base_url IS NULL OR cred.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/'))))
+      AND COALESCE(m.quality_options, '[]'::jsonb) = '[]'::jsonb
+      AND (m.base_url IS NULL OR m.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/')))
+  );
 `
 await db().query(sql)
 await db().query('DROP TABLE IF EXISTS smtp_settings')

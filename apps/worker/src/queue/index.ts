@@ -72,23 +72,31 @@ export async function consume(processJob: (jobId: string, runId?: string) => Pro
     for (const message of stale) {
       const jobId = message.message.jobId
       const runId = message.message.runId || undefined
-      if (jobId) {
-        try { await processJob(jobId, runId) } catch (error) {
-          console.error('stale job processing failed', { code: error instanceof Error ? error.name : 'JOB_FAILED' })
-        }
+      if (!jobId) {
+        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+        continue
       }
-      await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+      try {
+        await processJob(jobId, runId)
+        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+      } catch (error) {
+        console.error('stale job processing failed', { code: error instanceof Error ? error.name : 'JOB_FAILED' })
+      }
     }
     const reply = await redis.xReadGroup(GENERATION_GROUP, consumer, { key: GENERATION_STREAM, id: '>' }, { COUNT: 10, BLOCK: CONSUMER_BLOCK_MS }) as unknown
     for (const message of extractMessages(reply)) {
       const jobId = message.message.jobId
       const runId = message.message.runId || undefined
-      if (jobId) {
-        try { await processJob(jobId, runId) } catch (error) {
-          console.error('job processing failed', { code: error instanceof Error ? error.name : 'JOB_FAILED' })
-        }
+      if (!jobId) {
+        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+        continue
       }
-      await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+      try {
+        await processJob(jobId, runId)
+        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+      } catch (error) {
+        console.error('job processing failed', { code: error instanceof Error ? error.name : 'JOB_FAILED' })
+      }
     }
   }
 }

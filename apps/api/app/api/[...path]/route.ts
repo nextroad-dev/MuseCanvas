@@ -9,7 +9,7 @@ import {
   adjustCredits,
   BillingError,
 } from '../../../../../packages/database/src/index'
-import { validateModelInput, validateGenerationRequest, quoteMediaGenerationCredits, prepareRequestDigestInput } from '@musecanvas/domain'
+import { validateGenerationRequest, quoteMediaGenerationCredits, prepareRequestDigestInput } from '@musecanvas/domain'
 import type { CreateGenerationRequest } from '@musecanvas/contracts'
 import { actorFrom, hashOtp, hashToken, randomToken, safeEqual, type Actor } from '../../../src/auth/security'
 import { body, emailValid, fail, mutationOriginValid, ok } from '../../../src/shared/http'
@@ -32,6 +32,7 @@ import { limited } from '../../../src/shared/redis'
 import { decodeCursor, encodeCursor, boundedLimit, userJobSelect, loadJobInputs, loadSingleJobInputs } from '../../../src/shared/pagination'
 import { createGenerationUpload, completeGenerationUpload, deleteGenerationUpload, validateAndAttachGenerationUploads, normalizeGenerationInputs, validateInputsAgainstSlots, GenerationInputError } from '../../../src/modules/generation-uploads'
 import { modelPresets } from '../../../src/admin/model-presets'
+import { buildBuiltinProviderTemplates } from '../../../src/admin/provider-templates'
 import { loadPromptTemplateIndex, promptTemplateIndexDto } from '../../../../../packages/providers/src/index'
 import { type OAuthProvider } from '../../../src/auth/oauth'
 import { retryPreparation } from '../../../src/generation/job-retry'
@@ -269,6 +270,7 @@ export async function GET(request: NextRequest, context: Context) {
     })
   }
   if (path === 'admin/model-presets') return ok(modelPresets)
+  if (path === 'admin/provider-templates') return ok({ templates: buildBuiltinProviderTemplates() })
   if (path === 'admin/models') { const r = await db().query('SELECT m.*, pc.display_name AS provider_credential_name, rev.capabilities, rev.pricing, rev.defaults, rev.revision FROM model_configs m LEFT JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL LEFT JOIN model_config_revisions rev ON rev.id=m.latest_revision_id WHERE m.deleted_at IS NULL ORDER BY m.sort_order,m.created_at'); return ok(r.rows.map(modelDto)) }
   if (path === 'admin/prompt-templates') return ok(promptTemplateIndexDto(await loadPromptTemplateIndex()))
   if (path === 'admin/prompt-optimization-settings') { const r = await db().query('SELECT * FROM prompt_optimization_settings WHERE singleton=true'); return ok(optimizationSettingsDto(r.rows[0])) }
@@ -457,10 +459,13 @@ export async function POST(request: NextRequest, context: Context) {
       if (err instanceof GenerationInputError) return fail(err.code, err.message, err.status)
       return fail('INVALID_INPUT', '参考图参数无效', 400)
     }
-    // Descriptor-driven validation via domain. Image models keep a permissive
-    // size/quality contract (custom sizes allowed); legacy validateModelInput
-    // below still enforces adapter size rules. Video models use strict revision
-    // descriptors.
+    // Descriptor-driven validation via domain. The immutable revision
+    // capabilities plus the normalized parameters are the Image request
+    // contract: image models keep a permissive size/quality shape here and
+    // the provider plugin owns byte/shape enforcement downstream. No
+    // adapter-based second gate — revision.pluginId/pluginVersion is the
+    // only runtime routing identity (adapter columns remain for storage and
+    // public DTO compatibility only).
     const validationCaps = mediaKind === 'image'
       ? {
         modes: (capabilities.modes.length > 0 ? capabilities.modes : ['text_to_image', 'image_to_image']) as ('text_to_image' | 'image_to_image')[],
@@ -494,19 +499,6 @@ export async function POST(request: NextRequest, context: Context) {
     const domainValidation = validateGenerationRequest(validationCaps, createRequest, { defaults: defaults as Record<string, never> })
     if (!domainValidation.valid) return fail(domainValidation.errorCode, domainValidation.errorMessage)
     const normalized = domainValidation.value
-    if (mediaKind === 'image' && typeof normalized.parameters.size === 'string') {
-      const legacySizes = Array.isArray(model.sizes) ? (model.sizes as unknown[]).map(String) : []
-      const legacyQuality = Array.isArray(model.quality_options) ? (model.quality_options as unknown[]).map(String) : []
-      const legacyCheck = validateModelInput(
-        { adapter: model.adapter, vendorModelId: model.vendor_model_id, sizes: legacySizes, qualityOptions: legacyQuality, maxCount: capabilities.maxCount || 10 },
-        {
-          size: normalized.parameters.size as string,
-          quality: typeof normalized.parameters.quality === 'string' ? normalized.parameters.quality as string : undefined,
-          count: Number(normalized.parameters.count ?? 1),
-        },
-      )
-      if (legacyCheck) return fail(legacyCheck, '模型参数不受支持')
-    }
     if (input.expectedCredits !== undefined) {
       if (!Number.isSafeInteger(Number(input.expectedCredits)) || Number(input.expectedCredits) < 0) {
         return fail('INVALID_INPUT', '预期积分(expectedCredits)必须为非负整数', 400)

@@ -407,7 +407,7 @@ onMounted(async () => {
               <div class="flex items-start justify-between">
                 <div>
                   <h3 class="font-medium text-foreground">{{ preset.displayName }}</h3>
-                  <p class="mt-1 text-xs text-muted-foreground">{{ adapterLabels[preset.adapter] }} · {{ preset.modelKind === 'image' ? '图像' : '语言' }}</p>
+                  <p class="mt-1 text-xs text-muted-foreground">{{ adapterLabels[preset.adapter || preset.providerId || ''] || preset.providerId || '插件' }} · {{ preset.modelKind === 'image' ? '图像' : preset.modelKind === 'video' ? '视频' : '语言' }}</p>
                 </div>
                 <div
                   :class="[

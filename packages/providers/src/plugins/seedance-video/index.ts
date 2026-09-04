@@ -635,7 +635,18 @@ export class SeedanceVideoPlugin implements MediaProviderPlugin {
       controls[key] = value
     }
 
-    takeBoolean('generate_audio')
+    const generateAudioRaw = extra['generate_audio'] ?? extra['audio']
+    if (generateAudioRaw !== undefined) {
+      if (typeof generateAudioRaw !== 'boolean') {
+        throw NormalizedProviderError.create(
+          this.manifest.id,
+          this.manifest.version,
+          'INVALID_REQUEST',
+          "Video control 'generate_audio' must be a boolean",
+        )
+      }
+      controls['generate_audio'] = generateAudioRaw
+    }
     takeBoolean('camera_fixed')
     takeBoolean('watermark', request.watermark)
 
@@ -665,8 +676,9 @@ export class SeedanceVideoPlugin implements MediaProviderPlugin {
       controls['resolution'] = resolution
     }
 
-    if (extra['ratio'] !== undefined) {
-      const ratio = extra['ratio']
+    const ratioRaw = extra['ratio'] ?? extra['aspectRatio']
+    if (ratioRaw !== undefined) {
+      const ratio = ratioRaw
       if (typeof ratio !== 'string' || !/^\d{1,2}:\d{1,2}$/.test(ratio)) {
         throw NormalizedProviderError.create(
           this.manifest.id,

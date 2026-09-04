@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { inspectInputImage, validateInputImages } from '../../../../packages/providers/src/index'
-import { validateStoredInputImage } from './index'
+import { inspectInputImage, validateInputImages } from '../../../../packages/providers/src/core/image-input'
+import { isSynchronousPlugin, validateStoredInputImage } from './index'
 
 // Create helper PNG buffer with valid IHDR
 function createValidPng(width = 100, height = 100): Buffer {
@@ -135,4 +135,10 @@ test('validateStoredInputImage rejects post-completion object changes', () => {
     }),
     /INVALID_INPUT_IMAGE/,
   )
+})
+
+test('isSynchronousPlugin distinguishes image-style and video-style plugins', () => {
+  assert.equal(isSynchronousPlugin({}), true)
+  assert.equal(isSynchronousPlugin({ poll: undefined }), true)
+  assert.equal(isSynchronousPlugin({ poll: async () => ({ status: 'waiting' as const }) }), false)
 })

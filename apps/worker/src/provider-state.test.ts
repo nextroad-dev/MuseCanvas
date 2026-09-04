@@ -13,10 +13,22 @@ const {
   ingestionStorageKey,
   isCancelRequested,
   isLeaseExpired,
+  isSyncRetryPersistenceError,
+  isSyncRetryableResultError,
+  isSyncRetryableSubmitCode,
   manifestContainsSecrets,
+  MAX_RESOLVED_OUTPUT_BYTES,
+  MAX_SYNC_SUBMIT_ATTEMPTS,
   nextActionAtForRetryAfter,
+  planSyncSubmitRetry,
+  resolveOutputMaxBytes,
   shouldCreateNewRun,
+  shouldRetrySyncSubmit,
   stripOutputManifest,
+  SYNC_RETRY_PERSISTENCE_ERROR_CODE,
+  SYNC_RETRYABLE_HTTP_STATUS,
+  SyncRetryPersistenceError,
+  syncNoRemotePollCode,
 } = await import('./provider-state')
 
 test('opaque state round-trips locator without leaking into manifest', () => {
@@ -106,4 +118,106 @@ test('worker uses leases, XAUTOCLAIM, capacity reservation without sleep loops',
   assert.ok(/worker_lease_expires_at/.test(maintenanceSrc), 'maintenance must recover expired leases')
   assert.ok(/next_action_at/.test(maintenanceSrc), 'maintenance must schedule due provider-run polling')
   assert.ok(/cancel_requested_at/.test(maintenanceSrc), 'maintenance must handle cooperative cancellation')
+})
+
+test('synchronous retry only resubmits explicit 429 non-acceptance', () => {
+  assert.equal(MAX_SYNC_SUBMIT_ATTEMPTS, 3)
+  assert.equal(SYNC_RETRYABLE_HTTP_STATUS, 429)
+  const rateLimited = { status: 429 }
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_TEMPORARY_ERROR', rateLimited), true)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_TEMPORARY_ERROR', { status: 503 }), false)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_TEMPORARY_ERROR', { status: 500 }), false)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_TEMPORARY_ERROR'), false)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_TEMPORARY_ERROR', null), false)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_TIMEOUT', rateLimited), false)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_TIMEOUT', { status: 429 }), false)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_REJECTED', rateLimited), false)
+  assert.equal(isSyncRetryableSubmitCode('PROVIDER_BUSY', rateLimited), false)
+  assert.equal(isSyncRetryableSubmitCode(undefined, rateLimited), false)
+
+  for (const attempt of [1, 2]) {
+    assert.equal(shouldRetrySyncSubmit(attempt, 'PROVIDER_TEMPORARY_ERROR', rateLimited), true)
+    assert.equal(shouldRetrySyncSubmit(attempt, 'PROVIDER_TEMPORARY_ERROR', { status: 503 }), false)
+    assert.equal(shouldRetrySyncSubmit(attempt, 'PROVIDER_TIMEOUT', rateLimited), false)
+    const plan = planSyncSubmitRetry(attempt, 'PROVIDER_TEMPORARY_ERROR', rateLimited)
+    assert.equal(plan.retry, true)
+    assert.equal(plan.runOperationState, 'failed')
+    assert.equal(plan.releaseCapacity, true)
+    assert.equal(plan.completeRun, true)
+    assert.equal(plan.jobStatus, 'retry_wait')
+    assert.equal(plan.outboxEventType, 'generation.retry')
+  }
+
+  assert.equal(
+    isSyncRetryableResultError({ status: 'failed', error: { code: 'PROVIDER_TEMPORARY_ERROR', status: 429 } }),
+    true,
+  )
+  assert.equal(
+    isSyncRetryableResultError({ status: 'failed', error: { code: 'PROVIDER_TEMPORARY_ERROR', status: 503 } }),
+    false,
+  )
+  assert.equal(
+    isSyncRetryableResultError({ status: 'failed', error: { code: 'PROVIDER_TIMEOUT', status: 429 } }),
+    false,
+  )
+  assert.equal(
+    isSyncRetryableResultError({ status: 'failed', error: { code: 'PROVIDER_REJECTED', status: 429 } }),
+    false,
+  )
+  assert.equal(
+    isSyncRetryableResultError({ status: 'succeeded', error: { code: 'PROVIDER_TEMPORARY_ERROR', status: 429 } }),
+    false,
+  )
+})
+
+test('third synchronous attempt is terminal and releases capacity without requeue', () => {
+  const rateLimited = { status: 429 }
+  assert.equal(shouldRetrySyncSubmit(3, 'PROVIDER_TEMPORARY_ERROR', rateLimited), false)
+  assert.equal(shouldRetrySyncSubmit(4, 'PROVIDER_TEMPORARY_ERROR', rateLimited), false)
+  assert.equal(shouldRetrySyncSubmit(1, 'PROVIDER_REJECTED', rateLimited), false)
+  assert.equal(shouldRetrySyncSubmit(1, 'PROVIDER_TEMPORARY_ERROR', { status: 503 }), false)
+  assert.equal(shouldRetrySyncSubmit(0, 'PROVIDER_TEMPORARY_ERROR', rateLimited), false)
+
+  const plan = planSyncSubmitRetry(3, 'PROVIDER_TEMPORARY_ERROR', rateLimited)
+  assert.equal(plan.retry, false)
+  assert.equal(plan.runOperationState, 'failed')
+  assert.equal(plan.releaseCapacity, true)
+  assert.equal(plan.completeRun, true)
+  assert.equal(plan.jobStatus, 'failed')
+  assert.equal(plan.outboxEventType, null)
+})
+
+test('sync no-remote recovery terminalizes submitting runs as temporary, reserves empty-result for completed empties', () => {
+  assert.equal(syncNoRemotePollCode('submitting'), 'PROVIDER_TEMPORARY_ERROR')
+  assert.equal(syncNoRemotePollCode('waiting'), 'PROVIDER_EMPTY_RESULT')
+  assert.equal(syncNoRemotePollCode('submission_unknown'), 'PROVIDER_EMPTY_RESULT')
+  assert.equal(syncNoRemotePollCode('importing'), 'PROVIDER_EMPTY_RESULT')
+  assert.equal(syncNoRemotePollCode(null), 'PROVIDER_EMPTY_RESULT')
+  assert.equal(syncNoRemotePollCode(undefined), 'PROVIDER_EMPTY_RESULT')
+})
+
+test('output byte cap defaults when unset and rejects unbounded or invalid values', () => {
+  assert.equal(MAX_RESOLVED_OUTPUT_BYTES, 100_000_000)
+  assert.equal(resolveOutputMaxBytes(undefined), 100_000_000)
+  assert.equal(resolveOutputMaxBytes(null), 100_000_000)
+  assert.equal(resolveOutputMaxBytes(''), 100_000_000)
+  assert.equal(resolveOutputMaxBytes(100_000_000), 100_000_000)
+  assert.equal(resolveOutputMaxBytes(1024), 1024)
+  assert.equal(resolveOutputMaxBytes('4096'), 4096)
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 100_000_001, 'huge', {}, []]) {
+    assert.throws(() => resolveOutputMaxBytes(bad), /INVALID_CONFIG/)
+  }
+})
+
+test('sync retry persistence marker survives identity checks and never looks terminal', () => {
+  const marker = new SyncRetryPersistenceError(new Error('RUN_STATE_CONFLICT'))
+  assert.equal(marker.message, SYNC_RETRY_PERSISTENCE_ERROR_CODE)
+  assert.equal(marker.name, 'SyncRetryPersistenceError')
+  assert.ok(marker.cause instanceof Error)
+  assert.equal(isSyncRetryPersistenceError(marker), true)
+  assert.equal(isSyncRetryPersistenceError(new Error(SYNC_RETRY_PERSISTENCE_ERROR_CODE)), true)
+  assert.equal(isSyncRetryPersistenceError(new Error('PROVIDER_TEMPORARY_ERROR')), false)
+  assert.equal(isSyncRetryPersistenceError(new Error('GENERATION_FAILED')), false)
+  assert.equal(isSyncRetryPersistenceError(null), false)
+  assert.equal(isSyncRetryPersistenceError(undefined), false)
 })

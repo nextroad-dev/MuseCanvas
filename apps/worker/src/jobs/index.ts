@@ -31,49 +31,44 @@ import {
 import {
   decryptApiKey,
   decodeCredential,
-  generateImages,
   globalProviderRegistry,
-  type GeneratedImage,
   type MediaInputImage,
+  type MediaProviderPlugin,
   type MediaRequest,
   type OperationResult,
   type OutputDescriptor,
   type ProviderConfig,
-  inspectInputImage,
   LanguageModelHttpError,
+  NormalizedProviderError,
+} from '../../../../packages/providers/src/index'
+import {
+  inspectInputImage,
   MAX_INPUT_IMAGES,
   MAX_UPLOAD_IMAGE_BYTES,
   MAX_UPLOAD_TOTAL_BYTES,
-  NormalizedProviderError,
-  ProviderHttpError,
-} from '../../../../packages/providers/src/index'
+} from '../../../../packages/providers/src/core/image-input'
 import { preprocessPrompt } from '../preprocessing'
 import { bucket, s3 } from '../shared/infra'
 import {
   PROVIDER_LEASE_SECONDS,
+  SyncRetryPersistenceError,
   decryptOpaqueState,
   encryptOpaqueState,
   ingestionStorageKey,
   isCancelRequested,
   isNonTerminalRunState,
+  isSyncRetryPersistenceError,
+  isSyncRetryableResultError,
   nextActionAtForRetryAfter,
+  planSyncSubmitRetry,
   redactForLog,
+  resolveOutputMaxBytes,
   shouldCreateNewRun,
   stripOutputManifest,
   submissionUnknownNextActionAt,
+  syncNoRemotePollCode,
 } from '../provider-state'
 
-async function resolveApiKey(job: { provider_credential_id?: string; adapter: string }): Promise<string | undefined> {
-  if (job.provider_credential_id) {
-    const cred = await db().query('SELECT api_key_encrypted, payload_encrypted, enabled FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL', [job.provider_credential_id])
-    if (!cred.rows[0] || !cred.rows[0].enabled) throw new Error('PROVIDER_NOT_CONFIGURED')
-    const envelope = cred.rows[0].payload_encrypted || cred.rows[0].api_key_encrypted
-    if (!envelope) throw new Error('PROVIDER_NOT_CONFIGURED')
-    return decryptApiKey(envelope)
-  }
-  if (process.env.ALLOW_PROVIDER_ENV_FALLBACK === 'true') return undefined
-  throw new Error('PROVIDER_NOT_CONFIGURED')
-}
 
 export function validateStoredInputImage(
   data: Buffer,
@@ -154,7 +149,8 @@ export async function loadAndValidateInputImages(
   return inputImages
 }
 
-/** Video-aware input resolver: reads media_uploads via upload_id, falls back to legacy helper. */
+/** Unified input resolver: reads media_uploads via upload_id, falls back to generation_input_images. Every byte path revalidates checksum and size against stored metadata after the S3 fetch. */
+
 async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[] | undefined> {
   let rows: Array<Record<string, unknown>> = []
   try {
@@ -317,8 +313,6 @@ export async function persistJobFailure(
   return Boolean(updated.rowCount && updated.rowCount > 0)
 }
 
-type UploadedImage = { key: string; image: GeneratedImage; checksum: string }
-
 async function deleteUploadedObjects(uploaded: Array<{ key: string }>): Promise<void> {
   for (const item of uploaded) {
     try {
@@ -379,7 +373,9 @@ async function resolveSnapshot(job: Record<string, unknown>): Promise<ResolvedSn
     baseUrl,
     credential: decoded,
     timeoutMs: Number((normalized as Record<string, unknown>).timeoutMs || process.env.PROVIDER_TIMEOUT_MS || 300_000),
-    maxBytes: Number((normalized as Record<string, unknown>).maxBytes || process.env.MAX_OUTPUT_BYTES || 100_000_000),
+    maxBytes: resolveOutputMaxBytes(
+      (normalized as Record<string, unknown>).maxBytes ?? process.env.MAX_OUTPUT_BYTES ?? undefined,
+    ),
   }
   return { revision, config }
 }
@@ -422,7 +418,7 @@ function classifySubmitError(error: unknown, _pluginId: string): { code: string;
     const retryable = code === 'PROVIDER_TEMPORARY_ERROR' || code === 'PROVIDER_TIMEOUT' || code === 'OUTPUT_READ_FAILED'
     return { code, retryable, diagnostic: { ...error.diagnostic } }
   }
-  if (error instanceof ProviderHttpError || error instanceof LanguageModelHttpError) {
+  if (error instanceof LanguageModelHttpError) {
     const code = /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'GENERATION_FAILED'
     const retryable = ['PROVIDER_TEMPORARY_ERROR', 'PROVIDER_TIMEOUT', 'PROVIDER_DOWNLOAD_FAILED', 'PROVIDER_BUSY'].includes(code)
     return { code, retryable, diagnostic: (error.diagnostic as unknown as Record<string, unknown>) || null }
@@ -430,6 +426,66 @@ function classifySubmitError(error: unknown, _pluginId: string): { code: string;
   const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'GENERATION_FAILED'
   const retryable = ['PROVIDER_TEMPORARY_ERROR', 'PROVIDER_TIMEOUT', 'PROVIDER_DOWNLOAD_FAILED', 'PROVIDER_BUSY', 'INPUT_IMAGE_UNAVAILABLE', 'STORAGE_TEMPORARY_ERROR', 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR', 'LANGUAGE_MODEL_RESPONSE_INVALID'].includes(code)
   return { code, retryable, diagnostic: null }
+}
+
+/**
+ * Synchronous plugins (image) resolve submit inline and expose no poll
+ * entrypoint; async plugins (video) park runs in waiting/submission_unknown.
+ */
+export function isSynchronousPlugin(plugin: Pick<MediaProviderPlugin, 'poll'>): boolean {
+  return typeof plugin?.poll !== 'function'
+}
+
+/**
+ * Close and release the current run after a failed synchronous submit, set
+ * the job to retry_wait, and enqueue a new outbox submission.
+ *
+ * Returns false ONLY when the retry budget is exhausted (plan.retry false);
+ * the caller then fails the job terminal. Any transaction, CAS-conflict, or
+ * persistence failure throws SyncRetryPersistenceError, which processJob's
+ * outer catch rethrows untouched (never persisted as a terminal provider
+ * failure) so the queue can leave the message unacknowledged for XAUTOCLAIM
+ * redelivery.
+ */
+async function retrySyncSubmit(
+  run: ProviderRunEntity,
+  job: Record<string, unknown>,
+  attempt: number,
+  code: string,
+  diagnostic: Record<string, unknown> | null,
+): Promise<boolean> {
+  const plan = planSyncSubmitRetry(attempt, code, diagnostic)
+  if (!plan.retry || !plan.outboxEventType) return false
+  const dedupeKey = `${plan.outboxEventType}:${String(job.id)}:${attempt}`
+  try {
+    await transaction(async client => {
+      const updatedRun = await updateProviderRunState(client, {
+        runId: run.id,
+        expectedStateRevision: run.stateRevision,
+        operationState: plan.runOperationState,
+        error: { code, message: code, retryable: true, details: diagnostic || undefined },
+        releaseCapacity: plan.releaseCapacity,
+        completed: plan.completeRun,
+      })
+      if (!updatedRun) throw new Error('RUN_STATE_CONFLICT')
+      const jobTransitioned = await persistJobFailure(client, {
+        jobId: String(job.id),
+        promptOptimizationId: (job.prompt_optimization_id as string | null) || null,
+        phase: 'generation_failed',
+        code,
+        retryable: true,
+        providerError: diagnostic,
+      })
+      if (!jobTransitioned) throw new Error('JOB_STATE_CONFLICT')
+      await client.query(
+        'INSERT INTO outbox_events(event_type,aggregate_id,payload,dedupe_key) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+        [plan.outboxEventType, job.id, { jobId: job.id }, dedupeKey],
+      )
+    })
+  } catch (error) {
+    throw new SyncRetryPersistenceError(error)
+  }
+  return true
 }
 
 async function failRunTerminal(run: ProviderRunEntity, job: Record<string, unknown>, code: string, diagnostic: Record<string, unknown> | null, phase: string): Promise<void> {
@@ -678,13 +734,27 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
     const plugin = globalProviderRegistry.get(revision.pluginId, revision.pluginVersion)
     const context = globalProviderRegistry.createExecutionContext(revision.pluginId, revision.pluginVersion, { config })
     if (!run.remoteId) {
+      if (isSynchronousPlugin(plugin)) {
+        const recoveryCode = syncNoRemotePollCode(run.operationState)
+        await failRunTerminal(
+          run,
+          job,
+          recoveryCode,
+          recoveryCode === 'PROVIDER_TEMPORARY_ERROR'
+            ? { detail: 'SYNC_SUBMIT_RECOVERY_WITHOUT_REMOTE_ID' }
+            : { detail: 'SYNC_PLUGIN_MISSING_REMOTE_ID' },
+          'generation_failed',
+        )
+        return true
+      }
       await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt() }).catch(() => null)
       return true
     }
     let result: OperationResult
     try {
       if (!plugin.poll) {
-        result = { status: 'waiting', remoteId: run.remoteId, retryAfterMs: 10_000, opaqueState: opaque }
+        await failRunTerminal(run, job, 'PROVIDER_EMPTY_RESULT', { detail: 'SYNC_PLUGIN_UNEXPECTED_POLL' }, 'generation_failed')
+        return true
       } else {
         result = await plugin.poll(run.remoteId, opaque, config, context)
       }
@@ -841,6 +911,14 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         return true
       }
       const classified = classifySubmitError(error, revision.pluginId)
+      if (isSynchronousPlugin(plugin)) {
+        if (!planSyncSubmitRetry(attempt, classified.code, classified.diagnostic).retry) {
+          await failRunTerminal(run, jobRow, classified.code, classified.diagnostic, 'generation_failed')
+          return true
+        }
+        await retrySyncSubmit(run, jobRow, attempt, classified.code, classified.diagnostic)
+        return true
+      }
       if (classified.retryable) {
         await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt(), error: { code: classified.code, message: classified.code, retryable: true } }).catch(() => null)
         await db().query("UPDATE generation_jobs SET status='running',phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
@@ -849,14 +927,24 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       await failRunTerminal(run, jobRow, classified.code, classified.diagnostic, classified.code.startsWith('PROMPT_') || classified.code.startsWith('LANGUAGE_') ? 'optimization_failed' : 'generation_failed')
       return true
     }
-    const fresh = await getProviderRunById(db(), run.id).catch(() => null)
-    if (fresh) run = fresh
-    if (result.status === 'waiting') {
-      await storeRunWaiting(run, result)
-      await db().query("UPDATE generation_jobs SET phase='provider_waiting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
-      return true
+    if (result.status === 'failed' && isSynchronousPlugin(plugin) && isSyncRetryableResultError(result)) {
+      const retryError = (result.error || null) as unknown as Record<string, unknown> | null
+      const retryCode = result.error?.code || 'PROVIDER_TEMPORARY_ERROR'
+      if (planSyncSubmitRetry(attempt, retryCode, retryError).retry) {
+        await retrySyncSubmit(run, jobRow, attempt, retryCode, retryError)
+        return true
+      }
     }
-    if (result.status === 'submission_unknown') {
+    if (result.status === 'waiting' || result.status === 'submission_unknown') {
+      if (!result.remoteId && isSynchronousPlugin(plugin)) {
+        await failRunTerminal(run, jobRow, 'PROVIDER_EMPTY_RESULT', { detail: 'SYNC_PLUGIN_MISSING_REMOTE_ID' }, 'generation_failed')
+        return true
+      }
+      if (result.status === 'waiting') {
+        await storeRunWaiting(run, result)
+        await db().query("UPDATE generation_jobs SET phase='provider_waiting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
+        return true
+      }
       await storeRunUnknown(run, result)
       await db().query("UPDATE generation_jobs SET phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
       return true
@@ -868,10 +956,11 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
     await handleTerminalResult(run, jobRow, revision, config, result, prompt)
     return true
   } catch (error) {
+    if (isSyncRetryPersistenceError(error)) throw error
     const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'GENERATION_FAILED'
     const temporary = ['PROVIDER_TEMPORARY_ERROR', 'PROVIDER_TIMEOUT', 'PROVIDER_DOWNLOAD_FAILED', 'PROVIDER_BUSY', 'INPUT_IMAGE_UNAVAILABLE', 'STORAGE_TEMPORARY_ERROR', 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR', 'LANGUAGE_MODEL_RESPONSE_INVALID', 'PROMPT_TEMPLATE_SELECTION_INVALID', 'PROMPT_OUTPUT_INVALID'].includes(code)
     const phase = code.startsWith('PROMPT_TEMPLATE') ? 'template_failed' : code.startsWith('PROMPT_') || code.startsWith('LANGUAGE_') ? 'optimization_failed' : 'generation_failed'
-    const providerError = error instanceof ProviderHttpError || error instanceof LanguageModelHttpError ? error.diagnostic as unknown as Record<string, unknown> : null
+    const providerError = error instanceof LanguageModelHttpError ? error.diagnostic as unknown as Record<string, unknown> : null
     const latest = await getLatestProviderRunForJob(db(), String((claimed as Record<string, unknown>).id)).catch(() => null)
     await transaction(async client => {
       if (latest && shouldCreateNewRun(latest.operationState) === false) {
@@ -890,34 +979,4 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
     }).catch(() => {})
     return true
   }
-}
-
-// Legacy image-compat path retained: synchronous generateImages through plugins.
-export async function processLegacyImageJob(jobId: string): Promise<boolean> {
-  const row = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [jobId])
-  const job = row.rows[0] as Record<string, unknown> | undefined
-  if (!job) return true
-  const prompt = await preprocessPrompt(job)
-  const images = await generateImages({
-    adapter: String(job.adapter || 'seedream') as 'openai' | 'seedream',
-    vendorModelId: String(job.vendor_model_id || ''),
-    baseUrl: (job.provider_base_url as string) || undefined,
-    apiKey: await resolveApiKey(job as { provider_credential_id?: string; adapter: string }),
-    prompt,
-    size: String(job.size || '1024x1024'),
-    quality: (job.quality as string) || undefined,
-    count: Number(job.count || 1),
-    watermark: Boolean(job.watermark),
-    inputImages: await loadAndValidateInputImages(String(job.id)),
-  })
-  const uploaded: UploadedImage[] = []
-  for (const image of images) {
-    const key = `${String(job.created_by)}/${randomUUID()}.${image.mimeType === 'image/png' ? 'png' : 'jpg'}`
-    const checksum = createHash('sha256').update(image.data).digest('hex')
-    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: image.data, ContentType: image.mimeType, Metadata: { checksum } }))
-    uploaded.push({ key, image, checksum })
-  }
-  const persisted = await transaction(async client => persistJobSuccess(client, { jobId: String(job.id), createdBy: String(job.created_by), prompt, uploaded }))
-  if (!persisted) await deleteUploadedObjects(uploaded)
-  return true
 }

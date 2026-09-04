@@ -386,3 +386,71 @@ test('Veo submit reuses the cached service-account token on the second call', as
   assert.equal(second.status, 'waiting')
   assert.equal(tokenCalls, 1)
 })
+
+test('Veo probe uses GET operations without triggering generation', async () => {
+  const seen: Array<{ method?: string; url: string; body: string }> = []
+  const record = (status: number, payload: unknown = {}) =>
+    (async (url: string | URL | Request, init?: RequestInit) => {
+      seen.push({ method: init?.method, url: String(url), body: String(init?.body ?? '') })
+      return new Response(JSON.stringify(payload), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof globalThis.fetch
+  const cfg = makeConfig()
+
+  const okCtx = makeContext(record(200, { operations: [] }))
+  const healthy = await veoVideoPlugin.probe(cfg, okCtx)
+  assert.equal(healthy.healthy, true)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].method, 'GET')
+  assert.equal(
+    seen[0].url,
+    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT}/locations/${LOCATION}/operations?pageSize=1`,
+  )
+  assert.equal(seen[0].body, '')
+  assert.equal(seen[0].url.includes('predictLongRunning'), false)
+
+  seen.length = 0
+  const deniedCtx = makeContext(record(401, { error: { message: 'UNAUTHENTICATED' } }))
+  const denied = await veoVideoPlugin.probe(cfg, deniedCtx)
+  assert.equal(denied.healthy, false)
+  assert.ok(String(denied.message).includes('401'))
+  assert.equal(seen[0].method, 'GET')
+  assert.equal(seen[0].url.includes('predictLongRunning'), false)
+
+  const downCtx = makeContext(record(503, { error: { message: 'UNAVAILABLE' } }))
+  const down = await veoVideoPlugin.probe(cfg, downCtx)
+  assert.equal(down.healthy, false)
+})
+
+test('Veo maps extra.audio alias to generateAudio with explicit key winning', async () => {
+  const submitWithExtra = async (extra: Record<string, unknown>) => {
+    let capturedGenerateAudio: unknown
+    const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const parsed: unknown = JSON.parse(String(init?.body || '{}'))
+      if (parsed !== null && typeof parsed === 'object' && 'parameters' in parsed) {
+        const params = parsed.parameters
+        if (params !== null && typeof params === 'object' && 'generateAudio' in params) {
+          capturedGenerateAudio = params.generateAudio
+        }
+      }
+      return new Response(JSON.stringify({ name: OPERATION }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof globalThis.fetch
+    const result = await veoVideoPlugin.submit(mockRequest({ extra }), makeConfig(), makeContext(mockFetch))
+    assert.equal(result.status, 'waiting')
+    return capturedGenerateAudio
+  }
+  const aliased = await submitWithExtra({ audio: true })
+  assert.equal(aliased, true)
+
+  const explicit = await submitWithExtra({ generateAudio: false, audio: true })
+  assert.equal(explicit, false)
+
+  const legacy = await submitWithExtra({ generateAudio: true })
+  assert.equal(legacy, true)
+
+})

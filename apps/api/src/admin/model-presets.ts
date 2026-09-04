@@ -80,8 +80,25 @@ const seedream4kWay2Sizes = [
 const seedream40Way2Sizes = [...seedream1kWay2Sizes, ...seedream2kWay2Sizes, ...seedream4kWay2Sizes]
 const seedream45Way2Sizes = [...seedream2kWay2Sizes, ...seedream4kWay2Sizes]
 
-const videoDurationParameter: VideoParameterDescriptor = {
-  type: 'integer', name: 'durationSeconds', label: '时长（秒）', min: 1, max: 60, defaultValue: 5, required: false,
+// Seedance validates durationSeconds as a number in [1, 30]; the old generic
+// 1-60 integer range contradicted the plugin, so this preset pins 1-30 here.
+const seedanceDurationParameter: VideoParameterDescriptor = {
+  type: 'integer', name: 'durationSeconds', label: '时长（秒）', min: 1, max: 30, defaultValue: 5, required: false,
+}
+// Veo only accepts durations 4/6/8. Enum strings keep the descriptor
+// serializable; request normalization Number-converts them before validation.
+const veoDurationParameter: VideoParameterDescriptor = {
+  type: 'enum', name: 'durationSeconds', label: '时长（秒）', options: ['4', '6', '8'], defaultValue: '8', required: false,
+}
+// Veo only accepts 16:9 and 9:16; other ratios are normalized or rejected.
+const veoAspectParameter: VideoParameterDescriptor = {
+  type: 'enum', name: 'aspectRatio', label: '宽高比',
+  options: ['16:9', '9:16'], defaultValue: '16:9', required: false,
+}
+// Veo resolutions are 720p/1080p/4k; 1080p+ requires the standard model at 8s.
+const veoResolutionParameter: VideoParameterDescriptor = {
+  type: 'enum', name: 'resolution', label: '分辨率',
+  options: ['720p', '1080p', '4k'], defaultValue: '1080p', required: false,
 }
 const videoAspectParameter: VideoParameterDescriptor = {
   type: 'enum', name: 'aspectRatio', label: '宽高比',
@@ -103,39 +120,39 @@ const videoFrameSlots: VideoInputSlotDescriptor[] = [
   { role: 'reference_image', required: false, minCount: 0, maxCount: 4, allowedMediaKinds: ['image'], label: '参考图' },
 ]
 
-export const modelPresets = [
+export const modelPresets: ModelPreset[] = [
   {
     modelKind: 'image',
-    id: 'openai-gpt-image-2', displayName: 'GPT Image 2', adapter: 'openai', providerId: 'openai', pluginId: 'openai-image', pluginVersion: '1.0.0', vendorModelId: 'gpt-image-2', baseUrl: 'https://api.openai.com',
+    id: 'openai-gpt-image-2', displayName: 'GPT Image 2', adapter: 'openai', providerId: 'openai', pluginId: 'openai-image', pluginVersion: '1.1.0', vendorModelId: 'gpt-image-2', baseUrl: 'https://api.openai.com',
     sizes: ['1024x1024', '1280x720', '720x1280', '1536x1024', '1024x1536'], qualityOptions: ['auto', 'low', 'medium', 'high'], maxCount: 4, maxInputImages: 4, concurrencyLimit: 1, watermark: false,
   },
   {
     modelKind: 'image',
-    id: 'seedream-4-0', displayName: 'Seedream 4.0', adapter: 'seedream', providerId: 'volcengine', pluginId: 'seedream-image', pluginVersion: '1.0.0', vendorModelId: 'doubao-seedream-4-0-250828', baseUrl: 'https://ark.cn-beijing.volces.com',
+    id: 'seedream-4-0', displayName: 'Seedream 4.0', adapter: 'seedream', providerId: 'volcengine', pluginId: 'seedream-image', pluginVersion: '1.1.0', vendorModelId: 'doubao-seedream-4-0-250828', baseUrl: 'https://ark.cn-beijing.volces.com',
     sizes: seedream40Way2Sizes, qualityOptions: [], maxCount: 4, maxInputImages: 4, concurrencyLimit: 1, watermark: false,
   },
   {
     modelKind: 'image',
-    id: 'seedream-4-5', displayName: 'Seedream 4.5', adapter: 'seedream', providerId: 'volcengine', pluginId: 'seedream-image', pluginVersion: '1.0.0', vendorModelId: 'doubao-seedream-4-5-251128', baseUrl: 'https://ark.cn-beijing.volces.com',
+    id: 'seedream-4-5', displayName: 'Seedream 4.5', adapter: 'seedream', providerId: 'volcengine', pluginId: 'seedream-image', pluginVersion: '1.1.0', vendorModelId: 'doubao-seedream-4-5-251128', baseUrl: 'https://ark.cn-beijing.volces.com',
     sizes: seedream45Way2Sizes, qualityOptions: [], maxCount: 4, maxInputImages: 4, concurrencyLimit: 1, watermark: false,
   },
   {
     modelKind: 'video',
-    id: 'seedance-1-0', displayName: 'Seedance 1.0', providerId: 'volcengine', pluginId: 'seedance-video', pluginVersion: '1.0.0', vendorModelId: 'doubao-seedance-1-0-250828', baseUrl: 'https://ark.cn-beijing.volces.com',
+    id: 'seedance-1-0', displayName: 'Seedance 2.0 Fast', providerId: 'volcengine', pluginId: 'seedance-video', pluginVersion: '1.0.0', vendorModelId: 'doubao-seedance-2-0-fast-260128', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     modes: ['text_to_video', 'image_to_video'],
-    parameters: [videoDurationParameter, videoAspectParameter, videoResolutionParameter, videoAudioParameter, videoCountParameter],
+    parameters: [seedanceDurationParameter, videoAspectParameter, videoResolutionParameter, videoAudioParameter, videoCountParameter],
     inputSlots: videoFrameSlots,
-    pricing: { scheme: 'per_second_v1', creditsPerSecond: 10, minDurationSeconds: 1, maxDurationSeconds: 60 },
+    pricing: { scheme: 'per_second_v1', creditsPerSecond: 10, minDurationSeconds: 1, maxDurationSeconds: 30 },
     defaults: { durationSeconds: 5, aspectRatio: '16:9', resolution: '720p', audio: true, count: 1 },
     maxCount: 4, concurrencyLimit: 1,
   },
   {
     modelKind: 'video',
-    id: 'veo-3-1', displayName: 'Veo 3.1', providerId: 'google', pluginId: 'veo-video', pluginVersion: '1.0.0', vendorModelId: 'veo-3.1-generate-preview', baseUrl: 'https://generativelanguage.googleapis.com',
+    id: 'veo-3-1', displayName: 'Veo 3.1', providerId: 'google', pluginId: 'veo-video', pluginVersion: '1.0.0', vendorModelId: 'veo-3.1-generate-001', baseUrl: 'https://us-central1-aiplatform.googleapis.com',
     modes: ['text_to_video', 'image_to_video'],
-    parameters: [videoDurationParameter, videoAspectParameter, videoResolutionParameter, videoAudioParameter, videoCountParameter],
+    parameters: [veoDurationParameter, veoAspectParameter, veoResolutionParameter, videoAudioParameter, videoCountParameter],
     inputSlots: videoFrameSlots,
-    pricing: { scheme: 'per_second_v1', creditsPerSecond: 20, minDurationSeconds: 1, maxDurationSeconds: 60 },
+    pricing: { scheme: 'per_second_v1', creditsPerSecond: 20, minDurationSeconds: 4, maxDurationSeconds: 8 },
     defaults: { durationSeconds: 8, aspectRatio: '16:9', resolution: '1080p', audio: true, count: 1 },
     maxCount: 4, concurrencyLimit: 1,
   },
@@ -147,4 +164,4 @@ export const modelPresets = [
     id: 'openai-gpt-5-4', modelKind: 'language', displayName: 'GPT-5.4', adapter: 'openai', vendorModelId: 'gpt-5.4', baseUrl: 'https://api.openai.com',
     languageProtocol: 'openai_responses', maxOutputTokens: 25000, reasoningEffort: 'medium', concurrencyLimit: 1,
   },
-] satisfies ModelPreset[]
+]

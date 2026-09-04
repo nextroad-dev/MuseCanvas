@@ -3,6 +3,9 @@ import { NormalizedProviderError } from './errors'
 
 const DEFAULT_MAX_OUTPUT_BYTES = 25_000_000 // 25 MB
 const DEFAULT_OUTPUT_TIMEOUT_MS = 60_000
+export const MAX_OUTPUT_BYTES_HARD_CEILING = 100_000_000 // 100 MB hard ceiling
+
+const CANONICAL_BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/
 
 export function extractImageDimensions(data: Buffer): { width: number; height: number } {
   // PNG: signature 89 50 4E 47 0D 0A 1A 0A, IHDR starts at offset 12, width at 16, height at 20
@@ -54,15 +57,48 @@ export async function readBoundedOutput(
   pluginId = 'core',
   version = '1.0.0',
 ): Promise<BoundedOutput> {
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+  const configuredMaxBytes = options.maxBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+  if (
+    typeof configuredMaxBytes !== 'number' ||
+    !Number.isSafeInteger(configuredMaxBytes) ||
+    configuredMaxBytes <= 0 ||
+    configuredMaxBytes > MAX_OUTPUT_BYTES_HARD_CEILING
+  ) {
+    throw NormalizedProviderError.create(
+      pluginId,
+      version,
+      'OUTPUT_READ_FAILED',
+      `Invalid maxBytes '${String(options.maxBytes)}': must be a positive safe integer up to ${MAX_OUTPUT_BYTES_HARD_CEILING} bytes`,
+    )
+  }
+  const maxBytes = configuredMaxBytes
   const timeoutMs = options.timeoutMs ?? DEFAULT_OUTPUT_TIMEOUT_MS
 
   let data: Buffer
   let mimeType = descriptor.mimeType || 'image/png'
 
-  if (descriptor.b64Json) {
+  if (descriptor.b64Json !== undefined) {
+    const encoded = descriptor.b64Json
+    if (encoded.length % 4 !== 0 || !CANONICAL_BASE64_RE.test(encoded)) {
+      throw NormalizedProviderError.create(
+        pluginId,
+        version,
+        'OUTPUT_READ_FAILED',
+        'Output b64Json is not canonical base64',
+      )
+    }
+    const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0
+    const decodedEstimate = (encoded.length / 4) * 3 - padding
+    if (decodedEstimate > maxBytes) {
+      throw NormalizedProviderError.create(
+        pluginId,
+        version,
+        'OUTPUT_READ_FAILED',
+        `Base64 output size ~${decodedEstimate} bytes exceeds maximum of ${maxBytes} bytes`,
+      )
+    }
     try {
-      data = Buffer.from(descriptor.b64Json, 'base64')
+      data = Buffer.from(encoded, 'base64')
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Invalid base64 payload'
       throw NormalizedProviderError.create(
@@ -81,7 +117,7 @@ export async function readBoundedOutput(
         `Base64 output size ${data.length} bytes is invalid or exceeds maximum of ${maxBytes} bytes`,
       )
     }
-  } else if (descriptor.url) {
+  } else if (descriptor.url !== undefined) {
     const res = await http.get(descriptor.url, {
       timeoutMs,
       maxBytes,

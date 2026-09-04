@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
   AdminUser, AdminModel, AdminJob, DashboardMetrics, JobStatus,
-  Invitation, ModelPreset,
+  Invitation, ModelPreset, BuiltinProviderTemplate,
   ProviderCredential, ProviderCredentialInput,
   AdminOAuthProvider, OAuthProviderInput,
   PromptTemplateIndex, PromptOptimizationSettings,
@@ -34,6 +34,7 @@ export const useAdminStore = defineStore('admin', () => {
 
   // Provider credentials
   const providerCredentials = ref<ProviderCredential[]>([])
+  const providerTemplates = ref<BuiltinProviderTemplate[]>([])
 
   // OAuth providers
   const oauthProviders = ref<AdminOAuthProvider[]>([])
@@ -170,6 +171,15 @@ export const useAdminStore = defineStore('admin', () => {
   async function fetchProviderCredentials() {
     const res = await api<ProviderCredential[]>('/api/admin/provider-credentials')
     if (res.success && res.data) providerCredentials.value = res.data
+    return res
+  }
+
+  async function fetchProviderTemplates() {
+    const res = await api<{ templates: BuiltinProviderTemplate[] } | BuiltinProviderTemplate[]>('/api/admin/provider-templates')
+    if (res.success && res.data) {
+      providerTemplates.value = Array.isArray(res.data) ? res.data : res.data.templates || []
+    }
+    return res
   }
 
   async function createProviderCredential(data: ProviderCredentialInput) {
@@ -271,12 +281,12 @@ export const useAdminStore = defineStore('admin', () => {
 
   return {
     metrics, users, usersTotal, usersNextCursor, models, modelPresets, jobs, jobsTotal, jobsNextCursor,
-    requiresInvitation, invitations, providerCredentials, oauthProviders, promptTemplates, promptOptimizationSettings, billingSettings,
+    requiresInvitation, invitations, providerCredentials, providerTemplates, oauthProviders, promptTemplates, promptOptimizationSettings, billingSettings,
     fetchDashboard, fetchUsers, updateUserStatus, deleteUser, adjustUserCredits,
     fetchModels, fetchModelPresets, createModel, updateModel, deleteModel, fetchJobs,
     fetchRegistration, setRequiresInvitation,
     fetchInvitations, createInvitation, revokeInvitation,
-    fetchProviderCredentials, createProviderCredential, updateProviderCredential, testProviderCredential, deleteProviderCredential,
+    fetchProviderCredentials, fetchProviderTemplates, createProviderCredential, updateProviderCredential, testProviderCredential, deleteProviderCredential,
     fetchOAuthProviders, updateOAuthProvider,
     fetchPromptTemplates, reloadPromptTemplates, fetchPromptOptimizationSettings, updatePromptOptimizationSettings,
     fetchBillingSettings, updateBillingSettings,

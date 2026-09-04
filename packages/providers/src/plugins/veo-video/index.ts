@@ -134,26 +134,27 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
   readonly manifest = veoVideoManifest
 
   async probe(config: ProviderConfig, context: ExecutionContext): Promise<ProbeResult> {
+    this.validateConfig(config)
     const start = Date.now()
     try {
-      const resolved = this.resolveConnection(config)
+      const { projectId, location } = this.resolveConnection(config)
       const token = await this.resolveAccessToken(config, context)
-      const endpoint = this.submitEndpoint(resolved.projectId, resolved.location, VEO_FAST_MODEL)
-      const res = await context.http.post(
-        endpoint,
-        JSON.stringify({
-          instances: [{ prompt: 'ping' }],
-          parameters: { sampleCount: 1, aspectRatio: '16:9', durationSeconds: 4 },
-        }),
-        {
-          headers: {
-            authorization: `Bearer ${token}`,
-            'content-type': 'application/json',
-          },
-          timeoutMs: config.timeoutMs ?? 15_000,
+      const endpoint = this.operationsEndpoint(projectId, location)
+      const res = await context.http.get(endpoint, {
+        headers: {
+          authorization: `Bearer ${token}`,
         },
-      )
-      return { healthy: res.status < 500, latencyMs: Date.now() - start }
+        timeoutMs: config.timeoutMs ?? 15_000,
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        return {
+          healthy: false,
+          message: `Probe failed with HTTP ${res.status}: ${text}`,
+          latencyMs: Date.now() - start,
+        }
+      }
+      return { healthy: true, latencyMs: Date.now() - start }
     } catch (err: unknown) {
       return {
         healthy: false,
@@ -539,6 +540,13 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
     return minted
   }
 
+  operationsEndpoint(projectId: string, location: string): string {
+    return (
+      `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}` +
+      `/locations/${location}/operations?pageSize=1`
+    )
+  }
+
   submitEndpoint(projectId: string, location: string, model: string): string {
     return (
       `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}` +
@@ -620,7 +628,7 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
     if (extra.personGeneration !== undefined) parameters.personGeneration = String(extra.personGeneration)
     if (extra.negativePrompt !== undefined) parameters.negativePrompt = String(extra.negativePrompt)
     if (extra.enhancePrompt !== undefined) parameters.enhancePrompt = Boolean(extra.enhancePrompt)
-    if (extra.generateAudio !== undefined) parameters.generateAudio = Boolean(extra.generateAudio)
+    if ((extra.generateAudio ?? extra.audio) !== undefined) parameters.generateAudio = Boolean(extra.generateAudio ?? extra.audio)
     if (request.fps !== undefined || extra.fps !== undefined) {
       const fps = Number(requestFirst(request.fps, extra.fps as number | undefined))
       if (!Number.isFinite(fps) || fps <= 0 || fps > 60) throw invalidRequest(`Invalid Veo fps '${fps}'`)

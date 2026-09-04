@@ -88,6 +88,12 @@ services:
       ALLOW_INSECURE_SMTP: "true"
       ALLOW_INSECURE_PROVIDER_BASE_URL: "false"
       ALLOW_PRIVATE_PROVIDER_BASE_URL: "false"
+      # This bundled stack is served directly over HTTP by default.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # One-release upgrade-only read fallback for pre-master-key rows (optional, fresh installs leave unset).
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:-}
+      PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:-}
     healthcheck:
       test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready]
       interval: 5s

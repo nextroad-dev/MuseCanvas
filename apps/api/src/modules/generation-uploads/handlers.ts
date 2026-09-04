@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { db, transaction } from '../../../../../packages/database/src/index'
 import { inspectInputImage } from '../../../../../packages/providers/src/index'
+import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
 import type { Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import {
@@ -17,16 +18,21 @@ import {
   GENERATION_UPLOAD_TTL_SECONDS,
   GENERATION_UPLOAD_ID_PATTERN,
   MAX_ACTIVE_UPLOADS,
-  MAX_UPLOAD_IMAGE_BYTES,
 } from './constants'
 import { resolveRuntimeSettings } from '../settings/runtime'
 
-async function uploadRuntime(): Promise<{ maxImageBytes: number; uploadTtlSeconds: number; signTtlSeconds: number }> {
+async function uploadRuntime(): Promise<{ maxImageBytes: number; maxTotalBytes: number; maxInputs: number; uploadTtlSeconds: number; signTtlSeconds: number }> {
   try {
     const runtime = await resolveRuntimeSettings()
-    return { maxImageBytes: runtime.maxImageBytes, uploadTtlSeconds: runtime.uploadTtlSeconds, signTtlSeconds: runtime.signedUrlTtlSeconds }
+    return { maxImageBytes: runtime.maxImageBytes, maxTotalBytes: runtime.maxTotalBytes, maxInputs: runtime.maxInputs, uploadTtlSeconds: runtime.uploadTtlSeconds, signTtlSeconds: runtime.signedUrlTtlSeconds }
   } catch {
-    return { maxImageBytes: MAX_UPLOAD_IMAGE_BYTES, uploadTtlSeconds: GENERATION_UPLOAD_TTL_SECONDS, signTtlSeconds: GENERATION_UPLOAD_SIGN_TTL_SECONDS }
+    return {
+      maxImageBytes: RUNTIME_SETTINGS_DEFAULTS.maxImageBytes,
+      maxTotalBytes: RUNTIME_SETTINGS_DEFAULTS.maxTotalBytes,
+      maxInputs: RUNTIME_SETTINGS_DEFAULTS.maxInputs,
+      uploadTtlSeconds: GENERATION_UPLOAD_TTL_SECONDS,
+      signTtlSeconds: GENERATION_UPLOAD_SIGN_TTL_SECONDS,
+    }
   }
 }
 
@@ -187,15 +193,15 @@ export async function completeGenerationUpload(
   }
 
   const declaredSize = Number(upload.size_bytes)
-  const maxImageBytes = (await uploadRuntime()).maxImageBytes
-  if (bytes.length !== declaredSize || bytes.length > maxImageBytes) {
+  const runtime = await uploadRuntime()
+  if (bytes.length !== declaredSize || bytes.length > runtime.maxImageBytes) {
     await rejectUpload(upload.id as string, objectKey)
     return fail('INVALID_INPUT_IMAGE_SIZE', '上传文件大小与声明不符', 400)
   }
 
   let inspected: { width: number; height: number; mimeType: string; sizeBytes: number }
   try {
-    inspected = inspectInputImage(bytes)
+    inspected = inspectInputImage(bytes, { maxImageBytes: runtime.maxImageBytes })
   } catch (error) {
     await rejectUpload(upload.id as string, objectKey)
     const message = error instanceof Error ? error.message : 'INVALID_INPUT_IMAGE'

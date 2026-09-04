@@ -31,12 +31,13 @@ import type {
   OnboardingSectionState,
   SetupStatusResponse,
 } from '@musecanvas/contracts'
-import { hashOtp, hashToken, randomToken, verifyOtpHash, actorFrom } from '../../auth/security'
+import { hashOtp, hashToken, randomToken, verifyOtpHash, actorFrom, shouldUseSecureCookie } from '../../auth/security'
 import { body, emailValid, fail, ok } from '../../shared/http'
 import { userDto } from '../../shared/dto'
 import { sendMail, verifySmtpConnection, testStorageConnection } from '../../shared/services'
 import { limited, redisPing } from '../../shared/redis'
 import {
+  resolvePublicOrigin,
   resolveSiteSettings,
   resolveSmtpSettings,
   resolveStorageSettings,
@@ -261,7 +262,7 @@ export async function setupClaim(request: NextRequest, input: Record<string, unk
   })
   response.cookies.set(SETUP_COOKIE, token, {
     httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
+    secure: shouldUseSecureCookie(await resolvePublicOrigin()),
     sameSite: 'lax',
     path: '/',
     maxAge: SETUP_SESSION_TTL_SECONDS,
@@ -675,7 +676,7 @@ export async function setupAdminVerify(request: NextRequest, input: Record<strin
   const response = ok({ user: userDto(result.user) })
   response.cookies.set('muse_session', result.token, {
     httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
+    secure: shouldUseSecureCookie(await resolvePublicOrigin()),
     sameSite: 'lax',
     path: '/',
     maxAge: 30 * 86400,

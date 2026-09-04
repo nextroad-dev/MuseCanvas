@@ -1,5 +1,6 @@
 import type pg from 'pg'
 import { createHash, randomUUID } from 'node:crypto'
+import { RUNTIME_SETTINGS_DEFAULTS } from '../../../../packages/contracts/src/index'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -47,9 +48,10 @@ import {
   MAX_UPLOAD_IMAGE_BYTES,
   MAX_UPLOAD_TOTAL_BYTES,
 } from '../../../../packages/providers/src/core/image-input'
+import type { InputLimits } from '../../../../packages/providers/src/core/image-input'
 import { preprocessPrompt } from '../preprocessing'
 import { getStorageClient, type StorageClientHandle } from '../shared/storage'
-import { resolveMaxOutputBytes as resolveRuntimeMaxOutputBytes, resolveProviderTimeoutMs } from '../shared/runtime'
+import { resolveMaxOutputBytes as resolveRuntimeMaxOutputBytes, resolveProviderTimeoutMs, resolveRuntimeSettings } from '../shared/runtime'
 import {
   PROVIDER_LEASE_SECONDS,
   PROVIDER_RUN_STATE_KEY_ID,
@@ -71,11 +73,25 @@ import {
   syncNoRemotePollCode,
 } from '../provider-state'
 
+async function resolveInputLimits(): Promise<InputLimits> {
+  try {
+    const runtime = await resolveRuntimeSettings()
+    return { maxImageBytes: runtime.maxImageBytes, maxTotalBytes: runtime.maxTotalBytes, maxInputs: runtime.maxInputs }
+  } catch {
+    return {
+      maxImageBytes: RUNTIME_SETTINGS_DEFAULTS.maxImageBytes,
+      maxTotalBytes: RUNTIME_SETTINGS_DEFAULTS.maxTotalBytes,
+      maxInputs: RUNTIME_SETTINGS_DEFAULTS.maxInputs,
+    }
+  }
+}
+
 export function validateStoredInputImage(
   data: Buffer,
   expected: { mimeType: string; sizeBytes: number; checksum: string },
+  limits?: InputLimits,
 ): { width: number; height: number; mimeType: 'image/png' | 'image/jpeg'; sizeBytes: number } {
-  const inspected = inspectInputImage(data)
+  const inspected = inspectInputImage(data, limits)
   if (data.length !== expected.sizeBytes) throw new Error('INVALID_INPUT_IMAGE_SIZE')
   if (inspected.mimeType !== expected.mimeType) throw new Error('INVALID_INPUT_IMAGE')
   const checksum = createHash('sha256').update(data).digest('hex')
@@ -95,7 +111,11 @@ export async function loadAndValidateInputImages(
     [jobId],
   )
   if (!rows.rows.length) return undefined
-  if (rows.rows.length > MAX_INPUT_IMAGES) {
+  const limits = await resolveInputLimits()
+  const maxInputs = limits.maxInputs ?? MAX_INPUT_IMAGES
+  const maxSingle = limits.maxImageBytes ?? MAX_UPLOAD_IMAGE_BYTES
+  const maxTotal = limits.maxTotalBytes ?? MAX_UPLOAD_TOTAL_BYTES
+  if (rows.rows.length > maxInputs) {
     throw new Error('INVALID_INPUT_IMAGE')
   }
 
@@ -121,10 +141,10 @@ export async function loadAndValidateInputImages(
 
     const contentLength = s3Res.ContentLength
     if (contentLength !== undefined) {
-      if (contentLength <= 0 || contentLength > MAX_UPLOAD_IMAGE_BYTES) {
+      if (contentLength <= 0 || contentLength > maxSingle) {
         throw new Error('INVALID_INPUT_IMAGE_SIZE')
       }
-      if (totalBytes + contentLength > MAX_UPLOAD_TOTAL_BYTES) {
+      if (totalBytes + contentLength > maxTotal) {
         throw new Error('INVALID_INPUT_IMAGE_SIZE')
       }
     }
@@ -137,11 +157,11 @@ export async function loadAndValidateInputImages(
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
     }
 
-    if (data.length === 0 || data.length > MAX_UPLOAD_IMAGE_BYTES) {
+    if (data.length === 0 || data.length > maxSingle) {
       throw new Error('INVALID_INPUT_IMAGE_SIZE')
     }
     totalBytes += data.length
-    if (totalBytes > MAX_UPLOAD_TOTAL_BYTES) {
+    if (totalBytes > maxTotal) {
       throw new Error('INVALID_INPUT_IMAGE_SIZE')
     }
 
@@ -149,7 +169,7 @@ export async function loadAndValidateInputImages(
       mimeType: row.mime_type,
       sizeBytes: Number(row.size_bytes),
       checksum: row.checksum,
-    })
+    }, limits)
     inputImages.push({ data, mimeType: inspected.mimeType })
   }
 
@@ -174,6 +194,12 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
     rows = []
   }
   if (rows.length > 0) {
+    const limits = await resolveInputLimits()
+    const maxSingle = limits.maxImageBytes ?? MAX_UPLOAD_IMAGE_BYTES
+    const maxTotal = limits.maxTotalBytes ?? MAX_UPLOAD_TOTAL_BYTES
+    const maxInputs = limits.maxInputs ?? MAX_INPUT_IMAGES
+    const imageRows = rows.filter(row => String(row.mime_type || '').startsWith('image/'))
+    if (imageRows.length > maxInputs) throw new Error('INVALID_INPUT_IMAGE')
     const images: MediaInputImage[] = []
     let totalBytes = 0
     for (const row of rows) {
@@ -198,16 +224,16 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
       } catch {
         throw new Error('INPUT_IMAGE_UNAVAILABLE')
       }
-      if (data.length === 0 || data.length > MAX_UPLOAD_IMAGE_BYTES) throw new Error('INVALID_INPUT_IMAGE_SIZE')
+      if (data.length === 0 || data.length > maxSingle) throw new Error('INVALID_INPUT_IMAGE_SIZE')
       totalBytes += data.length
-      if (totalBytes > MAX_UPLOAD_TOTAL_BYTES) throw new Error('INVALID_INPUT_IMAGE_SIZE')
+      if (totalBytes > maxTotal) throw new Error('INVALID_INPUT_IMAGE_SIZE')
       const expected = { mimeType: mime, sizeBytes: Number(row.size_bytes), checksum: String(row.checksum || '') }
       try {
-        validateStoredInputImage(data, expected)
+        validateStoredInputImage(data, expected, limits)
       } catch {
         throw new Error('INVALID_INPUT_IMAGE')
       }
-      const inspected = inspectInputImage(data)
+      const inspected = inspectInputImage(data, limits)
       images.push({ data, mimeType: inspected.mimeType, width: inspected.width, height: inspected.height, sizeBytes: data.length })
     }
     return images.length > 0 ? images : undefined

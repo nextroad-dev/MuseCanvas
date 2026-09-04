@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/features/auth/stores/auth'
 import { useSetupStore } from '../stores/setup'
-import { SETUP_STEPS, isSetupStepId, resumeStepId, type SetupStepId } from '../lib/steps'
+import { resolveCompletedSetupPageRedirect } from '@/app/router/setupAdminAccess'
 import type { OnboardingSectionKey } from '@/shared/types'
+import { SETUP_STEPS, isSetupStepId, resumeStepId, type SetupStepId } from '../lib/steps'
 import SetupStepper from '../components/SetupStepper.vue'
 import StepClaimBootstrap from '../components/StepClaimBootstrap.vue'
 import StepSite from '../components/StepSite.vue'
@@ -85,9 +87,19 @@ function goBack() {
 async function init() {
   initializing.value = true
   await setup.checkStatus()
-  if (setup.setupComplete) {
-    await router.replace('/admin')
-    return
+  // Completed setup stays editable for authenticated admins revisiting
+  // /setup; anonymous/non-admin users fall back to /admin handling.
+  // Fresh onboarding (setupComplete === false) never touches auth state.
+  if (!setup.statusFailed && setup.setupComplete) {
+    const redirect = resolveCompletedSetupPageRedirect({
+      setupComplete: setup.setupComplete,
+      statusFailed: setup.statusFailed,
+      isAdmin: await ensureIsAdmin(),
+    })
+    if (redirect) {
+      await router.replace(redirect)
+      return
+    }
   }
   // Config needs the claim cookie (or an admin session); a failure here is
   // fine — the claim step surfaces it with its own retry.
@@ -97,6 +109,18 @@ async function init() {
     await router.replace({ path: '/setup', query: { step: target } })
   }
   initializing.value = false
+}
+
+async function ensureIsAdmin(): Promise<boolean> {
+  const auth = useAuthStore()
+  if (!auth.initialized) {
+    try {
+      await auth.init()
+    } catch {
+      return false
+    }
+  }
+  return auth.isAdmin
 }
 
 async function handleRetryStatus() {

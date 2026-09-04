@@ -110,6 +110,112 @@ export function isTransientErrorCode(code: string | undefined | null): boolean {
   return !!code && TRANSIENT_CODES.has(code)
 }
 
+export const MAX_SYNC_SUBMIT_ATTEMPTS = 3
+export const SYNC_RETRY_OUTBOX_EVENT_TYPE = 'generation.retry'
+export const SYNC_RETRYABLE_HTTP_STATUS = 429
+export const MAX_RESOLVED_OUTPUT_BYTES = 100_000_000
+
+export type SyncRetryDiagnostic = { status?: unknown; code?: unknown } | null | undefined
+
+/**
+ * Synchronous image plugins have no provider-guaranteed idempotency key, so
+ * an automatic resubmit is only safe for explicit HTTP 429 diagnostics
+ * (known non-acceptance: nothing was charged or created). Timeouts,
+ * transport errors, and 5xx TEMPORARY_ERRORs may have been accepted
+ * provider-side and must terminate/release instead of resubmitting.
+ */
+export function isSyncRetryableSubmitCode(
+  code: string | undefined | null,
+  diagnostic?: SyncRetryDiagnostic,
+): boolean {
+  if (code !== 'PROVIDER_TEMPORARY_ERROR') return false
+  if (!diagnostic || typeof diagnostic !== 'object') return false
+  return 'status' in diagnostic && diagnostic.status === SYNC_RETRYABLE_HTTP_STATUS
+}
+
+/**
+ * Bounded retry for synchronous plugins: retry while attempts remain.
+ * Attempt is the 1-based generation_jobs.attempt already incremented at claim,
+ * so attempt >= maxAttempts is terminal.
+ */
+export function shouldRetrySyncSubmit(
+  attempt: number,
+  code: string | undefined | null,
+  diagnostic?: SyncRetryDiagnostic,
+  maxAttempts: number = MAX_SYNC_SUBMIT_ATTEMPTS,
+): boolean {
+  return (
+    Number.isSafeInteger(attempt) &&
+    attempt >= 1 &&
+    attempt < maxAttempts &&
+    isSyncRetryableSubmitCode(code, diagnostic)
+  )
+}
+
+export interface SyncSubmitRetryPlan {
+  retry: boolean
+  runOperationState: 'failed'
+  releaseCapacity: boolean
+  completeRun: boolean
+  jobStatus: 'retry_wait' | 'failed'
+  outboxEventType: 'generation.retry' | null
+}
+
+/**
+ * Disposition for a failed synchronous submit: close and release the current
+ * run in both cases; retry enqueues a new outbox submission via retry_wait,
+ * exhaustion becomes terminal failed.
+ */
+export function planSyncSubmitRetry(
+  attempt: number,
+  code: string | undefined | null,
+  diagnostic?: SyncRetryDiagnostic,
+  maxAttempts: number = MAX_SYNC_SUBMIT_ATTEMPTS,
+): SyncSubmitRetryPlan {
+  const retry = shouldRetrySyncSubmit(attempt, code, diagnostic, maxAttempts)
+  return {
+    retry,
+    runOperationState: 'failed',
+    releaseCapacity: true,
+    completeRun: true,
+    jobStatus: retry ? 'retry_wait' : 'failed',
+    outboxEventType: retry ? SYNC_RETRY_OUTBOX_EVENT_TYPE : null,
+  }
+}
+
+export function isSyncRetryableResultError(result: { status?: unknown; error?: { code?: unknown; status?: unknown } } | null | undefined): boolean {
+  if (result?.status !== 'failed' || !result?.error || typeof result.error !== 'object') return false
+  if (!('code' in result.error) || typeof result.error.code !== 'string') return false
+  return isSyncRetryableSubmitCode(result.error.code, result.error)
+}
+
+/**
+ * Recovery classification for a synchronous run that reaches poll without a
+ * remote id. A run still in submitting never completed its inline submit
+ * (crash or failed retry persistence before any provider acceptance), so
+ * redelivery must not blindly resubmit without provider idempotency: close
+ * it with the original-safe temporary diagnostic and release capacity.
+ * Any other state without a remote id is a genuinely empty completed result.
+ */
+export function syncNoRemotePollCode(
+  operationState: string | null | undefined,
+): 'PROVIDER_TEMPORARY_ERROR' | 'PROVIDER_EMPTY_RESULT' {
+  return operationState === 'submitting' ? 'PROVIDER_TEMPORARY_ERROR' : 'PROVIDER_EMPTY_RESULT'
+}
+/**
+ * Resolve the bounded output byte cap: unset falls back to the default cap,
+ * but any explicitly configured NaN/Infinity/non-integer/non-positive or
+ * over-cap value fails INVALID_CONFIG instead of allowing unbounded reads.
+ */
+export function resolveOutputMaxBytes(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === '') return MAX_RESOLVED_OUTPUT_BYTES
+  const value = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_RESOLVED_OUTPUT_BYTES) {
+    throw new Error('INVALID_CONFIG')
+  }
+  return value
+}
+
 export function isLeaseExpired(expiresAt: string | Date | null | undefined, nowMs = Date.now()): boolean {
   if (!expiresAt) return true
   const ms = expiresAt instanceof Date ? expiresAt.getTime() : Date.parse(expiresAt)
@@ -173,4 +279,27 @@ export function redactForLog(value: unknown): unknown {
     return out
   }
   return value
+}
+
+export const SYNC_RETRY_PERSISTENCE_ERROR_CODE = 'SYNC_RETRY_PERSISTENCE_FAILED'
+
+/**
+ * Marker for a failed synchronous-retry persistence transition (run CAS,
+ * job status, or outbox insert). It must never be converted into a terminal
+ * provider failure: processJob rethrows it, and the queue leaves the message
+ * unacknowledged so XAUTOCLAIM redelivers it.
+ */
+export class SyncRetryPersistenceError extends Error {
+  constructor(cause?: unknown) {
+    super(SYNC_RETRY_PERSISTENCE_ERROR_CODE)
+    this.name = 'SyncRetryPersistenceError'
+    if (cause !== undefined) this.cause = cause
+  }
+}
+
+export function isSyncRetryPersistenceError(error: unknown): boolean {
+  return (
+    error instanceof SyncRetryPersistenceError ||
+    (error instanceof Error && error.message === SYNC_RETRY_PERSISTENCE_ERROR_CODE)
+  )
 }

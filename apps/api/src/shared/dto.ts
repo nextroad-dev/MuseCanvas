@@ -348,7 +348,7 @@ export function providerCredentialDto(row: Record<string, unknown>) {
     schemaId: (row.schema_id as string) || 'legacy-api-key-v1',
     schemaVersion: row.schema_version !== undefined && row.schema_version !== null ? Number(row.schema_version) : 1,
     // Legacy adapter fields preserved for existing clients.
-    adapter: (row.adapter as string) || undefined,
+    adapter: (row.adapter as string) || (row.provider_id as string) || undefined,
     baseUrl: (row.base_url as string) || '',
     enabled: Boolean(row.enabled),
     // Secrets are write-only: only presence and fingerprint are exposed.

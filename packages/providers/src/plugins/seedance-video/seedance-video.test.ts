@@ -323,3 +323,29 @@ test('validateConfig and validateRequest reject missing credentials and bad inpu
     (err: unknown) => (err as Error).message === 'INVALID_REQUEST',
   )
 })
+
+test('submit maps normalized aspectRatio/audio aliases to provider ratio/generate_audio', async () => {
+  const { context, calls } = createContext(() => jsonResponse(200, { id: 'cgt-alias' }))
+  const request: MediaRequest = {
+    ...baseRequest,
+    extra: { aspectRatio: '9:16', audio: true },
+  }
+  await seedanceVideoPlugin.submit(request, baseConfig, context)
+  const body = JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>
+  assert.equal(body['ratio'], '9:16')
+  assert.equal(body['generate_audio'], true)
+  assert.equal('aspectRatio' in body, false)
+  assert.equal('audio' in body, false)
+})
+
+test('submit keeps explicit provider keys winning over normalized aliases', async () => {
+  const { context, calls } = createContext(() => jsonResponse(200, { id: 'cgt-explicit' }))
+  const request: MediaRequest = {
+    ...baseRequest,
+    extra: { ratio: '16:9', aspectRatio: '9:16', generate_audio: false, audio: true },
+  }
+  await seedanceVideoPlugin.submit(request, baseConfig, context)
+  const body = JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>
+  assert.equal(body['ratio'], '16:9')
+  assert.equal(body['generate_audio'], false)
+})

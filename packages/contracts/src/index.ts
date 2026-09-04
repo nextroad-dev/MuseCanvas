@@ -330,3 +330,34 @@ export const INSUFFICIENT_CREDITS = BillingErrorCode.INSUFFICIENT_CREDITS
 export const GENERATION_PRICE_CHANGED = BillingErrorCode.GENERATION_PRICE_CHANGED
 export const BILLING_STATE_CONFLICT = BillingErrorCode.BILLING_STATE_CONFLICT
 export const INVALID_CREDIT_AMOUNT = BillingErrorCode.INVALID_CREDIT_AMOUNT
+
+// Built-in provider configuration templates. The admin API serves these from
+// the provider registry; the browser admin UI mirrors this shape locally.
+export interface BuiltinProviderTemplateCredential {
+  schemaId: string
+  schemaVersion: number
+  kind: 'api_key' | 'google_service_account'
+  label: string
+  placeholder?: string
+  helpText?: string
+}
+
+export interface BuiltinProviderTemplateModel {
+  id: string
+  name?: string
+}
+
+export interface BuiltinProviderTemplate {
+  key: string
+  pluginId: string
+  pluginVersion: string
+  providerId: string
+  adapter: string
+  displayName: string
+  description?: string
+  modality: 'image' | 'video'
+  baseUrl: string
+  credential: BuiltinProviderTemplateCredential
+  presetIds: string[]
+  models: BuiltinProviderTemplateModel[]
+}

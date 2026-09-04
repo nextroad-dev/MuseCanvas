@@ -5,29 +5,143 @@ import { type Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { capabilitiesFromRow, defaultsFromRow, modelDto, pricingFromRow } from '../../shared/dto'
 import { normalizedProviderBaseUrl, presetById, sanitizeReasoningEffort } from '../../shared/model-helpers'
+import { globalProviderRegistry, MAX_INPUT_IMAGES } from '../../../../../packages/providers/src/index'
+import type { MediaProviderPlugin } from '../../../../../packages/providers/src/index'
+import type { ModelPreset } from '../../admin/model-presets'
 
-// Static plugin catalog. Image plugins are registered in the provider package;
-// video plugins (seedance-video, veo-video) are integrated in parallel and may
-// not be registered yet at runtime, so the exact IDs below are the contract and
-// registry validation is best-effort (deferred dynamic import).
-const KNOWN_PLUGINS: Record<string, { providerId: string; mediaKind: 'image' | 'video' }> = {
-  'openai-image@1.0.0': { providerId: 'openai', mediaKind: 'image' },
-  'seedream-image@1.0.0': { providerId: 'volcengine', mediaKind: 'image' },
-  'seedance-video@1.0.0': { providerId: 'volcengine', mediaKind: 'video' },
-  'veo-video@1.0.0': { providerId: 'google', mediaKind: 'video' },
+// Plugin-first validation. New image configuration targets the hardened active
+// keys (openai-image@1.1.0, seedream-image@1.1.0); exact registered 1.0.0 keys
+// remain accepted so already-pinned historical revisions stay readable.
+// Runtime selection never maps adapter/provider strings to a plugin — the only
+// authority is the static registry plus the manifest modality.
+export const ACTIVE_IMAGE_PLUGIN_VERSION = '1.1.0'
+const IMAGE_PLUGIN_IDS: Record<string, true> = { 'openai-image': true, 'seedream-image': true }
+
+export function validatePluginSelection(
+  pluginId: string,
+  pluginVersion: string,
+  modelKind: string,
+): { ok: true; mediaKind: 'image' | 'video' } | { ok: false; error: 'INVALID_PLUGIN' | 'INVALID_MODALITY' } {
+  if (!globalProviderRegistry.has(pluginId, pluginVersion)) return { ok: false, error: 'INVALID_PLUGIN' }
+  const plugin = globalProviderRegistry.get(pluginId, pluginVersion)
+  const modalities = (plugin.manifest.modalities || []) as string[]
+  if (!modalities.includes(modelKind)) return { ok: false, error: 'INVALID_MODALITY' }
+  return { ok: true, mediaKind: modelKind as 'image' | 'video' }
 }
 
-async function registryKnowsPlugin(pluginId: string, version: string): Promise<boolean | null> {
+// Manifest vendor-model gate for the hardened image keys. An empty model list
+// means the plugin accepts any vendor model ID; a nonempty list is exhaustive.
+export function manifestSupportsVendorModel(
+  manifestModels: { id: string }[] | undefined,
+  vendorModelId: string,
+): boolean {
+  if (!manifestModels || manifestModels.length === 0) return true
+  return manifestModels.some((model) => model.id === vendorModelId)
+}
+
+// Official endpoint hosts for the hardened image keys. Active image
+// configuration must point at these hosts (or leave the base URL empty so the
+// plugin default applies); compatible/custom endpoints cannot use 1.1.0.
+export const IMAGE_PLUGIN_OFFICIAL_HOSTS: Record<string, string> = {
+  'openai-image': 'api.openai.com',
+  'seedream-image': 'ark.cn-beijing.volces.com',
+}
+
+export function imageBaseUrlAllowed(pluginId: string, baseUrl: string | null | undefined): boolean {
+  const official = IMAGE_PLUGIN_OFFICIAL_HOSTS[pluginId]
+  if (!official) return true
+  if (baseUrl === undefined || baseUrl === null || baseUrl === '') return true
   try {
-    const mod = (await import('@musecanvas/providers')) as unknown as {
-      globalProviderRegistry?: { has: (id: string, version: string) => boolean }
-    }
-    if (!mod.globalProviderRegistry) return null
-    return mod.globalProviderRegistry.has(pluginId, version)
+    return new URL(baseUrl).hostname.toLowerCase() === official
   } catch {
-    return null
+    return false
   }
 }
+
+export type ImageModelContract = {
+  vendorModelId: string
+  sizes: string[]
+  qualityOptions: string[]
+  maxCount: number
+  maxInputImages: number
+}
+
+// Validates persisted image model fields against the selected plugin contract
+// by exercising the plugin's own validateRequest: each configured size and
+// quality must be accepted, maxCount must be a valid request count, and
+// maxInputImages must fit the manifest per-model cap (or the shared cap).
+export async function validateImageModelContract(
+  plugin: Pick<MediaProviderPlugin, 'validateRequest' | 'manifest'>,
+  contract: ImageModelContract,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const check = async (extra: { size?: string; quality?: string; count?: number }): Promise<void> => {
+    await plugin.validateRequest({
+      modality: 'image',
+      vendorModelId: contract.vendorModelId,
+      prompt: 'MuseCanvas model contract check',
+      ...extra,
+    }, {})
+  }
+  try {
+    await check({})
+    for (const size of contract.sizes) await check({ size })
+    for (const quality of contract.qualityOptions) await check({ quality })
+    await check({ count: contract.maxCount })
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : '模型配置与插件契约不符' }
+  }
+  // Per-model manifest cap wins when present (e.g. dall-e-3 supports no input
+  // images); otherwise the shared global input-image cap applies.
+  const entry = plugin.manifest.models?.find((model) => model.id === contract.vendorModelId) as
+    | { maxInputImages?: unknown }
+    | undefined
+  const configuredCap = entry?.maxInputImages
+  const cap = Number.isSafeInteger(configuredCap) && (configuredCap as number) >= 0
+    ? Math.min(configuredCap as number, MAX_INPUT_IMAGES)
+    : MAX_INPUT_IMAGES
+  if (!Number.isInteger(contract.maxInputImages) || contract.maxInputImages < 0 || contract.maxInputImages > cap) {
+    return { ok: false, message: `maxInputImages must be an integer between 0 and ${cap}` }
+  }
+  return { ok: true }
+}
+// Canonical image capabilities derived solely from validated top-level
+// fields. Active image writes persist exactly this shape — never caller
+// supplied input.capabilities.
+export function buildCanonicalImageCapabilities(input: {
+  sizes: string[]
+  qualityOptions: string[]
+  maxCount: number
+  maxInputImages: number
+}): Record<string, unknown> {
+  return {
+    modes: input.maxInputImages > 0 ? ['text_to_image', 'image_to_image'] : ['text_to_image'],
+    parameters: [
+      { type: 'enum', name: 'size', label: '尺寸', options: input.sizes },
+      ...(input.qualityOptions.length > 0
+        ? [{ type: 'enum', name: 'quality', label: '质量', options: input.qualityOptions }]
+        : []),
+      { type: 'integer', name: 'count', label: '数量', min: 1, max: input.maxCount, defaultValue: 1 },
+    ],
+    inputSlots: input.maxInputImages > 0
+      ? [{ role: 'reference_image', required: false, minCount: 0, maxCount: input.maxInputImages, allowedMediaKinds: ['image'] }]
+      : [],
+    maxCount: input.maxCount,
+    supportedMediaKinds: ['image'],
+    mediaKind: 'image',
+  }
+}
+
+// True when a caller-supplied capabilities/defaults override carries no
+// content (absent, null, empty object/array/string). Anything else must be
+// rejected on active image writes rather than persisted or silently dropped.
+export function isEmptyInputOverride(value: unknown): boolean {
+  if (value === undefined || value === null) return true
+  if (typeof value === 'string') return value.trim().length === 0
+  if (Array.isArray(value)) return value.length === 0
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length === 0
+  return false
+}
+
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
@@ -44,6 +158,87 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) return value as Record<string, unknown>
   return null
 }
+function configuredPluginIdentity(row: Record<string, unknown>): {
+  pluginId?: string
+  pluginVersion?: string
+  hasIdentityField: boolean
+} {
+  let configured: Record<string, unknown> = {}
+  if (typeof row.configured_fields === 'object' && row.configured_fields !== null) {
+    configured = row.configured_fields as Record<string, unknown>
+  } else if (typeof row.configured_fields === 'string') {
+    try {
+      const parsed = JSON.parse(row.configured_fields) as unknown
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        configured = parsed as Record<string, unknown>
+      }
+    } catch {
+      configured = {}
+    }
+  }
+  const pluginId =
+    typeof configured.pluginId === 'string' && configured.pluginId.trim()
+      ? configured.pluginId.trim()
+      : undefined
+  const pluginVersion =
+    typeof configured.pluginVersion === 'string' && configured.pluginVersion.trim()
+      ? configured.pluginVersion.trim()
+      : undefined
+  return {
+    pluginId,
+    pluginVersion,
+    hasIdentityField: pluginId !== undefined || pluginVersion !== undefined,
+  }
+}
+
+export function providerCredentialMatchesPluginTarget(
+  credential: Record<string, unknown>,
+  target: { providerId: string; pluginId: string; pluginVersion: string },
+): boolean {
+  const identity = configuredPluginIdentity(credential)
+  if (identity.hasIdentityField) {
+    return identity.pluginId === target.pluginId && identity.pluginVersion === target.pluginVersion
+  }
+  return credential.provider_id === target.providerId
+}
+
+export function presetMatchesPersistedModel(
+  preset: ModelPreset,
+  model: Record<string, unknown>,
+): boolean {
+  const pluginId = typeof model.plugin_id === 'string' && model.plugin_id ? model.plugin_id : undefined
+  const pluginVersion =
+    typeof model.plugin_version === 'string' && model.plugin_version ? model.plugin_version : undefined
+  if (!pluginId && !pluginVersion) return true
+  return (
+    'pluginId' in preset &&
+    preset.pluginId === pluginId &&
+    preset.pluginVersion === pluginVersion &&
+    preset.vendorModelId === model.vendor_model_id
+  )
+}
+
+export function videoPresetRevisionContract(
+  preset: ModelPreset | null | undefined,
+): {
+  capabilities: Record<string, unknown>
+  pricing: Record<string, unknown>
+  defaults: Record<string, unknown>
+} | null {
+  if (!preset || preset.modelKind !== 'video') return null
+  return {
+    capabilities: {
+      modes: preset.modes,
+      parameters: preset.parameters,
+      inputSlots: preset.inputSlots,
+      maxCount: preset.maxCount,
+      supportedMediaKinds: ['video'],
+    },
+    pricing: preset.pricing,
+    defaults: preset.defaults,
+  }
+}
+
 
 function buildPluginCapabilities(
   pluginId: string,
@@ -135,13 +330,18 @@ async function snapshotRevisionForRow(
   client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
   row: Record<string, unknown>,
   actorId: string,
+  contract?: {
+    capabilities: Record<string, unknown>
+    pricing: Record<string, unknown>
+    defaults: Record<string, unknown>
+  } | null,
 ): Promise<Record<string, unknown>> {
   const providerId = (row.provider_id as string) || 'legacy'
   const pluginId = (row.plugin_id as string) || 'legacy-image'
   const pluginVersion = (row.plugin_version as string) || '1.0.0'
-  const capabilities = capabilitiesFromRow(row) as unknown as Record<string, unknown>
-  const pricing = pricingFromRow(row)
-  const defaults = { ...(defaultsFromRow(row)), ...(asRecord(row.defaults) || {}) }
+  const capabilities = contract?.capabilities ?? capabilitiesFromRow(row) as unknown as Record<string, unknown>
+  const pricing = contract?.pricing ?? pricingFromRow(row)
+  const defaults = contract?.defaults ?? { ...(defaultsFromRow(row)), ...(asRecord(row.defaults) || {}) }
   const digest = snapshotDigest({ modelId: row.id, providerId, pluginId, pluginVersion, capabilities, pricing, defaults })
   const existing = await client.query(
     'SELECT id FROM model_config_revisions WHERE model_id=$1 AND snapshot_digest=$2 ORDER BY revision DESC LIMIT 1',
@@ -192,22 +392,39 @@ export async function upsertModel(
   if (id && !existing) return fail('NOT_FOUND', '模型不存在', 404)
 
   // Plugin-driven path: explicit provider/plugin identity (image or video).
-  // Accepts providerId/pluginId/pluginVersion plus capability/pricing/defaults JSON,
-  // preserving legacy adapter fields for existing clients.
+  // The static registry plus the manifest modality is the only authority:
+  // no adapter/provider-string mapping. New image configuration targets the
+  // hardened 1.1.0 keys and is validated against the plugin contract
+  // (vendor model, sizes, qualities, counts, input images, endpoint host).
+  // Exact 1.0.0 image keys are accepted only when updating an existing row
+  // already pinned to that exact key; all other image writes use 1.1.0.
   if (typeof input.pluginId === 'string' && input.pluginId.trim()) {
     const pluginId = input.pluginId.trim()
     const pluginVersion = typeof input.pluginVersion === 'string' && input.pluginVersion.trim()
       ? input.pluginVersion.trim()
-      : '1.0.0'
-    const known = KNOWN_PLUGINS[`${pluginId}@${pluginVersion}`]
-    const registryKnown = await registryKnowsPlugin(pluginId, pluginVersion)
-    if (!known && registryKnown !== true) return fail('INVALID_PLUGIN', '供应商插件不存在或版本不受支持')
-    const mediaKind = (typeof input.modelKind === 'string' && ['image', 'video'].includes(input.modelKind)
+      : (IMAGE_PLUGIN_IDS[pluginId] ? ACTIVE_IMAGE_PLUGIN_VERSION : '1.0.0')
+    const requestedKind = typeof input.modelKind === 'string' && ['image', 'video'].includes(input.modelKind)
       ? input.modelKind
-      : known?.mediaKind || existing?.model_kind || 'video') as 'image' | 'video'
+      : (existing?.model_kind as string) || null
+    if (!globalProviderRegistry.has(pluginId, pluginVersion)) {
+      return fail('INVALID_PLUGIN', '供应商插件不存在或版本不受支持')
+    }
+    const provisionalKind = requestedKind || globalProviderRegistry.get(pluginId, pluginVersion).manifest.modalities[0]
+    if (!provisionalKind) return fail('INVALID_PLUGIN', '供应商插件不存在或版本不受支持')
+    const selection = validatePluginSelection(pluginId, pluginVersion, provisionalKind)
+    if (!selection.ok) {
+      return selection.error === 'INVALID_MODALITY'
+        ? fail('INVALID_PLUGIN', '供应商插件不支持该媒体类型')
+        : fail('INVALID_PLUGIN', '供应商插件不存在或版本不受支持')
+    }
+    const mediaKind = selection.mediaKind
+    if (mediaKind === 'image' && pluginVersion !== ACTIVE_IMAGE_PLUGIN_VERSION) {
+      const pinned = id && existing?.plugin_id === pluginId && existing?.plugin_version === pluginVersion
+      if (!pinned) return fail('INVALID_INPUT', '新的图片模型配置必须使用插件版本 1.1.0')
+    }
     const providerId = (typeof input.providerId === 'string' && input.providerId.trim()
       ? input.providerId.trim()
-      : known?.providerId || existing?.provider_id || null) as string | null
+      : existing?.provider_id || null) as string | null
     if (!providerId) return fail('INVALID_INPUT', '供应商 ID（providerId）必填')
     const displayName = (typeof input.displayName === 'string' && input.displayName.trim()
       ? input.displayName.trim()
@@ -217,15 +434,46 @@ export async function upsertModel(
       ? input.vendorModelId.trim()
       : existing?.vendor_model_id) as string | undefined
     if (!vendorModelId) return fail('INVALID_INPUT', '供应商模型 ID（vendorModelId）必填')
+    // Hardened image keys carry an exhaustive manifest model list: unknown or
+    // custom vendor IDs are rejected here so they never reach strict plugin
+    // validation. Historical 1.0.0 revisions stay permissive.
+    if (mediaKind === 'image' && pluginVersion === ACTIVE_IMAGE_PLUGIN_VERSION) {
+      const supported = manifestSupportsVendorModel(
+        globalProviderRegistry.get(pluginId, pluginVersion).manifest.models,
+        vendorModelId,
+      )
+      if (!supported) return fail('INVALID_INPUT', '供应商模型 ID（vendorModelId）不受该插件版本支持')
+    }
     const baseUrl = input.baseUrl !== undefined
       ? normalizedProviderBaseUrl(input.baseUrl)
       : (existing?.base_url ?? undefined)
     if (baseUrl === null) return fail('INVALID_BASE_URL', 'Base URL 必须是安全的 HTTPS 地址')
+    if (mediaKind === 'image' && pluginVersion === ACTIVE_IMAGE_PLUGIN_VERSION) {
+      const effectiveBase = (baseUrl === undefined ? existing?.base_url : baseUrl) as string | null | undefined
+      if (!imageBaseUrlAllowed(pluginId, effectiveBase)) {
+        return fail('INVALID_BASE_URL', '图片插件 1.1.0 仅支持官方服务端点')
+      }
+    }
     const credId = input.providerCredentialId
     const effectiveCredId = credId === undefined ? existing?.provider_credential_id : credId
     if (typeof effectiveCredId === 'string' && effectiveCredId) {
-      const cred = await db().query('SELECT id FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL', [effectiveCredId])
+      const cred = await db().query(
+        'SELECT id,base_url,provider_id,configured_fields FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL',
+        [effectiveCredId],
+      )
       if (!cred.rows[0]) return fail('INVALID_INPUT', '供应商凭据不存在')
+      if (!providerCredentialMatchesPluginTarget(cred.rows[0], { providerId, pluginId, pluginVersion })) {
+        return fail('INVALID_INPUT', '供应商凭据与模型插件不匹配')
+      }
+      // A credential base URL overrides the model base URL at runtime, so a
+      // custom-host credential must be rejected for hardened image keys even
+      // when the model itself points at the official endpoint.
+      if (mediaKind === 'image' && pluginVersion === ACTIVE_IMAGE_PLUGIN_VERSION) {
+        const credBase = cred.rows[0]?.base_url as string | null | undefined
+        if (!imageBaseUrlAllowed(pluginId, credBase)) {
+          return fail('INVALID_BASE_URL', '该供应商凭据的 Base URL 非官方服务端点，不能用于图片插件 1.1.0')
+        }
+      }
     }
     const concurrencyLimit = input.concurrencyLimit === undefined
       ? Number(existing?.concurrency_limit ?? 1)
@@ -243,8 +491,8 @@ export async function upsertModel(
     } catch {
       return fail('INVALID_INPUT', '模型计费配置无效')
     }
-    const capabilities = buildPluginCapabilities(pluginId, mediaKind, input, existing)
-    const defaults = { ...(asRecord(input.defaults) || {}) }
+    let capabilities: Record<string, unknown> = buildPluginCapabilities(pluginId, mediaKind, input, existing)
+    let defaults: Record<string, unknown> = { ...(asRecord(input.defaults) || {}) }
     const watermark = typeof input.watermark === 'boolean' ? input.watermark : Boolean(existing?.watermark ?? false)
     const enabled = typeof input.enabled === 'boolean' ? input.enabled : Boolean(existing?.enabled ?? false)
     const sizes = mediaKind === 'image'
@@ -262,6 +510,47 @@ export async function upsertModel(
       : Number(existing?.max_input_images ?? (mediaKind === 'video' ? 4 : 0))
     if (!Number.isInteger(maxInputImages) || maxInputImages < 0 || maxInputImages > 32) {
       return fail('INVALID_INPUT', '模型输入配置无效')
+    }
+    if (mediaKind === 'image' && pluginVersion === ACTIVE_IMAGE_PLUGIN_VERSION) {
+      // Non-empty caller overrides are rejected: the persisted snapshot is
+      // always the canonical contract below, and omitted fields stay fine.
+      if (!isEmptyInputOverride(input.capabilities)) {
+        return fail('INVALID_INPUT', '图片插件 capabilities 由模型配置派生，不接受自定义覆盖')
+      }
+      if (!isEmptyInputOverride(input.defaults)) {
+        return fail('INVALID_INPUT', '图片插件 defaults 暂不支持自定义')
+      }
+      const sizeList = ((): string[] => {
+        try {
+          const parsed = JSON.parse(sizes as string) as unknown
+          return Array.isArray(parsed) ? parsed.map(String) : []
+        } catch {
+          return []
+        }
+      })()
+      const qualityList = ((): string[] => {
+        try {
+          const parsed = JSON.parse(qualityOptions) as unknown
+          return Array.isArray(parsed) ? parsed.map(String) : []
+        } catch {
+          return []
+        }
+      })()
+      const contract = await validateImageModelContract(globalProviderRegistry.get(pluginId, pluginVersion), {
+        vendorModelId,
+        sizes: sizeList,
+        qualityOptions: qualityList,
+        maxCount,
+        maxInputImages,
+      })
+      if (!contract.ok) return fail('INVALID_INPUT', contract.message)
+      capabilities = buildCanonicalImageCapabilities({
+        sizes: sizeList,
+        qualityOptions: qualityList,
+        maxCount,
+        maxInputImages,
+      })
+      defaults = {}
     }
     const row = await transaction(async (client) => {
       let record: Record<string, unknown>
@@ -323,10 +612,11 @@ export async function upsertModel(
   ]
   if (forbiddenManualFields.some((field) => input[field] !== undefined))
     return fail('INVALID_INPUT', '模型参数只能通过预设选择')
+  const storedPreset = existing?.preset_id ? presetById(existing.preset_id) : null
   const preset =
     input.presetId === undefined
-      ? existing?.preset_id
-        ? presetById(existing.preset_id)
+      ? storedPreset && presetMatchesPersistedModel(storedPreset, existing)
+        ? storedPreset
         : null
       : presetById(input.presetId)
   if (!id && !preset) return fail('INVALID_PRESET', '请选择模型预设')
@@ -338,8 +628,22 @@ export async function upsertModel(
   if (targetKind === 'language' && (typeof effectiveCredId !== 'string' || !effectiveCredId))
     return fail('LANGUAGE_MODEL_CONFIG_INVALID', '语言模型必须选择供应商凭据')
   if (typeof effectiveCredId === 'string' && effectiveCredId) {
-    const cred = await db().query('SELECT id FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL', [effectiveCredId])
+    const cred = await db().query(
+      'SELECT id,provider_id,configured_fields FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL',
+      [effectiveCredId],
+    )
     if (!cred.rows[0]) return fail('INVALID_INPUT', '供应商凭据不存在')
+    if (
+      targetPreset &&
+      'pluginId' in targetPreset &&
+      !providerCredentialMatchesPluginTarget(cred.rows[0], {
+        providerId: targetPreset.providerId,
+        pluginId: targetPreset.pluginId,
+        pluginVersion: targetPreset.pluginVersion,
+      })
+    ) {
+      return fail('INVALID_INPUT', '供应商凭据与模型插件不匹配')
+    }
   }
   if (targetPreset && 'adapter' in targetPreset && !['openai', 'seedream', 'anthropic'].includes(String(targetPreset.adapter)))
     return fail('INVALID_INPUT', '模型配置无效')
@@ -462,7 +766,12 @@ export async function upsertModel(
   if (!result.rows[0]) return fail('NOT_FOUND', '模型不存在', 404)
   await db().query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5)', [actor.id, id ? 'model.update' : 'model.create', 'model', result.rows[0].id, {}])
   try {
-    const withRevision = await snapshotRevisionForRow(db(), result.rows[0], actor.id)
+    const withRevision = await snapshotRevisionForRow(
+      db(),
+      result.rows[0],
+      actor.id,
+      videoPresetRevisionContract(targetPreset),
+    )
     return ok(modelDto(withRevision))
   } catch {
     return ok(modelDto(result.rows[0]))

@@ -369,6 +369,16 @@ export interface AdminModel extends ModelConfig {
 
 export type ProviderTestStatus = 'success' | 'failed' | 'not_tested'
 
+export interface ProviderCredentialConfiguredFields {
+  pluginId?: string
+  pluginVersion?: string
+  baseUrl?: string | null
+  hasApiKey?: boolean
+  apiKeyFingerprint?: string
+  legacyFormat?: boolean
+  [key: string]: unknown
+}
+
 export interface ProviderCredential {
   id: string
   displayName: string
@@ -382,6 +392,7 @@ export interface ProviderCredential {
   hasCredential?: boolean
   keyFingerprint?: string
   credentialFingerprint?: string
+  configuredFields?: ProviderCredentialConfiguredFields
   lastTestStatus: ProviderTestStatus
   lastTestErrorCode?: string
   lastTestedAt?: string
@@ -392,9 +403,13 @@ export interface ProviderCredentialInput {
   displayName?: string
   adapter?: ModelAdapter
   providerId?: string
+  pluginId?: string
+  pluginVersion?: string
   schemaId?: string
   schemaVersion?: number | string
   baseUrl?: string
+  /** Real credential payload (write-only): API key string or service-account object. */
+  credential?: string | Record<string, unknown>
   apiKey?: string
   /** Google service-account JSON (write-only) for video providers. */
   serviceAccountJson?: string
@@ -404,6 +419,37 @@ export interface ProviderCredentialInput {
   /** Generic credential JSON payload (write-only) for plugin providers. */
   credentialJson?: string
   enabled?: boolean
+}
+
+export type BuiltinProviderTemplateCredentialKind = 'api_key' | 'google_service_account'
+
+export interface BuiltinProviderTemplateCredential {
+  schemaId: string
+  schemaVersion: number
+  kind: BuiltinProviderTemplateCredentialKind
+  label: string
+  placeholder?: string
+  helpText?: string
+}
+
+export interface BuiltinProviderTemplateModel {
+  id: string
+  name?: string
+}
+
+export interface BuiltinProviderTemplate {
+  key: string
+  pluginId: string
+  pluginVersion: string
+  providerId: string
+  adapter: string
+  displayName: string
+  description?: string
+  modality: 'image' | 'video'
+  baseUrl: string
+  credential: BuiltinProviderTemplateCredential
+  presetIds: string[]
+  models: BuiltinProviderTemplateModel[]
 }
 
 export interface OAuthProviderInfo {
@@ -440,18 +486,28 @@ export interface ModelPreset {
   id: string
   modelKind: ModelKind
   displayName: string
-  adapter: ModelAdapter
+  adapter?: ModelAdapter
+  providerId?: string
+  pluginId?: string
+  pluginVersion?: string
   vendorModelId: string
   baseUrl: string
   sizes?: string[]
   qualityOptions?: Quality[]
   maxCount?: number
+  maxInputImages?: number
   languageProtocol?: LanguageProtocol
   maxOutputTokens?: number
   temperature?: number
   reasoningEffort?: ReasoningEffort
   concurrencyLimit: number
   watermark?: boolean
+  modes?: GenerationMode[]
+  parameters?: ParameterDescriptor[]
+  inputSlots?: InputSlotDescriptor[]
+  capabilities?: ModelCapabilities
+  pricing?: ModelPricing
+  defaults?: Record<string, unknown>
 }
 
 export interface AdminJob {

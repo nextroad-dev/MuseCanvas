@@ -6,6 +6,10 @@ import { Github, Copy } from 'lucide-vue-next'
 import { toast } from '@/shared/composables/useToast'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
 import GoogleIcon from '@/shared/components/ui/GoogleIcon.vue'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import TextInput from '@/shared/components/ui/TextInput.vue'
+import Field from '@/shared/components/ui/Field.vue'
+import Badge from '@/shared/components/ui/Badge.vue'
 import type { AdminOAuthProvider } from '@/shared/types'
 
 const admin = useAdminStore()
@@ -99,63 +103,57 @@ function copyRedirectUri(uri: string) {
               <p class="mt-1 text-xs text-muted-foreground">{{ sourceLabel(provider.source) }}</p>
             </div>
           </div>
-          <span
-            :class="[
-              'rounded-full px-2 py-0.5 text-xs font-medium',
-              provider.enabled ? 'bg-success-soft text-success' : 'bg-neutral-100 text-neutral-500',
-            ]"
-          >
+          <Badge :tone="provider.enabled ? 'success' : 'neutral'">
             {{ provider.enabled ? '可用' : '未启用' }}
-          </span>
+          </Badge>
         </div>
 
         <div v-if="forms[provider.provider]" class="space-y-3">
-          <div>
-            <label class="mb-1 block text-xs font-medium text-foreground">回调地址</label>
+          <Field label="回调地址">
             <div class="flex gap-2">
-              <input
-                :value="provider.redirectUri"
+              <TextInput
+                :model-value="provider.redirectUri"
+                type="text"
                 readonly
-                class="h-9 flex-1 rounded-[var(--radius-control)] border border-border bg-surface-subtle px-3 text-xs text-muted-foreground focus:outline-none"
+                class="flex-1 text-xs"
               />
-              <button
-                class="inline-flex h-9 items-center rounded-[var(--radius-control)] border border-border px-3 text-xs text-foreground hover:bg-surface-subtle"
+              <BaseButton
+                variant="secondary"
                 @click="copyRedirectUri(provider.redirectUri)"
+                aria-label="复制 Redirect URI"
               >
-                <Copy class="h-4 w-4" />
-              </button>
+                <template #icon>
+                  <Copy class="h-4 w-4" />
+                </template>
+              </BaseButton>
             </div>
-          </div>
-          <div>
-            <label class="mb-1 block text-xs font-medium text-foreground">Client ID</label>
-            <input
+          </Field>
+          <Field label="Client ID">
+            <TextInput
               v-model="forms[provider.provider].clientId"
               type="text"
               autocomplete="off"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
             />
-          </div>
-          <div>
-            <label class="mb-1 block text-xs font-medium text-foreground">Client Secret</label>
-            <input
+          </Field>
+          <Field label="Client Secret">
+            <TextInput
               v-model="forms[provider.provider].clientSecret"
               type="password"
               autocomplete="off"
               :placeholder="provider.hasClientSecret ? '已配置（留空保持不变）' : '输入 Client Secret'"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
             />
-          </div>
+          </Field>
           <div class="flex items-center gap-2">
             <PillToggle v-model="forms[provider.provider].enabled" />
             <span class="text-xs font-medium text-foreground">启用该登录方式</span>
           </div>
-          <button
+          <BaseButton
             :disabled="saving === provider.provider"
-            class="inline-flex h-9 items-center rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-50"
+            :loading="saving === provider.provider"
             @click="saveProvider(provider)"
           >
             {{ saving === provider.provider ? '保存中...' : '保存配置' }}
-          </button>
+          </BaseButton>
         </div>
       </div>
     </div>

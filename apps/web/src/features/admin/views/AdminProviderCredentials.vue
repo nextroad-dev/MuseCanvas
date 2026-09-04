@@ -8,6 +8,11 @@ import BaseDropdown from '@/shared/components/ui/BaseDropdown.vue'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
 import ConfirmDialog from '@/shared/components/ui/ConfirmDialog.vue'
 import AppModal from '@/shared/components/ui/AppModal.vue'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import TextInput from '@/shared/components/ui/TextInput.vue'
+import Textarea from '@/shared/components/ui/Textarea.vue'
+import Field from '@/shared/components/ui/Field.vue'
+import Badge from '@/shared/components/ui/Badge.vue'
 import { Plug } from 'lucide-vue-next'
 import { toast } from '@/shared/composables/useToast'
 import type { ProviderCredential, ProviderCredentialInput, ModelAdapter } from '@/shared/types'
@@ -26,8 +31,13 @@ const testingId = ref<string | null>(null)
 const form = ref({
   displayName: '',
   adapter: 'openai' as ModelAdapter,
+  providerId: '',
   baseUrl: '',
   apiKey: '',
+  serviceAccountJson: '',
+  accessKeyId: '',
+  secretAccessKey: '',
+  credentialJson: '',
   enabled: true,
 })
 
@@ -35,7 +45,13 @@ const adapterOptions = [
   { value: 'openai', label: 'OpenAI 兼容' },
   { value: 'seedream', label: 'Seedream (火山引擎)' },
   { value: 'anthropic', label: 'Anthropic' },
+  { value: 'veo', label: 'Veo (Google 视频)' },
+  { value: 'volcengine', label: '火山引擎 (Seedance 视频)' },
+  { value: 'google', label: 'Google (通用)' },
 ]
+
+const isGoogleAdapter = computed(() => form.value.adapter === 'veo' || form.value.adapter === 'google')
+const isVolcAdapter = computed(() => form.value.adapter === 'volcengine' || form.value.adapter === 'seedream')
 
 const TEST_ERROR_LABELS: Record<string, string> = {
   CONNECTIVITY_FAILED: '无法连接供应商，请检查 API Key 与 Base URL',
@@ -61,7 +77,7 @@ onMounted(async () => {
 function openCreate() {
   editing.value = null
   formError.value = ''
-  form.value = { displayName: '', adapter: 'openai', baseUrl: '', apiKey: '', enabled: true }
+  form.value = { displayName: '', adapter: 'openai', providerId: '', baseUrl: '', apiKey: '', serviceAccountJson: '', accessKeyId: '', secretAccessKey: '', credentialJson: '', enabled: true }
   showDialog.value = true
 }
 
@@ -71,8 +87,13 @@ function openEdit(cred: ProviderCredential) {
   form.value = {
     displayName: cred.displayName,
     adapter: cred.adapter,
+    providerId: cred.providerId || '',
     baseUrl: cred.baseUrl || '',
     apiKey: '',
+    serviceAccountJson: '',
+    accessKeyId: '',
+    secretAccessKey: '',
+    credentialJson: '',
     enabled: cred.enabled,
   }
   showDialog.value = true
@@ -90,8 +111,16 @@ async function handleSave() {
     baseUrl: form.value.baseUrl.trim(),
     enabled: form.value.enabled,
   }
+  if (form.value.providerId.trim()) payload.providerId = form.value.providerId.trim()
   // API Key is write-only: only send when the admin typed a new one (rotation).
   if (form.value.apiKey.trim()) payload.apiKey = form.value.apiKey.trim()
+  // Google service-account JSON (write-only) for Veo/Google video providers.
+  if (form.value.serviceAccountJson.trim()) payload.serviceAccountJson = form.value.serviceAccountJson
+  // Volcengine AK/SK bundle (write-only) for Seedance/volcengine providers.
+  if (form.value.accessKeyId.trim()) payload.accessKeyId = form.value.accessKeyId.trim()
+  if (form.value.secretAccessKey.trim()) payload.secretAccessKey = form.value.secretAccessKey.trim()
+  // Generic plugin credential JSON (write-only).
+  if (form.value.credentialJson.trim()) payload.credentialJson = form.value.credentialJson
 
   const res = editing.value
     ? await admin.updateProviderCredential(editing.value.id, payload)
@@ -137,7 +166,13 @@ function fmtDate(iso?: string) {
 
 const testStatusLabel: Record<string, string> = { success: '通过', failed: '失败', not_tested: '未测试' }
 function adapterLabel(adapter: ModelAdapter) {
-  return adapter === 'openai' ? 'OpenAI 兼容' : adapter === 'anthropic' ? 'Anthropic' : 'Seedream'
+  if (adapter === 'openai') return 'OpenAI 兼容'
+  if (adapter === 'anthropic') return 'Anthropic'
+  if (adapter === 'seedream') return 'Seedream'
+  if (adapter === 'veo') return 'Veo (Google 视频)'
+  if (adapter === 'volcengine') return '火山引擎视频'
+  if (adapter === 'google') return 'Google'
+  return String(adapter)
 }
 
 const columns: Column<ProviderCredential>[] = [
@@ -156,15 +191,12 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
   <div class="space-y-6">
     <PageHeader
       title="供应商凭据"
-      description="配置生图供应商的 API Key 与 Base URL，密钥仅写入、不可回读。"
+      description="配置图像与视频供应商的密钥（API Key / Google 服务账号 JSON / 火山引擎 AK·SK），密钥仅写入、不可回读。"
     >
       <template #actions>
-        <button
-          class="inline-flex h-8 items-center rounded-[var(--radius-control)] bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-          @click="openCreate"
-        >
+        <BaseButton size="sm" @click="openCreate">
           添加凭据
-        </button>
+        </BaseButton>
       </template>
     </PageHeader>
 
@@ -172,7 +204,6 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
     <div v-if="loading" class="py-12 text-center text-xs text-muted-foreground">
       加载中…
     </div>
-
     <!-- Load error -->
     <div v-else-if="loadError" class="py-8 text-center">
       <p class="text-xs text-danger">{{ loadError }}</p>
@@ -195,27 +226,20 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
       empty-text="暂无供应商凭据"
     >
       <template #cell-hasApiKey="{ row }">
-        <span v-if="row.hasApiKey" class="inline-flex items-center gap-1.5 text-xs text-foreground">
+        <span v-if="row.hasApiKey || row.hasCredential" class="inline-flex items-center gap-1.5 text-xs text-foreground">
           <span class="inline-block h-1.5 w-1.5 rounded-full bg-success" />
-          已配置<span v-if="row.keyFingerprint" class="font-mono text-muted-foreground">·{{ row.keyFingerprint }}</span>
+          已配置<span v-if="row.keyFingerprint || row.credentialFingerprint" class="font-mono text-muted-foreground">·{{ row.keyFingerprint || row.credentialFingerprint }}</span>
         </span>
         <span v-else class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span class="inline-block h-1.5 w-1.5 rounded-full bg-neutral-300" />
+          <span class="inline-block h-1.5 w-1.5 rounded-full bg-border" />
           未配置
         </span>
       </template>
 
       <template #cell-lastTestStatus="{ row }">
-        <span
-          :class="[
-            'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-            row.lastTestStatus === 'success' ? 'bg-success-soft text-success'
-              : row.lastTestStatus === 'failed' ? 'bg-danger-soft text-danger'
-              : 'bg-neutral-100 text-neutral-500',
-          ]"
-        >
+        <Badge :tone="row.lastTestStatus === 'success' ? 'success' : row.lastTestStatus === 'failed' ? 'danger' : 'neutral'">
           {{ testStatusLabel[row.lastTestStatus] || row.lastTestStatus }}
-        </span>
+        </Badge>
         <span class="ml-2 text-xs text-muted-foreground">{{ fmtDate(row.lastTestedAt) }}</span>
       </template>
 
@@ -240,40 +264,67 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
 
     <AppModal v-model:open="showDialog" :title="editing ? '编辑凭据' : '添加凭据'">
       <div class="space-y-3">
-        <div>
-          <label class="mb-1 block text-xs font-medium text-foreground">凭据名称</label>
-          <input
+        <Field label="凭据名称">
+          <TextInput
             v-model="form.displayName"
             type="text"
             placeholder="例如：OpenAI 兼容主账号"
-            class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
-        </div>
+        </Field>
         <div>
           <label class="mb-1 block text-xs font-medium text-foreground">供应商类型</label>
           <BaseDropdown v-model="form.adapter" :options="adapterOptions" :disabled="!!editing" />
           <p v-if="editing" class="mt-1 text-xs text-muted-foreground">供应商类型创建后不可修改。</p>
         </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-foreground">API Base URL</label>
-          <input
+        <Field label="供应商 ID（可选）">
+          <TextInput
+            v-model="form.providerId"
+            type="text"
+            placeholder="例如：veo / seedance，留空由服务端按类型推断"
+          />
+        </Field>
+        <Field label="API Base URL" hint="必须是安全的 HTTPS 地址；留空使用供应商默认地址。">
+          <TextInput
             v-model="form.baseUrl"
             type="url"
-            :placeholder="form.adapter === 'openai' ? 'https://api.openai.com' : form.adapter === 'anthropic' ? 'https://api.anthropic.com' : 'https://ark.cn-beijing.volces.com'"
-            class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            :placeholder="form.adapter === 'openai' ? 'https://api.openai.com' : form.adapter === 'anthropic' ? 'https://api.anthropic.com' : isGoogleAdapter ? 'https://generativelanguage.googleapis.com' : 'https://ark.cn-beijing.volces.com'"
           />
-          <p class="mt-1 text-xs text-muted-foreground">必须是安全的 HTTPS 地址；留空使用供应商默认地址。</p>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-foreground">API Key</label>
-          <input
+        </Field>
+        <Field v-if="!isGoogleAdapter" label="API Key" hint="密钥仅加密写入，保存后不可回读；填写新值即轮换。">
+          <TextInput
             v-model="form.apiKey"
             type="password"
             autocomplete="off"
             :placeholder="editing?.hasApiKey ? '已配置（留空保持不变）' : '输入 API Key'"
-            class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
-          <p class="mt-1 text-xs text-muted-foreground">密钥仅加密写入，保存后不可回读；填写新值即轮换。</p>
+        </Field>
+        <Field v-if="isGoogleAdapter" label="Google 服务账号 JSON（写入后不可回读）" hint="Veo / Google 视频凭据使用服务账号 JSON；留空表示保持现有配置不变。">
+          <Textarea
+            v-model="form.serviceAccountJson"
+            :rows="5"
+            placeholder='{"type": "service_account", "project_id": "...", "private_key": "...", "client_email": "..."}'
+            spellcheck="false"
+            class="font-mono text-xs"
+          />
+        </Field>
+        <div v-if="isVolcAdapter" class="grid gap-3 md:grid-cols-2">
+          <Field label="Access Key ID">
+            <TextInput
+              v-model="form.accessKeyId"
+              type="text"
+              autocomplete="off"
+              placeholder="火山引擎 AK"
+            />
+          </Field>
+          <Field label="Secret Access Key">
+            <TextInput
+              v-model="form.secretAccessKey"
+              type="password"
+              autocomplete="off"
+              placeholder="火山引擎 SK（留空保持不变）"
+            />
+          </Field>
+          <p class="text-xs text-muted-foreground md:col-span-2">AK/SK 仅加密写入，保存后不可回读；填写新值即轮换。</p>
         </div>
         <div class="flex items-center gap-2">
           <PillToggle v-model="form.enabled" />
@@ -282,19 +333,12 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
         <div v-if="formError" class="text-xs text-danger">{{ formError }}</div>
       </div>
       <template #footer="{ close }">
-        <button
-          class="inline-flex h-9 items-center rounded-[var(--radius-control)] border border-border px-4 text-sm font-medium text-foreground hover:bg-surface-subtle"
-          @click="close"
-        >
+        <BaseButton variant="secondary" @click="close">
           取消
-        </button>
-        <button
-          :disabled="saving || !form.displayName.trim()"
-          class="inline-flex h-9 items-center rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white hover:bg-primary-hover disabled:opacity-50"
-          @click="handleSave"
-        >
+        </BaseButton>
+        <BaseButton variant="primary" :disabled="saving || !form.displayName.trim()" :loading="saving" @click="handleSave">
           {{ saving ? '保存中…' : editing ? '保存' : '添加' }}
-        </button>
+        </BaseButton>
       </template>
     </AppModal>
 

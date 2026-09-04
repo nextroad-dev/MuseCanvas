@@ -6,6 +6,10 @@ import { useAdminStore } from '@/features/admin/stores/admin'
 import { useAuthStore } from '@/features/auth/stores/auth'
 import type { ModelPreset, ModelAdapter, UserRole } from '@/shared/types'
 import { api } from '@/shared/services/api'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import TextInput from '@/shared/components/ui/TextInput.vue'
+import Field from '@/shared/components/ui/Field.vue'
+import SurfaceCard from '@/shared/components/ui/SurfaceCard.vue'
 
 const router = useRouter()
 const setup = useSetupStore()
@@ -43,6 +47,24 @@ const oauthGoogle = ref({ clientId: '', clientSecret: '', enabled: false })
 const oauthRedirects = ref<{ github: string; google: string }>({ github: '', google: '' })
 const oauthSaving = ref(false)
 const oauthError = ref('')
+
+function oauthClientId(provider: 'github' | 'google') {
+  return provider === 'github' ? oauthGithub.value.clientId : oauthGoogle.value.clientId
+}
+
+function setOauthClientId(provider: 'github' | 'google', value: string) {
+  if (provider === 'github') oauthGithub.value.clientId = value
+  else oauthGoogle.value.clientId = value
+}
+
+function oauthClientSecret(provider: 'github' | 'google') {
+  return provider === 'github' ? oauthGithub.value.clientSecret : oauthGoogle.value.clientSecret
+}
+
+function setOauthClientSecret(provider: 'github' | 'google', value: string) {
+  if (provider === 'github') oauthGithub.value.clientSecret = value
+  else oauthGoogle.value.clientSecret = value
+}
 
 // Step 5: Complete
 const summary = ref('')
@@ -211,250 +233,270 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-950 flex flex-col items-center justify-center p-4">
+  <div class="flex min-h-screen flex-col items-center justify-center bg-canvas p-4 text-foreground">
     <div class="w-full max-w-2xl">
       <!-- Header -->
-      <div class="text-center mb-8">
-        <h1 class="text-3xl font-bold text-white mb-2">MuseCanvas 初始化</h1>
-        <p class="text-slate-400">完成以下步骤即可开始使用</p>
+      <div class="mb-8 text-center">
+        <h1 class="mb-2 text-3xl font-bold text-foreground">MuseCanvas 初始化</h1>
+        <p class="text-muted-foreground">完成以下步骤即可开始使用</p>
       </div>
 
       <!-- Step indicator -->
-      <div class="flex items-center justify-center gap-2 mb-10">
+      <div class="mb-10 flex items-center justify-center gap-2">
         <template v-for="(name, i) in stepNames" :key="i">
           <div class="flex items-center">
             <div
               :class="[
-                'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors',
+                'flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors',
                 i + 1 === currentStep
-                  ? 'bg-purple-600 text-white'
+                  ? 'bg-primary text-primary-foreground'
                   : i + 1 < currentStep
-                    ? 'bg-green-600 text-white'
-                    : 'bg-slate-700 text-slate-400',
+                    ? 'bg-success text-white'
+                    : 'bg-surface-subtle text-muted-foreground',
               ]"
             >
               {{ i + 1 < currentStep ? '✓' : i + 1 }}
             </div>
             <span
               :class="[
-                'ml-2 text-sm hidden sm:inline',
-                i + 1 === currentStep ? 'text-purple-300' : 'text-slate-500',
+                'ml-2 hidden text-sm sm:inline',
+                i + 1 === currentStep ? 'font-medium text-foreground' : 'text-muted-foreground',
               ]"
             >
               {{ name }}
             </span>
           </div>
-          <div v-if="i < stepNames.length - 1" class="w-8 h-px bg-slate-700 mx-1" />
+          <div v-if="i < stepNames.length - 1" class="mx-1 h-px w-8 bg-border" />
         </template>
       </div>
 
       <!-- Step content -->
-      <div class="bg-slate-900/80 backdrop-blur-sm rounded-xl border border-slate-800 p-8 shadow-2xl">
+      <SurfaceCard padding="lg">
         <!-- Step 1: Admin -->
         <div v-if="currentStep === 1">
-          <h2 class="text-xl font-semibold text-white mb-2">设置管理员账号</h2>
-          <p class="text-slate-400 text-sm mb-6">输入你的邮箱，系统将发送验证码以创建管理员账号</p>
+          <h2 class="mb-2 text-xl font-semibold text-foreground">设置管理员账号</h2>
+          <p class="mb-6 text-sm text-muted-foreground">输入你的邮箱，系统将发送验证码以创建管理员账号</p>
 
           <div v-if="adminStep === 'email'">
-            <input
-              v-model="adminEmail"
-              type="email"
-              placeholder="admin@example.com"
-              class="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 mb-4"
-              @keyup.enter="handleRequestOtp"
-            />
-            <p v-if="adminError" class="text-red-400 text-sm mb-4">{{ adminError }}</p>
-            <button
-              :disabled="adminLoading || !adminEmail.trim()"
-              class="w-full py-3 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium transition-colors"
+            <Field label="管理员邮箱" :error="adminError || undefined">
+              <TextInput
+                v-model="adminEmail"
+                type="email"
+                placeholder="admin@example.com"
+                :invalid="!!adminError"
+                @keyup.enter="handleRequestOtp"
+              />
+            </Field>
+            <BaseButton
+              :loading="adminLoading"
+              :disabled="!adminEmail.trim()"
+              class="mt-4 w-full"
               @click="handleRequestOtp"
             >
               {{ adminLoading ? '发送中...' : '发送验证码' }}
-            </button>
+            </BaseButton>
           </div>
 
           <div v-else>
-            <p class="text-slate-300 text-sm mb-2">验证码已发送至 <strong>{{ adminEmail }}</strong></p>
-            <input
-              v-model="adminCode"
-              type="text"
-              maxlength="6"
-              placeholder="输入 6 位验证码"
-              class="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 mb-4 text-center text-2xl tracking-widest"
-              @keyup.enter="handleVerifyOtp"
-            />
-            <p v-if="adminError" class="text-red-400 text-sm mb-4">{{ adminError }}</p>
-            <button
-              :disabled="adminLoading || adminCode.length !== 6"
-              class="w-full py-3 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium transition-colors"
+            <p class="mb-4 text-sm text-muted-foreground">验证码已发送至 <strong class="text-foreground">{{ adminEmail }}</strong></p>
+            <Field label="验证码" :error="adminError || undefined">
+              <TextInput
+                v-model="adminCode"
+                type="text"
+                inputmode="numeric"
+                maxlength="6"
+                placeholder="输入 6 位验证码"
+                class="text-center tracking-widest"
+                :invalid="!!adminError"
+                @keyup.enter="handleVerifyOtp"
+              />
+            </Field>
+            <BaseButton
+              :loading="adminLoading"
+              :disabled="adminCode.length !== 6"
+              class="mt-4 w-full"
               @click="handleVerifyOtp"
             >
               {{ adminLoading ? '验证中...' : '验证并创建管理员' }}
-            </button>
-            <button class="w-full mt-2 py-2 text-sm text-slate-400 hover:text-white transition-colors" @click="adminStep = 'email'">
+            </BaseButton>
+            <BaseButton variant="ghost" class="mt-2 w-full" @click="adminStep = 'email'">
               更换邮箱
-            </button>
+            </BaseButton>
           </div>
         </div>
 
         <!-- Step 2: Provider Credentials -->
         <div v-if="currentStep === 2">
-          <h2 class="text-xl font-semibold text-white mb-2">配置供应商凭据</h2>
-          <p class="text-slate-400 text-sm mb-6">添加图像生成或语言模型的 API 凭据。可在管理后台随时补充。</p>
+          <h2 class="mb-2 text-xl font-semibold text-foreground">配置供应商凭据</h2>
+          <p class="mb-6 text-sm text-muted-foreground">添加图像生成或语言模型的 API 凭据。可在管理后台随时补充。</p>
 
           <!-- Existing credentials list -->
           <div v-if="creds.length > 0" class="mb-4 space-y-2">
-            <div v-for="(cred, i) in creds" :key="i" class="flex items-center justify-between bg-slate-800 rounded-lg px-4 py-3">
+            <div v-for="(cred, i) in creds" :key="i" class="flex items-center justify-between rounded-[var(--radius-control)] border border-border bg-surface-subtle px-4 py-3">
               <div>
-                <span class="text-white font-medium">{{ cred.displayName }}</span>
-                <span class="text-slate-400 text-sm ml-2">{{ adapterLabels[cred.adapter] }}</span>
+                <span class="font-medium text-foreground">{{ cred.displayName }}</span>
+                <span class="ml-2 text-sm text-muted-foreground">{{ adapterLabels[cred.adapter] }}</span>
               </div>
-              <button class="text-red-400 hover:text-red-300 text-sm" @click="removeCredential(i)">删除</button>
+              <BaseButton variant="danger-ghost" size="sm" @click="removeCredential(i)">删除</BaseButton>
             </div>
           </div>
 
           <!-- Add new credential form -->
           <div class="space-y-3">
-            <input v-model="newCred.displayName" placeholder="凭据名称" class="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500" />
-            <select v-model="newCred.adapter" class="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
-              <option value="openai">OpenAI 兼容</option>
-              <option value="seedream">火山引擎 Seedream</option>
-              <option value="anthropic">Anthropic</option>
-            </select>
-            <input v-model="newCred.apiKey" type="password" placeholder="API Key" class="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500" />
-            <input v-model="newCred.baseUrl" :placeholder="adapterPlaceholders[newCred.adapter] + '（可选）'" class="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500" />
-            <p v-if="credError" class="text-red-400 text-sm">{{ credError }}</p>
-            <button class="w-full py-2.5 rounded-lg border border-dashed border-slate-600 text-slate-300 hover:border-purple-500 hover:text-purple-300 transition-colors" @click="addCredential">
+            <Field label="凭据名称">
+              <TextInput v-model="newCred.displayName" placeholder="凭据名称" />
+            </Field>
+            <Field label="适配器">
+              <select
+                v-model="newCred.adapter"
+                class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="openai">OpenAI 兼容</option>
+                <option value="seedream">火山引擎 Seedream</option>
+                <option value="anthropic">Anthropic</option>
+              </select>
+            </Field>
+            <Field label="API Key">
+              <TextInput v-model="newCred.apiKey" type="password" placeholder="API Key" />
+            </Field>
+            <Field label="Base URL" hint="可选，不填则使用默认地址">
+              <TextInput v-model="newCred.baseUrl" type="url" :placeholder="adapterPlaceholders[newCred.adapter] + '（可选）'" />
+            </Field>
+            <p v-if="credError" class="text-sm text-danger">{{ credError }}</p>
+            <BaseButton variant="secondary" class="w-full" @click="addCredential">
               + 添加凭据
-            </button>
+            </BaseButton>
           </div>
 
-          <div class="flex gap-3 mt-6">
-            <button class="flex-1 py-2.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors" @click="next">
+          <div class="mt-6 flex gap-3">
+            <BaseButton variant="secondary" class="flex-1" @click="next">
               跳过
-            </button>
-            <button
-              :disabled="creds.length === 0 || credSaving"
-              class="flex-1 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium transition-colors"
+            </BaseButton>
+            <BaseButton
+              :loading="credSaving"
+              :disabled="creds.length === 0"
+              class="flex-1"
               @click="saveCredentials"
             >
               {{ credSaving ? '保存中...' : '保存并继续' }}
-            </button>
+            </BaseButton>
           </div>
         </div>
 
         <!-- Step 3: Models -->
         <div v-if="currentStep === 3">
-          <h2 class="text-xl font-semibold text-white mb-2">创建模型</h2>
-          <p class="text-slate-400 text-sm mb-6">选择需要启用的模型预设，系统将自动关联已配置的凭据。</p>
+          <h2 class="mb-2 text-xl font-semibold text-foreground">创建模型</h2>
+          <p class="mb-6 text-sm text-muted-foreground">选择需要启用的模型预设，系统将自动关联已配置的凭据。</p>
 
-          <div v-if="presets.length === 0" class="text-center py-8 text-slate-500">
+          <div v-if="presets.length === 0" class="py-8 text-center text-muted-foreground">
             加载预设中...
           </div>
 
-          <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+          <div v-else class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div
               v-for="preset in presets"
               :key="preset.id"
               :class="[
-                'rounded-lg border p-4 cursor-pointer transition-colors',
+                'cursor-pointer rounded-[var(--radius-card)] border p-4 transition-colors',
                 selectedPresets.has(preset.id)
-                  ? 'border-purple-500 bg-purple-900/30'
-                  : 'border-slate-700 bg-slate-800/50 hover:border-slate-600',
+                  ? 'border-primary bg-primary-soft'
+                  : 'border-border bg-surface-subtle hover:border-border-strong',
               ]"
               @click="togglePreset(preset.id)"
             >
               <div class="flex items-start justify-between">
                 <div>
-                  <h3 class="text-white font-medium">{{ preset.displayName }}</h3>
-                  <p class="text-slate-400 text-xs mt-1">{{ adapterLabels[preset.adapter] }} · {{ preset.modelKind === 'image' ? '图像' : '语言' }}</p>
+                  <h3 class="font-medium text-foreground">{{ preset.displayName }}</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">{{ adapterLabels[preset.adapter] }} · {{ preset.modelKind === 'image' ? '图像' : '语言' }}</p>
                 </div>
                 <div
                   :class="[
-                    'w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 mt-0.5',
-                    selectedPresets.has(preset.id) ? 'border-purple-500 bg-purple-600' : 'border-slate-600',
+                    'mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border-2',
+                    selectedPresets.has(preset.id) ? 'border-primary bg-primary' : 'border-border-strong',
                   ]"
                 >
-                  <span v-if="selectedPresets.has(preset.id)" class="text-white text-xs">✓</span>
+                  <span v-if="selectedPresets.has(preset.id)" class="text-xs text-primary-foreground">✓</span>
                 </div>
               </div>
-              <p class="text-slate-500 text-xs mt-2">{{ preset.vendorModelId }}</p>
+              <p class="mt-2 text-xs text-muted-foreground">{{ preset.vendorModelId }}</p>
             </div>
           </div>
 
-          <p v-if="modelError" class="text-red-400 text-sm mb-4">{{ modelError }}</p>
+          <p v-if="modelError" class="mb-4 text-sm text-danger">{{ modelError }}</p>
 
           <div class="flex gap-3">
-            <button class="flex-1 py-2.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors" @click="next">
+            <BaseButton variant="secondary" class="flex-1" @click="next">
               跳过
-            </button>
-            <button
-              :disabled="selectedPresets.size === 0 || modelSaving"
-              class="flex-1 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium transition-colors"
+            </BaseButton>
+            <BaseButton
+              :loading="modelSaving"
+              :disabled="selectedPresets.size === 0"
+              class="flex-1"
               @click="saveModels"
             >
               {{ modelSaving ? '创建中...' : '创建并继续' }}
-            </button>
+            </BaseButton>
           </div>
         </div>
 
         <!-- Step 4: OAuth -->
         <div v-if="currentStep === 4">
-          <h2 class="text-xl font-semibold text-white mb-2">配置 OAuth 登录</h2>
-          <p class="text-slate-400 text-sm mb-6">可选。配置 GitHub 或 Google 登录，让用户可以使用第三方账号登录。</p>
+          <h2 class="mb-2 text-xl font-semibold text-foreground">配置 OAuth 登录</h2>
+          <p class="mb-6 text-sm text-muted-foreground">可选。配置 GitHub 或 Google 登录，让用户可以使用第三方账号登录。</p>
 
           <div v-for="provider in (['github', 'google'] as const)" :key="provider" class="mb-6 last:mb-0">
-            <h3 class="text-white font-medium mb-2">{{ provider === 'github' ? 'GitHub' : 'Google' }} 登录</h3>
-            <div class="bg-slate-800 rounded-lg p-3 mb-3">
-              <p class="text-slate-400 text-xs mb-1">回调地址（需在 {{ provider === 'github' ? 'GitHub' : 'Google' }} 开发者控制台配置）</p>
-              <code class="text-purple-300 text-sm break-all">{{ oauthRedirects[provider] || '加载中...' }}</code>
+            <h3 class="mb-2 font-medium text-foreground">{{ provider === 'github' ? 'GitHub' : 'Google' }} 登录</h3>
+            <div class="mb-3 rounded-[var(--radius-control)] border border-border bg-surface-subtle p-3">
+              <p class="mb-1 text-xs text-muted-foreground">回调地址（需在 {{ provider === 'github' ? 'GitHub' : 'Google' }} 开发者控制台配置）</p>
+              <code class="break-all text-sm text-primary">{{ oauthRedirects[provider] || '加载中...' }}</code>
             </div>
-            <input
-              v-model="provider === 'github' ? oauthGithub.clientId : oauthGoogle.clientId"
-              placeholder="Client ID"
-              class="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 mb-2"
-            />
-            <input
-              v-model="provider === 'github' ? oauthGithub.clientSecret : oauthGoogle.clientSecret"
-              type="password"
-              placeholder="Client Secret（留空不修改）"
-              class="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
-            />
+            <Field label="Client ID">
+              <TextInput
+                :model-value="oauthClientId(provider)"
+                placeholder="Client ID"
+                @update:model-value="setOauthClientId(provider, $event)"
+              />
+            </Field>
+            <Field label="Client Secret" hint="留空不修改" class="mt-2">
+              <TextInput
+                :model-value="oauthClientSecret(provider)"
+                type="password"
+                placeholder="Client Secret（留空不修改）"
+                @update:model-value="setOauthClientSecret(provider, $event)"
+              />
+            </Field>
           </div>
 
-          <p v-if="oauthError" class="text-red-400 text-sm mb-4">{{ oauthError }}</p>
+          <p v-if="oauthError" class="mb-4 text-sm text-danger">{{ oauthError }}</p>
 
-          <div class="flex gap-3 mt-6">
-            <button class="flex-1 py-2.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors" @click="next">
+          <div class="mt-6 flex gap-3">
+            <BaseButton variant="secondary" class="flex-1" @click="next">
               跳过
-            </button>
-            <button
-              :disabled="oauthSaving"
-              class="flex-1 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium transition-colors"
+            </BaseButton>
+            <BaseButton
+              :loading="oauthSaving"
+              class="flex-1"
               @click="saveOAuth"
             >
               {{ oauthSaving ? '保存中...' : '保存并继续' }}
-            </button>
+            </BaseButton>
           </div>
         </div>
 
         <!-- Step 5: Complete -->
         <div v-if="currentStep === 5">
-          <div class="text-center py-8">
-            <div class="w-16 h-16 bg-green-600/30 rounded-full flex items-center justify-center mx-auto mb-4">
-              <span class="text-3xl text-green-400">✓</span>
+          <div class="py-8 text-center">
+            <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-success-soft">
+              <span class="text-3xl text-success">✓</span>
             </div>
-            <h2 class="text-xl font-semibold text-white mb-2">初始化完成</h2>
-            <p class="text-slate-400 mb-4">{{ summary }}</p>
-            <button
-              class="px-8 py-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors"
-              @click="goToApp"
-            >
+            <h2 class="mb-2 text-xl font-semibold text-foreground">初始化完成</h2>
+            <p class="mb-4 text-muted-foreground">{{ summary }}</p>
+            <BaseButton size="lg" class="px-8" @click="goToApp">
               开始创作
-            </button>
+            </BaseButton>
           </div>
         </div>
-      </div>
+      </SurfaceCard>
     </div>
   </div>
 </template>

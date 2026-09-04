@@ -11,13 +11,16 @@ const props = defineProps<{
 const model = defineModel<string>({ required: true })
 
 const options = computed(() =>
-  props.models.map(m => ({ value: m.id, label: m.displayName })),
+  props.models.map(m => ({
+    value: m.id,
+    label: `${m.displayName}${m.modelKind === 'video' || (m as { mediaKind?: string }).mediaKind === 'video' ? ' · 视频' : ''}`,
+  })),
 )
 </script>
 
 <template>
   <div class="flex flex-col gap-1.5">
-    <label class="text-sm font-medium text-neutral-700">模型</label>
+    <label class="text-sm font-medium text-foreground">模型</label>
     <BaseDropdown v-model="model" :options="options" :disabled="disabled" />
   </div>
 </template>

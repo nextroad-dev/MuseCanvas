@@ -10,5 +10,5 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="text-sm text-neutral-500">注册设置已合并到用户管理，正在跳转...</div>
+  <div class="text-sm text-muted-foreground">注册设置已合并到用户管理，正在跳转...</div>
 </template>

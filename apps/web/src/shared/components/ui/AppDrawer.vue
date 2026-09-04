@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, toRef } from 'vue'
 import { X } from 'lucide-vue-next'
-import { useFocusTrap } from '@/shared/composables/useFocusTrap'
+import { useOverlay } from '@/shared/composables/useOverlay'
 import { cn } from '@/shared/lib/utils'
 
 const props = defineProps<{
@@ -16,7 +16,15 @@ const emit = defineEmits<{
 }>()
 
 const drawerRef = ref<HTMLElement | null>(null)
-const { activate, deactivate } = useFocusTrap(drawerRef)
+
+function close() {
+  emit('update:open', false)
+}
+
+useOverlay(drawerRef, toRef(props, 'open'), {
+  onOpen: () => { /* scroll lock + focus trap handled by useOverlay */ },
+  onClose: () => { /* cleanup handled by useOverlay */ },
+})
 
 const sizeMap = {
   sm: 'w-[min(320px,calc(100vw-48px))]',
@@ -24,30 +32,12 @@ const sizeMap = {
   lg: 'w-[min(560px,calc(100vw-48px))]',
   xl: 'w-[min(720px,calc(100vw-48px))]',
 }
-
-watch(() => props.open, (val) => {
-  if (val) {
-    document.body.style.overflow = 'hidden'
-    nextTick(() => activate())
-  } else {
-    document.body.style.overflow = ''
-    deactivate()
-  }
-})
-
-function close() {
-  emit('update:open', false)
-}
-
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') close()
-}
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="drawer">
-      <div v-if="open" class="fixed inset-0 z-50" @keydown="handleKeydown">
+      <div v-if="open" class="fixed inset-0 z-overlay">
         <!-- Backdrop -->
         <div class="absolute inset-0 bg-black/40" @click="close" />
         <!-- Drawer -->
@@ -71,7 +61,7 @@ function handleKeydown(e: KeyboardEvent) {
                 aria-label="关闭"
                 @click="close"
               >
-                <X class="h-4 w-4" />
+                <X class="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
             <div class="flex-1 overflow-auto p-5">

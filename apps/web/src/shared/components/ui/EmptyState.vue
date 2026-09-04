@@ -30,7 +30,7 @@ defineEmits<{
         compact ? 'h-10 w-10' : 'h-12 w-12',
       ]"
     >
-      <FileX class="h-6 w-6 text-muted-foreground" />
+      <FileX class="h-6 w-6 text-muted-foreground" aria-hidden="true" />
     </div>
     <h3 :class="['font-medium text-foreground', compact ? 'text-sm' : 'text-sm']">{{ title }}</h3>
     <p class="mt-1 max-w-sm text-xs text-muted-foreground">{{ description }}</p>

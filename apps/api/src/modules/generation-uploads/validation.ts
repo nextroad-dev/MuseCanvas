@@ -151,11 +151,16 @@ export function validateInputImageIdsSyntax(
   return inputImageIds as string[]
 }
 
+export interface UploadAttachLimits {
+  maxTotalBytes?: number
+}
+
 export async function validateAndAttachGenerationInputs(
   client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
   actorId: string,
   jobId: string,
-  inputImageIds: string[]
+  inputImageIds: string[],
+  limits?: UploadAttachLimits,
 ): Promise<void> {
   if (inputImageIds.length === 0) return
 
@@ -196,8 +201,7 @@ export async function validateAndAttachGenerationInputs(
     }
     totalBytes += Number(row.size_bytes || 0)
   }
-
-  if (totalBytes > MAX_UPLOAD_TOTAL_BYTES) {
+  if (totalBytes > (limits?.maxTotalBytes ?? MAX_UPLOAD_TOTAL_BYTES)) {
     throw new GenerationInputError('INVALID_INPUT_IMAGE_SIZE', '参考图总大小超出限制')
   }
 
@@ -226,6 +230,7 @@ export async function validateAndAttachGenerationUploads(
   actorId: string,
   jobId: string,
   normalized: NormalizedGenerationInput[],
+  limits?: UploadAttachLimits,
 ): Promise<void> {
   if (normalized.length === 0) return
   const ids = normalized.map(item => item.uploadId)
@@ -281,7 +286,7 @@ export async function validateAndAttachGenerationUploads(
     }
     totalBytes += Number(row.size_bytes || 0)
   }
-  if (totalBytes > MAX_UPLOAD_TOTAL_BYTES) {
+  if (totalBytes > (limits?.maxTotalBytes ?? MAX_UPLOAD_TOTAL_BYTES)) {
     throw new GenerationInputError('INVALID_INPUT_IMAGE_SIZE', '参考图总大小超出限制')
   }
   for (const item of normalized) {

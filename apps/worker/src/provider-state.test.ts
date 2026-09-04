@@ -3,7 +3,9 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { encryptApiKey } from '../../../packages/providers/src/index'
 
+process.env.APP_MASTER_KEY ||= '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 process.env.PROVIDER_CREDENTIALS_ENCRYPTION_KEY ||= 'test-worker-encryption-key'
 
 const {
@@ -220,4 +222,11 @@ test('sync retry persistence marker survives identity checks and never looks ter
   assert.equal(isSyncRetryPersistenceError(new Error('GENERATION_FAILED')), false)
   assert.equal(isSyncRetryPersistenceError(null), false)
   assert.equal(isSyncRetryPersistenceError(undefined), false)
+})
+
+test('opaque state dual-reads legacy provider-key ciphertext', () => {
+  const legacy = encryptApiKey(JSON.stringify({ remoteId: 'legacy-1' }))
+  assert.deepEqual(decryptOpaqueState(legacy, 'provider-credentials-key-v1'), { remoteId: 'legacy-1' })
+  assert.deepEqual(decryptOpaqueState(legacy), { remoteId: 'legacy-1' })
+  assert.equal(decryptOpaqueState('not-ciphertext', 'app-v1'), undefined)
 })

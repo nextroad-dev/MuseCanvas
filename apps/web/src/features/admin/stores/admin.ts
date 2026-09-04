@@ -5,10 +5,19 @@ import type {
   Invitation, ModelPreset, BuiltinProviderTemplate,
   ProviderCredential, ProviderCredentialInput,
   AdminOAuthProvider, OAuthProviderInput,
-  PromptTemplateIndex, PromptOptimizationSettings,
+  PromptTemplateSetSummaryDto, PromptTemplateSetDetailDto,
+  ImportPromptTemplateSetInput, ImportPromptTemplateSetResult,
+  CreatePromptTemplateEntryInput, UpdatePromptTemplateEntryInput,
+  DeletePromptTemplateEntryResult,
+  RenderPromptTemplateInput, RenderPromptTemplateResult,
+  PromptOptimizationSettings,
   BillingSettings, UpdateBillingSettingsInput, AdjustCreditsInput, CreditBalance,
 } from '@/shared/types'
 import { api } from '@/shared/services/api'
+import {
+  buildPromptTemplateExportFilename,
+  buildPromptTemplateExportUrl,
+} from '@/features/admin/lib/prompt-templates'
 
 export const useAdminStore = defineStore('admin', () => {
   // Dashboard
@@ -38,7 +47,9 @@ export const useAdminStore = defineStore('admin', () => {
 
   // OAuth providers
   const oauthProviders = ref<AdminOAuthProvider[]>([])
-  const promptTemplates = ref<PromptTemplateIndex | null>(null)
+  const activePromptTemplateSet = ref<PromptTemplateSetDetailDto | null>(null)
+  const promptTemplateSets = ref<PromptTemplateSetSummaryDto[]>([])
+  const selectedPromptTemplateSet = ref<PromptTemplateSetDetailDto | null>(null)
   const promptOptimizationSettings = ref<PromptOptimizationSettings | null>(null)
   const billingSettings = ref<BillingSettings | null>(null)
 
@@ -226,16 +237,144 @@ export const useAdminStore = defineStore('admin', () => {
     return res
   }
 
-  async function fetchPromptTemplates() {
-    const res = await api<PromptTemplateIndex>('/api/admin/prompt-templates')
-    if (res.success && res.data) promptTemplates.value = res.data
+  async function fetchActivePromptTemplateSet() {
+    const res = await api<PromptTemplateSetDetailDto | null>('/api/admin/prompt-templates')
+    if (res.success) activePromptTemplateSet.value = res.data ?? null
     return res
   }
 
-  async function reloadPromptTemplates() {
-    const res = await api<PromptTemplateIndex>('/api/admin/prompt-templates/reload', { method: 'POST' })
-    if (res.success && res.data) promptTemplates.value = res.data
+  async function fetchPromptTemplateSets() {
+    const res = await api<PromptTemplateSetSummaryDto[]>('/api/admin/prompt-templates/sets')
+    if (res.success) promptTemplateSets.value = res.data ?? []
     return res
+  }
+
+  async function fetchPromptTemplateSetDetail(id: string, select = true) {
+    const res = await api<PromptTemplateSetDetailDto>(`/api/admin/prompt-templates/sets/${id}`)
+    if (res.success && res.data && select) selectedPromptTemplateSet.value = res.data
+    return res
+  }
+
+  /** Re-read active set, history, and the selected detail (best-effort) after a mutation. */
+  async function refreshPromptTemplateState() {
+    await Promise.all([fetchActivePromptTemplateSet(), fetchPromptTemplateSets()])
+    const selectedId = selectedPromptTemplateSet.value?.id
+    if (selectedId) {
+      const res = await fetchPromptTemplateSetDetail(selectedId)
+      if (!res.success) selectedPromptTemplateSet.value = null
+    }
+  }
+
+  async function importPromptTemplateSet(input: ImportPromptTemplateSetInput) {
+    const res = await api<ImportPromptTemplateSetResult>('/api/admin/prompt-templates/import', {
+      method: 'POST',
+      body: input,
+    })
+    if (res.success) await refreshPromptTemplateState()
+    return res
+  }
+
+  async function activatePromptTemplateSet(id: string) {
+    const res = await api<PromptTemplateSetSummaryDto>(`/api/admin/prompt-templates/sets/${id}/activate`, {
+      method: 'POST',
+      body: {},
+    })
+    if (res.success) await refreshPromptTemplateState()
+    return res
+  }
+
+  async function deletePromptTemplateSet(id: string) {
+    const res = await api(`/api/admin/prompt-templates/sets/${id}`, { method: 'DELETE' })
+    if (res.success) {
+      if (selectedPromptTemplateSet.value?.id === id) selectedPromptTemplateSet.value = null
+      await refreshPromptTemplateState()
+    }
+    return res
+  }
+
+  async function createPromptTemplateEntry(setId: string, input: CreatePromptTemplateEntryInput) {
+    const res = await api<PromptTemplateSetDetailDto>(`/api/admin/prompt-templates/sets/${setId}/entries`, {
+      method: 'POST',
+      body: input,
+    })
+    if (res.success && res.data) {
+      // Entry mutations fork a new version: adopt the forked set, then refresh.
+      selectedPromptTemplateSet.value = res.data
+      await Promise.all([fetchActivePromptTemplateSet(), fetchPromptTemplateSets()])
+    }
+    return res
+  }
+
+  async function updatePromptTemplateEntry(entryId: string, input: UpdatePromptTemplateEntryInput) {
+    const res = await api<PromptTemplateSetDetailDto>(`/api/admin/prompt-templates/entries/${entryId}`, {
+      method: 'PATCH',
+      body: input,
+    })
+    if (res.success && res.data) {
+      // Entry mutations fork a new version: adopt the forked set, then refresh.
+      selectedPromptTemplateSet.value = res.data
+      await Promise.all([fetchActivePromptTemplateSet(), fetchPromptTemplateSets()])
+    }
+    return res
+  }
+
+  async function deletePromptTemplateEntry(entryId: string) {
+    const res = await api<DeletePromptTemplateEntryResult>(`/api/admin/prompt-templates/entries/${entryId}`, { method: 'DELETE' })
+    if (res.success && res.data) {
+      // Deletion forks a new version: adopt the forked set, then refresh.
+      await Promise.all([fetchActivePromptTemplateSet(), fetchPromptTemplateSets(), fetchPromptTemplateSetDetail(res.data.setId)])
+    }
+    return res
+  }
+
+  async function previewPromptTemplate(input: RenderPromptTemplateInput) {
+    return api<RenderPromptTemplateResult>('/api/admin/prompt-templates/preview', {
+      method: 'POST',
+      body: input,
+    })
+  }
+
+  /**
+   * Download the standard JSON for a set (active set when omitted) via a
+   * browser anchor download. Blob download needs the raw response, so this
+   * action uses `fetch` directly instead of the JSON `api` helper.
+   */
+  async function exportPromptTemplateSet(setId?: string | null) {
+    const path = buildPromptTemplateExportUrl(setId ?? undefined)
+    const base = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+    const url = base.endsWith('/api') && path.startsWith('/api/')
+      ? base + path.slice(4)
+      : base + path
+    try {
+      const res = await fetch(url, { credentials: 'include' })
+      if (!res.ok) {
+        let message = '导出失败'
+        try {
+          const body = (await res.json()) as { error?: { message?: string } }
+          if (body?.error?.message) message = body.error.message
+        } catch {
+          // Keep the default message when the error body is not JSON.
+        }
+        return { success: false as const, error: { code: `HTTP_${res.status}`, message } }
+      }
+      const blob = await res.blob()
+      const meta = promptTemplateSets.value.find((s) => s.id === setId)
+        ?? (activePromptTemplateSet.value && (!setId || activePromptTemplateSet.value.id === setId)
+          ? activePromptTemplateSet.value
+          : null)
+      const filename = buildPromptTemplateExportFilename(meta, setId)
+      const objectUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectUrl
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+      return { success: true as const, data: { filename } }
+    } catch {
+      return { success: false as const, error: { code: 'NETWORK_ERROR', message: '网络连接失败' } }
+    }
   }
 
   async function fetchPromptOptimizationSettings() {
@@ -281,14 +420,20 @@ export const useAdminStore = defineStore('admin', () => {
 
   return {
     metrics, users, usersTotal, usersNextCursor, models, modelPresets, jobs, jobsTotal, jobsNextCursor,
-    requiresInvitation, invitations, providerCredentials, providerTemplates, oauthProviders, promptTemplates, promptOptimizationSettings, billingSettings,
+    requiresInvitation, invitations, providerCredentials, providerTemplates, oauthProviders,
+    activePromptTemplateSet, promptTemplateSets, selectedPromptTemplateSet,
+    promptOptimizationSettings, billingSettings,
     fetchDashboard, fetchUsers, updateUserStatus, deleteUser, adjustUserCredits,
     fetchModels, fetchModelPresets, createModel, updateModel, deleteModel, fetchJobs,
     fetchRegistration, setRequiresInvitation,
     fetchInvitations, createInvitation, revokeInvitation,
     fetchProviderCredentials, fetchProviderTemplates, createProviderCredential, updateProviderCredential, testProviderCredential, deleteProviderCredential,
     fetchOAuthProviders, updateOAuthProvider,
-    fetchPromptTemplates, reloadPromptTemplates, fetchPromptOptimizationSettings, updatePromptOptimizationSettings,
+    fetchActivePromptTemplateSet, fetchPromptTemplateSets, fetchPromptTemplateSetDetail,
+    importPromptTemplateSet, activatePromptTemplateSet, deletePromptTemplateSet,
+    createPromptTemplateEntry, updatePromptTemplateEntry, deletePromptTemplateEntry,
+    previewPromptTemplate, exportPromptTemplateSet,
+    fetchPromptOptimizationSettings, updatePromptOptimizationSettings,
     fetchBillingSettings, updateBillingSettings,
   }
 })

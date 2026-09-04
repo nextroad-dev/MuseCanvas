@@ -1,18 +1,21 @@
 import { DeleteObjectCommand } from '@aws-sdk/client-s3'
 import { db, releaseGenerationCredits, transaction } from '../../../../packages/database/src/index'
 import { dispatchOutbox } from '../queue'
-import { bucket, s3 } from '../shared/infra'
-
-const configuredUploadSignTtl = Number(process.env.GENERATION_UPLOAD_SIGN_TTL_SECONDS || 900)
-const uploadSignTtlSeconds =
-  Number.isSafeInteger(configuredUploadSignTtl) &&
-  configuredUploadSignTtl >= 60 &&
-  configuredUploadSignTtl <= 3600
-    ? configuredUploadSignTtl
-    : 900
+import { getStorageClient } from '../shared/storage'
+import { resolveUploadSignTtlSeconds } from '../shared/runtime'
 
 const DUE_POLL_LIMIT = 50
 const CANCEL_SCAN_LIMIT = 50
+
+/**
+ * Best-effort single-object delete through the per-revision storage client.
+ * Storage misconfiguration surfaces as STORAGE_NOT_CONFIGURED and is left
+ * for the next sweep; object deletes never fail the maintenance tick itself.
+ */
+async function deleteStorageObject(objectKey: string): Promise<void> {
+  const { s3, bucket } = await getStorageClient()
+  await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }))
+}
 
 async function recoverExpiredLeases() {
   await db().query(
@@ -96,17 +99,17 @@ export async function maintenance() {
   for (const deletion of deletions.rows) {
     try {
       const assets = await db().query('SELECT id,object_key FROM assets WHERE created_by=$1 AND deleted_at IS NULL', [deletion.user_id])
-      for (const asset of assets.rows) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.object_key }))
+      for (const asset of assets.rows) await deleteStorageObject(asset.object_key)
       const inputImages = await db().query('SELECT id,object_key FROM generation_input_images WHERE created_by=$1 AND object_deleted_at IS NULL', [deletion.user_id])
       for (const img of inputImages.rows) {
         try {
-          await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: img.object_key }))
+          await deleteStorageObject(img.object_key)
         } catch {}
       }
-      const mediaUploads = await db().query('SELECT id,object_key FROM media_uploads WHERE created_by=$1 AND object_deleted_at IS NULL', [deletion.user_id]).catch(() => ({ rows: [] as Array<Record<string, unknown>> }))
-      for (const upload of (mediaUploads as { rows: Array<{ object_key: string }> }).rows) {
+      const mediaUploads = await db().query('SELECT id,object_key FROM media_uploads WHERE created_by=$1 AND object_deleted_at IS NULL', [deletion.user_id]).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
+      for (const upload of mediaUploads.rows) {
         try {
-          await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: upload.object_key }))
+          await deleteStorageObject(upload.object_key)
         } catch {}
       }
       await transaction(async client => {
@@ -125,7 +128,7 @@ export async function maintenance() {
   const assetDeletions = await db().query('SELECT id,object_key FROM asset_deletion_jobs WHERE completed_at IS NULL ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED')
   for (const deletion of assetDeletions.rows) {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: deletion.object_key }))
+      await deleteStorageObject(deletion.object_key)
       await db().query('UPDATE asset_deletion_jobs SET completed_at=now(),last_error_code=NULL WHERE id=$1', [deletion.id])
     } catch {
       await db().query("UPDATE asset_deletion_jobs SET attempts=attempts+1,last_error_code='CLEANUP_FAILED' WHERE id=$1", [deletion.id])
@@ -138,7 +141,7 @@ export async function maintenance() {
   )
   for (const item of expiredInputs.rows) {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: item.object_key }))
+      await deleteStorageObject(item.object_key)
       await db().query(
         "UPDATE generation_input_images SET status='deleted',deleted_at=COALESCE(deleted_at,now()),object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],
@@ -151,9 +154,9 @@ export async function maintenance() {
   const expiredUploads = await db().query(
     "SELECT id,object_key FROM media_uploads WHERE status IN ('pending','ready') AND expires_at < now() AND object_deleted_at IS NULL LIMIT 50",
   ).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
-  for (const item of (expiredUploads as { rows: Array<{ id: string; object_key: string }> }).rows) {
+  for (const item of expiredUploads.rows) {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: item.object_key }))
+      await deleteStorageObject(String(item.object_key))
       await db().query(
         "UPDATE media_uploads SET status='deleted',deleted_at=COALESCE(deleted_at,now()),object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],
@@ -163,6 +166,9 @@ export async function maintenance() {
     }
   }
 
+  // Signed-URL TTL doubles as the soft-delete grace window; resolved per tick
+  // from runtime settings so onboarding changes apply without a restart.
+  const uploadSignTtlSeconds = await resolveUploadSignTtlSeconds().catch(() => 900)
   // Clean up soft-deleted input objects whose S3 objects have not yet been marked deleted
   const softDeletedInputs = await db().query(
     `SELECT id,object_key
@@ -175,7 +181,7 @@ export async function maintenance() {
   )
   for (const item of softDeletedInputs.rows) {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: item.object_key }))
+      await deleteStorageObject(item.object_key)
       await db().query(
         "UPDATE generation_input_images SET object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],
@@ -194,9 +200,9 @@ export async function maintenance() {
      LIMIT 50`,
     [uploadSignTtlSeconds],
   ).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
-  for (const item of (softDeletedUploads as { rows: Array<{ id: string; object_key: string }> }).rows) {
+  for (const item of softDeletedUploads.rows) {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: item.object_key }))
+      await deleteStorageObject(String(item.object_key))
       await db().query(
         "UPDATE media_uploads SET object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],

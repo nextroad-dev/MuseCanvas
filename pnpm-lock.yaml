@@ -74,6 +74,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@musecanvas/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       pinia:
         specifier: ^3.0.0
         version: 3.0.4(typescript@5.9.3)(vue@3.5.38(typescript@5.9.3))
@@ -207,6 +210,9 @@ importers:
 
   packages/providers:
     dependencies:
+      '@musecanvas/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@aws-sdk/client-s3':
         specifier: ^3.1073.0
         version: 3.1073.0

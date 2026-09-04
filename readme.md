@@ -44,13 +44,13 @@ scripts/     本地和部署辅助脚本
 
 | 文件 | 用途 |
 | --- | --- |
-| `deploy/compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit。|
+| `deploy/compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit；首次启动会自动把 Mailpit / 内嵌 MinIO 的开发默认值写入数据库（已配置未验证），引导页直接预填。|
 | `deploy/compose.dev.yaml` | 开发环境兼容入口，保留给显式 `docker compose --project-directory . --env-file .env -f deploy/compose.dev.yaml` 使用，同样面向本地开发。|
-| `deploy/compose.prod.yaml` | 从源码构建的部署模板，不包含 MinIO / Mailpit，必须接入外部 S3 兼容对象存储和 SMTP 邮件服务。|
-| `deploy/compose.images.yaml` | 使用 GHCR 已构建镜像部署，不包含 MinIO / Mailpit，默认通过 `18080:80` 暴露 Nginx。|
+| `deploy/compose.prod.yaml` | 从源码构建的部署模板，不包含 MinIO / Mailpit，不预置任何 SMTP / S3 默认值，应用配置全部走 `/setup` 引导页写入数据库。|
+| `deploy/compose.images.yaml` | 使用 GHCR 已构建镜像部署，不包含 MinIO / Mailpit，默认通过 `18080:80` 暴露 Nginx，同样不预置应用配置。|
 | `deploy/docker/*.Dockerfile` | `api`、`worker`、`web`、`nginx` 四个镜像定义。|
 
-> MinIO 和 Mailpit 只用于本地开发，方便模拟对象存储和邮件投递。公开部署或生产环境不要使用内嵌 MinIO / Mailpit，请接入真实的 S3 兼容对象存储与 SMTP 服务。
+> MinIO 和 Mailpit 只用于本地开发，方便模拟对象存储和邮件投递。公开部署或生产环境不要使用内嵌 MinIO / Mailpit，请在 `/setup` 引导页接入真实的 S3 兼容对象存储与 SMTP 服务。
 
 ## 本地运行
 
@@ -61,17 +61,18 @@ corepack enable
 pnpm install
 ```
 
-2. 启动完整本地环境（首次会自动生成密钥和随机密码）：
+2. 启动完整本地环境（首次会自动生成 bootstrap 密钥和随机密码）：
 
 ```bash
 pnpm compose:up
 ```
 
-等价于自动生成 `.env` → 准备提示词模板 → `docker compose --project-directory . --env-file .env -f deploy/compose.yaml up --build -d`。
+等价于自动生成/补齐 `.env`（只含 `POSTGRES_PASSWORD`、`APP_MASTER_KEY`、`MINIO_ROOT_*`，已存在的值绝不改动）→ `docker compose --project-directory . --env-file .env -f deploy/compose.yaml up --build -d`。
 
 3. 访问 `http://localhost:8080`，浏览器会自动进入**初始化引导页面**：
 
 - 设置管理员邮箱（OTP 验证码发送到 Mailpit：`http://localhost:8025`）
+- SMTP 与对象存储已预填内嵌 Mailpit / MinIO 的值，点“测试连接”验证即可
 - 可选配置供应商凭据、模型和 OAuth 登录
 - 完成引导后即可开始创作
 
@@ -84,7 +85,7 @@ pnpm compose:up
 | MinIO API | `http://localhost:9000` | 对象存储 |
 | MinIO Console | `http://localhost:9001` | 对象存储管理后台 |
 
-> 手动创建 `.env` 可以覆盖自动生成的配置。本地开发至少需要 `POSTGRES_PASSWORD`、`SESSION_SECRET`、`S3_ACCESS_KEY_ID`、`S3_SECRET_ACCESS_KEY`，其余由引导页面或容器默认值自动处理。
+> `.env` 只承载 bootstrap 密钥与部署开关：`POSTGRES_PASSWORD`、`APP_MASTER_KEY`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD`，以及默认全为 `false` 的 `ALLOW_INSECURE_*` 开关（内嵌 Compose 已为 Mailpit 放行明文 SMTP）。SMTP、应用 S3 配置、公开访问地址、OAuth、上传限制和提示词模板全部是数据库配置，在引导页里填写和测试，不再需要环境变量。仍在过渡期的旧密钥（`SESSION_SECRET`、`OAUTH_CREDENTIALS_ENCRYPTION_KEY`、`PROVIDER_CREDENTIALS_ENCRYPTION_KEY`）可继续传给容器做只读兼容，新安装无需设置。
 
 停止本地环境：
 
@@ -94,44 +95,27 @@ pnpm compose:down
 
 ## 部署环境要求
 
-`deploy/compose.prod.yaml` 和 `deploy/compose.images.yaml` 都不内置 S3 或邮件服务。部署前需要准备：
-
-- 一个可访问的 S3 兼容对象存储，例如 AWS S3、Cloudflare R2、MinIO 独立实例、阿里云 OSS S3 兼容层等。
-- 一个真实 SMTP 邮件服务，用于 OTP 登录、邀请注册和系统邮件。
-- 生产级随机密钥：`SESSION_SECRET`、`SMTP_ENCRYPTION_KEY`、`OAUTH_CREDENTIALS_ENCRYPTION_KEY`、`PROVIDER_CREDENTIALS_ENCRYPTION_KEY`。
-- 正确的公开访问地址：`OAUTH_REDIRECT_BASE_URL`，例如 `https://studio.example.com`。
-
-部署环境至少需要配置：
+`deploy/compose.prod.yaml` 和 `deploy/compose.images.yaml` 都不内置 S3 或邮件服务，也不在数据库里预置任何默认值。部署前只需要准备 bootstrap 密钥和部署开关：
 
 ```bash
 POSTGRES_PASSWORD=
-SESSION_SECRET=
-SMTP_ENCRYPTION_KEY=
-ADMIN_EMAIL=
-COOKIE_SECURE=true
+APP_MASTER_KEY=   # 32 字节，64 位 hex 或 base64/base64url
 
-SMTP_HOST=
-SMTP_PORT=465
-SMTP_TLS_MODE=implicit_tls
-SMTP_FROM=
-SMTP_USER=
-SMTP_PASSWORD=
+# 默认拒绝的安全开关（按需放宽，默认保持 false）
+ALLOW_INSECURE_SMTP=false
+ALLOW_INSECURE_PROVIDER_BASE_URL=false
+ALLOW_PRIVATE_PROVIDER_BASE_URL=false
 
-S3_ENDPOINT=
-S3_PUBLIC_ENDPOINT=
-S3_REGION=us-east-1
-S3_BUCKET=
-S3_ACCESS_KEY_ID=
-S3_SECRET_ACCESS_KEY=
-
-# 参考图上传 TTL（可选配置，默认安全值如下）
-GENERATION_UPLOAD_TTL_SECONDS=86400
-GENERATION_UPLOAD_SIGN_TTL_SECONDS=900
-
-OAUTH_REDIRECT_BASE_URL=
-OAUTH_CREDENTIALS_ENCRYPTION_KEY=
-PROVIDER_CREDENTIALS_ENCRYPTION_KEY=
+# 过渡期只读兼容（可选，仅一个版本）：仍可传入旧密钥，已有加密数据继续可读，
+# 所有新写入都只用 APP_MASTER_KEY 派生的密钥。新安装留空即可。
+# SESSION_SECRET=
+# OAUTH_CREDENTIALS_ENCRYPTION_KEY=
+# PROVIDER_CREDENTIALS_ENCRYPTION_KEY=
 ```
+
+其余应用配置（SMTP 发件、S3 兼容对象存储、公开访问地址、OAuth 登录、上传限制、提示词模板）在首次打开的 `/setup` 引导页里填写并点“测试连接”验证，写入数据库加密保存，不再经过环境变量。
+
+> 升级说明：旧 `.env` 里残留的 `SESSION_SECRET`、`*_ENCRYPTION_KEY`、`SMTP_*`、`S3_*`、`ADMIN_EMAIL`、`PROMPT_TEMPLATE_*` 等会被新 Compose 忽略（不再必填也不再报错），`generate-env` 只会补齐缺失的 `APP_MASTER_KEY` / `MINIO_ROOT_*`，绝不改动已有值。已写入数据库的管理员和配置不受影响。
 
 所有密钥只允许放在服务端环境变量或管理员后台的加密配置中，禁止写入前端代码。
 
@@ -199,10 +183,7 @@ docker compose --project-directory . --env-file .env -f deploy/compose.images.ya
 ```bash
 MUSECANVAS_IMAGE_TAG=latest
 MUSECANVAS_HTTP_PORT=18080
-PROMPT_TEMPLATE_HOST_DIR=./prompt-templates
-PROMPT_TEMPLATE_CONTAINER_INDEX_PATH=/opt/musecanvas/prompt-templates/index.json
 ```
-
 如果 GHCR Package 还不是公开包，需要先在服务器登录：
 
 ```bash
@@ -217,10 +198,9 @@ echo GITHUB_TOKEN | docker login ghcr.io -u nextroad-dev --password-stdin
 docker compose --project-directory . --env-file .env -f deploy/compose.prod.yaml up --build -d
 ```
 
-这一路径同样要求外部 S3 和 SMTP。`deploy/compose.prod.yaml` 只负责应用、Nginx、PostgreSQL 与 Redis 的编排，不会启动 MinIO 或 Mailpit。
+这一路径同样只要求 bootstrap 密钥（见上），应用的 SMTP / S3 / 域名 / OAuth 配置在 `/setup` 引导页完成。`deploy/compose.prod.yaml` 只负责应用、Nginx、PostgreSQL 与 Redis 的编排，不会启动 MinIO 或 Mailpit。
 
 ## 常用命令
-
 ```bash
 pnpm dev                  # 并行启动 apps 下的开发服务
 pnpm build                # 递归构建
@@ -228,10 +208,11 @@ pnpm lint                 # 递归运行 lint
 pnpm typecheck            # 递归类型检查
 pnpm test                 # 递归运行测试
 pnpm test:e2e:admin       # 管理后台端到端验证脚本
-pnpm prepare:prompt-templates
 pnpm compose:up
 pnpm compose:down
 ```
+
+> `scripts/prepare-prompt-templates.mjs`（`pnpm prepare:prompt-templates`）仅为仍在直接挂载外部模板目录的旧部署保留的手动兼容入口，不再被 `compose:up` 或任何 Compose 文件自动执行；模板的运行时来源是引导页写入数据库的版本化模板集。
 
 也可以只运行单个应用：
 

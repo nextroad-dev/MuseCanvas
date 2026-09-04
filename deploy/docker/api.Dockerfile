@@ -13,5 +13,6 @@ COPY packages/providers/package.json packages/providers/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/api apps/api
 COPY packages packages
+COPY scripts scripts
 RUN pnpm --filter @musecanvas/api build
 CMD ["pnpm", "--filter", "@musecanvas/api", "start"]

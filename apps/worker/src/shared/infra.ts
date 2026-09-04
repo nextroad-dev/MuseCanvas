@@ -6,3 +6,8 @@ export const redis = createClient({ url: process.env.REDIS_URL }); redis.on('err
 export const s3 = new S3Client({ endpoint: process.env.S3_ENDPOINT, region: process.env.S3_REGION || 'us-east-1', forcePathStyle: true, credentials: { accessKeyId: process.env.S3_ACCESS_KEY_ID || '', secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || '' } })
 export const bucket = process.env.S3_BUCKET || 'musecanvas'
 export const consumer = `worker-${process.pid}-${randomUUID().slice(0, 8)}`
+
+export const GENERATION_STREAM = 'muse:generation'
+export const GENERATION_GROUP = 'workers'
+export const STALE_PENDING_IDLE_MS = 30_000
+export const CONSUMER_BLOCK_MS = 5000

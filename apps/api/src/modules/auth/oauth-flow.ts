@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction, ensureCreditAccount } from '../../../../../packages/database/src/index'
 import { hashToken, randomToken } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { userDto } from '../../shared/dto'
@@ -152,6 +152,13 @@ async function loginWithIdentity(
   }
   const created = await transaction(async (client) => {
     const user = await client.query('INSERT INTO users(email) VALUES($1) RETURNING id,role', [profile.email])
+    const bRes = await client.query('SELECT signup_grant FROM billing_settings WHERE singleton=true')
+    const signupGrant = Number(bRes.rows[0]?.signup_grant || 0)
+    await ensureCreditAccount(client, user.rows[0].id, {
+      signupGrant,
+      createdBy: user.rows[0].id,
+      note: 'Signup credit grant',
+    })
     await client.query('INSERT INTO oauth_identities(user_id,provider,provider_subject,email_at_link,email_verified,display_name,avatar_url) VALUES($1,$2,$3,$4,$5,$6,$7)', [user.rows[0].id, provider, profile.providerSubject, profile.email, profile.emailVerified, profile.displayName || null, profile.avatarUrl || null])
     return user.rows[0]
   })
@@ -192,7 +199,20 @@ export async function completeOAuthInvitation(
     const invite = await client.query('UPDATE invitations SET consumed_at=now() WHERE code_hash=$1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>now() RETURNING id', [hashToken(invitationCode)])
     if (!invite.rows[0]) return null
     const existing = await client.query('SELECT id FROM users WHERE lower(email)=$1 AND deleted_at IS NULL', [challenge.email])
-    const userId = existing.rows[0]?.id || (await client.query('INSERT INTO users(email) VALUES($1) RETURNING id', [challenge.email])).rows[0].id
+    let userId: string
+    if (existing.rows[0]) {
+      userId = existing.rows[0].id
+    } else {
+      const newUser = await client.query('INSERT INTO users(email) VALUES($1) RETURNING id', [challenge.email])
+      userId = newUser.rows[0].id
+      const bRes = await client.query('SELECT signup_grant FROM billing_settings WHERE singleton=true')
+      const signupGrant = Number(bRes.rows[0]?.signup_grant || 0)
+      await ensureCreditAccount(client, userId, {
+        signupGrant,
+        createdBy: userId,
+        note: 'Signup credit grant',
+      })
+    }
     await client.query('INSERT INTO oauth_identities(user_id,provider,provider_subject,email_at_link,email_verified,display_name,avatar_url) VALUES($1,$2,$3,$4,true,$5,$6)', [userId, challenge.provider, challenge.providerSubject, challenge.email, challenge.displayName || null, challenge.avatarUrl || null])
     const token = randomToken()
     await client.query("INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 days')", [userId, hashToken(token)])

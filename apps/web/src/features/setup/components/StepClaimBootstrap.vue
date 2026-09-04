@@ -51,7 +51,7 @@ async function handleRetry() {
     <div>
       <h3 class="mb-1 text-lg font-semibold text-foreground">实例认领与环境自检</h3>
       <p class="text-sm text-muted-foreground">
-        输入服务端启动日志中打印的一次性认领码（30 分钟内有效），认领成功后继续配置。
+        输入服务端启动日志中打印的一次性认领码（15 分钟内有效），认领成功后继续配置。
       </p>
     </div>
 

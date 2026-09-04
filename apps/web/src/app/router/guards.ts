@@ -1,6 +1,7 @@
 import type { Router } from 'vue-router'
 import { useAuthStore } from '@/features/auth/stores/auth'
 import { useSetupStore } from '@/features/setup/stores/setup'
+import { resolveSetupGuardRedirect } from './setupAdminAccess'
 
 // Pure-public legal pages stay reachable while the wizard is incomplete;
 // everything else (including guest pages such as /login and /) funnels into
@@ -23,18 +24,27 @@ export function setupGuards(router: Router) {
     const auth = useAuthStore()
     const setup = await ensureSetupChecked()
 
-    // A transport/API failure is NOT "setup incomplete": never force a
-    // redirect on it, just fall through to the normal auth handling below.
+    // Completed setup stays closed to anonymous/non-admin users, while
+    // authenticated admins may revisit /setup to edit persisted config.
     if (!setup.statusFailed) {
-      if (!setup.setupComplete) {
-        if (to.name !== 'setup' && !(to.meta.public && LEGAL_PUBLIC_NAMES.has(to.name as string))) {
-          return { path: '/setup' }
-        }
-      } else if (to.name === 'setup') {
-        // Onboarding is done; the wizard itself redirects onward to admin
-        // (the requiresAdmin handling below sends logged-out users to login).
-        return { path: '/admin' }
+      const isSetupRoute = to.name === 'setup'
+      const isLegalPublicRoute = Boolean(to.meta.public && LEGAL_PUBLIC_NAMES.has(to.name as string))
+      // The completed-wizard decision needs the admin flag; incomplete setup
+      // never does, so only initialize auth for that branch.
+      if (setup.setupComplete && isSetupRoute && !auth.initialized) {
+        await auth.init()
       }
+      const redirect = resolveSetupGuardRedirect({
+        setupComplete: setup.setupComplete,
+        statusFailed: setup.statusFailed,
+        isSetupRoute,
+        isLegalPublicRoute,
+        isAdmin: auth.isAdmin,
+      })
+      if (redirect) return { path: redirect }
+      // An admin revisit must not fall into the public passthrough below
+      // without an initialized auth state; it returns here instead.
+      if (setup.setupComplete && isSetupRoute) return true
     }
 
     // Public pages (e.g. legal, setup) — accessible whether logged in or not

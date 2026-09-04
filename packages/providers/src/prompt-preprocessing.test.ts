@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { buildLanguageModelRequest, callLanguageModel, inspectInputImage, LanguageModelHttpError, loadPromptTemplateIndex, MAX_UPLOAD_IMAGE_BYTES, normalizeSeedreamSize, parseExactJsonString, parseLanguageModelResponse, renderPromptTemplate, validateInputImages } from './index'
+import { buildLanguageModelRequest, callLanguageModel, inspectInputImage, LanguageModelHttpError, loadPromptTemplateIndex, MAX_UPLOAD_IMAGE_BYTES, MAX_UPLOAD_TOTAL_BYTES, normalizeSeedreamSize, parseExactJsonString, parseLanguageModelResponse, renderPromptTemplate, validateInputImages } from './index'
 
 async function fixture(index: unknown, files: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'muse-templates-'))
@@ -115,18 +115,19 @@ test('inspectInputImage validates PNG/JPEG magic, dimension bounds, aspect ratio
   assert.throws(() => inspectInputImage(createMockPng(1700, 100)), /INVALID_INPUT_IMAGE_SIZE/)
   assert.throws(() => inspectInputImage(createMockPng(100, 1700)), /INVALID_INPUT_IMAGE_SIZE/)
 
-  const oversizeSingle = Buffer.alloc(MAX_UPLOAD_IMAGE_BYTES + 1)
-  assert.throws(() => inspectInputImage(oversizeSingle), /INVALID_INPUT_IMAGE_SIZE/)
+  // Absolute single-image ceiling rejects absurd inputs; resolved limits
+  // enforce both raised and lowered settings without huge allocations.
+  assert.throws(() => inspectInputImage(createMockPng(100, 100), { maxImageBytes: 10 }), /INVALID_INPUT_IMAGE_SIZE/)
+  assert.equal(inspectInputImage(createMockPng(100, 100), { maxImageBytes: MAX_UPLOAD_IMAGE_BYTES }).width, 100)
 
-  const img1 = { data: Buffer.alloc(MAX_UPLOAD_IMAGE_BYTES) }
-  img1.data.set(createMockPng(100, 100), 0)
-  const img2 = { data: Buffer.alloc(MAX_UPLOAD_IMAGE_BYTES) }
-  img2.data.set(createMockPng(100, 100), 0)
-  const img3 = { data: createMockPng(100, 100) }
-  assert.throws(() => validateInputImages([img1, img2, img3]), /INVALID_INPUT_IMAGE_SIZE/)
+  const tinyTotal = { maxTotalBytes: 40 }
+  const twoTiny = [{ data: createMockPng(100, 100) }, { data: createMockPng(100, 100) }]
+  assert.throws(() => validateInputImages(twoTiny, tinyTotal), /INVALID_INPUT_IMAGE_SIZE/)
+  assert.equal(validateInputImages(twoTiny, { maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES }).length, 2)
 
-  const five = [1, 2, 3, 4, 5].map(() => ({ data: createMockPng(100, 100) }))
-  assert.throws(() => validateInputImages(five), /INVALID_INPUT_IMAGE/)
+  const thirtyThree = Array.from({ length: 33 }, () => ({ data: createMockPng(100, 100) }))
+  assert.throws(() => validateInputImages(thirtyThree), /INVALID_INPUT_IMAGE/)
+  assert.throws(() => validateInputImages(twoTiny, { maxInputs: 1 }), /INVALID_INPUT_IMAGE/)
 })
 
 

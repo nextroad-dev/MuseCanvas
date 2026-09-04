@@ -181,13 +181,7 @@ test('validateRequest rejects bad modality/prompt/model/size/count/quality/input
     { ...base, vendorModelId: 'dall-e-3', size: '1024x1024', quality: 'low' },
     {
       ...base,
-      inputImages: [
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-      ],
+      inputImages: Array.from({ length: 33 }, () => ({ data: mockPng, mimeType: 'image/png' as const })),
     },
     { ...base, inputImages: [{ data: mockPng, mimeType: 'image/gif' as unknown as 'image/png' }] },
   ]

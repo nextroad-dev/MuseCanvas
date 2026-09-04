@@ -22,7 +22,10 @@ const SEEDANCE_TASKS_PATH = '/contents/generations/tasks'
 const DEFAULT_RETRY_AFTER_MS = 5_000
 const MAX_RETRY_AFTER_MS = 30_000
 const MAX_PROMPT_CHARS = 8_000
-const MAX_INPUT_IMAGES = 4
+// Absolute defense ceilings (setup-allowed maxima). Runtime DB limits are
+// enforced upstream in API/worker; this fallback never contradicts them.
+const MAX_INPUT_IMAGES = 32
+const MAX_INPUT_IMAGE_BYTES = 100_000_000
 const MAX_VIDEO_URL_CHARS = 4_096
 
 export const SEEDANCE_IMAGE_ROLES = ['first_frame', 'last_frame', 'reference_image', 'mask'] as const
@@ -226,12 +229,12 @@ export class SeedanceVideoPlugin implements MediaProviderPlugin {
           'Input image data must be non-empty',
         )
       }
-      if (img.sizeBytes !== undefined && img.sizeBytes > 20_000_000) {
+      if (img.sizeBytes !== undefined && img.sizeBytes > MAX_INPUT_IMAGE_BYTES) {
         throw NormalizedProviderError.create(
           this.manifest.id,
           this.manifest.version,
           'INVALID_REQUEST',
-          'Input image exceeds maximum size of 20 MB',
+          'Input image exceeds maximum size of 100 MB',
         )
       }
     }

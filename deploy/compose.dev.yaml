@@ -1,3 +1,5 @@
+name: musecanvas
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -29,13 +31,8 @@ services:
   mailpit:
     image: axllent/mailpit:v1.27
     ports: ["8025:8025"]
-  db-migrate:
-    build: { context: ., dockerfile: infra/docker/api.Dockerfile }
-    depends_on: { postgres: { condition: service_healthy } }
-    command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts"]
-    environment: *backend-env
   api:
-    build: { context: ., dockerfile: infra/docker/api.Dockerfile }
+    build: { context: ., dockerfile: deploy/docker/api.Dockerfile }
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -68,16 +65,21 @@ services:
     volumes:
       - ./.runtime/prompt-templates:/opt/musecanvas/prompt-templates:ro
     healthcheck: { test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready], interval: 5s, timeout: 3s, retries: 30 }
+  db-migrate:
+    build: { context: ., dockerfile: deploy/docker/api.Dockerfile }
+    depends_on: { postgres: { condition: service_healthy } }
+    command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts"]
+    environment: *backend-env
   worker:
-    build: { context: ., dockerfile: infra/docker/worker.Dockerfile }
+    build: { context: ., dockerfile: deploy/docker/worker.Dockerfile }
     depends_on: { api: { condition: service_healthy }, db-migrate: { condition: service_completed_successfully } }
     environment: *backend-env
     volumes:
       - ./.runtime/prompt-templates:/opt/musecanvas/prompt-templates:ro
   web:
-    build: { context: ., dockerfile: infra/docker/web.Dockerfile, args: { VITE_API_BASE_URL: "" } }
+    build: { context: ., dockerfile: deploy/docker/web.Dockerfile, args: { VITE_API_BASE_URL: "" } }
   nginx:
-    build: { context: ., dockerfile: infra/docker/nginx.Dockerfile }
+    build: { context: ., dockerfile: deploy/docker/nginx.Dockerfile }
     depends_on: { api: { condition: service_healthy }, web: { condition: service_started } }
     ports: ["8080:80"]
 volumes: { postgres_data: {}, redis_data: {}, minio_data: {} }

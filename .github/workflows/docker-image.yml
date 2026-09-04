@@ -6,7 +6,7 @@ on:
     paths:
       - "apps/**"
       - "packages/**"
-      - "infra/**"
+      - "deploy/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -18,7 +18,7 @@ on:
     paths:
       - "apps/**"
       - "packages/**"
-      - "infra/**"
+      - "deploy/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -49,20 +49,20 @@ jobs:
       matrix:
         include:
           - image: musecanvas-api
-            dockerfile: infra/docker/api.Dockerfile
+            dockerfile: deploy/docker/api.Dockerfile
             build_args: ""
 
           - image: musecanvas-worker
-            dockerfile: infra/docker/worker.Dockerfile
+            dockerfile: deploy/docker/worker.Dockerfile
             build_args: ""
 
           - image: musecanvas-web
-            dockerfile: infra/docker/web.Dockerfile
+            dockerfile: deploy/docker/web.Dockerfile
             build_args: |
               VITE_API_BASE_URL=
 
           - image: musecanvas-nginx
-            dockerfile: infra/docker/nginx.Dockerfile
+            dockerfile: deploy/docker/nginx.Dockerfile
             build_args: ""
 
     steps:

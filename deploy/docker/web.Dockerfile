@@ -12,10 +12,10 @@ COPY packages/domain/package.json packages/domain/package.json
 COPY packages/providers/package.json packages/providers/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
-COPY infra/nginx/web.conf infra/nginx/web.conf
+COPY deploy/nginx/web.conf deploy/nginx/web.conf
 ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN pnpm --filter @musecanvas/web build
 FROM nginx:1.27-alpine
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
-COPY infra/nginx/web.conf /etc/nginx/conf.d/default.conf
+COPY deploy/nginx/web.conf /etc/nginx/conf.d/default.conf

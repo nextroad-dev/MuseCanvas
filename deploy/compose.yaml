@@ -1,5 +1,12 @@
 name: musecanvas
 
+# Bundled local stack: Postgres, Redis, MinIO, and Mailpit are started here.
+# Application SMTP/S3 settings are NOT passed via env — db-migrate seeds the
+# dev Mailpit/bundled-MinIO values into the database (BUNDLED_SERVICES=true)
+# so the onboarding wizard opens with them prefilled (configured, unverified).
+# Long-lived api/worker processes receive only bootstrap secrets, default-deny
+# policy flags, and optional one-release legacy crypto keys.
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -30,8 +37,8 @@ services:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address :9001
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-musecanvas}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_API_CORS_ALLOW_ORIGIN:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173}
     volumes:
       - minio_data:/data
@@ -51,8 +58,8 @@ services:
         until mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do sleep 2; done
         mc mb --ignore-existing local/musecanvas
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-musecanvas}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
 
   mailpit:
     image: axllent/mailpit:v1.27
@@ -74,33 +81,13 @@ services:
         condition: service_completed_successfully
     environment: &backend-env
       NODE_ENV: production
-      ALLOW_INSECURE_SMTP: "true"
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
       REDIS_URL: redis://redis:6379
-      SESSION_SECRET: ${SESSION_SECRET}
-      SMTP_ENCRYPTION_KEY: ${SMTP_ENCRYPTION_KEY:-}
-      ADMIN_EMAIL: ${ADMIN_EMAIL}
-      COOKIE_SECURE: "false"
-      SMTP_HOST: mailpit
-      SMTP_PORT: "1025"
-      SMTP_TLS_MODE: none
-      SMTP_FROM: no-reply@musecanvas.local
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_BUCKET: ${S3_BUCKET:-musecanvas}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
-      GENERATION_UPLOAD_TTL_SECONDS: ${GENERATION_UPLOAD_TTL_SECONDS:-86400}
-      GENERATION_UPLOAD_SIGN_TTL_SECONDS: ${GENERATION_UPLOAD_SIGN_TTL_SECONDS:-900}
-      OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-http://localhost:8080}
-      OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:-}
-      PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:-}
-      PROMPT_TEMPLATE_INDEX_PATH: /opt/musecanvas/prompt-templates/index.json
-    volumes:
-      - ./.runtime/prompt-templates:/opt/musecanvas/prompt-templates:ro
+      APP_MASTER_KEY: ${APP_MASTER_KEY}
+      # Bundled Mailpit speaks plaintext SMTP; every other deployment denies it.
+      ALLOW_INSECURE_SMTP: "true"
+      ALLOW_INSECURE_PROVIDER_BASE_URL: "false"
+      ALLOW_PRIVATE_PROVIDER_BASE_URL: "false"
     healthcheck:
       test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready]
       interval: 5s
@@ -113,8 +100,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts"]
-    environment: *backend-env
+    command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts && pnpm --filter @musecanvas/database exec tsx ../../scripts/seed-bundled-services.ts"]
+    environment:
+      DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
+      APP_MASTER_KEY: ${APP_MASTER_KEY}
+      BUNDLED_SERVICES: "true"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-musecanvas}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
 
   worker:
     build:
@@ -126,8 +118,6 @@ services:
       db-migrate:
         condition: service_completed_successfully
     environment: *backend-env
-    volumes:
-      - ./.runtime/prompt-templates:/opt/musecanvas/prompt-templates:ro
 
   web:
     build:

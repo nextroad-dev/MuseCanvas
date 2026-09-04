@@ -16,6 +16,26 @@ export async function limited(key: string, max: number, seconds: number): Promis
   }
 }
 
+/** Bootstrap liveness probe. True when Redis answers PING, false otherwise. Never throws. */
+export async function redisPing(timeoutMs = 2000): Promise<boolean> {
+  try {
+    redis ??= createClient({ url: process.env.REDIS_URL })
+    if (!redis.isOpen) await redis.connect()
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('REDIS_TIMEOUT')), timeoutMs)
+    })
+    try {
+      await Promise.race([redis.ping(), timeout])
+      return true
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  } catch {
+    return false
+  }
+}
+
 async function redisClient() {
   redis ??= createClient({ url: process.env.REDIS_URL })
   if (!redis.isOpen) await redis.connect()

@@ -7,10 +7,18 @@ import DataTable from '@/shared/components/ui/DataTable.vue'
 import BaseDropdown from '@/shared/components/ui/BaseDropdown.vue'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
 import ConfirmDialog from '@/shared/components/ui/ConfirmDialog.vue'
-import { toast } from '@/shared/composables/useToast'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import Textarea from '@/shared/components/ui/Textarea.vue'
+import Field from '@/shared/components/ui/Field.vue'
 import type { AdminModel, LanguageProtocol, ModelAdapter, ModelPreset, PromptOptimizationSettings, ReasoningEffort } from '@/shared/types'
 import type { Column } from '@/shared/components/ui/DataTable.vue'
 import AppModal from '@/shared/components/ui/AppModal.vue'
+import { toast } from '@/shared/composables/useToast'
+type AdminModelWithCapabilityJson = AdminModel & {
+  capabilities?: unknown
+  pricing?: unknown
+  defaults?: unknown
+}
 
 const admin = useAdminStore()
 const showCreateDialog = ref(false)
@@ -33,15 +41,19 @@ const promptLanguageModelOptions = computed(() => [
 const form = ref({
   presetId: '',
   concurrencyLimit: 1,
+  creditsPerImage: 0,
   watermark: false,
   sortOrder: 0,
   providerCredentialId: '',
   reasoningEffort: 'medium' as ReasoningEffort,
+  capabilitiesJson: '',
+  pricingJson: '',
+  defaultsJson: '',
 })
 
 const presetOptions = computed(() => [
   { value: '', label: '请选择模型预设' },
-  ...admin.modelPresets.map(p => ({ value: p.id, label: `${p.displayName} · ${p.modelKind === 'language' ? '语言模型' : '图像模型'} · ${presetProtocolLabel(p)}` })),
+  ...admin.modelPresets.map(p => ({ value: p.id, label: `${p.displayName} · ${presetKindLabel(p)} · ${presetProtocolLabel(p)}` })),
 ])
 
 const selectedPreset = computed(() => admin.modelPresets.find((item) => item.id === form.value.presetId) || null)
@@ -75,7 +87,7 @@ const reasoningEffortOptions = [
 
 const canSave = computed(() =>
   !!selectedPreset.value
-  && (selectedPreset.value.modelKind === 'image' || !!form.value.providerCredentialId),
+  && (selectedPreset.value.modelKind !== 'language' || !!form.value.providerCredentialId),
 )
 
 onMounted(async () => {
@@ -89,7 +101,12 @@ const availableCredentials = computed(() =>
 )
 
 function adapterLabel(adapter: ModelAdapter) {
-  return adapter === 'openai' ? 'OpenAI 兼容' : adapter === 'anthropic' ? 'Anthropic' : 'Seedream'
+  if (adapter === 'openai') return 'OpenAI 兼容'
+  if (adapter === 'anthropic') return 'Anthropic'
+  if (adapter === 'seedream') return 'Seedream'
+  if (adapter === 'veo' || adapter === 'google') return 'Veo (Google)'
+  if (adapter === 'volcengine') return '火山引擎'
+  return String(adapter)
 }
 
 function languageProtocolLabel(protocol?: LanguageProtocol | null) {
@@ -111,7 +128,9 @@ function credentialProtocolLabel(adapter: ModelAdapter) {
 }
 
 function presetKindLabel(preset?: ModelPreset | null) {
-  return preset?.modelKind === 'language' ? '语言模型' : '图像模型'
+  if (preset?.modelKind === 'language') return '语言模型'
+  if (preset?.modelKind === 'video') return '视频模型'
+  return '图像模型'
 }
 
 function reasoningLabel(value?: ReasoningEffort | null) {
@@ -127,6 +146,14 @@ function presetSummary(preset?: ModelPreset | null) {
       `协议：${languageProtocolLabel(preset.languageProtocol)}`,
       `输出上限：${preset.maxOutputTokens || '-'}`,
       `温度：${preset.temperature ?? '-'}`,
+    ]
+  }
+  if (preset.modelKind === 'video') {
+    return [
+      `供应商：${adapterLabel(preset.adapter)}`,
+      `模型 ID：${preset.vendorModelId}`,
+      `时长/比例/分辨率由生成页能力描述动态提供`,
+      `最多：${preset.maxCount || 1} 个视频`,
     ]
   }
   return [
@@ -152,11 +179,9 @@ function applyPreset(id: string) {
     ? languageCredentials.value.find((cred) => cred.adapter === preset.adapter)?.id || ''
     : availableCredentials.value.find((cred) => cred.adapter === preset.adapter)?.id || ''
   form.value.reasoningEffort = (preset.reasoningEffort || 'medium') as ReasoningEffort
-}
-
-function findPresetForModel(model: AdminModel): ModelPreset | undefined {
-  return admin.modelPresets.find(preset => preset.id === model.presetId)
-    || admin.modelPresets.find(preset => preset.modelKind === (model.modelKind || 'image') && preset.adapter === model.adapter && preset.vendorModelId === model.vendorModelId)
+  form.value.capabilitiesJson = ''
+  form.value.pricingJson = ''
+  form.value.defaultsJson = ''
 }
 
 function openCreate() {
@@ -164,48 +189,117 @@ function openCreate() {
   form.value = {
     presetId: '',
     concurrencyLimit: 1,
+    creditsPerImage: 0,
     watermark: false,
     sortOrder: 0,
     providerCredentialId: '',
     reasoningEffort: 'medium',
+    capabilitiesJson: '',
+    pricingJson: '',
+    defaultsJson: '',
   }
   showCreateDialog.value = true
 }
 
+function findPresetForModel(model: AdminModel): ModelPreset | undefined {
+  return admin.modelPresets.find(preset => preset.id === model.presetId)
+    || admin.modelPresets.find(preset => preset.modelKind === (model.modelKind || 'image') && preset.adapter === model.adapter && preset.vendorModelId === model.vendorModelId)
+}
+
 function openEdit(model: AdminModel) {
+  const modelWithCapabilities = model as AdminModelWithCapabilityJson
   editingModel.value = model
   const preset = findPresetForModel(model)
   form.value = {
     presetId: preset?.id || '',
     concurrencyLimit: model.concurrencyLimit,
+    creditsPerImage: model.creditsPerImage ?? 0,
     watermark: model.watermark || false,
     sortOrder: model.sortOrder,
     providerCredentialId: model.providerCredentialId || '',
     reasoningEffort: model.reasoningEffort || preset?.reasoningEffort || 'medium',
+    capabilitiesJson: model.capabilitiesJson || stringifyJson(modelWithCapabilities.capabilities),
+    pricingJson: model.pricingJson || stringifyJson(modelWithCapabilities.pricing),
+    defaultsJson: model.defaultsJson || stringifyJson(modelWithCapabilities.defaults),
   }
   showCreateDialog.value = true
 }
 
+function stringifyJson(value: unknown): string {
+  if (value === undefined || value === null) return ''
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function parseOptionalJson(raw: string, field: string): { ok: boolean; value?: Record<string, unknown>; error?: string } {
+  const text = raw.trim()
+  if (!text) return { ok: true, value: undefined }
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return { ok: false, error: `${field}必须是 JSON 对象` }
+    }
+    return { ok: true, value: parsed as Record<string, unknown> }
+  } catch {
+    return { ok: false, error: `${field}不是合法 JSON` }
+  }
+}
+
 async function handleSave() {
   if (!canSave.value) return
+  if (selectedPreset.value?.modelKind === 'image') {
+    const rawCredits = form.value.creditsPerImage
+    const credits = Number(rawCredits)
+    if (rawCredits === null || rawCredits === undefined || (rawCredits as unknown) === '' || !Number.isSafeInteger(credits) || credits < 0) {
+      toast('积分单价必须是非负整数', 'error')
+      return
+    }
+  }
   const data: Partial<AdminModel> & { presetId?: string } = {
     presetId: form.value.presetId,
     concurrencyLimit: form.value.concurrencyLimit,
+    creditsPerImage: Number(form.value.creditsPerImage ?? 0),
     sortOrder: form.value.sortOrder,
     providerCredentialId: form.value.providerCredentialId || '',
   }
   if (selectedPreset.value?.modelKind === 'image') {
     data.watermark = form.value.watermark
-  } else {
+  } else if (selectedPreset.value?.modelKind === 'language') {
     data.reasoningEffort = form.value.reasoningEffort
   }
-
-  if (editingModel.value) {
-    await admin.updateModel(editingModel.value.id, data)
-  } else {
-    await admin.createModel(data)
+  if (selectedPreset.value?.modelKind !== 'language') {
+    const capabilities = parseOptionalJson(form.value.capabilitiesJson, '能力描述')
+    if (!capabilities.ok) {
+      toast(capabilities.error || '能力描述不合法', 'error')
+      return
+    }
+    const pricing = parseOptionalJson(form.value.pricingJson, '计费配置')
+    if (!pricing.ok) {
+      toast(pricing.error || '计费配置不合法', 'error')
+      return
+    }
+    const defaults = parseOptionalJson(form.value.defaultsJson, '默认参数')
+    if (!defaults.ok) {
+      toast(defaults.error || '默认参数不合法', 'error')
+      return
+    }
+    if (capabilities.value !== undefined) (data as Record<string, unknown>).capabilities = capabilities.value
+    if (pricing.value !== undefined) (data as Record<string, unknown>).pricing = pricing.value
+    if (defaults.value !== undefined) (data as Record<string, unknown>).defaults = defaults.value
   }
-  showCreateDialog.value = false
+  const res = editingModel.value
+    ? await admin.updateModel(editingModel.value.id, data)
+    : await admin.createModel(data)
+
+  if (res.success) {
+    toast(editingModel.value ? '模型已更新' : '模型已添加', 'success')
+    showCreateDialog.value = false
+  } else {
+    toast(res.error?.message || (editingModel.value ? '保存模型失败' : '添加模型失败'), 'error')
+  }
 }
 
 function handleToggleEnabled(model: AdminModel) {
@@ -252,7 +346,6 @@ function handlePromptLanguageModelChange(value: string) {
   promptLanguageModelId.value = value
   void savePromptSettings({ languageModelConfigId: value || null })
 }
-
 function handlePromptEnabledChange(value: boolean) {
   if (value === promptEnabled.value || promptSettingsSaving.value) return
   promptEnabled.value = value
@@ -267,17 +360,28 @@ function handlePromptAllowReadChange(value: boolean) {
 
 const modelColumns: Column<AdminModel>[] = [
   { key: 'displayName', label: '模型名称' },
-  { key: 'modelKind', label: '用途', render: row => row.modelKind === 'language' ? '语言模型' : '图像模型' },
+  { key: 'modelKind', label: '用途', render: row => row.modelKind === 'language' ? '语言模型' : row.modelKind === 'video' ? '视频模型' : '图像模型' },
   {
     key: 'adapter',
     label: '供应商',
     render: (row) => adapterLabel(row.adapter),
   },
+  { key: 'pluginVersion', label: '插件版本', render: row => (row as AdminModel).pluginVersion || (row as AdminModel).pluginId || '-' },
   { key: 'languageProtocol', label: '协议/推理', render: row => row.modelKind === 'language' ? `${languageProtocolLabel(row.languageProtocol)} · ${reasoningLabel(row.reasoningEffort)}` : '-' },
   {
     key: 'enabled',
     label: '状态',
     render: (row) => row.enabled ? '已启用' : '已禁用',
+  },
+  {
+    key: 'creditsPerImage',
+    label: '积分单价',
+    render: (row) => {
+      if (row.modelKind === 'language') return '-'
+      const pricing = (row as AdminModel & { pricing?: { scheme?: string; creditsPerSecond?: number } }).pricing
+      if (pricing?.scheme === 'per_second_v1') return `${pricing.creditsPerSecond ?? 0} 积分/秒`
+      return `${row.creditsPerImage ?? 0} 积分/${row.modelKind === 'video' ? '次' : '张'}`
+    },
   },
   { key: 'concurrencyLimit', label: '并发上限' },
   { key: 'providerCredentialName', label: '凭据', render: (row) => row.providerCredentialName || '未关联' },
@@ -288,12 +392,9 @@ const modelColumns: Column<AdminModel>[] = [
   <div class="space-y-6">
     <PageHeader title="模型管理">
       <template #actions>
-        <button
-          class="inline-flex h-8 items-center rounded-[var(--radius-control)] bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
-          @click="openCreate"
-        >
+        <BaseButton size="sm" @click="openCreate">
           添加模型
-        </button>
+        </BaseButton>
       </template>
     </PageHeader>
 
@@ -368,16 +469,62 @@ const modelColumns: Column<AdminModel>[] = [
           </p>
         </div>
 
+        <div v-if="selectedPreset?.modelKind === 'video'">
+          <label class="mb-1 block text-xs font-medium text-foreground">供应商凭据（插件密钥）</label>
+          <BaseDropdown v-model="form.providerCredentialId" :options="imageCredentialOptions" />
+          <p class="mt-1 text-xs text-muted-foreground">
+            视频模型通过插件调用供应商（如 Veo / Seedance），凭据密钥仅写入不可回读。
+            <RouterLink to="/admin/providers" class="text-primary hover:underline">前往配置凭据</RouterLink>
+          </p>
+        </div>
+
         <div v-if="selectedPreset?.modelKind === 'language'">
           <label class="mb-1 block text-xs font-medium text-foreground">思考等级</label>
           <BaseDropdown v-model="form.reasoningEffort" :options="reasoningEffortOptions" />
         </div>
 
         <p v-if="selectedPreset?.modelKind === 'image'" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 text-xs text-muted-foreground lg:col-span-2">尺寸、质量和生成张数由生成页统一提供常用预设，也支持用户自定义安全尺寸。</p>
+        <p v-if="selectedPreset?.modelKind === 'video'" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 text-xs text-muted-foreground lg:col-span-2">时长、比例、分辨率与音频由插件能力描述驱动，生成页会自动渲染可用选项。</p>
 
-        <div class="grid grid-cols-2 gap-4 lg:col-span-2">
-          <div>
-            <label class="mb-1 block text-xs font-medium text-foreground">并发上限</label>
+        <div v-if="selectedPreset && selectedPreset.modelKind !== 'language'" class="grid gap-4 lg:col-span-2">
+          <Field label="能力描述 (capabilities JSON，可选)">
+            <Textarea
+              v-model="form.capabilitiesJson"
+              :rows="4"
+              placeholder='{"modes": ["text_to_video"], "parameters": [...], "inputSlots": [...]}'
+              spellcheck="false"
+              class="font-mono text-xs"
+            />
+          </Field>
+          <div class="grid gap-4 md:grid-cols-2">
+              <Textarea
+                v-model="form.pricingJson"
+                :rows="3"
+                placeholder='{"scheme": "per_second_v1", "creditsPerSecond": 10}'
+                spellcheck="false"
+                class="font-mono text-xs"
+              />
+              <Textarea
+                v-model="form.defaultsJson"
+                :rows="3"
+                placeholder='{"aspect_ratio": "16:9", "resolution": "720p"}'
+                spellcheck="false"
+                class="font-mono text-xs"
+              />
+          </div>
+          <p class="text-xs text-muted-foreground">留空沿用插件默认；填写后随模型版本一并下发，密钥等敏感信息不得填入此处。</p>
+        </div>
+
+        <div class="grid gap-4 lg:col-span-2" :class="selectedPreset?.modelKind === 'image' ? 'grid-cols-3' : 'grid-cols-2'">
+          <Field v-if="selectedPreset?.modelKind === 'image'" label="积分单价 (张)">
+            <input
+              v-model.number="form.creditsPerImage"
+              type="number"
+              min="0"
+              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </Field>
+          <Field label="并发上限">
             <input
               v-model.number="form.concurrencyLimit"
               type="number"
@@ -385,11 +532,10 @@ const modelColumns: Column<AdminModel>[] = [
               max="50"
               class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
             />
-          </div>
-          <div>
-            <label class="mb-1 block text-xs font-medium text-foreground">排序</label>
+          </Field>
+          <Field label="排序">
             <input v-model.number="form.sortOrder" type="number" class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm focus:border-primary focus:outline-none" />
-          </div>
+          </Field>
         </div>
 
         <div v-if="selectedPreset?.modelKind === 'image' && selectedPreset.adapter === 'seedream'" class="flex items-center gap-2 pt-1">
@@ -398,19 +544,12 @@ const modelColumns: Column<AdminModel>[] = [
         </div>
       </div>
       <template #footer="{ close }">
-        <button
-          class="inline-flex h-9 items-center rounded-[var(--radius-control)] border border-border px-4 text-sm font-medium text-foreground hover:bg-surface-subtle"
-          @click="close"
-        >
+        <BaseButton variant="secondary" @click="close">
           取消
-        </button>
-        <button
-          :disabled="!canSave"
-          class="inline-flex h-9 items-center rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white hover:bg-primary-hover disabled:opacity-50"
-          @click="handleSave"
-        >
+        </BaseButton>
+        <BaseButton variant="primary" :disabled="!canSave" @click="handleSave">
           {{ editingModel ? '保存' : '添加' }}
-        </button>
+        </BaseButton>
       </template>
     </AppModal>
 

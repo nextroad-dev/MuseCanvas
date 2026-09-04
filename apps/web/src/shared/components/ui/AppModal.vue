@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, toRef } from 'vue'
 import { X } from 'lucide-vue-next'
-import { useFocusTrap } from '@/shared/composables/useFocusTrap'
+import { useOverlay } from '@/shared/composables/useOverlay'
 import { cn } from '@/shared/lib/utils'
 
 const props = defineProps<{
@@ -19,7 +19,15 @@ const emit = defineEmits<{
 }>()
 
 const modalRef = ref<HTMLElement | null>(null)
-const { activate, deactivate } = useFocusTrap(modalRef)
+
+function close() {
+  emit('update:open', false)
+}
+
+useOverlay(modalRef, toRef(props, 'open'), {
+  onOpen: () => { /* scroll lock + focus trap handled by useOverlay */ },
+  onClose: () => { /* cleanup handled by useOverlay */ },
+})
 
 const sizeMap = {
   sm: 'max-w-sm',
@@ -27,30 +35,12 @@ const sizeMap = {
   lg: 'max-w-2xl',
   xl: 'max-w-5xl',
 }
-
-watch(() => props.open, (val) => {
-  if (val) {
-    document.body.style.overflow = 'hidden'
-    nextTick(() => activate())
-  } else {
-    document.body.style.overflow = ''
-    deactivate()
-  }
-})
-
-function close() {
-  emit('update:open', false)
-}
-
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') close()
-}
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div v-if="open" class="fixed inset-0 z-50 flex items-center justify-center p-4" @keydown="handleKeydown">
+      <div v-if="open" class="fixed inset-0 z-overlay flex items-center justify-center p-4">
         <!-- Backdrop -->
         <div class="absolute inset-0 bg-black/40" @click="close" />
 
@@ -71,11 +61,11 @@ function handleKeydown(e: KeyboardEvent) {
               <p v-if="description" class="mt-1 text-sm text-muted-foreground">{{ description }}</p>
             </div>
             <button
-              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-neutral-500 hover:bg-neutral-100"
+              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle"
               aria-label="关闭"
               @click="close"
             >
-              <X class="h-4 w-4" />
+              <X class="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
           <div :class="cn('flex-1 p-5', scrollBody === false ? 'overflow-visible' : 'overflow-y-auto', bodyClass)">

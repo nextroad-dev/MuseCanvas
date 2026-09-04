@@ -6,7 +6,7 @@ useToast()
 </script>
 
 <template>
-  <div class="pointer-events-none fixed inset-x-0 top-0 z-[100] flex flex-col items-center gap-2 p-4">
+  <div class="pointer-events-none fixed inset-x-0 top-0 z-toast flex flex-col items-center gap-2 p-4">
     <TransitionGroup
       enter-active-class="transition-all duration-300 ease-out"
       enter-from-class="opacity-0 -translate-y-2 scale-95"

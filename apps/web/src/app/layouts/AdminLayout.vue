@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { RouterView, RouterLink, useRoute } from 'vue-router'
+import { RouterView, useRoute } from 'vue-router'
 import { useAuthStore } from '@/features/auth/stores/auth'
 import {
   LayoutDashboard, ShieldCheck, Users, Cpu, ListTodo, Key, FileText,
-  ArrowLeft, Menu,
+  ArrowLeft, Menu, Coins,
 } from 'lucide-vue-next'
-import { cn } from '@/shared/lib/utils'
 import AppDrawer from '@/shared/components/ui/AppDrawer.vue'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import NavLink from '@/shared/components/ui/NavLink.vue'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -35,6 +36,7 @@ const navGroups: NavGroup[] = [
   {
     title: '系统设置',
     items: [
+      { name: 'admin-billing', path: '/admin/billing', label: '计费设置', icon: Coins },
       { name: 'admin-oauth', path: '/admin/oauth', label: 'OAuth', icon: ShieldCheck },
     ],
   },
@@ -46,13 +48,12 @@ const navGroups: NavGroup[] = [
   <div class="flex h-screen flex-col bg-canvas text-foreground">
     <!-- Top bar -->
     <header class="flex h-16 shrink-0 items-center border-b border-border bg-surface px-4 sm:px-6">
-      <RouterLink
-        to="/generate"
-        class="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
-      >
-        <ArrowLeft class="h-4 w-4" />
+      <BaseButton to="/generate" size="sm">
+        <template #icon>
+          <ArrowLeft class="h-4 w-4" />
+        </template>
         返回创作端
-      </RouterLink>
+      </BaseButton>
 
       <span class="ml-4 hidden text-sm font-semibold text-foreground md:inline">管理后台</span>
 
@@ -87,20 +88,16 @@ const navGroups: NavGroup[] = [
             >
               {{ group.title }}
             </div>
-            <RouterLink
+            <NavLink
               v-for="item in group.items"
               :key="item.name"
               :to="item.path"
-              :class="cn(
-                'flex items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors',
-                route.name === item.name
-                  ? 'bg-primary-soft text-primary'
-                  : 'text-muted-foreground hover:bg-surface-subtle hover:text-foreground',
-              )"
+              :active="route.name === item.name"
+              class="flex items-center gap-2"
             >
               <component :is="item.icon" class="h-4 w-4 shrink-0" />
               <span class="truncate">{{ item.label }}</span>
-            </RouterLink>
+            </NavLink>
           </div>
         </nav>
       </aside>
@@ -124,21 +121,17 @@ const navGroups: NavGroup[] = [
         <div v-if="group.title" class="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           {{ group.title }}
         </div>
-        <RouterLink
+        <NavLink
           v-for="item in group.items"
           :key="item.name"
           :to="item.path"
-          :class="cn(
-            'flex items-center gap-2 rounded-[var(--radius-control)] px-3 py-2.5 text-sm font-medium transition-colors',
-            route.name === item.name
-              ? 'bg-primary-soft text-primary'
-              : 'text-muted-foreground hover:bg-surface-subtle',
-          )"
+          :active="route.name === item.name"
+          class="flex items-center gap-2"
           @click="drawerOpen = false"
         >
-          <component :is="item.icon" class="h-4 w-4" />
+          <component :is="item.icon" class="h-4 w-4 shrink-0" />
           {{ item.label }}
-        </RouterLink>
+        </NavLink>
       </div>
     </nav>
   </AppDrawer>

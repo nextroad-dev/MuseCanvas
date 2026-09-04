@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from 'vue'
+import { computed, ref, toRef } from 'vue'
 import { X, ChevronLeft, ChevronRight, Download } from 'lucide-vue-next'
-import { useFocusTrap } from '@/shared/composables/useFocusTrap'
+import { useOverlay } from '@/shared/composables/useOverlay'
 
 interface LightboxImage {
   url: string
@@ -11,32 +11,25 @@ interface LightboxImage {
 
 const props = defineProps<{
   images: LightboxImage[]
-  modelValue: number
+  open: boolean
+  modelValue?: number
 }>()
 
 const emit = defineEmits<{
-  'update:modelValue': [index: number]
+  'update:open': [value: boolean]
+  'update:modelValue': [value: number]
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
-const { activate, deactivate } = useFocusTrap(containerRef)
-
-const isOpen = computed(() => props.modelValue >= 0)
-const currentIndex = computed(() => Math.max(0, Math.min(props.modelValue, props.images.length - 1)))
-const currentImage = computed(() => props.images[currentIndex.value])
-
-watch(isOpen, (val) => {
-  if (val) {
-    document.body.style.overflow = 'hidden'
-    nextTick(() => activate())
-  } else {
-    document.body.style.overflow = ''
-    deactivate()
-  }
+useOverlay(containerRef, toRef(props, 'open'), {
+  onClose: () => emit('update:open', false),
 })
 
+const currentIndex = computed(() => Math.max(0, Math.min(props.modelValue ?? 0, props.images.length - 1)))
+const currentImage = computed(() => props.images[currentIndex.value])
+
 function close() {
-  emit('update:modelValue', -1)
+  emit('update:open', false)
 }
 
 function prev() {
@@ -52,14 +45,15 @@ function next() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') close()
   if (e.key === 'ArrowLeft') prev()
   if (e.key === 'ArrowRight') next()
 }
 
 function handleDownload() {
+  const url = currentImage.value?.url
+  if (!url) return
   const a = document.createElement('a')
-  a.href = currentImage.value.url
+  a.href = url
   a.download = `musecanvas-${Date.now()}.png`
   a.click()
 }
@@ -69,9 +63,9 @@ function handleDownload() {
   <Teleport to="body">
     <Transition name="lightbox">
       <div
-        v-if="isOpen"
+        v-if="open"
         ref="containerRef"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+        class="fixed inset-0 z-overlay flex items-center justify-center bg-black/80"
         @click="close"
         @keydown="handleKeydown"
       >
@@ -81,7 +75,7 @@ function handleDownload() {
           aria-label="关闭"
           @click.stop="close"
         >
-          <X class="h-5 w-5" />
+          <X class="h-5 w-5" aria-hidden="true" />
         </button>
 
         <!-- Prev -->
@@ -91,7 +85,7 @@ function handleDownload() {
           aria-label="上一张"
           @click.stop="prev"
         >
-          <ChevronLeft class="h-5 w-5" />
+          <ChevronLeft class="h-5 w-5" aria-hidden="true" />
         </button>
 
         <!-- Next -->
@@ -101,7 +95,7 @@ function handleDownload() {
           aria-label="下一张"
           @click.stop="next"
         >
-          <ChevronRight class="h-5 w-5" />
+          <ChevronRight class="h-5 w-5" aria-hidden="true" />
         </button>
 
         <!-- Image -->
@@ -119,7 +113,7 @@ function handleDownload() {
               class="inline-flex h-8 items-center gap-1 rounded-md bg-white/10 px-3 text-xs text-white hover:bg-white/20"
               @click.stop="handleDownload"
             >
-              <Download class="h-3.5 w-3.5" />
+              <Download class="h-3.5 w-3.5" aria-hidden="true" />
               下载
             </button>
           </div>

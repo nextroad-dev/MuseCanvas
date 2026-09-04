@@ -55,15 +55,29 @@ function titleText(job: GenerationJob) {
 
       <!-- Thumbnail -->
       <div class="relative z-10 h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-surface-subtle pointer-events-none">
+        <video
+          v-if="job.outputs[0] && (job.outputs[0].mediaKind === 'video' || job.mediaKind === 'video')"
+          :src="job.outputs[0].url || job.outputs[0].imageUrl"
+          :poster="(job.outputs[0].mediaKind === 'video' ? (job.outputs[0] as any).metadata?.posterUrl : undefined)"
+          preload="metadata"
+          muted
+          playsinline
+          class="block h-full w-full object-cover"
+        />
         <img
-          v-if="job.outputs[0]?.imageUrl"
-          :src="job.outputs[0].imageUrl"
+          v-else-if="job.outputs[0]?.imageUrl || (job.outputs[0] as any)?.url"
+          :src="(job.outputs[0] as any).url || job.outputs[0].imageUrl"
           :alt="titleText(job)"
           class="block h-full w-full object-cover"
           loading="lazy"
         />
         <div v-else class="flex h-full w-full items-center justify-center">
           <ImageIcon class="h-5 w-5 text-muted-foreground/30" />
+        </div>
+
+        <!-- Media kind badge -->
+        <div v-if="job.outputs[0]?.mediaKind === 'video' || job.mediaKind === 'video'" class="absolute bottom-1 right-1">
+          <span class="flex items-center rounded bg-black/65 px-1 py-px text-[9px] font-semibold text-white">视频</span>
         </div>
 
         <!-- Status badges overlay on thumbnail -->
@@ -83,14 +97,12 @@ function titleText(job: GenerationJob) {
           </span>
         </div>
       </div>
-
-      <!-- Title / Info -->
       <div class="z-10 flex min-w-0 flex-1 flex-col pointer-events-none">
         <p class="truncate text-sm font-medium text-foreground">
           {{ titleText(job) }}
         </p>
         <p class="truncate text-xs text-muted-foreground">
-          {{ job.modelName || '未知模型' }}
+          {{ job.modelName || '未知模型' }}{{ job.outputs[0]?.mediaKind === 'video' || job.mediaKind === 'video' ? ' · 视频' : '' }}
         </p>
       </div>
 

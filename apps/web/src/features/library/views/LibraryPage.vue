@@ -48,7 +48,8 @@ const library = useLibraryStore()
 const generation = useGenerationStore()
 const deleteTarget = ref<Asset | null>(null)
 const showDeleteConfirm = ref(false)
-const lightboxIndex = ref(-1)
+const lightboxOpen = ref(false)
+const lightboxIndex = ref(0)
 
 /* view controls */
 const columnCount = ref<ColumnCount>(
@@ -102,7 +103,7 @@ const displayedAssets = computed(() => {
 })
 
 const lightboxImages = computed(() =>
-  library.assets.map(a => ({ url: a.imageUrl, prompt: a.prompt, alt: a.prompt })),
+  library.assets.map(a => ({ url: a.url || a.imageUrl, prompt: a.prompt, alt: a.prompt })),
 )
 
 /* ------------------------------------------------------------------ */
@@ -129,26 +130,29 @@ function handleView(asset: Asset) {
   const index = library.assets.findIndex(a => a.id === asset.id)
   if (index >= 0) {
     lightboxIndex.value = index
+    lightboxOpen.value = true
   }
 }
 
 async function handleDownload(asset: Asset) {
+  const url = asset.url || asset.imageUrl
+  const isVideo = asset.mediaKind === 'video' || (asset.mimeType || '').startsWith('video/')
   try {
-    const response = await fetch(asset.imageUrl)
+    const response = await fetch(url)
     const blob = await response.blob()
     const objectUrl = URL.createObjectURL(blob)
-    
+
     const link = document.createElement('a')
     link.href = objectUrl
-    link.download = `musecanvas-${asset.id}.png`
+    link.download = url.split('/').pop()?.split('?')[0] || `musecanvas-${asset.id}.${isVideo ? 'mp4' : 'png'}`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-    
+
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
   } catch (error) {
-    console.error('Failed to download image:', error)
-    window.open(asset.imageUrl, '_blank')
+    console.error('Failed to download asset:', error)
+    window.open(url, '_blank')
   }
 }
 
@@ -196,8 +200,8 @@ async function confirmDelete() {
     <!-- Content -->
     <div class="flex-1 overflow-auto p-4 sm:p-6">
       <EmptyState
-        v-if="!library.loading && library.assets.length === 0"
-        title="暂无图片"
+        v-if="!library.loading && displayedAssets.length === 0"
+        title="暂无作品"
         description="生成后的作品会出现在这里"
         @action="() => {}"
       >
@@ -229,7 +233,7 @@ async function confirmDelete() {
     </div>
 
     <!-- Lightbox -->
-    <Lightbox :images="lightboxImages" v-model="lightboxIndex" />
+    <Lightbox :images="lightboxImages" v-model:open="lightboxOpen" v-model="lightboxIndex" />
 
     <!-- Delete confirmation -->
     <ConfirmDialog

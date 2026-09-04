@@ -34,15 +34,24 @@ const firstOutput = computed(() => props.job.outputs?.[0])
     @keydown.space.prevent="emit('select', job.id)"
   >
     <!-- Thumbnail -->
-    <div class="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
+    <div class="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
+      <video
+        v-if="firstOutput?.mediaKind === 'video'"
+        :src="firstOutput.url || firstOutput.imageUrl"
+        preload="metadata"
+        muted
+        playsinline
+        class="h-full w-full object-cover"
+      />
       <img
-        v-if="firstOutput?.imageUrl"
-        :src="firstOutput.imageUrl"
+        v-else-if="firstOutput && (firstOutput.url || firstOutput.imageUrl)"
+        :src="firstOutput.url || firstOutput.imageUrl"
         alt=""
         class="h-full w-full object-cover"
         loading="lazy"
       />
       <ImageIcon v-else class="h-4 w-4 text-muted-foreground" />
+      <span v-if="firstOutput?.mediaKind === 'video'" class="absolute bottom-0.5 right-0.5 rounded bg-black/65 px-1 text-[9px] font-semibold text-white">视频</span>
     </div>
 
     <!-- Info -->

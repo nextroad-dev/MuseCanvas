@@ -12,7 +12,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1073.0",
+    "@aws-sdk/s3-presigned-post": "^3.1073.0",
     "@aws-sdk/s3-request-presigner": "^3.1073.0",
+    "@musecanvas/contracts": "workspace:*",
+    "@musecanvas/database": "workspace:*",
+    "@musecanvas/domain": "workspace:*",
+    "@musecanvas/providers": "workspace:*",
     "jose": "^6.2.3",
     "next": "^15.5.19",
     "nodemailer": "^7.0.13",

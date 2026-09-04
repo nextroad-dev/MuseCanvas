@@ -124,12 +124,57 @@ S3_BUCKET=
 S3_ACCESS_KEY_ID=
 S3_SECRET_ACCESS_KEY=
 
+# 参考图上传 TTL（可选配置，默认安全值如下）
+GENERATION_UPLOAD_TTL_SECONDS=86400
+GENERATION_UPLOAD_SIGN_TTL_SECONDS=900
+
 OAUTH_REDIRECT_BASE_URL=
 OAUTH_CREDENTIALS_ENCRYPTION_KEY=
 PROVIDER_CREDENTIALS_ENCRYPTION_KEY=
 ```
 
 所有密钥只允许放在服务端环境变量或管理员后台的加密配置中，禁止写入前端代码。
+
+### 外部 S3 存储桶 CORS 要求
+
+为支持前端浏览器直接通过预签名 POST（Presigned POST）上传参考图，外部 S3 / Cloudflare R2 / MinIO 存储桶必须配置跨域资源共享（CORS）规则：
+
+- **AllowedOrigins**：前端应用部署的访问来源，例如 `https://studio.example.com`（本地开发联调外部桶时使用 `http://localhost:8080` 等）。
+- **AllowedMethods**：`POST`、`GET`、`HEAD`（预签名表单直传必须允许 `POST` 方法）。
+- **AllowedHeaders**：`*`（包含表单上传携带的各类标头）。
+- **ExposeHeaders**：`ETag`, `Location`。
+- **MaxAgeSeconds**：`3600`。
+
+AWS S3 / 兼容存储桶 JSON 配置示例：
+
+```json
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["POST", "GET", "HEAD"],
+    "AllowedOrigins": ["https://studio.example.com"],
+    "ExposeHeaders": ["ETag", "Location"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+MinIO / S3 XML 配置示例：
+
+```xml
+<CORSConfiguration>
+  <CORSRule>
+    <AllowedOrigin>https://studio.example.com</AllowedOrigin>
+    <AllowedMethod>POST</AllowedMethod>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>HEAD</AllowedMethod>
+    <AllowedHeader>*</AllowedHeader>
+    <ExposeHeader>ETag</ExposeHeader>
+    <ExposeHeader>Location</ExposeHeader>
+    <MaxAgeSeconds>3600</MaxAgeSeconds>
+  </CORSRule>
+</CORSConfiguration>
+```
 
 ## 使用 GHCR 镜像部署
 

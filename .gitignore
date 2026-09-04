@@ -51,6 +51,8 @@ Desktop.ini
 
 # Local AI agent instructions and development notes
 docs/
+agents.md
+**/agents.md
 AGENTS.md
 **/AGENTS.md
 CLAUDE.md

@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const hex = (bytes: number) => randomBytes(bytes).toString('hex')
+const hex = (bytes) => randomBytes(bytes).toString('hex')
 
 const envPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.env')
 

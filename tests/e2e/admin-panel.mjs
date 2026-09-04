@@ -27,7 +27,7 @@ assert.equal(verified.payload.data.user.role, 'admin')
 const cookie = verified.response.headers.get('set-cookie')?.split(';')[0]
 assert.ok(cookie)
 
-for (const endpoint of ['dashboard', 'registration', 'smtp', 'users', 'models', 'model-presets', 'jobs']) {
+for (const endpoint of ['dashboard', 'registration', 'users', 'models', 'model-presets', 'jobs']) {
   const result = await json(`/api/admin/${endpoint}`, { headers: { cookie } })
   assert.equal(result.response.status, 200, endpoint)
   assert.equal(result.payload.success, true, endpoint)

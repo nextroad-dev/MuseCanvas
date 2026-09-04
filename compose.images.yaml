@@ -30,6 +30,13 @@ services:
       timeout: 3s
       retries: 20
 
+  db-migrate:
+    image: ghcr.io/nextroad-dev/musecanvas-api:${MUSECANVAS_IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts"]
+    environment: *backend-env
   api:
     image: ghcr.io/nextroad-dev/musecanvas-api:${MUSECANVAS_IMAGE_TAG:-latest}
     depends_on:
@@ -37,6 +44,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment: &backend-env
       NODE_ENV: production
       ALLOW_INSECURE_SMTP: ${ALLOW_INSECURE_SMTP:-false}
@@ -58,6 +67,11 @@ services:
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+      MAX_UPLOAD_IMAGE_BYTES: ${MAX_UPLOAD_IMAGE_BYTES:-10000000}
+      MAX_UPLOAD_TOTAL_BYTES: ${MAX_UPLOAD_TOTAL_BYTES:-20000000}
+      MAX_INPUT_IMAGES: ${MAX_INPUT_IMAGES:-4}
+      GENERATION_UPLOAD_TTL_SECONDS: ${GENERATION_UPLOAD_TTL_SECONDS:-86400}
+      GENERATION_UPLOAD_SIGN_TTL_SECONDS: ${GENERATION_UPLOAD_SIGN_TTL_SECONDS:-900}
       OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:?OAUTH_REDIRECT_BASE_URL is required}
       OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:?OAUTH_CREDENTIALS_ENCRYPTION_KEY is required}
       PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:?PROVIDER_CREDENTIALS_ENCRYPTION_KEY is required}
@@ -75,6 +89,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment: *backend-env
     volumes:
       - ${PROMPT_TEMPLATE_HOST_DIR:-./prompt-templates}:/opt/musecanvas/prompt-templates:ro

@@ -12,8 +12,8 @@ services:
       POSTGRES_DB: musecanvas
       POSTGRES_USER: musecanvas
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes: [postgres_data:/var/lib/postgresql/data]
-    healthcheck: { test: [CMD-SHELL, "pg_isready -U musecanvas -d musecanvas"], interval: 3s, timeout: 3s, retries: 20 }
+    volumes: [postgres_data:/var/lib/postgresql/data, postgres_socket:/var/run/postgresql]
+    healthcheck: { test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U musecanvas -d musecanvas"], interval: 3s, timeout: 3s, retries: 20 }
   redis:
     image: redis:7.4-alpine
     command: [redis-server, --appendonly, "yes"]
@@ -54,9 +54,20 @@ services:
       ALLOW_PRIVATE_PROVIDER_BASE_URL: "false"
 
     healthcheck: { test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready], interval: 5s, timeout: 3s, retries: 30 }
+  db-password-sync:
+    image: postgres:17-alpine
+    depends_on: { postgres: { condition: service_healthy } }
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        printf '%s\n%s\n' "$$POSTGRES_PASSWORD" "$$POSTGRES_PASSWORD" |
+          psql --no-psqlrc --no-password --host=/var/run/postgresql --username=musecanvas --dbname=musecanvas --set=ON_ERROR_STOP=1 --command='\password musecanvas'
+    environment: { POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}" }
+    volumes: [postgres_socket:/var/run/postgresql]
+
   db-migrate:
     build: { context: ., dockerfile: deploy/docker/api.Dockerfile }
-    depends_on: { postgres: { condition: service_healthy } }
+    depends_on: { postgres: { condition: service_healthy }, db-password-sync: { condition: service_completed_successfully } }
     command: ["sh", "-c", "pnpm --filter @musecanvas/database exec tsx src/migrate.ts && pnpm --filter @musecanvas/database exec tsx src/seed.ts && pnpm --filter @musecanvas/database exec tsx ../../scripts/seed-bundled-services.ts"]
     environment:
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
@@ -74,4 +85,4 @@ services:
     build: { context: ., dockerfile: deploy/docker/nginx.Dockerfile }
     depends_on: { api: { condition: service_healthy }, web: { condition: service_started } }
     ports: ["8080:80"]
-volumes: { postgres_data: {}, redis_data: {}, minio_data: {} }
+volumes: { postgres_data: {}, postgres_socket: {}, redis_data: {}, minio_data: {} }

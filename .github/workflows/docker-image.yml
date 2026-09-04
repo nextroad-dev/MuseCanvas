@@ -40,6 +40,48 @@ env:
   IMAGE_OWNER: nextroad-dev
 
 jobs:
+  postgres-password-rotation:
+    name: Verify persistent PostgreSQL password rotation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rotate password without replacing persistent data
+        env:
+          COMPOSE_PROJECT_NAME: musecanvas-password-sync
+          APP_MASTER_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+          MINIO_ROOT_PASSWORD: unused-by-password-sync-test
+          OLD_PASSWORD: before-password-rotation
+          NEW_PASSWORD: after-password-rotation
+        run: |
+          cleanup() {
+            docker compose --project-directory . -f deploy/compose.yaml down -v
+          }
+          trap cleanup EXIT
+
+          export POSTGRES_PASSWORD="$OLD_PASSWORD"
+          docker compose --project-directory . -f deploy/compose.yaml up -d --wait postgres
+
+          export POSTGRES_PASSWORD="$NEW_PASSWORD"
+          docker compose --project-directory . -f deploy/compose.yaml up -d --wait postgres
+          docker compose --project-directory . -f deploy/compose.yaml run --rm --no-deps db-password-sync
+
+          docker run --rm \
+            --network "${COMPOSE_PROJECT_NAME}_default" \
+            --env PGPASSWORD="$NEW_PASSWORD" \
+            postgres:17-alpine \
+            psql --host=postgres --username=musecanvas --dbname=musecanvas --tuples-only --command='SELECT 1'
+
+          if docker run --rm \
+            --network "${COMPOSE_PROJECT_NAME}_default" \
+            --env PGPASSWORD="$OLD_PASSWORD" \
+            postgres:17-alpine \
+            psql --host=postgres --username=musecanvas --dbname=musecanvas --command='SELECT 1'; then
+            echo "::error::Previous PostgreSQL password is still accepted"
+            exit 1
+          fi
+
   build-and-push:
     name: Build ${{ matrix.image }}
     runs-on: ubuntu-latest

@@ -19,6 +19,16 @@ import {
   MAX_ACTIVE_UPLOADS,
   MAX_UPLOAD_IMAGE_BYTES,
 } from './constants'
+import { resolveRuntimeSettings } from '../settings/runtime'
+
+async function uploadRuntime(): Promise<{ maxImageBytes: number; uploadTtlSeconds: number; signTtlSeconds: number }> {
+  try {
+    const runtime = await resolveRuntimeSettings()
+    return { maxImageBytes: runtime.maxImageBytes, uploadTtlSeconds: runtime.uploadTtlSeconds, signTtlSeconds: runtime.signedUrlTtlSeconds }
+  } catch {
+    return { maxImageBytes: MAX_UPLOAD_IMAGE_BYTES, uploadTtlSeconds: GENERATION_UPLOAD_TTL_SECONDS, signTtlSeconds: GENERATION_UPLOAD_SIGN_TTL_SECONDS }
+  }
+}
 
 async function rejectUpload(uploadId: string, objectKey: string): Promise<void> {
   try {
@@ -63,14 +73,16 @@ export async function createGenerationUpload(
     return fail('INVALID_INPUT', '仅支持 PNG 或 JPEG 格式的图片')
   }
 
+  const runtime = await uploadRuntime()
   const sizeBytes = Number(payload.sizeBytes)
-  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > MAX_UPLOAD_IMAGE_BYTES) {
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > runtime.maxImageBytes) {
     return fail('INVALID_INPUT_IMAGE_SIZE', '图片大小超出限制')
   }
 
   const id = randomUUID()
   const ext = mimeType === 'image/png' ? 'png' : 'jpg'
   const objectKey = `inputs/${actor.id}/${id}.${ext}`
+  const uploadTtlSeconds = runtime.uploadTtlSeconds
   const row = await transaction(async client => {
     await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [actor.id])
     const activeUploads = await client.query(
@@ -85,14 +97,14 @@ export async function createGenerationUpload(
       `INSERT INTO generation_input_images(id, created_by, status, object_key, mime_type, size_bytes, expires_at)
        VALUES($1, $2, 'pending', $3, $4, $5, now() + ($6 * interval '1 second'))
        RETURNING id, expires_at`,
-      [id, actor.id, objectKey, mimeType, sizeBytes, GENERATION_UPLOAD_TTL_SECONDS]
+      [id, actor.id, objectKey, mimeType, sizeBytes, uploadTtlSeconds]
     )
     // Mirror into generic media_uploads so role-aware video/image inputs share one source.
     try {
       await client.query(
         `INSERT INTO media_uploads(id, created_by, media_kind, status, object_key, mime_type, size_bytes, expires_at)
          VALUES($1, $2, 'image', 'pending', $3, $4, $5, now() + ($6 * interval '1 second')) ON CONFLICT (id) DO NOTHING`,
-        [id, actor.id, objectKey, mimeType, sizeBytes, GENERATION_UPLOAD_TTL_SECONDS]
+        [id, actor.id, objectKey, mimeType, sizeBytes, uploadTtlSeconds]
       )
     } catch {
       // media_uploads table may not exist on older databases; legacy table remains source of truth.
@@ -102,13 +114,12 @@ export async function createGenerationUpload(
   if (!row) {
     return fail('UPLOAD_QUOTA_EXCEEDED', '待处理参考图过多，请先移除已有图片', 429)
   }
-
   try {
     const presigned = await createUploadPresignedPost(
       objectKey,
       mimeType,
       sizeBytes,
-      GENERATION_UPLOAD_SIGN_TTL_SECONDS
+      runtime.signTtlSeconds
     )
     return ok(
       {
@@ -176,7 +187,8 @@ export async function completeGenerationUpload(
   }
 
   const declaredSize = Number(upload.size_bytes)
-  if (bytes.length !== declaredSize || bytes.length > MAX_UPLOAD_IMAGE_BYTES) {
+  const maxImageBytes = (await uploadRuntime()).maxImageBytes
+  if (bytes.length !== declaredSize || bytes.length > maxImageBytes) {
     await rejectUpload(upload.id as string, objectKey)
     return fail('INVALID_INPUT_IMAGE_SIZE', '上传文件大小与声明不符', 400)
   }

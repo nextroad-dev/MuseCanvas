@@ -8,10 +8,11 @@ import {
   releaseGenerationCredits,
   adjustCredits,
   BillingError,
+  getOnboardingState,
 } from '../../../../../packages/database/src/index'
 import { validateGenerationRequest, quoteMediaGenerationCredits, prepareRequestDigestInput } from '@musecanvas/domain'
 import type { CreateGenerationRequest } from '@musecanvas/contracts'
-import { actorFrom, hashOtp, hashToken, randomToken, safeEqual, type Actor } from '../../../src/auth/security'
+import { actorFrom, hashOtp, hashToken, randomToken, verifyOtpHash, type Actor } from '../../../src/auth/security'
 import { body, emailValid, fail, mutationOriginValid, ok } from '../../../src/shared/http'
 import {
   adminJobDto,
@@ -31,19 +32,33 @@ import { sendMail, signedAssetUrl } from '../../../src/shared/services'
 import { limited } from '../../../src/shared/redis'
 import { decodeCursor, encodeCursor, boundedLimit, userJobSelect, loadJobInputs, loadSingleJobInputs } from '../../../src/shared/pagination'
 import { createGenerationUpload, completeGenerationUpload, deleteGenerationUpload, validateAndAttachGenerationUploads, normalizeGenerationInputs, validateInputsAgainstSlots, GenerationInputError } from '../../../src/modules/generation-uploads'
+import { resolveRuntimeSettings } from '../../../src/modules/settings/runtime'
 import { modelPresets } from '../../../src/admin/model-presets'
 import { buildBuiltinProviderTemplates } from '../../../src/admin/provider-templates'
-import { loadPromptTemplateIndex, promptTemplateIndexDto } from '../../../../../packages/providers/src/index'
+import { derivePurposeKey } from '../../../../../packages/providers/src/index'
 import { type OAuthProvider } from '../../../src/auth/oauth'
 import { retryPreparation } from '../../../src/generation/job-retry'
 import { oauthProviderList, adminOAuthSettings } from '../../../src/modules/auth/oauth-settings'
 import { startOAuth, handleOAuthCallback, completeOAuthInvitation } from '../../../src/modules/auth/oauth-flow'
-import { upsertModel, deleteModel } from '../../../src/modules/models/handlers'
+import { upsertModel } from '../../../src/modules/models/handlers'
 import { deleteJobWithAssets } from '../../../src/modules/generations/handlers'
 import { createProviderCredential, updateProviderCredential, deleteProviderCredential, testProviderCredential } from '../../../src/modules/admin/provider-credentials'
 import { updateOAuthProvider } from '../../../src/modules/admin/oauth'
 import { updatePromptOptimizationSettings } from '../../../src/modules/admin/prompt-optimization'
-import { setupStatus, setupAdminRequest, setupAdminVerify } from '../../../src/modules/setup/handlers'
+import {
+  activatePromptTemplateSet,
+  createPromptTemplateEntry,
+  deletePromptTemplateEntry,
+  deletePromptTemplateSet,
+  exportPromptTemplates,
+  getAdminPromptTemplates,
+  getPromptTemplateSetDetail,
+  importPromptTemplates,
+  listPromptTemplateSets,
+  previewPromptTemplate,
+  updatePromptTemplateEntry,
+} from '../../../src/modules/admin/prompt-templates'
+import { setupStatus, setupConfig, handleSetupPost } from '../../../src/modules/setup/handlers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -88,9 +103,15 @@ async function getBillingSettingsWithOpt(client?: { query: (sql: string, params?
 
 export async function GET(request: NextRequest, context: Context) {
   const path = await cleanPath(context)
-  if (path === 'health/live') return ok({ status: 'ok' })
-  if (path === 'health/ready') { try { await db().query('SELECT 1'); return ok({ status: 'ready' }) } catch { return fail('DEPENDENCY_UNAVAILABLE', '服务尚未就绪', 503) } }
+  if (path === 'health/ready') {
+    try { await db().query('SELECT 1') } catch { return fail('DEPENDENCY_UNAVAILABLE', '服务尚未就绪', 503) }
+    try { derivePurposeKey('session-hmac') } catch { return fail('DEPENDENCY_UNAVAILABLE', '服务尚未就绪', 503) }
+    let setupComplete = false
+    try { setupComplete = (await getOnboardingState(db()))?.status === 'complete' } catch { setupComplete = false }
+    return ok({ status: 'ready', setupComplete })
+  }
   if (path === 'setup/status') return setupStatus()
+  if (path === 'setup/config') return setupConfig(request)
   if (path === 'registration') { const r = await db().query('SELECT mode FROM registration_settings WHERE singleton=true'); return ok({ requiresInvitation: r.rows[0]?.mode === 'invite_only' }) }
   if (path === 'session') { const actor = await requireActor(request); return isResponse(actor) ? actor : ok({ user: actor }) }
 
@@ -272,7 +293,11 @@ export async function GET(request: NextRequest, context: Context) {
   if (path === 'admin/model-presets') return ok(modelPresets)
   if (path === 'admin/provider-templates') return ok({ templates: buildBuiltinProviderTemplates() })
   if (path === 'admin/models') { const r = await db().query('SELECT m.*, pc.display_name AS provider_credential_name, rev.capabilities, rev.pricing, rev.defaults, rev.revision FROM model_configs m LEFT JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL LEFT JOIN model_config_revisions rev ON rev.id=m.latest_revision_id WHERE m.deleted_at IS NULL ORDER BY m.sort_order,m.created_at'); return ok(r.rows.map(modelDto)) }
-  if (path === 'admin/prompt-templates') return ok(promptTemplateIndexDto(await loadPromptTemplateIndex()))
+  if (path === 'admin/prompt-templates') return getAdminPromptTemplates()
+  if (path === 'admin/prompt-templates/sets') return listPromptTemplateSets()
+  if (path === 'admin/prompt-templates/export') return exportPromptTemplates(request.nextUrl.searchParams.get('setId') || undefined)
+  const promptSetDetail = path.match(/^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)$/)
+  if (promptSetDetail) return getPromptTemplateSetDetail(promptSetDetail[1])
   if (path === 'admin/prompt-optimization-settings') { const r = await db().query('SELECT * FROM prompt_optimization_settings WHERE singleton=true'); return ok(optimizationSettingsDto(r.rows[0])) }
   if (path === 'admin/jobs') {
     const limit = boundedLimit(request); const cursor = decodeCursor(request.nextUrl.searchParams.get('cursor')); const values: unknown[] = []; const conditions = ['deleted_at IS NULL']
@@ -296,9 +321,11 @@ export async function GET(request: NextRequest, context: Context) {
 
 export async function POST(request: NextRequest, context: Context) {
   if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403)
-  const path = await cleanPath(context); const input = await body(request)
-  if (path === 'setup/admin/request') return setupAdminRequest(request)
-  if (path === 'setup/admin/verify') return setupAdminVerify(request)
+  const path = await cleanPath(context)
+  if (path === 'setup/complete' || path === 'setup/claim' || path === 'setup/site' || path === 'setup/smtp' || path === 'setup/smtp/test' || path === 'setup/storage' || path === 'setup/storage/test' || path === 'setup/runtime' || path === 'setup/prompt-templates/import' || path === 'setup/admin/request' || path === 'setup/admin/verify') {
+    return (await handleSetupPost(request, path)) ?? fail('NOT_FOUND', '接口不存在', 404)
+  }
+  const input = await body(request)
   if (path === 'auth/otp/request') {
     if (!emailValid(input.email)) return fail('INVALID_INPUT', '邮箱格式不正确')
     const email = input.email.trim().toLowerCase(); const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown'
@@ -323,7 +350,7 @@ export async function POST(request: NextRequest, context: Context) {
     const email = input.email.trim().toLowerCase(); if (await limited(`verify:${email}`, 10, 600)) return fail('RATE_LIMITED', '验证尝试过多，请稍后再试', 429)
     const result = await transaction(async client => {
       const challengeResult = await client.query("SELECT * FROM otp_challenges WHERE lower(email)=$1 AND consumed_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE", [email]); const challenge = challengeResult.rows[0]
-      if (!challenge || challenge.attempts >= 5 || !safeEqual(challenge.code_hash, hashOtp(email, input.code as string))) { if (challenge) await client.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=$1', [challenge.id]); return null }
+      if (!challenge || challenge.attempts >= 5 || !verifyOtpHash(challenge.code_hash, email, input.code as string)) { if (challenge) await client.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=$1', [challenge.id]); return null }
       let userResult = await client.query('SELECT * FROM users WHERE lower(email)=$1 AND deleted_at IS NULL FOR UPDATE', [email]); let user = userResult.rows[0]
       if (!user) {
         const setting = await client.query('SELECT mode FROM registration_settings WHERE singleton=true FOR UPDATE')
@@ -343,7 +370,7 @@ export async function POST(request: NextRequest, context: Context) {
     if (!result) return fail('INVALID_OTP', '验证码无效或已过期', 401)
     const response = ok({ user: userDto(result.user) }); response.cookies.set('muse_session', result.token, { httpOnly: true, secure: process.env.COOKIE_SECURE === 'true', sameSite: 'lax', path: '/', maxAge: 30 * 86400 }); return response
   }
-  if (path === 'auth/logout') { const token = request.cookies.get('muse_session')?.value; if (token) await db().query('UPDATE sessions SET revoked_at=now() WHERE token_hash=$1', [hashToken(token)]); const response = ok({ loggedOut: true }); response.cookies.delete('muse_session'); return response }
+  if (path === 'auth/logout') { const token = request.cookies.get('muse_session')?.value; if (token) await db().query('UPDATE sessions SET revoked_at=now() WHERE token_hash=$1', [hashToken(token)]); const response = ok({ loggedOut: true }); response.cookies.delete('muse_session'); response.cookies.delete('muse_setup'); return response }
   if (path === 'auth/oauth/invitation') return completeOAuthInvitation(request, input)
 
   const actor = await requireActor(request, path.startsWith('admin/')); if (isResponse(actor)) return actor
@@ -506,6 +533,8 @@ export async function POST(request: NextRequest, context: Context) {
     }
     const prompt = normalized.prompt
     const requestDigest = createHash('sha256').update(prepareRequestDigestInput(normalized)).digest('hex')
+    let attachLimits: { maxTotalBytes?: number } | undefined
+    try { attachLimits = { maxTotalBytes: (await resolveRuntimeSettings()).maxTotalBytes } } catch { attachLimits = undefined }
     let row: Record<string, unknown>
     try {
       row = await transaction(async client => {
@@ -611,7 +640,7 @@ export async function POST(request: NextRequest, context: Context) {
           const insertSql = `INSERT INTO generation_jobs(created_by,model_id,model_name,adapter,vendor_model_id,provider_base_url,prompt,size,quality,count,watermark,idempotency_key,provider_credential_id,provider_credential_name,optimization_mode,phase,media_kind,model_revision_id,provider_id,plugin_id,plugin_version,normalized_request,request_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`
           const insertParams = [actor.id, lockedModel.id, lockedModel.display_name, lockedModel.adapter, lockedModel.vendor_model_id, providerBaseUrl, prompt, jobSize, jobQuality, jobCount, lockedModel.watermark, idempotencyKey, credId, credName, optimizationMode, phase, mediaKind, lockedModel.revision_id || null, lockedModel.provider_id || null, lockedModel.plugin_id || null, lockedModel.plugin_version || '1.0.0', normalizedRequestJson, requestDigest]
           const inserted = await client.query(insertSql, insertParams)
-          await validateAndAttachGenerationUploads(client, actor.id, inserted.rows[0].id, normalizedInputs)
+          await validateAndAttachGenerationUploads(client, actor.id, inserted.rows[0].id, normalizedInputs, attachLimits)
           if (optRow.enabled) {
             const optimization = await client.query(`INSERT INTO prompt_optimizations(job_id,created_by,input_prompt,input_language,language_model_config_id,language_model_name_snapshot,language_model_vendor_id_snapshot,language_model_protocol_snapshot,language_model_adapter_snapshot,language_model_base_url_snapshot,language_model_max_output_tokens_snapshot,language_model_temperature_snapshot,language_model_reasoning_effort_snapshot,provider_credential_id,provider_credential_name_snapshot)
               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`, [inserted.rows[0].id, actor.id, prompt, typeof input.inputLanguage === 'string' ? input.inputLanguage.slice(0, 20) : 'und', optSettings.language_model_config_id, optSettings.display_name, optSettings.vendor_model_id, optSettings.language_protocol, optSettings.adapter, optSettings.credential_base_url || optSettings.base_url, optSettings.max_output_tokens, optSettings.temperature, optSettings.reasoning_effort, optSettings.credential_id, optSettings.credential_name])
@@ -638,7 +667,7 @@ export async function POST(request: NextRequest, context: Context) {
           const insertSql = `INSERT INTO generation_jobs(created_by,model_id,model_name,adapter,vendor_model_id,provider_base_url,prompt,size,quality,count,watermark,idempotency_key,provider_credential_id,provider_credential_name,optimization_mode,phase,media_kind,model_revision_id,provider_id,plugin_id,plugin_version,normalized_request,request_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`
           const insertParams = [actor.id, lockedModel.id, lockedModel.display_name, lockedModel.adapter, lockedModel.vendor_model_id, providerBaseUrl, prompt, jobSize, jobQuality, jobCount, lockedModel.watermark, idempotencyKey, credId, credName, optimizationMode, phase, mediaKind, lockedModel.revision_id || null, lockedModel.provider_id || null, lockedModel.plugin_id || null, lockedModel.plugin_version || '1.0.0', normalizedRequestJson, requestDigest]
           const inserted = await client.query(insertSql, insertParams)
-          await validateAndAttachGenerationUploads(client, actor.id, inserted.rows[0].id, normalizedInputs)
+          await validateAndAttachGenerationUploads(client, actor.id, inserted.rows[0].id, normalizedInputs, attachLimits)
           if (optRow.enabled) {
             const optimization = await client.query(`INSERT INTO prompt_optimizations(job_id,created_by,input_prompt,input_language,language_model_config_id,language_model_name_snapshot,language_model_vendor_id_snapshot,language_model_protocol_snapshot,language_model_adapter_snapshot,language_model_base_url_snapshot,language_model_max_output_tokens_snapshot,language_model_temperature_snapshot,language_model_reasoning_effort_snapshot,provider_credential_id,provider_credential_name_snapshot)
               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`, [inserted.rows[0].id, actor.id, prompt, typeof input.inputLanguage === 'string' ? input.inputLanguage.slice(0, 20) : 'und', optSettings.language_model_config_id, optSettings.display_name, optSettings.vendor_model_id, optSettings.language_protocol, optSettings.adapter, optSettings.credential_base_url || optSettings.base_url, optSettings.max_output_tokens, optSettings.temperature, optSettings.reasoning_effort, optSettings.credential_id, optSettings.credential_name])
@@ -762,7 +791,12 @@ export async function POST(request: NextRequest, context: Context) {
     const code = randomToken(18); const r = await db().query("INSERT INTO invitations(email,code_hash,expires_at,created_by) VALUES(NULL,$1,now()+interval '7 days',$2) RETURNING id,created_at", [hashToken(code), actor.id]); await audit(db(), actor, 'invitation.create', 'invitation', r.rows[0].id); return ok({ id: r.rows[0].id, code, used: false, createdAt: r.rows[0].created_at.toISOString() })
   }
   if (path === 'admin/models') return upsertModel(actor, input)
-  if (path === 'admin/prompt-templates/reload') { const index = await loadPromptTemplateIndex(); await audit(db(), actor, 'prompt_templates.reload', 'prompt_templates', 'external', { valid: index.valid, entryCount: index.entryCount, errorCode: index.errorCode }); return ok(promptTemplateIndexDto(index)) }
+  if (path === 'admin/prompt-templates/import') return importPromptTemplates(actor, input)
+  if (path === 'admin/prompt-templates/preview') return previewPromptTemplate(input)
+  const promptActivate = path.match(/^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)\/activate$/)
+  if (promptActivate) return activatePromptTemplateSet(actor, promptActivate[1])
+  const promptEntryCreate = path.match(/^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)\/entries$/)
+  if (promptEntryCreate) return createPromptTemplateEntry(actor, promptEntryCreate[1], input)
   if (path === 'admin/provider-credentials') return createProviderCredential(actor, input)
   const credTest = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)\/test$/)
   if (credTest) return testProviderCredential(credTest[1])
@@ -822,6 +856,7 @@ export async function PATCH(request: NextRequest, context: Context) {
   const model = path.match(/^admin\/models\/([0-9a-f-]+)$/); if (model) return upsertModel(actor, input, model[1])
   const cred = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)$/); if (cred) return updateProviderCredential(actor, cred[1], input)
   const oauthProvider = path.match(/^admin\/oauth-providers\/(github|google)$/); if (oauthProvider) return updateOAuthProvider(actor, oauthProvider[1] as OAuthProvider, input)
+  const promptEntryUpdate = path.match(/^admin\/prompt-templates\/entries\/([0-9a-fA-F-]+)$/); if (promptEntryUpdate) return updatePromptTemplateEntry(actor, promptEntryUpdate[1], input)
   return fail('NOT_FOUND', '接口不存在', 404)
 }
 
@@ -846,8 +881,9 @@ export async function DELETE(request: NextRequest, context: Context) {
         }
         await client.query('INSERT INTO deletion_jobs(user_id) VALUES($1) ON CONFLICT DO NOTHING', [user[1]]);
         await client.query("UPDATE generation_input_images SET status='deleted',deleted_at=now() WHERE created_by=$1", [user[1]]); await audit(client, actor, 'user.delete', 'user', user[1]); return true }); return deleted ? ok({ deleted: true }) : fail('NOT_FOUND', '用户不存在', 404) }
-  const model = path.match(/^admin\/models\/([0-9a-f-]+)$/); if (model) return deleteModel(actor, model[1])
   const credDel = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)$/); if (credDel) return deleteProviderCredential(credDel[1])
+  const promptSetDel = path.match(/^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)$/); if (promptSetDel) return deletePromptTemplateSet(actor, promptSetDel[1])
+  const promptEntryDel = path.match(/^admin\/prompt-templates\/entries\/([0-9a-fA-F-]+)$/); if (promptEntryDel) return deletePromptTemplateEntry(actor, promptEntryDel[1])
   const oauthUnlink = path.match(/^account\/oauth\/(github|google)$/)
   if (oauthUnlink) { const r = await db().query('UPDATE oauth_identities SET deleted_at=now() WHERE user_id=$1 AND provider=$2 AND deleted_at IS NULL RETURNING id', [actor.id, oauthUnlink[1]]); if (r.rows[0]) await audit(db(), actor, 'oauth.unlink', 'oauth_identity', r.rows[0].id, { provider: oauthUnlink[1] }); return r.rows[0] ? ok({ unlinked: true }) : fail('NOT_FOUND', '未绑定该第三方账户', 404) }
   return fail('NOT_FOUND', '接口不存在', 404)

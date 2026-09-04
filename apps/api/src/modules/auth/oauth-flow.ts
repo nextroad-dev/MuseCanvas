@@ -1,10 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { db, transaction, ensureCreditAccount } from '../../../../../packages/database/src/index'
-import { hashToken, randomToken } from '../../auth/security'
+import { hashToken, hashTokenCandidates, randomToken, shouldUseSecureCookie } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { userDto } from '../../shared/dto'
 import { limited, redisSet, redisGetDel } from '../../shared/redis'
 import { oauthSetting } from './oauth-settings'
+import { resolvePublicOrigin } from '../settings/runtime'
 import {
   authorizeUrlWithConfig,
   createPkceVerifier,
@@ -33,16 +34,18 @@ type OAuthChallengeRecord = {
   avatarUrl?: string
 }
 
-const loginRedirect = (code: string) =>
-  NextResponse.redirect(
-    `${(process.env.OAUTH_REDIRECT_BASE_URL || '').replace(/\/$/, '')}/login?error=${encodeURIComponent(code)}`,
+async function loginRedirect(code: string): Promise<NextResponse> {
+  const origin = await resolvePublicOrigin()
+  return NextResponse.redirect(
+    `${origin.replace(/\/$/, '')}/login?error=${encodeURIComponent(code)}`,
   )
+}
 
 /** Attach a fresh session cookie for the given user to a redirect response. */
 async function issueSession(userId: string, response: NextResponse): Promise<NextResponse> {
   const token = randomToken()
   await db().query("INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 days')", [userId, hashToken(token)])
-  response.cookies.set('muse_session', token, { httpOnly: true, secure: process.env.COOKIE_SECURE === 'true', sameSite: 'lax', path: '/', maxAge: 30 * 86400 })
+  response.cookies.set('muse_session', token, { httpOnly: true, secure: shouldUseSecureCookie(await resolvePublicOrigin()), sameSite: 'lax', path: '/', maxAge: 30 * 86400 })
   return response
 }
 
@@ -106,8 +109,9 @@ async function loginWithIdentity(
   provider: OAuthProvider,
   profile: OAuthProfile,
 ): Promise<NextResponse> {
+  const origin = await resolvePublicOrigin()
   const successUrl = (role: string) =>
-    `${(process.env.OAUTH_REDIRECT_BASE_URL || '').replace(/\/$/, '')}${role === 'admin' ? '/admin' : '/generate'}`
+    `${origin.replace(/\/$/, '')}${role === 'admin' ? '/admin' : '/generate'}`
   // 1. Existing identity → its (active) user logs in.
   const identity = await db().query(
     `SELECT u.id,u.role,u.status FROM oauth_identities oi JOIN users u ON u.id=oi.user_id WHERE oi.provider=$1 AND oi.provider_subject=$2 AND oi.deleted_at IS NULL AND u.deleted_at IS NULL`,
@@ -145,7 +149,7 @@ async function loginWithIdentity(
     } catch {
       return loginRedirect('OAUTH_STATE_FAILED')
     }
-    const base = (process.env.OAUTH_REDIRECT_BASE_URL || '').replace(/\/$/, '')
+    const base = origin.replace(/\/$/, '')
     return NextResponse.redirect(
       `${base}/login?oauth_challenge=${challengeId}&email=${encodeURIComponent(profile.email)}&provider=${provider}`,
     )
@@ -170,7 +174,7 @@ async function linkIdentity(
   provider: OAuthProvider,
   profile: OAuthProfile,
 ): Promise<NextResponse> {
-  const base = (process.env.OAUTH_REDIRECT_BASE_URL || '').replace(/\/$/, '')
+  const base = (await resolvePublicOrigin()).replace(/\/$/, '')
   const accountRedirect = (code?: string) =>
     NextResponse.redirect(`${base}/account${code ? `?error=${encodeURIComponent(code)}` : '?linked=1'}`)
   // The OAuth email must match the logged-in account's email.
@@ -196,7 +200,7 @@ export async function completeOAuthInvitation(
   const challenge = await redisGetDel<OAuthChallengeRecord>(`oauth:challenge:${challengeId}`)
   if (!challenge) return fail('OAUTH_REGISTRATION_EXPIRED', '注册会话已过期，请重新登录', 410)
   const result = await transaction(async (client) => {
-    const invite = await client.query('UPDATE invitations SET consumed_at=now() WHERE code_hash=$1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>now() RETURNING id', [hashToken(invitationCode)])
+    const invite = await client.query('UPDATE invitations SET consumed_at=now() WHERE code_hash = ANY($1) AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>now() RETURNING id', [hashTokenCandidates(invitationCode)])
     if (!invite.rows[0]) return null
     const existing = await client.query('SELECT id FROM users WHERE lower(email)=$1 AND deleted_at IS NULL', [challenge.email])
     let userId: string
@@ -221,6 +225,6 @@ export async function completeOAuthInvitation(
   })
   if (!result) return fail('INVALID_INVITATION', '邀请码无效或已过期')
   const response = ok({ user: userDto(result.user) })
-  response.cookies.set('muse_session', result.token, { httpOnly: true, secure: process.env.COOKIE_SECURE === 'true', sameSite: 'lax', path: '/', maxAge: 30 * 86400 })
+  response.cookies.set('muse_session', result.token, { httpOnly: true, secure: shouldUseSecureCookie(await resolvePublicOrigin()), sameSite: 'lax', path: '/', maxAge: 30 * 86400 })
   return response
 }

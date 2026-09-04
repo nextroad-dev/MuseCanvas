@@ -821,8 +821,150 @@ WHERE r.model_id = m.id
       AND COALESCE(m.quality_options, '[]'::jsonb) = '[]'::jsonb
       AND (m.base_url IS NULL OR m.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/')))
   );
+
+-- 11. Resumable, secure onboarding foundation.
+-- Explicit completion state replaces admin-count completion checks: status only
+-- ever transitions pending -> complete, so completed deployments stay complete
+-- even if admins are later deleted. Secrets are stored only as opaque
+-- ciphertext plus fingerprint/key-id columns; no plaintext secret columns exist.
+CREATE TABLE IF NOT EXISTS onboarding_state (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','complete')),
+  bootstrap_status text NOT NULL DEFAULT 'pending' CHECK(bootstrap_status IN ('pending','complete')),
+  site_status text NOT NULL DEFAULT 'pending' CHECK(site_status IN ('pending','complete')),
+  smtp_status text NOT NULL DEFAULT 'pending' CHECK(smtp_status IN ('pending','complete')),
+  admin_status text NOT NULL DEFAULT 'pending' CHECK(admin_status IN ('pending','complete')),
+  storage_status text NOT NULL DEFAULT 'pending' CHECK(storage_status IN ('pending','complete')),
+  providers_status text NOT NULL DEFAULT 'pending' CHECK(providers_status IN ('pending','complete')),
+  models_status text NOT NULL DEFAULT 'pending' CHECK(models_status IN ('pending','complete')),
+  oauth_status text NOT NULL DEFAULT 'pending' CHECK(oauth_status IN ('pending','complete')),
+  templates_status text NOT NULL DEFAULT 'pending' CHECK(templates_status IN ('pending','complete')),
+  runtime_status text NOT NULL DEFAULT 'pending' CHECK(runtime_status IN ('pending','complete')),
+  config_revision integer NOT NULL DEFAULT 0 CHECK(config_revision >= 0),
+  completed_at timestamptz,
+  claim_token_hash text,
+  claim_expires_at timestamptz,
+  claim_attempts integer NOT NULL DEFAULT 0 CHECK(claim_attempts >= 0),
+  claim_consumed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES users(id),
+  CHECK(status <> 'complete' OR completed_at IS NOT NULL)
+);
+CREATE TABLE IF NOT EXISTS app_settings (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+  site_name text,
+  site_url text,
+  revision integer NOT NULL DEFAULT 1 CHECK(revision >= 1),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS smtp_settings (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+  host text,
+  port integer CHECK(port IS NULL OR (port >= 1 AND port <= 65535)),
+  tls_mode text NOT NULL DEFAULT 'none' CHECK(tls_mode IN ('none','starttls','implicit_tls')),
+  username text,
+  password_encrypted text,
+  password_fingerprint text,
+  encryption_key_id text,
+  from_address text,
+  from_name text,
+  status text NOT NULL DEFAULT 'not_configured' CHECK(status IN ('not_configured','configured','verified','error')),
+  revision integer NOT NULL DEFAULT 1 CHECK(revision >= 1),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS object_storage_settings (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+  endpoint text,
+  public_endpoint text,
+  region text NOT NULL DEFAULT 'us-east-1',
+  bucket text,
+  access_key_id text,
+  secret_encrypted text,
+  secret_fingerprint text,
+  encryption_key_id text,
+  signed_url_ttl_seconds integer NOT NULL DEFAULT 900 CHECK(signed_url_ttl_seconds >= 60 AND signed_url_ttl_seconds <= 3600),
+  status text NOT NULL DEFAULT 'not_configured' CHECK(status IN ('not_configured','configured','verified','error')),
+  revision integer NOT NULL DEFAULT 1 CHECK(revision >= 1),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS runtime_settings (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+  upload_ttl_seconds integer NOT NULL DEFAULT 86400 CHECK(upload_ttl_seconds >= 300 AND upload_ttl_seconds <= 604800),
+  signed_url_ttl_seconds integer NOT NULL DEFAULT 900 CHECK(signed_url_ttl_seconds >= 60 AND signed_url_ttl_seconds <= 3600),
+  max_image_bytes integer NOT NULL DEFAULT 10000000 CHECK(max_image_bytes > 0),
+  max_total_bytes integer NOT NULL DEFAULT 20000000 CHECK(max_total_bytes > 0),
+  max_inputs integer NOT NULL DEFAULT 4 CHECK(max_inputs >= 1 AND max_inputs <= 32),
+  provider_timeout_ms integer NOT NULL DEFAULT 300000 CHECK(provider_timeout_ms > 0),
+  max_output_bytes integer NOT NULL DEFAULT 100000000 CHECK(max_output_bytes > 0 AND max_output_bytes <= 100000000),
+  job_lease_ms integer NOT NULL DEFAULT 600000 CHECK(job_lease_ms > 0),
+  revision integer NOT NULL DEFAULT 1 CHECK(revision >= 1),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS setup_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS setup_sessions_expiry_idx ON setup_sessions(expires_at) WHERE consumed_at IS NULL;
+CREATE TABLE IF NOT EXISTS prompt_template_sets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL DEFAULT 'default',
+  version integer NOT NULL DEFAULT 1 CHECK(version >= 1),
+  is_active boolean NOT NULL DEFAULT false,
+  index_path text,
+  entry_count integer NOT NULL DEFAULT 0 CHECK(entry_count >= 0),
+  content_digest text,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(name, version)
+);
+CREATE TABLE IF NOT EXISTS prompt_template_entries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  set_id uuid NOT NULL REFERENCES prompt_template_sets(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  path text NOT NULL,
+  content_sha256 text,
+  instruction text,
+  sort_order integer NOT NULL DEFAULT 0 CHECK(sort_order >= 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(set_id, name)
+);
+CREATE INDEX IF NOT EXISTS prompt_template_entries_set_idx ON prompt_template_entries(set_id, sort_order);
+-- At most one active prompt template set. Normalize any legacy duplicates
+-- first (keep the newest active set), then enforce with a partial unique index.
+UPDATE prompt_template_sets SET is_active = false WHERE is_active = true AND id NOT IN (
+  SELECT id FROM prompt_template_sets WHERE is_active = true ORDER BY version DESC, created_at DESC LIMIT 1
+);
+CREATE UNIQUE INDEX IF NOT EXISTS prompt_template_sets_single_active_idx ON prompt_template_sets (is_active) WHERE is_active;
+ALTER TABLE oauth_provider_settings ADD COLUMN IF NOT EXISTS encryption_key_id text;
+ALTER TABLE onboarding_state ADD COLUMN IF NOT EXISTS claim_token_hash text;
+ALTER TABLE onboarding_state ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
+ALTER TABLE onboarding_state ADD COLUMN IF NOT EXISTS claim_attempts integer NOT NULL DEFAULT 0;
+ALTER TABLE onboarding_state ADD COLUMN IF NOT EXISTS claim_consumed_at timestamptz;
+DO $$ BEGIN ALTER TABLE onboarding_state ADD CONSTRAINT onboarding_state_claim_attempts_check CHECK(claim_attempts >= 0); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+INSERT INTO onboarding_state(singleton) VALUES(true) ON CONFLICT DO NOTHING;
+INSERT INTO app_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
+INSERT INTO smtp_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
+INSERT INTO object_storage_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
+INSERT INTO runtime_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
+-- One-way deterministic backfill: existing deployments with an active admin are
+-- complete; fresh installs stay pending. Never transitions complete -> pending,
+-- so completed status survives later admin deletions.
+UPDATE onboarding_state SET status='complete', completed_at=COALESCE(completed_at, now()), updated_at=now() WHERE singleton=true AND status='pending' AND EXISTS (SELECT 1 FROM users WHERE role='admin' AND status='active' AND deleted_at IS NULL);
 `
 await db().query(sql)
-await db().query('DROP TABLE IF EXISTS smtp_settings')
 console.log('database migration complete')
 await db().end()

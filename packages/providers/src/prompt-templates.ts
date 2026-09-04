@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { PROMPT_TEMPLATE_VAR_LOOKUP } from '@musecanvas/contracts'
 
 const MAX_INDEX_BYTES = 1_000_000
 const MAX_TEMPLATE_BYTES = 128_000
 const MAX_TEMPLATES = 100
-const VARIABLES = new Set(['input_prompt', 'image_model_name', 'image_adapter', 'size', 'quality', 'count', 'input_language'])
+const VARIABLES: Readonly<Record<string, true>> = PROMPT_TEMPLATE_VAR_LOOKUP
 
 export type PromptTemplateEntry = {
   name: string
@@ -51,7 +52,7 @@ async function loadEntry(raw: unknown, rootReal: string): Promise<PromptTemplate
     const instruction = await readFile(target, 'utf8')
     if (instruction.includes('\0')) return { ...invalidEntry(raw, 'PROMPT_TEMPLATE_FILE_INVALID'), resolvedPath: relative, fileExists: true }
     const variables = [...instruction.matchAll(/{{\s*([^{}]+?)\s*}}/g)].map(match => match[1].trim())
-    if (variables.some(variable => !VARIABLES.has(variable)) || /{{|}}/.test(instruction.replace(/{{\s*([^{}]+?)\s*}}/g, ''))) return { ...invalidEntry(raw, 'PROMPT_TEMPLATE_FILE_INVALID'), resolvedPath: relative, fileExists: true }
+    if (variables.some(variable => VARIABLES[variable] !== true) || /{{|}}/.test(instruction.replace(/{{\s*([^{}]+?)\s*}}/g, ''))) return { ...invalidEntry(raw, 'PROMPT_TEMPLATE_FILE_INVALID'), resolvedPath: relative, fileExists: true }
     return { name: value.name.trim(), description: value.description.trim(), path: relative, resolvedPath: path.relative(rootReal, target).replaceAll(path.sep, '/'), fileExists: true, valid: true, instruction, sha256: createHash('sha256').update(instruction).digest('hex') }
   } catch {
     return { ...invalidEntry(raw, 'PROMPT_TEMPLATE_FILE_INVALID'), resolvedPath: relative }
@@ -91,7 +92,7 @@ export function promptTemplateIndexDto(index: PromptTemplateIndex) {
 
 export function renderPromptTemplate(instruction: string, values: Record<string, string | number>): string {
   return instruction.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, variable: string) => {
-    if (!VARIABLES.has(variable)) throw new Error('PROMPT_TEMPLATE_FILE_INVALID')
+    if (VARIABLES[variable] !== true) throw new Error('PROMPT_TEMPLATE_FILE_INVALID')
     return String(values[variable] ?? '')
   })
 }

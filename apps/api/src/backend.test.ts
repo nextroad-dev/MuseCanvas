@@ -122,10 +122,10 @@ test('image plugin manifests declare hardened host allowlists instead of adapter
   assert.ok(seedream.allowedHosts.includes('ark.cn-beijing.volces.com'))
 })
 
-test('upload constants match cross-slice specifications', () => {
-  assert.equal(MAX_UPLOAD_IMAGE_BYTES, 10000000)
-  assert.equal(MAX_UPLOAD_TOTAL_BYTES, 20000000)
-  assert.equal(MAX_INPUT_IMAGES, 4)
+test('upload constants expose the setup-allowed absolute ceilings', () => {
+  assert.equal(MAX_UPLOAD_IMAGE_BYTES, 100_000_000)
+  assert.equal(MAX_UPLOAD_TOTAL_BYTES, 200_000_000)
+  assert.equal(MAX_INPUT_IMAGES, 32)
 })
 
 test('publicModelDto and modelDto expose maxInputImages with 0 as default', () => {
@@ -260,7 +260,11 @@ test('validateAndAttachGenerationInputs checks ownership, status, TTL, and total
     validateAndAttachGenerationInputs(makeMockClient([
       { id: id1, status: 'ready', size_bytes: 11000000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null },
       { id: id2, status: 'ready', size_bytes: 10000000, expires_at: new Date(Date.now() + 10000), deleted_at: null, attached_job_id: null },
-    ]), actorId, jobId, [id1, id2]),
+    ]), actorId, jobId, [id1, id2], {
+      maxImageBytes: 20_000_000,
+      maxTotalBytes: 20_000_000,
+      maxInputs: 4,
+    }),
     (err: unknown) => err instanceof GenerationInputError && err.code === 'INVALID_INPUT_IMAGE_SIZE'
   )
 

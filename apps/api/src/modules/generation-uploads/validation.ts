@@ -1,4 +1,4 @@
-import { GENERATION_UPLOAD_ID_PATTERN, MAX_INPUT_IMAGES, MAX_UPLOAD_TOTAL_BYTES } from './constants'
+import { GENERATION_UPLOAD_ID_PATTERN, MAX_INPUT_IMAGES, MAX_UPLOAD_IMAGE_BYTES, MAX_UPLOAD_TOTAL_BYTES } from './constants'
 
 export class GenerationInputError extends Error {
   code: string
@@ -80,11 +80,13 @@ export function normalizeGenerationInputs(
 export function validateInputsAgainstSlots(
   normalized: NormalizedGenerationInput[],
   slots: { role: string; required?: boolean; minCount?: number; maxCount?: number }[],
+  limits?: UploadAttachLimits,
 ): NormalizedGenerationInput[] {
+  const maxInputs = limits?.maxInputs ?? MAX_INPUT_IMAGES
+  if (normalized.length > maxInputs) {
+    throw new GenerationInputError('INVALID_INPUT', '参考图数量超出上限')
+  }
   if (!slots || slots.length === 0) {
-    if (normalized.length > MAX_INPUT_IMAGES) {
-      throw new GenerationInputError('INVALID_INPUT', '参考图数量超出上限')
-    }
     for (const item of normalized) {
       if (!KNOWN_INPUT_ROLES[item.role]) {
         throw new GenerationInputError('INVALID_INPUT', `不支持的输入角色：${item.role}`)
@@ -100,7 +102,7 @@ export function validateInputsAgainstSlots(
   for (const slot of slots) {
     const items = byRole[slot.role] || []
     const min = slot.minCount ?? (slot.required ? 1 : 0)
-    const max = slot.maxCount ?? MAX_INPUT_IMAGES
+    const max = slot.maxCount ?? maxInputs
     if (items.length < min) {
       throw new GenerationInputError('INVALID_INPUT', `缺少必需的输入：${slot.role}`)
     }
@@ -119,15 +121,16 @@ export function validateInputsAgainstSlots(
 
 export function validateInputImageIdsSyntax(
   inputImageIds: unknown,
-  modelMaxInputImages: number
+  modelMaxInputImages: number,
+  limits?: UploadAttachLimits,
 ): string[] {
   if (inputImageIds === undefined || inputImageIds === null) return []
   if (!Array.isArray(inputImageIds)) {
     throw new GenerationInputError('INVALID_INPUT', 'inputImageIds 必须为数组')
   }
   if (inputImageIds.length === 0) return []
-
-  if (inputImageIds.length > MAX_INPUT_IMAGES) {
+  const maxInputs = limits?.maxInputs ?? MAX_INPUT_IMAGES
+  if (inputImageIds.length > maxInputs) {
     throw new GenerationInputError('INVALID_INPUT', '参考图数量超出上限')
   }
   if (modelMaxInputImages <= 0) {
@@ -152,7 +155,9 @@ export function validateInputImageIdsSyntax(
 }
 
 export interface UploadAttachLimits {
+  maxImageBytes?: number
   maxTotalBytes?: number
+  maxInputs?: number
 }
 
 export async function validateAndAttachGenerationInputs(
@@ -162,7 +167,10 @@ export async function validateAndAttachGenerationInputs(
   inputImageIds: string[],
   limits?: UploadAttachLimits,
 ): Promise<void> {
-  if (inputImageIds.length === 0) return
+  const maxInputs = limits?.maxInputs ?? MAX_INPUT_IMAGES
+  if (inputImageIds.length > maxInputs) {
+    throw new GenerationInputError('INVALID_INPUT', '参考图数量超出上限')
+  }
 
   const result = await client.query(
     `SELECT id, status, size_bytes, expires_at, deleted_at, attached_job_id
@@ -199,7 +207,12 @@ export async function validateAndAttachGenerationInputs(
     if (Number.isFinite(expiresAt) && expiresAt <= now) {
       throw new GenerationInputError('INPUT_IMAGE_UNAVAILABLE', '参考图已过期')
     }
-    totalBytes += Number(row.size_bytes || 0)
+    const sizeBytes = Number(row.size_bytes || 0)
+    const maxSingle = limits?.maxImageBytes ?? MAX_UPLOAD_IMAGE_BYTES
+    if (sizeBytes > maxSingle) {
+      throw new GenerationInputError('INVALID_INPUT_IMAGE_SIZE', '参考图大小超出限制')
+    }
+    totalBytes += sizeBytes
   }
   if (totalBytes > (limits?.maxTotalBytes ?? MAX_UPLOAD_TOTAL_BYTES)) {
     throw new GenerationInputError('INVALID_INPUT_IMAGE_SIZE', '参考图总大小超出限制')
@@ -232,7 +245,10 @@ export async function validateAndAttachGenerationUploads(
   normalized: NormalizedGenerationInput[],
   limits?: UploadAttachLimits,
 ): Promise<void> {
-  if (normalized.length === 0) return
+  const maxInputs = limits?.maxInputs ?? MAX_INPUT_IMAGES
+  if (normalized.length > maxInputs) {
+    throw new GenerationInputError('INVALID_INPUT', '参考图数量超出上限')
+  }
   const ids = normalized.map(item => item.uploadId)
   let rows: Record<string, unknown>[] = []
   try {
@@ -284,7 +300,12 @@ export async function validateAndAttachGenerationUploads(
     if (Number.isFinite(expiresAt) && expiresAt <= now) {
       throw new GenerationInputError('INPUT_IMAGE_UNAVAILABLE', '参考图已过期')
     }
-    totalBytes += Number(row.size_bytes || 0)
+    const sizeBytes = Number(row.size_bytes || 0)
+    const maxSingle = limits?.maxImageBytes ?? MAX_UPLOAD_IMAGE_BYTES
+    if (sizeBytes > maxSingle) {
+      throw new GenerationInputError('INVALID_INPUT_IMAGE_SIZE', '参考图大小超出限制')
+    }
+    totalBytes += sizeBytes
   }
   if (totalBytes > (limits?.maxTotalBytes ?? MAX_UPLOAD_TOTAL_BYTES)) {
     throw new GenerationInputError('INVALID_INPUT_IMAGE_SIZE', '参考图总大小超出限制')

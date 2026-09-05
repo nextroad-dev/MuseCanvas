@@ -22,12 +22,24 @@ export type InspectedInputImage = {
   sizeBytes: number
 }
 
-export const MAX_UPLOAD_IMAGE_BYTES = 10_000_000
-export const MAX_UPLOAD_TOTAL_BYTES = 20_000_000
-export const MAX_INPUT_IMAGES = 4
+export const MAX_UPLOAD_IMAGE_BYTES = 100_000_000
+export const MAX_UPLOAD_TOTAL_BYTES = 200_000_000
+export const MAX_INPUT_IMAGES = 32
 export const MIN_INPUT_IMAGE_DIMENSION = 32
 export const MAX_INPUT_IMAGE_DIMENSION = 6000
 export const MAX_INPUT_IMAGE_ASPECT_RATIO = 16
+
+/**
+ * Canonical runtime input limits `{maxImageBytes,maxTotalBytes,maxInputs}`.
+ * API/worker pass resolved DB values; provider/plugin fallback uses the
+ * absolute configured ceilings above so a valid runtime setting is never
+ * contradicted. All fields optional for backward-compatible callsites.
+ */
+export interface InputLimits {
+  maxImageBytes?: number
+  maxTotalBytes?: number
+  maxInputs?: number
+}
 
 export type InspectedImageBytes = {
   width: number
@@ -122,11 +134,12 @@ export function inspectImageBytes(data: Buffer): InspectedImageBytes {
   }
 }
 
-export function inspectInputImage(data: Buffer): InspectedInputImage {
+export function inspectInputImage(data: Buffer, limits?: InputLimits): InspectedInputImage {
   if (!Buffer.isBuffer(data) || data.length === 0) {
     throw new Error('INVALID_INPUT_IMAGE')
   }
-  if (data.length > MAX_UPLOAD_IMAGE_BYTES) {
+  const maxSingle = limits?.maxImageBytes ?? MAX_UPLOAD_IMAGE_BYTES
+  if (data.length > maxSingle) {
     throw new Error('INVALID_INPUT_IMAGE_SIZE')
   }
 
@@ -159,11 +172,14 @@ export function inspectInputImage(data: Buffer): InspectedInputImage {
 
 export function validateInputImages(
   inputImages?: InputImage[],
+  limits?: InputLimits,
 ): InspectedInputImage[] {
   if (!inputImages || inputImages.length === 0) return []
-  if (inputImages.length > MAX_INPUT_IMAGES) {
+  const maxCount = limits?.maxInputs ?? MAX_INPUT_IMAGES
+  if (inputImages.length > maxCount) {
     throw new Error('INVALID_INPUT_IMAGE')
   }
+  const maxTotal = limits?.maxTotalBytes ?? MAX_UPLOAD_TOTAL_BYTES
   let totalBytes = 0
   const inspectedList: InspectedInputImage[] = []
   for (const img of inputImages) {
@@ -171,10 +187,10 @@ export function validateInputImages(
       throw new Error('INVALID_INPUT_IMAGE')
     }
     totalBytes += img.data.length
-    if (totalBytes > MAX_UPLOAD_TOTAL_BYTES) {
+    if (totalBytes > maxTotal) {
       throw new Error('INVALID_INPUT_IMAGE_SIZE')
     }
-    const inspected = inspectInputImage(img.data)
+    const inspected = inspectInputImage(img.data, limits)
     inspectedList.push(inspected)
   }
   return inspectedList

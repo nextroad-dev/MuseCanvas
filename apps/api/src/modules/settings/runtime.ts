@@ -143,6 +143,34 @@ async function currentRevision(): Promise<number> {
   }
 }
 
+/**
+ * Per-field site resolution: a persisted non-null siteUrl always wins so
+ * operator configuration survives, while a NULL site_url (e.g. the singleton
+ * row created by migration before onboarding runs) still falls back to the
+ * canonical legacy env origin. siteName/revision metadata always come from
+ * the persisted row when one exists.
+ */
+export function resolveSiteFromRowWithLegacyFallback(
+  row: SiteSettingsEntity | null,
+  oauthRedirectBaseUrl: string | null | undefined,
+  publicOrigin: string | null | undefined,
+): ResolvedSiteSettings {
+  if (row) {
+    return {
+      siteName: row.siteName,
+      siteUrl: row.siteUrl ?? canonicalEnvOrigin(oauthRedirectBaseUrl ?? publicOrigin),
+      revision: row.revision,
+      updatedAt: row.updatedAt,
+    }
+  }
+  return {
+    siteName: null,
+    siteUrl: canonicalEnvOrigin(oauthRedirectBaseUrl ?? publicOrigin),
+    revision: 1,
+    updatedAt: SYNTHETIC_UPDATED_AT,
+  }
+}
+
 async function loadSite(): Promise<ResolvedSiteSettings> {
   let row: SiteSettingsEntity | null = null
   try {
@@ -150,13 +178,7 @@ async function loadSite(): Promise<ResolvedSiteSettings> {
   } catch {
     row = null
   }
-  if (row) return { siteName: row.siteName, siteUrl: row.siteUrl, revision: row.revision, updatedAt: row.updatedAt }
-  return {
-    siteName: null,
-    siteUrl: canonicalEnvOrigin(env('OAUTH_REDIRECT_BASE_URL') ?? env('PUBLIC_ORIGIN')),
-    revision: 1,
-    updatedAt: SYNTHETIC_UPDATED_AT,
-  }
+  return resolveSiteFromRowWithLegacyFallback(row, env('OAUTH_REDIRECT_BASE_URL'), env('PUBLIC_ORIGIN'))
 }
 
 async function loadSmtp(): Promise<ResolvedSmtpSettings> {

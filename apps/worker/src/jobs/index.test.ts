@@ -87,18 +87,15 @@ test('validateInputImages enforces caps and ordering', () => {
   assert.equal(list[0].width, 100)
   assert.equal(list[1].width, 200)
 
-  // More than MAX_INPUT_IMAGES (4)
+  // More than MAX_INPUT_IMAGES (32 absolute ceiling)
   assert.throws(
     () =>
-      validateInputImages([
-        { data: png1 },
-        { data: png1 },
-        { data: png1 },
-        { data: png1 },
-        { data: png1 },
-      ]),
+      validateInputImages(Array.from({ length: 33 }, () => ({ data: png1 }))),
     /INVALID_INPUT_IMAGE/,
   )
+  // Resolved runtime limits are enforced, including lowered values.
+  assert.throws(() => validateInputImages([{ data: png1 }, { data: png1 }], { maxInputs: 1 }), /INVALID_INPUT_IMAGE/)
+  assert.equal(validateInputImages([{ data: png1 }, { data: png1 }], { maxInputs: 32 }).length, 2)
 })
 
 test('validateStoredInputImage rejects post-completion object changes', () => {
@@ -134,6 +131,14 @@ test('validateStoredInputImage rejects post-completion object changes', () => {
       checksum: '0'.repeat(64),
     }),
     /INVALID_INPUT_IMAGE/,
+  )
+  assert.throws(
+    () => validateStoredInputImage(data, {
+      mimeType: 'image/png',
+      sizeBytes: data.length,
+      checksum,
+    }, { maxImageBytes: data.length - 1 }),
+    /INVALID_INPUT_IMAGE_SIZE/,
   )
 })
 

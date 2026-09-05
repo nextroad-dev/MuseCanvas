@@ -219,13 +219,7 @@ test('validateRequest rejects bad modality/prompt/model/size/count/inputs before
       ...base,
       vendorModelId: 'doubao-seedream-4-0-250828',
       size: '1024x1024',
-      inputImages: [
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-        { data: mockPng, mimeType: 'image/png' },
-      ],
+      inputImages: Array.from({ length: 33 }, () => ({ data: mockPng, mimeType: 'image/png' as const })),
     },
     {
       ...base,

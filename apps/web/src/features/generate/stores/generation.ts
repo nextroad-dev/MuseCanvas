@@ -27,13 +27,20 @@ import { api } from '@/shared/services/api'
 import { toast } from '@/shared/composables/useToast'
 import { useLibraryStore } from '@/features/library/stores/library'
 import { useAccountStore } from '@/features/account/stores/account'
-export const MAX_INPUT_IMAGES = 4
-export const MAX_UPLOAD_IMAGE_BYTES = 10_000_000 // 10MB
-export const MAX_UPLOAD_TOTAL_BYTES = 20_000_000 // 20MB
+// Absolute defense ceilings (setup-allowed maxima). Server runtime settings
+// are authoritative: this preflight only rejects inputs no valid runtime
+// could accept, so raised/lowered DB limits are never contradicted here.
+export const MAX_INPUT_IMAGES = 32
+export const MAX_UPLOAD_IMAGE_BYTES = 100_000_000 // 100MB absolute ceiling
+export const MAX_UPLOAD_TOTAL_BYTES = 200_000_000 // 200MB absolute ceiling
 export const ALLOWED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg']
 export const MIN_IMAGE_DIMENSION = 32
 export const MAX_IMAGE_DIMENSION = 6000
 export const MAX_ASPECT_RATIO = 16
+
+function formatLimitMb(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))}MB`
+}
 
 export const useGenerationStore = defineStore('generation', () => {
   const models = ref<ModelConfig[]>([])
@@ -136,7 +143,7 @@ export const useGenerationStore = defineStore('generation', () => {
       return `参考图数量超出当前模型上限（最多 ${modelMaxInputImages.value} 张）`
     }
     if (stagedImagesTotalBytes.value > MAX_UPLOAD_TOTAL_BYTES) {
-      return '参考图总大小不能超过 20MB'
+      return `参考图总大小不能超过 ${formatLimitMb(MAX_UPLOAD_TOTAL_BYTES)}`
     }
     if (stagedImagesUploading.value) {
       return '参考图正在上传，请等待完成'
@@ -205,7 +212,7 @@ export const useGenerationStore = defineStore('generation', () => {
       }
 
       if (file.size > MAX_UPLOAD_IMAGE_BYTES) {
-        const err = `图片 "${file.name}" 大小超出 10MB 限制 (${(file.size / (1024 * 1024)).toFixed(1)}MB)`
+        const err = `图片 "${file.name}" 大小超出 ${formatLimitMb(MAX_UPLOAD_IMAGE_BYTES)} 限制 (${(file.size / (1024 * 1024)).toFixed(1)}MB)`
         inlineUploadError.value = err
         toast(err, 'error')
         continue
@@ -213,7 +220,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
       const currentTotal = stagedImages.value.reduce((sum, img) => sum + img.sizeBytes, 0)
       if (currentTotal + file.size > MAX_UPLOAD_TOTAL_BYTES) {
-        const err = '参考图总大小不能超过 20MB'
+        const err = `参考图总大小不能超过 ${formatLimitMb(MAX_UPLOAD_TOTAL_BYTES)}`
         inlineUploadError.value = err
         toast(err, 'error')
         break
@@ -238,7 +245,7 @@ export const useGenerationStore = defineStore('generation', () => {
           ? '当前模型不支持参考图'
           : stagedImages.value.length >= currentMaxAllowed
             ? `最多支持添加 ${currentMaxAllowed} 张参考图`
-            : '参考图总大小不能超过 20MB'
+            : `参考图总大小不能超过 ${formatLimitMb(MAX_UPLOAD_TOTAL_BYTES)}`
         inlineUploadError.value = err
         toast(err, 'error')
         break

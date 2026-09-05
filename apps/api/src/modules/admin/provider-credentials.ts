@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { db } from '../../../../../packages/database/src/index'
+import { db, transaction } from '../../../../../packages/database/src/index'
 import { type Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
+import { writeAudit } from '../../shared/audit'
 import { providerCredentialDto } from '../../shared/dto'
 import { normalizedProviderBaseUrl } from '../../shared/model-helpers'
 import { builtinProviderTemplateForPlugin } from '../../admin/provider-templates'
@@ -275,16 +276,25 @@ export async function createProviderCredential(actor: Actor, input: Record<strin
     ...(explicitPluginVersion ? { pluginVersion: explicitPluginVersion } : {}),
   }
   const enabled = input.enabled === true
-  const r = await db().query(
-    `INSERT INTO provider_credentials(display_name,adapter,base_url,api_key_encrypted,api_key_fingerprint,enabled,created_by,updated_by,
-      provider_id,schema_id,schema_version,payload_encrypted,configured_fields,encryption_key_id)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-    [input.displayName.trim(), adapter, effectiveBaseUrl || null,
-      secret.apiKey ? encrypted : (secretHasApiKey(secret) ? encrypted : null),
-      fingerprint, enabled, actor.id,
-      providerId, schemaId, schemaVersion, encrypted, JSON.stringify(configuredFields), credentialKeyId],
-  )
-  return ok(providerCredentialDto(r.rows[0]))
+  const displayName = input.displayName.trim()
+  const created = await transaction(async (client) => {
+    const r = await client.query(
+      `INSERT INTO provider_credentials(display_name,adapter,base_url,api_key_encrypted,api_key_fingerprint,enabled,created_by,updated_by,
+        provider_id,schema_id,schema_version,payload_encrypted,configured_fields,encryption_key_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [displayName, adapter, effectiveBaseUrl || null,
+        secret.apiKey ? encrypted : (secretHasApiKey(secret) ? encrypted : null),
+        fingerprint, enabled, actor.id,
+        providerId, schemaId, schemaVersion, encrypted, JSON.stringify(configuredFields), credentialKeyId],
+    )
+    await writeAudit(client, actor.id, 'provider_credential.create', 'provider_credential', r.rows[0].id, {
+      displayName: r.rows[0].display_name,
+      adapter: r.rows[0].adapter,
+      baseUrl: r.rows[0].base_url,
+    })
+    return r.rows[0]
+  })
+  return ok(providerCredentialDto(created))
 }
 
 export async function updateProviderCredential(
@@ -400,48 +410,65 @@ export async function updateProviderCredential(
   )) {
     return fail('SECRET_REQUIRED_FOR_REDIRECT', '更改凭据目标（主机/插件）时必须提供新密钥', 422)
   }
-  const r = await db().query(
-    `UPDATE provider_credentials SET display_name=COALESCE($1,display_name),base_url=CASE WHEN $2::text IS NULL AND $9::boolean THEN base_url ELSE COALESCE($2,base_url) END,
-      api_key_encrypted=CASE WHEN $3::boolean THEN $4 ELSE api_key_encrypted END,
-      api_key_fingerprint=CASE WHEN $3::boolean THEN $5 ELSE api_key_fingerprint END,
-      payload_encrypted=CASE WHEN $3::boolean THEN $6 ELSE payload_encrypted END,
-      encryption_key_id=CASE WHEN $3::boolean THEN $15 ELSE encryption_key_id END,
-      provider_id=COALESCE($7,provider_id),schema_id=COALESCE($8,schema_id),schema_version=COALESCE($10,schema_version),
-      configured_fields=$11::jsonb,enabled=COALESCE($12,enabled),updated_at=now(),updated_by=$13
-     WHERE id=$14 AND deleted_at IS NULL RETURNING *`,
-    [
-      typeof input.displayName === 'string' && input.displayName.trim() ? input.displayName.trim() : null,
-      effectiveBaseUrl === undefined ? null : effectiveBaseUrl,
-      hasNewSecret,
-      legacyEncrypted,
-      fingerprint,
-      encrypted,
-      providerId || null,
-      schemaId || null,
-      effectiveBaseUrl === undefined,
-      schemaVersion ?? null,
-      JSON.stringify(nextConfigured),
-      typeof input.enabled === 'boolean' ? input.enabled : null,
-      actor.id,
-      id,
-      credentialKeyId,
-    ],
-  )
-  if (!r.rows[0]) return fail('NOT_FOUND', '供应商凭据不存在', 404)
-  return ok(providerCredentialDto(r.rows[0]))
+  const r = await transaction(async (client) => {
+    const updated = await client.query(
+      `UPDATE provider_credentials SET display_name=COALESCE($1,display_name),base_url=CASE WHEN $2::text IS NULL AND $9::boolean THEN base_url ELSE COALESCE($2,base_url) END,
+        api_key_encrypted=CASE WHEN $3::boolean THEN $4 ELSE api_key_encrypted END,
+        api_key_fingerprint=CASE WHEN $3::boolean THEN $5 ELSE api_key_fingerprint END,
+        payload_encrypted=CASE WHEN $3::boolean THEN $6 ELSE payload_encrypted END,
+        encryption_key_id=CASE WHEN $3::boolean THEN $15 ELSE encryption_key_id END,
+        provider_id=COALESCE($7,provider_id),schema_id=COALESCE($8,schema_id),schema_version=COALESCE($10,schema_version),
+        configured_fields=$11::jsonb,enabled=COALESCE($12,enabled),updated_at=now(),updated_by=$13
+       WHERE id=$14 AND deleted_at IS NULL RETURNING *`,
+      [
+        typeof input.displayName === 'string' && input.displayName.trim() ? input.displayName.trim() : null,
+        effectiveBaseUrl === undefined ? null : effectiveBaseUrl,
+        hasNewSecret,
+        legacyEncrypted,
+        fingerprint,
+        encrypted,
+        providerId || null,
+        schemaId || null,
+        effectiveBaseUrl === undefined,
+        schemaVersion ?? null,
+        JSON.stringify(nextConfigured),
+        typeof input.enabled === 'boolean' ? input.enabled : null,
+        actor.id,
+        id,
+        credentialKeyId,
+      ],
+    )
+    if (!updated.rows[0]) return null
+    await writeAudit(client, actor.id, 'provider_credential.update', 'provider_credential', id, {
+      apiKeyRotated: hasNewSecret,
+      // The UPDATE keeps base_url when the effective value is null/undefined,
+      // so only a concrete differing URL counts as changed.
+      baseUrlChanged: typeof effectiveBaseUrl === 'string' && effectiveBaseUrl !== current.base_url,
+    })
+    return updated.rows[0]
+  })
+  if (!r) return fail('NOT_FOUND', '供应商凭据不存在', 404)
+  return ok(providerCredentialDto(r))
 }
 
-export async function deleteProviderCredential(id: string) {
+export async function deleteProviderCredential(actor: { id: string }, id: string) {
   const inUse = await db().query(
     'SELECT id FROM model_configs WHERE provider_credential_id=$1 AND deleted_at IS NULL LIMIT 1',
     [id],
   )
   if (inUse.rows[0]) return fail('CREDENTIAL_IN_USE', '该凭据仍被模型使用，无法删除', 409)
-  const r = await db().query(
-    'UPDATE provider_credentials SET deleted_at=now(),enabled=false,updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id',
-    [id],
-  )
-  if (!r.rows[0]) return fail('NOT_FOUND', '供应商凭据不存在', 404)
+  const deleted = await transaction(async (client) => {
+    const r = await client.query(
+      'UPDATE provider_credentials SET deleted_at=now(),enabled=false,updated_at=now(),updated_by=$2 WHERE id=$1 AND deleted_at IS NULL RETURNING id, display_name',
+      [id, actor.id],
+    )
+    if (!r.rows[0]) return null
+    await writeAudit(client, actor.id, 'provider_credential.delete', 'provider_credential', id, {
+      displayName: r.rows[0].display_name,
+    })
+    return r.rows[0]
+  })
+  if (!deleted) return fail('NOT_FOUND', '供应商凭据不存在', 404)
   return ok({ deleted: true })
 }
 
@@ -486,7 +513,17 @@ export function resolveCredentialPlugin(
   return null
 }
 
-export async function testProviderCredential(id: string) {
+// Credential tests run outside any transaction, so the audit is best-effort and
+// must never fail an already-completed test response.
+async function auditCredentialTest(actorId: string | null, id: string, status: 'success' | 'failed', errorCode?: string) {
+  try {
+    await writeAudit(db(), actorId, 'provider_credential.test', 'provider_credential', id, errorCode === undefined ? { status } : { status, errorCode })
+  } catch (error) {
+    console.error('audit write failed', error)
+  }
+}
+
+export async function testProviderCredential(actor: { id: string }, id: string) {
   const cred = await db().query(
     'SELECT * FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL',
     [id],
@@ -501,6 +538,7 @@ export async function testProviderCredential(id: string) {
       "UPDATE provider_credentials SET last_test_status='failed',last_test_error_code='NO_API_KEY',last_tested_at=now() WHERE id=$1",
       [id],
     )
+    await auditCredentialTest(actor.id, id,'failed', 'NO_API_KEY')
     return fail('INVALID_INPUT', '未配置凭据内容，无法测试')
   }
   const providerId = (row.provider_id as string) || (row.adapter as string) || 'legacy'
@@ -513,9 +551,23 @@ export async function testProviderCredential(id: string) {
     [id],
   )
   if (linked.rows[0]?.model_kind === 'language') {
-    return testLanguageModel(linked.rows[0].id)
+    const result = await testLanguageModel(linked.rows[0].id)
+    try {
+      // Clone before reading so the original response body stays intact.
+      const payload = (await result.clone().json()) as { success: boolean; error?: { code?: string } }
+      await auditCredentialTest(
+        actor.id,
+        id,
+        payload.success ? 'success' : 'failed',
+        payload.success ? undefined : (payload.error?.code ?? 'UNKNOWN'),
+      )
+    } catch (error) {
+      console.error('audit write failed', error)
+    }
+    return result
   }
   if (row.adapter === 'anthropic' || providerId === 'anthropic') {
+    await auditCredentialTest(actor.id, id,'failed', 'PROMPT_MODEL_NOT_CONFIGURED')
     return fail('PROMPT_MODEL_NOT_CONFIGURED', '请先将该凭据关联到语言模型')
   }
   // Media credential test goes through the provider plugin probe — never a
@@ -539,6 +591,7 @@ export async function testProviderCredential(id: string) {
         'UPDATE provider_credentials SET last_test_status=$1,last_test_error_code=$2,last_tested_at=now() WHERE id=$3',
         ['failed', 'PLUGIN_NOT_LINKED', id],
       )
+      await auditCredentialTest(actor.id, id,'failed', 'PLUGIN_NOT_LINKED')
       return fail('PLUGIN_NOT_LINKED', '该凭据尚未关联供应商插件（缺少 pluginId/pluginVersion），请先关联模型或配置插件身份后再测试')
     }
     const { pluginId, pluginVersion } = resolved
@@ -547,6 +600,7 @@ export async function testProviderCredential(id: string) {
         'UPDATE provider_credentials SET last_test_status=$1,last_test_error_code=$2,last_tested_at=now() WHERE id=$3',
         ['failed', 'PLUGIN_NOT_REGISTERED', id],
       )
+      await auditCredentialTest(actor.id, id,'failed', 'PLUGIN_NOT_REGISTERED')
       return fail('PLUGIN_NOT_REGISTERED', '该凭据对应的供应商插件尚未可用，请稍后重试')
     }
     const plugin = providers.globalProviderRegistry.get(pluginId, pluginVersion)
@@ -566,6 +620,7 @@ export async function testProviderCredential(id: string) {
       "UPDATE provider_credentials SET last_test_status='success',last_test_error_code=NULL,last_tested_at=now() WHERE id=$1",
       [id],
     )
+    await auditCredentialTest(actor.id, id,'success')
     return ok({ tested: true, status: 'success' })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'CONNECTIVITY_FAILED'
@@ -582,6 +637,7 @@ export async function testProviderCredential(id: string) {
       'UPDATE provider_credentials SET last_test_status=$1,last_test_error_code=$2,last_tested_at=now() WHERE id=$3',
       ['failed', code, id],
     )
+    await auditCredentialTest(actor.id, id,'failed', code)
     return fail(
       code,
       code === 'PROVIDER_REJECTED'

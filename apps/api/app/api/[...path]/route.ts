@@ -11,8 +11,9 @@ import {
   getOnboardingState,
 } from '../../../../../packages/database/src/index'
 import { validateGenerationRequest, quoteMediaGenerationCredits, prepareRequestDigestInput } from '@musecanvas/domain'
-import type { CreateGenerationRequest } from '@musecanvas/contracts'
+import { RUNTIME_SETTINGS_DEFAULTS, type CreateGenerationRequest } from '@musecanvas/contracts'
 import { actorFrom, hashOtp, hashToken, randomToken, verifyOtpHash, type Actor } from '../../../src/auth/security'
+import { findActiveInvitationHash } from '../../../src/auth/invitations'
 import { body, emailValid, fail, mutationOriginValid, ok } from '../../../src/shared/http'
 import {
   adminJobDto,
@@ -40,7 +41,7 @@ import { type OAuthProvider } from '../../../src/auth/oauth'
 import { retryPreparation } from '../../../src/generation/job-retry'
 import { oauthProviderList, adminOAuthSettings } from '../../../src/modules/auth/oauth-settings'
 import { startOAuth, handleOAuthCallback, completeOAuthInvitation } from '../../../src/modules/auth/oauth-flow'
-import { upsertModel } from '../../../src/modules/models/handlers'
+import { upsertModel, deleteModel, modelDeleteIdFromPath } from '../../../src/modules/models/handlers'
 import { deleteJobWithAssets } from '../../../src/modules/generations/handlers'
 import { createProviderCredential, updateProviderCredential, deleteProviderCredential, testProviderCredential } from '../../../src/modules/admin/provider-credentials'
 import { updateOAuthProvider } from '../../../src/modules/admin/oauth'
@@ -336,9 +337,8 @@ export async function POST(request: NextRequest, context: Context) {
     let invitationHash: string | null = null
     if (requiresInvitation) {
       if (typeof input.invitationCode !== 'string' || !input.invitationCode.trim()) return ok({ accepted: false, nextStep: 'invitation' as const })
-      invitationHash = hashToken(input.invitationCode.trim())
-      const invite = await db().query('SELECT id FROM invitations WHERE code_hash=$1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>now()', [invitationHash])
-      if (!invite.rows[0]) return fail('INVALID_INVITATION', '邀请码无效或已过期')
+      invitationHash = await findActiveInvitationHash(db(), input.invitationCode)
+      if (!invitationHash) return fail('INVALID_INVITATION', '邀请码无效或已过期')
     }
     const code = randomInt(100000, 1000000).toString(); await db().query('UPDATE otp_challenges SET consumed_at=now() WHERE lower(email)=$1 AND consumed_at IS NULL', [email]); const challenge = await db().query("INSERT INTO otp_challenges(email,code_hash,invitation_code_hash,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes') RETURNING id", [email, hashOtp(email, code), invitationHash])
     try { await sendMail(email, 'MuseCanvas 登录验证码', `你的 MuseCanvas 验证码是：${code}。10 分钟内有效。`) }
@@ -475,12 +475,34 @@ export async function POST(request: NextRequest, context: Context) {
       if (typeof input.quality === 'string') rawParameters.quality = input.quality
       if (input.count !== undefined) rawParameters.count = Number(input.count)
     }
+    // Resolved runtime input limits (DB first) enforce both raised and
+    // lowered settings; canonical defaults are the safe fallback.
+    let runtimeLimits: { maxImageBytes: number; maxTotalBytes: number; maxInputs: number } = {
+      maxImageBytes: RUNTIME_SETTINGS_DEFAULTS.maxImageBytes,
+      maxTotalBytes: RUNTIME_SETTINGS_DEFAULTS.maxTotalBytes,
+      maxInputs: RUNTIME_SETTINGS_DEFAULTS.maxInputs,
+    }
+    try {
+      const resolved = await resolveRuntimeSettings()
+      runtimeLimits = {
+        maxImageBytes: resolved.maxImageBytes,
+        maxTotalBytes: resolved.maxTotalBytes,
+        maxInputs: resolved.maxInputs,
+      }
+    } catch {
+      runtimeLimits = {
+        maxImageBytes: RUNTIME_SETTINGS_DEFAULTS.maxImageBytes,
+        maxTotalBytes: RUNTIME_SETTINGS_DEFAULTS.maxTotalBytes,
+        maxInputs: RUNTIME_SETTINGS_DEFAULTS.maxInputs,
+      }
+    }
     // Role-aware generic inputs with legacy inputImageIds compatibility.
     let normalizedInputs: { uploadId: string; role: string; position: number }[]
     try {
       normalizedInputs = validateInputsAgainstSlots(
         normalizeGenerationInputs(input.inputs, input.inputImageIds),
         (capabilities.inputSlots as { role: string; required?: boolean; minCount?: number; maxCount?: number }[]) || [],
+        runtimeLimits,
       )
     } catch (err) {
       if (err instanceof GenerationInputError) return fail(err.code, err.message, err.status)
@@ -502,7 +524,7 @@ export async function POST(request: NextRequest, context: Context) {
           { type: 'integer' as const, name: 'count', min: 1, max: capabilities.maxCount || 10, defaultValue: 1 },
         ],
         inputSlots: ((capabilities.inputSlots as { role: string; maxCount?: number }[]) || []).map(slot => ({
-          role: slot.role, required: false, minCount: 0, maxCount: slot.maxCount ?? 4, allowedMediaKinds: ['image' as const],
+          role: slot.role, required: false, minCount: 0, maxCount: slot.maxCount ?? runtimeLimits?.maxInputs ?? 32, allowedMediaKinds: ['image' as const],
         })),
         maxCount: capabilities.maxCount,
         supportedMediaKinds: ['image' as const],
@@ -533,8 +555,7 @@ export async function POST(request: NextRequest, context: Context) {
     }
     const prompt = normalized.prompt
     const requestDigest = createHash('sha256').update(prepareRequestDigestInput(normalized)).digest('hex')
-    let attachLimits: { maxTotalBytes?: number } | undefined
-    try { attachLimits = { maxTotalBytes: (await resolveRuntimeSettings()).maxTotalBytes } } catch { attachLimits = undefined }
+    const attachLimits = runtimeLimits
     let row: Record<string, unknown>
     try {
       row = await transaction(async client => {
@@ -882,6 +903,7 @@ export async function DELETE(request: NextRequest, context: Context) {
         await client.query('INSERT INTO deletion_jobs(user_id) VALUES($1) ON CONFLICT DO NOTHING', [user[1]]);
         await client.query("UPDATE generation_input_images SET status='deleted',deleted_at=now() WHERE created_by=$1", [user[1]]); await audit(client, actor, 'user.delete', 'user', user[1]); return true }); return deleted ? ok({ deleted: true }) : fail('NOT_FOUND', '用户不存在', 404) }
   const credDel = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)$/); if (credDel) return deleteProviderCredential(credDel[1])
+  const modelId = modelDeleteIdFromPath(path); if (modelId) return deleteModel(actor, modelId)
   const promptSetDel = path.match(/^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)$/); if (promptSetDel) return deletePromptTemplateSet(actor, promptSetDel[1])
   const promptEntryDel = path.match(/^admin\/prompt-templates\/entries\/([0-9a-fA-F-]+)$/); if (promptEntryDel) return deletePromptTemplateEntry(actor, promptEntryDel[1])
   const oauthUnlink = path.match(/^account\/oauth\/(github|google)$/)

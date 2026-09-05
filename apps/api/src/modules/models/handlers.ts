@@ -17,6 +17,10 @@ import type { ModelPreset } from '../../admin/model-presets'
 export const ACTIVE_IMAGE_PLUGIN_VERSION = '1.1.0'
 const IMAGE_PLUGIN_IDS: Record<string, true> = { 'openai-image': true, 'seedream-image': true }
 
+export function modelDeleteIdFromPath(path: string): string | null {
+  return path.match(/^admin\/models\/([0-9a-f-]+)$/)?.[1] ?? null
+}
+
 export function validatePluginSelection(
   pluginId: string,
   pluginVersion: string,

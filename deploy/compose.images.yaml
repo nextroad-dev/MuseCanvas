@@ -51,6 +51,12 @@ services:
       ALLOW_INSECURE_SMTP: ${ALLOW_INSECURE_SMTP:-false}
       ALLOW_INSECURE_PROVIDER_BASE_URL: ${ALLOW_INSECURE_PROVIDER_BASE_URL:-false}
       ALLOW_PRIVATE_PROVIDER_BASE_URL: ${ALLOW_PRIVATE_PROVIDER_BASE_URL:-false}
+      # TLS is expected; set false only for an intentional direct-HTTP deployment.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # One-release upgrade-only read fallback for pre-master-key rows (optional, fresh installs leave unset).
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:-}
+      PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:-}
 
     healthcheck:
       test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready]

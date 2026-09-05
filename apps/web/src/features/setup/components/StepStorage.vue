@@ -115,8 +115,8 @@ async function handleSave() {
       <Field label="Endpoint" required hint="例如 https://s3.example.com">
         <TextInput v-model="endpoint" type="url" placeholder="https://s3.example.com" autocomplete="off" />
       </Field>
-      <Field label="公开访问域名" hint="可选，用于拼接公开外链">
-        <TextInput v-model="publicEndpoint" type="url" placeholder="https://cdn.example.com" autocomplete="off" />
+      <Field label="公网 S3 端点" hint="可选，浏览器可达的 S3 兼容 API 端点，用于签名 GET 直链与 POST 上传；留空则使用 Endpoint">
+        <TextInput v-model="publicEndpoint" type="url" placeholder="https://s3-public.example.com" autocomplete="off" />
       </Field>
       <Field label="Region">
         <TextInput v-model="region" type="text" placeholder="us-east-1" autocomplete="off" />

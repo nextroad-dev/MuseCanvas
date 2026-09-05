@@ -4,7 +4,7 @@ import { RouterView, useRoute } from 'vue-router'
 import { useAuthStore } from '@/features/auth/stores/auth'
 import {
   LayoutDashboard, ShieldCheck, Users, Cpu, ListTodo, Key, FileText,
-  ArrowLeft, Menu, Coins,
+  ArrowLeft, Menu, Coins, Settings,
 } from 'lucide-vue-next'
 import AppDrawer from '@/shared/components/ui/AppDrawer.vue'
 import BaseButton from '@/shared/components/ui/BaseButton.vue'
@@ -38,6 +38,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'admin-billing', path: '/admin/billing', label: '计费设置', icon: Coins },
       { name: 'admin-oauth', path: '/admin/oauth', label: 'OAuth', icon: ShieldCheck },
+      { name: 'setup', path: '/setup?step=site', label: '系统配置', icon: Settings },
     ],
   },
   { items: [{ name: 'admin-jobs', path: '/admin/jobs', label: '任务监控', icon: ListTodo }] },

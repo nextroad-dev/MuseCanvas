@@ -230,7 +230,7 @@ async function loadRuntimeSettings(): Promise<ResolvedRuntimeSettings> {
       envInt('MAX_UPLOAD_IMAGE_BYTES', 1, 100_000_000) ?? RUNTIME_SETTINGS_DEFAULTS.maxImageBytes,
     maxTotalBytes:
       envInt('MAX_UPLOAD_TOTAL_BYTES', 1, 200_000_000) ?? RUNTIME_SETTINGS_DEFAULTS.maxTotalBytes,
-    maxInputs: envInt('MAX_INPUT_IMAGES', 1, 16) ?? RUNTIME_SETTINGS_DEFAULTS.maxInputs,
+    maxInputs: envInt('MAX_INPUT_IMAGES', 1, 32) ?? RUNTIME_SETTINGS_DEFAULTS.maxInputs,
     providerTimeoutMs:
       envInt('PROVIDER_TIMEOUT_MS', 1000, 600_000) ?? RUNTIME_SETTINGS_DEFAULTS.providerTimeoutMs,
     maxOutputBytes:

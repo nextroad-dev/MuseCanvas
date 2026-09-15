@@ -185,6 +185,10 @@ async function ensureSetupClaim(): Promise<void> {
       tokenHash: hmacForPurpose(code, 'setup-session'),
       expiresInSeconds: CLAIM_TTL_SECONDS,
     })
+    // Sole channel for obtaining the claim code during bootstrap (no API ever
+    // returns it); regeneration is guarded above (a live claim, or any
+    // unconsumed setup session, suppresses a new code). Sensitive: readable
+    // only via server logs; setupComplete sweeps all setup sessions on completion.
     console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes, printed once): ${code}`)
   })
 }

@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DefaultSafeHttpClient } from '../../core/http'
+import { NormalizedProviderError } from '../../core/errors'
 import { readBoundedOutput } from '../../core/output-reader'
 import type { ExecutionContext, MediaRequest, OutputDescriptor, ProviderConfig } from '../../core/types'
 import {
@@ -171,6 +172,25 @@ test('Veo validateRequest enforces Veo 3.1 bounds', async () => {
   await assert.rejects(() =>
     veoVideoPlugin.submit(mockRequest({ vendorModelId: 'veo-2.0-generate-001' }), config, context),
   )
+})
+
+test('Veo resolveConnection rejects unsafe location values', () => {
+  const badLocations = ['evil.com/paths', 'US-CENTRAL1', 'us central1', '-us-central1', 'us_central1', 'a'.repeat(64)]
+  for (const location of badLocations) {
+    const config = makeConfig({ credential: { schema: 'json-v1', extra: { projectId: PROJECT, location } } })
+    assert.throws(
+      () => veoVideoPlugin.resolveConnection(config),
+      (err: unknown) => {
+        assert.equal(err instanceof NormalizedProviderError, true)
+        assert.equal((err as NormalizedProviderError).diagnostic.code, 'UNSAFE_URL')
+        return true
+      },
+    )
+  }
+  // Defaults and well-formed regions keep working.
+  assert.equal(veoVideoPlugin.resolveConnection(makeConfig()).location, LOCATION)
+  const west = makeConfig({ credential: { schema: 'json-v1', extra: { projectId: PROJECT, location: 'europe-west4' } } })
+  assert.equal(veoVideoPlugin.resolveConnection(west).location, 'europe-west4')
 })
 
 test('Veo poll maps waiting/success-gcs/success-inline/safety-filter', async () => {

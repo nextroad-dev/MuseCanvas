@@ -129,6 +129,7 @@ function hasServiceAccountFields(extra: Record<string, unknown>): boolean {
   return typeof extra.client_email === 'string' || typeof extra.private_key === 'string'
 }
 const serviceAccountTokenCache = new Map<string, { token: string; expiresAtMs: number }>()
+const SERVICE_ACCOUNT_TOKEN_CACHE_LIMIT = 100
 
 export class VeoVideoPlugin implements MediaProviderPlugin {
   readonly manifest = veoVideoManifest
@@ -507,6 +508,16 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
     const projectId =
       readString(config.projectId) ?? readString(extra.projectId) ?? readString(extra.project_id) ?? ''
     const location = readString(config.location) ?? readString(extra.location) ?? VEO_DEFAULT_LOCATION
+    // Location is interpolated into `https://${location}-aiplatform.googleapis.com/...`,
+    // so constrain it to a single lowercase DNS label before it reaches any URL.
+    if (!/^[a-z][a-z0-9-]{0,62}$/.test(location)) {
+      throw NormalizedProviderError.create(
+        VEO_VIDEO_PLUGIN_ID,
+        VEO_VIDEO_PLUGIN_VERSION,
+        'UNSAFE_URL',
+        `Invalid Veo location '${location.slice(0, 64)}': expected a GCP region such as 'us-central1'`,
+      )
+    }
     return { projectId, location }
   }
 
@@ -761,6 +772,10 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
       typeof payload.expires_in === 'number' && Number.isFinite(payload.expires_in) && payload.expires_in > 0
         ? payload.expires_in
         : 3600
+    if (serviceAccountTokenCache.size >= SERVICE_ACCOUNT_TOKEN_CACHE_LIMIT) {
+      const oldest = serviceAccountTokenCache.keys().next().value
+      if (oldest !== undefined) serviceAccountTokenCache.delete(oldest)
+    }
     serviceAccountTokenCache.set(clientEmail, { token: accessToken, expiresAtMs: Date.now() + expiresIn * 1000 })
     return accessToken
   }

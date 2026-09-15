@@ -25,7 +25,7 @@ export class DefaultSafeHttpClient implements SafeHttpClient {
     this.fetchImpl = options.fetchImpl || globalThis.fetch
   }
 
-  private validateUrl(rawUrl: string, explicitAllowedHosts?: string[]): URL {
+  private validateUrl(rawUrl: string, init: SafeHttpRequestInit): URL {
     let parsed: URL
     try {
       parsed = new URL(rawUrl)
@@ -39,7 +39,7 @@ export class DefaultSafeHttpClient implements SafeHttpClient {
         ).diagnostic,
       )
     }
-    if (parsed.protocol !== 'https:') {
+    if (parsed.protocol !== 'https:' && !(init.allowInsecureProtocol === true && parsed.protocol === 'http:')) {
       throw new SafeHttpError(
         NormalizedProviderError.create(
           this.pluginId,
@@ -51,7 +51,7 @@ export class DefaultSafeHttpClient implements SafeHttpClient {
     }
 
     const hostname = parsed.hostname.toLowerCase()
-    const allowed = explicitAllowedHosts || this.allowedHosts
+    const allowed = init.allowedHosts || this.allowedHosts
 
     const isAllowed = allowed.some(pattern => {
       const p = pattern.toLowerCase().trim()
@@ -61,7 +61,9 @@ export class DefaultSafeHttpClient implements SafeHttpClient {
       }
       if (p.startsWith('*-')) {
         const suffix = p.slice(1) // e.g. -aiplatform.googleapis.com
-        return hostname.endsWith(suffix) && hostname.length > suffix.length
+        if (!hostname.endsWith(suffix) || hostname.length <= suffix.length) return false
+        // '*' matches a single DNS label only, so evil.com-aiplatform... cannot pass.
+        return !hostname.slice(0, hostname.length - suffix.length).includes('.')
       }
       return hostname === p
     })
@@ -89,7 +91,7 @@ export class DefaultSafeHttpClient implements SafeHttpClient {
     let redirectsFollowed = 0
 
     while (true) {
-      const validatedUrl = this.validateUrl(currentUrl, init.allowedHosts)
+      const validatedUrl = this.validateUrl(currentUrl, init)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
       const cleanup = () => clearTimeout(timer)

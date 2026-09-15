@@ -27,6 +27,9 @@ test('model_config_revisions repository creates and retrieves revisions with imm
   const revisions: ModelConfigRevisionRow[] = []
   const mockClient = {
     query: async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('SELECT id FROM model_configs WHERE id = $1 FOR UPDATE')) {
+        return { rows: [{ id: params[0] as string }] }
+      }
       if (sql.includes('SELECT COALESCE(MAX(revision)')) {
         const modelId = params[0] as string
         const revs = revisions.filter(r => r.model_id === modelId).map(r => r.revision)
@@ -427,4 +430,43 @@ test('output_ingestions repository registers and updates crash-safe output artif
 
   const jobIngestions = await getOutputIngestionsByJob(mockClient, 'job-1')
   assert.equal(jobIngestions.length, 1)
+})
+
+test('createModelConfigRevision locks model row before MAX query and maps unique violation to MODEL_CONFIG_REVISION_CONFLICT', async () => {
+  const calls: string[] = []
+  const mockClient = {
+    query: async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('SELECT id FROM model_configs WHERE id = $1 FOR UPDATE')) {
+        calls.push('lock_model')
+        return { rows: [{ id: params[0] as string }] }
+      }
+      if (sql.includes('SELECT COALESCE(MAX(revision)')) {
+        calls.push('max_revision')
+        return { rows: [{ next_rev: 3 }] }
+      }
+      if (sql.includes('INSERT INTO model_config_revisions')) {
+        calls.push('insert')
+        throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' })
+      }
+      if (sql.includes('UPDATE model_configs SET latest_revision_id')) {
+        return { rows: [] }
+      }
+      return { rows: [] }
+    },
+  } as unknown as pg.PoolClient
+
+  await assert.rejects(
+    async () => {
+      await createModelConfigRevision(mockClient, {
+        modelId: 'model-1',
+        providerId: 'volcengine',
+        pluginId: 'seedream-image',
+        capabilities: {},
+        pricing: {},
+        snapshotDigest: 'sha256-hash',
+      })
+    },
+    (err: unknown) => err instanceof Error && err.message === 'MODEL_CONFIG_REVISION_CONFLICT'
+  )
+  assert.deepEqual(calls, ['lock_model', 'max_revision', 'insert'])
 })

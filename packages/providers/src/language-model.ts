@@ -1,3 +1,7 @@
+import { DefaultSafeHttpClient } from './core/http'
+import { NormalizedProviderError } from './core/errors'
+import type { SafeHttpResponse } from './core/types'
+
 export type LanguageProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 export type LanguageModelInput = { protocol: LanguageProtocol; vendorModelId: string; baseUrl?: string; apiKey: string; system: string; user: string; schemaName?: string; schema?: Record<string, unknown>; maxOutputTokens: number; temperature?: number; reasoningEffort?: ReasoningEffort | null; timeoutMs: number }
@@ -49,7 +53,7 @@ function providerReferenceId(headers: Headers): string | undefined {
     || undefined
 }
 
-async function throwLanguageModelHttpError(response: Response, input: LanguageModelInput, requestUrl: string): Promise<never> {
+async function throwLanguageModelHttpError(response: Pick<SafeHttpResponse, 'status' | 'statusText' | 'headers' | 'text'>, input: LanguageModelInput, requestUrl: string): Promise<never> {
   const body = await response.text().catch(() => '')
   const diagnostic = {
     adapter: adapterForProtocol(input.protocol),
@@ -82,15 +86,71 @@ export function parseLanguageModelResponse(protocol: LanguageProtocol, raw: unkn
   return { text, providerReferenceId: typeof value.id === 'string' ? value.id : undefined, inputTokens: value.usage?.input_tokens, outputTokens: value.usage?.output_tokens }
 }
 
+const LANGUAGE_MODEL_MAX_RESPONSE_BYTES = 10_000_000
+
+// Module-level singleton; fetch defers to ambient globalThis.fetch at call time so tests can stub it.
+const languageModelHttp = new DefaultSafeHttpClient({
+  pluginId: 'language-model',
+  version: '1.0.0',
+  allowedHosts: ['api.openai.com', 'api.anthropic.com'],
+  fetchImpl: ((input, init) => globalThis.fetch(input, init)) as typeof globalThis.fetch,
+})
+
+function isPrivateProviderHost(host: string): boolean {
+  const h = host.toLowerCase()
+  return h === 'localhost' || h === '0.0.0.0' || h === '::1' || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+}
+
+function throwLanguageModelUnsafeUrl(input: LanguageModelInput, requestUrl: string, detail: string): never {
+  let endpoint = requestUrl
+  try { endpoint = new URL(requestUrl).pathname } catch { endpoint = requestUrl }
+  const diagnostic = {
+    adapter: adapterForProtocol(input.protocol),
+    status: 0,
+    statusText: 'unsafe_url',
+    endpoint,
+    detail: sanitizeProviderDetail(detail),
+    occurredAt: new Date().toISOString(),
+  }
+  console.warn('language model rejected request', diagnostic)
+  throw new LanguageModelHttpError('PROMPT_OPTIMIZATION_REJECTED', diagnostic)
+}
+
 export async function callLanguageModel(input: LanguageModelInput): Promise<LanguageModelResult> {
   const request = buildLanguageModelRequest(input)
-  let response: Response
-  try { response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body), redirect: 'error', signal: AbortSignal.timeout(input.timeoutMs) }) }
-  catch { throw new Error('PROMPT_OPTIMIZATION_TEMPORARY_ERROR') }
+  // Independent private-address gate on the configured baseUrl host: the per-request
+  // allowlist below would otherwise admit that host by construction.
+  if (input.baseUrl && process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL !== 'true') {
+    let parsedBase: URL | null = null
+    try { parsedBase = new URL(input.baseUrl) } catch { parsedBase = null }
+    if (parsedBase && isPrivateProviderHost(parsedBase.hostname)) {
+      throwLanguageModelUnsafeUrl(input, request.url, `Configured language model base URL host '${parsedBase.hostname}' is a private address`)
+    }
+  }
+  let requestHost = ''
+  try { requestHost = new URL(request.url).hostname } catch { requestHost = '' }
+  let response: SafeHttpResponse
+  try {
+    response = await languageModelHttp.request(request.url, {
+      method: 'POST',
+      headers: request.headers,
+      body: JSON.stringify(request.body),
+      timeoutMs: input.timeoutMs,
+      maxBytes: LANGUAGE_MODEL_MAX_RESPONSE_BYTES,
+      allowedHosts: requestHost ? [requestHost] : [],
+      allowInsecureProtocol: process.env.ALLOW_INSECURE_PROVIDER_BASE_URL === 'true',
+    })
+  } catch (error) {
+    if (error instanceof NormalizedProviderError) {
+      if (error.diagnostic.code === 'UNSAFE_URL') throwLanguageModelUnsafeUrl(input, request.url, error.diagnostic.detail)
+      if (error.diagnostic.code === 'PROVIDER_TIMEOUT' || error.diagnostic.code === 'PROVIDER_TEMPORARY_ERROR') throw new Error('PROMPT_OPTIMIZATION_TEMPORARY_ERROR')
+    }
+    throw new Error('PROMPT_OPTIMIZATION_TEMPORARY_ERROR')
+  }
   if (!response.ok) {
     await throwLanguageModelHttpError(response, input, request.url)
   }
-  try { return parseLanguageModelResponse(input.protocol, await response.json()) } catch (error) { if (error instanceof Error && error.message === 'LANGUAGE_MODEL_RESPONSE_INVALID') throw error; throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID') }
+  try { return parseLanguageModelResponse(input.protocol, JSON.parse(await response.text())) } catch (error) { if (error instanceof Error && error.message === 'LANGUAGE_MODEL_RESPONSE_INVALID') throw error; throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID') }
 }
 
 export function parseExactJsonString(text: string, key: string, maxChars: number): string {

@@ -152,7 +152,7 @@ async function handleDownload(asset: Asset) {
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
   } catch (error) {
     console.error('Failed to download asset:', error)
-    window.open(url, '_blank')
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 }
 

@@ -171,7 +171,8 @@ export async function validateExplicitPluginCredential(options: {
     try {
       decoded = decodeCredential(raw, schemaId, pluginId, pluginVersion)
     } catch (error) {
-      return { ok: false, code: 'INVALID_CREDENTIAL', message: error instanceof Error ? error.message : '凭据内容无法解析' }
+      console.error('credential decode failed', error instanceof Error ? error.message : error)
+      return { ok: false, code: 'INVALID_CREDENTIAL', message: '凭据内容无法解析' }
     }
     if (pluginId === 'veo-video') {
       const extra = decoded.extra ?? {}
@@ -187,7 +188,8 @@ export async function validateExplicitPluginCredential(options: {
     try {
       await plugin.validateConfig({ baseUrl, credential: decoded })
     } catch (error) {
-      return { ok: false, code: 'INVALID_CREDENTIAL', message: error instanceof Error ? error.message : '凭据未通过插件校验' }
+      console.error('credential plugin validation failed', error instanceof Error ? error.message : error)
+      return { ok: false, code: 'INVALID_CREDENTIAL', message: '凭据未通过插件校验' }
     }
   }
   return { ok: true, pluginId, pluginVersion, schemaId, schemaVersion: parsedVersion.version, baseUrl }

@@ -1,6 +1,13 @@
 import { db } from '../../../../packages/database/src/index'
-import { CONSUMER_BLOCK_MS, GENERATION_GROUP, GENERATION_STREAM, STALE_PENDING_IDLE_MS, consumer, redis } from '../shared/infra'
+import { CONSUMER_BLOCK_MS, GENERATION_GROUP, GENERATION_STREAM, HEARTBEAT_RENEW_MS, HEARTBEAT_TTL_MS, STALE_PENDING_IDLE_MS, consumer, redis } from '../shared/infra'
 import { resolveJobLeaseMs } from '../shared/runtime'
+
+// Heartbeat keys mark a message as in-flight so another worker's XAUTOCLAIM
+// skips it (see claimStalePending). Keys are never deleted; TTL expiry plus
+// the claim-side exists() check bound recovery.
+const heartbeatKey = (messageId: string) => `hb:gen-msg:${messageId}`
+const writeHeartbeat = (messageId: string) =>
+  redis.set(heartbeatKey(messageId), '1', { expiration: { type: 'PX', value: HEARTBEAT_TTL_MS } }).catch(() => {})
 
 export async function acquire(modelId: string, limit: number, owner: string): Promise<boolean> {
   // Lease window comes from runtime settings (DB first, legacy JOB_LEASE_MS
@@ -60,11 +67,17 @@ async function claimStalePending(): Promise<StreamMessage[]> {
     const reply = await client.xAutoClaim(GENERATION_STREAM, GENERATION_GROUP, consumer, STALE_PENDING_IDLE_MS, '0-0', { COUNT: 10 })
     const normalized = reply as { messages?: StreamMessage[] } | StreamMessage[] | null
     if (!normalized) return []
-    if (Array.isArray(normalized)) return normalized as StreamMessage[]
-    if (Array.isArray((normalized as { messages?: StreamMessage[] }).messages)) {
-      return (normalized as { messages: StreamMessage[] }).messages
+    const claimed = Array.isArray(normalized)
+      ? normalized as StreamMessage[]
+      : Array.isArray((normalized as { messages?: StreamMessage[] }).messages) ? (normalized as { messages: StreamMessage[] }).messages : []
+    const claimable: StreamMessage[] = []
+    for (const message of claimed) {
+      // Skipping still counts as a claim (idle reset) and that is acceptable:
+      // a live owner acks by message id once done, while a dead owner's key
+      // expires (<=90s) and the next idle-threshold pass retries the message.
+      if (!await redis.exists(heartbeatKey(message.id))) claimable.push(message)
     }
-    return []
+    return claimable
   } catch {
     return []
   }
@@ -72,36 +85,27 @@ async function claimStalePending(): Promise<StreamMessage[]> {
 
 export async function consume(processJob: (jobId: string, runId?: string) => Promise<boolean>) {
   try { await redis.xGroupCreate(GENERATION_STREAM, GENERATION_GROUP, '0', { MKSTREAM: true }) } catch (error) { if (!(error instanceof Error) || !error.message.includes('BUSYGROUP')) throw error }
+  const run = async (message: StreamMessage, logLabel: string) => {
+    const jobId = message.message.jobId
+    const runId = message.message.runId || undefined
+    if (!jobId) {
+      await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+      return
+    }
+    await writeHeartbeat(message.id)
+    const renew = setInterval(() => { void writeHeartbeat(message.id) }, HEARTBEAT_RENEW_MS)
+    try {
+      await processJob(jobId, runId)
+      await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
+    } catch (error) {
+      console.error(logLabel, { code: error instanceof Error ? error.name : 'JOB_FAILED' })
+    } finally {
+      clearInterval(renew)
+    }
+  }
   while (true) {
-    const stale = await claimStalePending()
-    for (const message of stale) {
-      const jobId = message.message.jobId
-      const runId = message.message.runId || undefined
-      if (!jobId) {
-        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
-        continue
-      }
-      try {
-        await processJob(jobId, runId)
-        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
-      } catch (error) {
-        console.error('stale job processing failed', { code: error instanceof Error ? error.name : 'JOB_FAILED' })
-      }
-    }
+    for (const message of await claimStalePending()) await run(message, 'stale job processing failed')
     const reply = await redis.xReadGroup(GENERATION_GROUP, consumer, { key: GENERATION_STREAM, id: '>' }, { COUNT: 10, BLOCK: CONSUMER_BLOCK_MS }) as unknown
-    for (const message of extractMessages(reply)) {
-      const jobId = message.message.jobId
-      const runId = message.message.runId || undefined
-      if (!jobId) {
-        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
-        continue
-      }
-      try {
-        await processJob(jobId, runId)
-        await redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id)
-      } catch (error) {
-        console.error('job processing failed', { code: error instanceof Error ? error.name : 'JOB_FAILED' })
-      }
-    }
+    for (const message of extractMessages(reply)) await run(message, 'job processing failed')
   }
 }

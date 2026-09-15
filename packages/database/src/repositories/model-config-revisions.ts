@@ -83,37 +83,48 @@ export async function createModelConfigRevision(
   client: pg.PoolClient | pg.Pool,
   input: CreateModelConfigRevisionInput,
 ): Promise<ModelConfigRevisionEntity> {
+  // Lock the parent model row first to serialize concurrent revision allocation (same pattern as acquireModelCapacity).
+  await client.query('SELECT id FROM model_configs WHERE id = $1 FOR UPDATE', [input.modelId])
+
   const nextRevRes = await client.query(
     'SELECT COALESCE(MAX(revision), 0) + 1 AS next_rev FROM model_config_revisions WHERE model_id = $1',
     [input.modelId],
   )
   const nextRevision = Number(nextRevRes.rows[0]?.next_rev || 1)
 
-  const res = await client.query(
-    `INSERT INTO model_config_revisions(
-       model_id, revision, provider_id, plugin_id, plugin_version,
-       vendor_model_id, base_url, credential_id, credential_schema_version,
-       capabilities, pricing, normalized_config, defaults, snapshot_digest, created_by
-     ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-     RETURNING *`,
-    [
-      input.modelId,
-      nextRevision,
-      input.providerId,
-      input.pluginId,
-      input.pluginVersion || '1.0.0',
-      input.vendorModelId || null,
-      input.baseUrl || null,
-      input.credentialId || null,
-      input.credentialSchemaVersion || null,
-      JSON.stringify(input.capabilities || {}),
-      JSON.stringify(input.pricing || {}),
-      JSON.stringify(input.normalizedConfig || {}),
-      JSON.stringify(input.defaults || {}),
-      input.snapshotDigest,
-      input.createdBy || null,
-    ],
-  )
+  let res: pg.QueryResult
+  try {
+    res = await client.query(
+      `INSERT INTO model_config_revisions(
+         model_id, revision, provider_id, plugin_id, plugin_version,
+         vendor_model_id, base_url, credential_id, credential_schema_version,
+         capabilities, pricing, normalized_config, defaults, snapshot_digest, created_by
+       ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING *`,
+      [
+        input.modelId,
+        nextRevision,
+        input.providerId,
+        input.pluginId,
+        input.pluginVersion || '1.0.0',
+        input.vendorModelId || null,
+        input.baseUrl || null,
+        input.credentialId || null,
+        input.credentialSchemaVersion || null,
+        JSON.stringify(input.capabilities || {}),
+        JSON.stringify(input.pricing || {}),
+        JSON.stringify(input.normalizedConfig || {}),
+        JSON.stringify(input.defaults || {}),
+        input.snapshotDigest,
+        input.createdBy || null,
+      ],
+    )
+  } catch (err) {
+    if ((err as { code?: string }).code === '23505') {
+      throw new Error('MODEL_CONFIG_REVISION_CONFLICT', { cause: err })
+    }
+    throw err
+  }
 
   const row = res.rows[0] as ModelConfigRevisionRow
   await client.query(

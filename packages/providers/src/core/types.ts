@@ -222,6 +222,8 @@ export type SafeHttpRequestInit = {
   timeoutMs?: number
   maxBytes?: number
   allowedHosts?: string[]
+  /** Opt-out of the HTTPS-only default for explicit deployments (e.g. ALLOW_INSECURE_PROVIDER_BASE_URL). */
+  allowInsecureProtocol?: boolean
 }
 
 export type SafeHttpResponse = {

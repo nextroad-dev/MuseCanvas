@@ -526,18 +526,18 @@ export async function captureGenerationCredits(
 ): Promise<CaptureGenerationCreditsResult> {
   const { jobId } = input
 
-  // Lock charge
-  const chargeRes = await client.query<GenerationChargeRow>(
-    `SELECT * FROM generation_charges WHERE job_id = $1 FOR UPDATE`,
+  // Pre-read the owner without a lock so we can acquire locks in the same
+  // order as reserveGenerationCredits (account -> charge) and avoid deadlocks.
+  const ownerRes = await client.query<GenerationChargeRow>(
+    `SELECT user_id FROM generation_charges WHERE job_id = $1`,
     [jobId]
   )
-  if (chargeRes.rows.length === 0) {
+  if (ownerRes.rows.length === 0) {
     throw new BillingError(BILLING_STATE_CONFLICT, `Charge record not found for job ${jobId}`)
   }
-  const charge = chargeRes.rows[0]
-  const userId = charge.user_id
+  const userId = ownerRes.rows[0].user_id
 
-  // Lock account
+  // Lock account first, then charge
   const accountRes = await client.query<CreditAccountRow>(
     `SELECT * FROM credit_accounts WHERE user_id = $1 FOR UPDATE`,
     [userId]
@@ -546,6 +546,18 @@ export async function captureGenerationCredits(
     throw new BillingError(BILLING_STATE_CONFLICT, `Credit account not found for user ${userId}`)
   }
   let currentAccount = accountRes.rows[0]
+
+  const chargeRes = await client.query<GenerationChargeRow>(
+    `SELECT * FROM generation_charges WHERE job_id = $1 FOR UPDATE`,
+    [jobId]
+  )
+  if (chargeRes.rows.length === 0) {
+    throw new BillingError(BILLING_STATE_CONFLICT, `Charge record not found for job ${jobId}`)
+  }
+  const charge = chargeRes.rows[0]
+  if (charge.user_id !== userId) {
+    throw new BillingError(BILLING_STATE_CONFLICT, `Charge owner mismatch for job ${jobId}`)
+  }
 
   if (charge.state === 'settled') {
     return {
@@ -653,18 +665,18 @@ export async function releaseGenerationCredits(
 ): Promise<ReleaseGenerationCreditsResult> {
   const { jobId } = input
 
-  // Lock charge
-  const chargeRes = await client.query<GenerationChargeRow>(
-    `SELECT * FROM generation_charges WHERE job_id = $1 FOR UPDATE`,
+  // Pre-read the owner without a lock so we can acquire locks in the same
+  // order as reserveGenerationCredits (account -> charge) and avoid deadlocks.
+  const ownerRes = await client.query<GenerationChargeRow>(
+    `SELECT user_id FROM generation_charges WHERE job_id = $1`,
     [jobId]
   )
-  if (chargeRes.rows.length === 0) {
+  if (ownerRes.rows.length === 0) {
     throw new BillingError(BILLING_STATE_CONFLICT, `Charge record not found for job ${jobId}`)
   }
-  const charge = chargeRes.rows[0]
-  const userId = charge.user_id
+  const userId = ownerRes.rows[0].user_id
 
-  // Lock account
+  // Lock account first, then charge
   const accountRes = await client.query<CreditAccountRow>(
     `SELECT * FROM credit_accounts WHERE user_id = $1 FOR UPDATE`,
     [userId]
@@ -673,6 +685,18 @@ export async function releaseGenerationCredits(
     throw new BillingError(BILLING_STATE_CONFLICT, `Credit account not found for user ${userId}`)
   }
   let currentAccount = accountRes.rows[0]
+
+  const chargeRes = await client.query<GenerationChargeRow>(
+    `SELECT * FROM generation_charges WHERE job_id = $1 FOR UPDATE`,
+    [jobId]
+  )
+  if (chargeRes.rows.length === 0) {
+    throw new BillingError(BILLING_STATE_CONFLICT, `Charge record not found for job ${jobId}`)
+  }
+  const charge = chargeRes.rows[0]
+  if (charge.user_id !== userId) {
+    throw new BillingError(BILLING_STATE_CONFLICT, `Charge owner mismatch for job ${jobId}`)
+  }
 
   if (charge.state === 'released') {
     return {

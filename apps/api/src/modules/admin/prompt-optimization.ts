@@ -37,7 +37,7 @@ export async function updatePromptOptimizationSettings(
     return fail('INVALID_INPUT', '语言模型无效')
   if (modelId) {
     const model = await db().query(
-      `SELECT m.id FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.enabled=true AND m.deleted_at IS NULL AND pc.enabled=true AND pc.api_key_encrypted IS NOT NULL`,
+      `SELECT m.id FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.enabled=true AND m.deleted_at IS NULL AND pc.enabled=true AND COALESCE(NULLIF(pc.payload_encrypted,''),pc.api_key_encrypted) IS NOT NULL`,
       [modelId],
     )
     if (!model.rows[0])

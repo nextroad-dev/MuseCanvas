@@ -11,5 +11,10 @@ export const consumer = `worker-${process.pid}-${randomUUID().slice(0, 8)}`
 
 export const GENERATION_STREAM = 'muse:generation'
 export const GENERATION_GROUP = 'workers'
-export const STALE_PENDING_IDLE_MS = 30_000
+// Stale-idle threshold must stay below HEARTBEAT_TTL_MS: a crashed worker's
+// in-flight messages are only retried once its heartbeat key lapses, never
+// while it is still being renewed.
+export const STALE_PENDING_IDLE_MS = 60_000
 export const CONSUMER_BLOCK_MS = 5000
+export const HEARTBEAT_TTL_MS = 90_000
+export const HEARTBEAT_RENEW_MS = 15_000

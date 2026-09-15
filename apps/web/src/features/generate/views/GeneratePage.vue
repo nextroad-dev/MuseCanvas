@@ -164,7 +164,7 @@ async function handleDownload(url: string) {
   } catch (error) {
     console.error('Failed to download asset:', error)
     // Fallback to opening in new tab
-    window.open(url, '_blank')
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 }
 

@@ -33,7 +33,7 @@ packages/
   contracts/ 浏览器可安全使用的 DTO、共享类型和错误码
   database/  migration、事务和数据访问
   domain/    框架无关的业务规则和状态机
-  providers/ 图像生成、对象存储和邮件服务适配器
+  providers/ 图像/视频生成插件与凭据加密（对象存储客户端在 apps/worker，SMTP 在 apps/api）
 docs/        功能设计、实现记录和设计系统
 deploy/      Compose 编排、Dockerfile 与 Nginx 配置
 scripts/     本地和部署辅助脚本

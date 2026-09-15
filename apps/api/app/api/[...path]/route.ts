@@ -12,9 +12,10 @@ import {
 } from '../../../../../packages/database/src/index'
 import { validateGenerationRequest, quoteMediaGenerationCredits, prepareRequestDigestInput } from '@musecanvas/domain'
 import { RUNTIME_SETTINGS_DEFAULTS, type CreateGenerationRequest } from '@musecanvas/contracts'
-import { actorFrom, hashOtp, hashToken, randomToken, verifyOtpHash, type Actor } from '../../../src/auth/security'
+import { actorFrom, hashOtp, hashToken, randomToken, shouldUseSecureCookie, verifyOtpHash, type Actor } from '../../../src/auth/security'
 import { findActiveInvitationHash } from '../../../src/auth/invitations'
-import { body, emailValid, fail, mutationOriginValid, ok } from '../../../src/shared/http'
+import { writeAudit } from '../../../src/shared/audit'
+import { body, clientIpFromRequest, emailValid, fail, mutationOriginValid, ok } from '../../../src/shared/http'
 import {
   adminJobDto,
   jobDto,
@@ -33,7 +34,7 @@ import { sendMail, signedAssetUrl } from '../../../src/shared/services'
 import { limited } from '../../../src/shared/redis'
 import { decodeCursor, encodeCursor, boundedLimit, userJobSelect, loadJobInputs, loadSingleJobInputs } from '../../../src/shared/pagination'
 import { createGenerationUpload, completeGenerationUpload, deleteGenerationUpload, validateAndAttachGenerationUploads, normalizeGenerationInputs, validateInputsAgainstSlots, GenerationInputError } from '../../../src/modules/generation-uploads'
-import { resolveRuntimeSettings } from '../../../src/modules/settings/runtime'
+import { resolvePublicOrigin, resolveRuntimeSettings } from '../../../src/modules/settings/runtime'
 import { modelPresets } from '../../../src/admin/model-presets'
 import { buildBuiltinProviderTemplates } from '../../../src/admin/provider-templates'
 import { derivePurposeKey } from '../../../../../packages/providers/src/index'
@@ -84,7 +85,7 @@ const jobOutputSelect = `SELECT go.asset_id,a.object_key,a.media_kind,a.mime_typ
   FROM generation_outputs go JOIN assets a ON a.id=go.asset_id WHERE go.job_id=$1 AND a.deleted_at IS NULL`
 const cleanPath = (context: Context) => context.params.then(value => value.path.join('/'))
 const audit = (client: { query: (sql: string, params: unknown[]) => Promise<unknown> }, actor: Actor, action: string, type: string, id: string, summary: object = {}) =>
-  client.query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5)', [actor.id, action, type, id, summary])
+  writeAudit(client, actor.id, action, type, id, summary)
 const optimizationSettingsDto = (row: Record<string, unknown>) => ({
   enabled: Boolean(row.enabled),
   allowUserReadFinalPrompt: Boolean(row.allow_user_read_final_prompt),
@@ -329,7 +330,7 @@ export async function POST(request: NextRequest, context: Context) {
   const input = await body(request)
   if (path === 'auth/otp/request') {
     if (!emailValid(input.email)) return fail('INVALID_INPUT', '邮箱格式不正确')
-    const email = input.email.trim().toLowerCase(); const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown'
+    const email = input.email.trim().toLowerCase(); const ip = clientIpFromRequest(request)
     if (await limited(`otp:${email}:${ip}`, 5, 600)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
     const existing = await db().query('SELECT id,status,deleted_at FROM users WHERE lower(email)=$1 ORDER BY deleted_at NULLS FIRST LIMIT 1', [email]); const account = existing.rows[0]
     if (account && (account.deleted_at || account.status !== 'active')) return fail('ACCOUNT_UNAVAILABLE', '账户当前不可用', 403)
@@ -365,12 +366,12 @@ export async function POST(request: NextRequest, context: Context) {
         })
       }
       if (user.status !== 'active') return null
-      await client.query('UPDATE otp_challenges SET consumed_at=now() WHERE id=$1', [challenge.id]); const token = randomToken(); await client.query("INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 days')", [user.id, hashToken(token)]); return { user, token }
+      await client.query('UPDATE otp_challenges SET consumed_at=now() WHERE id=$1', [challenge.id]); const token = randomToken(); await client.query("INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 days')", [user.id, hashToken(token)]); await audit(client, user, 'auth.otp.login', 'user', user.id); return { user, token }
     })
     if (!result) return fail('INVALID_OTP', '验证码无效或已过期', 401)
-    const response = ok({ user: userDto(result.user) }); response.cookies.set('muse_session', result.token, { httpOnly: true, secure: process.env.COOKIE_SECURE === 'true', sameSite: 'lax', path: '/', maxAge: 30 * 86400 }); return response
+    const response = ok({ user: userDto(result.user) }); response.cookies.set('muse_session', result.token, { httpOnly: true, secure: shouldUseSecureCookie(await resolvePublicOrigin()), sameSite: 'lax', path: '/', maxAge: 30 * 86400 }); return response
   }
-  if (path === 'auth/logout') { const token = request.cookies.get('muse_session')?.value; if (token) await db().query('UPDATE sessions SET revoked_at=now() WHERE token_hash=$1', [hashToken(token)]); const response = ok({ loggedOut: true }); response.cookies.delete('muse_session'); response.cookies.delete('muse_setup'); return response }
+  if (path === 'auth/logout') { const logoutActor = await actorFrom(request); const token = request.cookies.get('muse_session')?.value; if (token) await db().query('UPDATE sessions SET revoked_at=now() WHERE token_hash=$1', [hashToken(token)]); if (logoutActor) { try { await writeAudit(db(), logoutActor.id, 'auth.logout', 'user', logoutActor.id) } catch (error) { console.error('audit write failed', error) } } const response = ok({ loggedOut: true }); response.cookies.delete('muse_session'); response.cookies.delete('muse_setup'); return response }
   if (path === 'auth/oauth/invitation') return completeOAuthInvitation(request, input)
 
   const actor = await requireActor(request, path.startsWith('admin/')); if (isResponse(actor)) return actor
@@ -445,6 +446,7 @@ export async function POST(request: NextRequest, context: Context) {
   }
 
   if (path === 'generations') {
+    if (await limited(`gen:create:${actor.id}`, 20, 300)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
     const allowedGenerationFields = new Set(['prompt', 'modelId', 'parameters', 'inputs', 'idempotencyKey', 'inputLanguage', 'expectedCredits', 'size', 'quality', 'count', 'inputImageIds'])
     if (Object.keys(input).some(key => !allowedGenerationFields.has(key))) return fail('INVALID_INPUT', '生成请求包含不允许的字段')
     if (typeof input.prompt !== 'string' || input.prompt.trim().length < 1 || input.prompt.length > 4000 || hasControlChars(input.prompt) || typeof input.modelId !== 'string') return fail('INVALID_INPUT', '生成参数无效')
@@ -658,9 +660,17 @@ export async function POST(request: NextRequest, context: Context) {
           const jobQuality = typeof normalized.parameters.quality === 'string' ? normalized.parameters.quality as string : null
           const jobCount = Number(normalized.parameters.count ?? 1)
           const normalizedRequestJson = JSON.stringify({ modelId: normalized.modelId, prompt: normalized.prompt, parameters: normalized.parameters, inputs: normalized.inputs, mode: normalized.mode })
-          const insertSql = `INSERT INTO generation_jobs(created_by,model_id,model_name,adapter,vendor_model_id,provider_base_url,prompt,size,quality,count,watermark,idempotency_key,provider_credential_id,provider_credential_name,optimization_mode,phase,media_kind,model_revision_id,provider_id,plugin_id,plugin_version,normalized_request,request_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`
+          const insertSql = `INSERT INTO generation_jobs(created_by,model_id,model_name,adapter,vendor_model_id,provider_base_url,prompt,size,quality,count,watermark,idempotency_key,provider_credential_id,provider_credential_name,optimization_mode,phase,media_kind,model_revision_id,provider_id,plugin_id,plugin_version,normalized_request,request_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) ON CONFLICT (created_by, idempotency_key) DO NOTHING RETURNING *`
           const insertParams = [actor.id, lockedModel.id, lockedModel.display_name, lockedModel.adapter, lockedModel.vendor_model_id, providerBaseUrl, prompt, jobSize, jobQuality, jobCount, lockedModel.watermark, idempotencyKey, credId, credName, optimizationMode, phase, mediaKind, lockedModel.revision_id || null, lockedModel.provider_id || null, lockedModel.plugin_id || null, lockedModel.plugin_version || '1.0.0', normalizedRequestJson, requestDigest]
           const inserted = await client.query(insertSql, insertParams)
+          if (inserted.rowCount === 0) {
+            // Concurrent create with the same idempotency key: the winner
+            // already committed the job, its input bindings, charge and
+            // outbox event. Return the existing row and skip every write.
+            const replayed = await client.query('SELECT * FROM generation_jobs WHERE created_by=$1 AND idempotency_key=$2', [actor.id, idempotencyKey])
+            if (replayed.rows[0]) return replayed.rows[0]
+            throw new Error('GENERATION_CREATE_FAILED')
+          }
           await validateAndAttachGenerationUploads(client, actor.id, inserted.rows[0].id, normalizedInputs, attachLimits)
           if (optRow.enabled) {
             const optimization = await client.query(`INSERT INTO prompt_optimizations(job_id,created_by,input_prompt,input_language,language_model_config_id,language_model_name_snapshot,language_model_vendor_id_snapshot,language_model_protocol_snapshot,language_model_adapter_snapshot,language_model_base_url_snapshot,language_model_max_output_tokens_snapshot,language_model_temperature_snapshot,language_model_reasoning_effort_snapshot,provider_credential_id,provider_credential_name_snapshot)
@@ -685,9 +695,17 @@ export async function POST(request: NextRequest, context: Context) {
           const jobQuality = typeof normalized.parameters.quality === 'string' ? normalized.parameters.quality as string : null
           const jobCount = Number(normalized.parameters.count ?? 1)
           const normalizedRequestJson = JSON.stringify({ modelId: normalized.modelId, prompt: normalized.prompt, parameters: normalized.parameters, inputs: normalized.inputs, mode: normalized.mode })
-          const insertSql = `INSERT INTO generation_jobs(created_by,model_id,model_name,adapter,vendor_model_id,provider_base_url,prompt,size,quality,count,watermark,idempotency_key,provider_credential_id,provider_credential_name,optimization_mode,phase,media_kind,model_revision_id,provider_id,plugin_id,plugin_version,normalized_request,request_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`
+          const insertSql = `INSERT INTO generation_jobs(created_by,model_id,model_name,adapter,vendor_model_id,provider_base_url,prompt,size,quality,count,watermark,idempotency_key,provider_credential_id,provider_credential_name,optimization_mode,phase,media_kind,model_revision_id,provider_id,plugin_id,plugin_version,normalized_request,request_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) ON CONFLICT (created_by, idempotency_key) DO NOTHING RETURNING *`
           const insertParams = [actor.id, lockedModel.id, lockedModel.display_name, lockedModel.adapter, lockedModel.vendor_model_id, providerBaseUrl, prompt, jobSize, jobQuality, jobCount, lockedModel.watermark, idempotencyKey, credId, credName, optimizationMode, phase, mediaKind, lockedModel.revision_id || null, lockedModel.provider_id || null, lockedModel.plugin_id || null, lockedModel.plugin_version || '1.0.0', normalizedRequestJson, requestDigest]
           const inserted = await client.query(insertSql, insertParams)
+          if (inserted.rowCount === 0) {
+            // Concurrent create with the same idempotency key: the winner
+            // already committed the job, its input bindings, charge and
+            // outbox event. Return the existing row and skip every write.
+            const replayed = await client.query('SELECT * FROM generation_jobs WHERE created_by=$1 AND idempotency_key=$2', [actor.id, idempotencyKey])
+            if (replayed.rows[0]) return replayed.rows[0]
+            throw new Error('GENERATION_CREATE_FAILED')
+          }
           await validateAndAttachGenerationUploads(client, actor.id, inserted.rows[0].id, normalizedInputs, attachLimits)
           if (optRow.enabled) {
             const optimization = await client.query(`INSERT INTO prompt_optimizations(job_id,created_by,input_prompt,input_language,language_model_config_id,language_model_name_snapshot,language_model_vendor_id_snapshot,language_model_protocol_snapshot,language_model_adapter_snapshot,language_model_base_url_snapshot,language_model_max_output_tokens_snapshot,language_model_temperature_snapshot,language_model_reasoning_effort_snapshot,provider_credential_id,provider_credential_name_snapshot)
@@ -725,8 +743,9 @@ export async function POST(request: NextRequest, context: Context) {
 
   const cancel = path.match(/^jobs\/([0-9a-f-]+)\/cancel$/)
   if (cancel) {
+    if (await limited(`gen:cancel:${actor.id}`, 60, 60)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
     const outcome = await transaction(async client => {
-      const current = await client.query('SELECT id,status FROM generation_jobs WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL FOR UPDATE', [cancel[1], actor.id])
+      const current = await client.query('SELECT id,status,attempt FROM generation_jobs WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL FOR UPDATE', [cancel[1], actor.id])
       const job = current.rows[0]
       if (!job) return { kind: 'not_found' as const }
       if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'canceled') {
@@ -746,7 +765,7 @@ export async function POST(request: NextRequest, context: Context) {
       // Active job: cooperative cancel. Record local intent and enqueue provider
       // cancel work; never claim success on local intent alone.
       await client.query('UPDATE generation_jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),updated_at=now() WHERE id=$1', [cancel[1]])
-      await client.query("INSERT INTO outbox_events(event_type,aggregate_id,payload) VALUES('generation.cancel.requested',$1,$2)", [cancel[1], { jobId: cancel[1] }])
+      await client.query("INSERT INTO outbox_events(event_type,aggregate_id,payload,dedupe_key) VALUES('generation.cancel.requested',$1,$2,$3) ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING", [cancel[1], { jobId: cancel[1] }, `cancel:${cancel[1]}:a${job.attempt}`])
       try {
         await client.query("UPDATE provider_runs SET operation_state='canceling',next_action_at=now(),updated_at=now() WHERE job_id=$1 AND operation_state IN ('submitting','submission_unknown','waiting','importing')", [cancel[1]])
       } catch {
@@ -765,6 +784,7 @@ export async function POST(request: NextRequest, context: Context) {
 
   const retry = path.match(/^jobs\/([0-9a-f-]+)\/retry$/)
   if (retry) {
+    if (await limited(`gen:retry:${actor.id}`, 30, 60)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
     let row: Record<string, unknown> | null = null
     try {
       row = await transaction(async client => {
@@ -820,7 +840,7 @@ export async function POST(request: NextRequest, context: Context) {
   if (promptEntryCreate) return createPromptTemplateEntry(actor, promptEntryCreate[1], input)
   if (path === 'admin/provider-credentials') return createProviderCredential(actor, input)
   const credTest = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)\/test$/)
-  if (credTest) return testProviderCredential(credTest[1])
+  if (credTest) return testProviderCredential(actor, credTest[1])
   return fail('NOT_FOUND', '接口不存在', 404)
 }
 
@@ -902,7 +922,7 @@ export async function DELETE(request: NextRequest, context: Context) {
         }
         await client.query('INSERT INTO deletion_jobs(user_id) VALUES($1) ON CONFLICT DO NOTHING', [user[1]]);
         await client.query("UPDATE generation_input_images SET status='deleted',deleted_at=now() WHERE created_by=$1", [user[1]]); await audit(client, actor, 'user.delete', 'user', user[1]); return true }); return deleted ? ok({ deleted: true }) : fail('NOT_FOUND', '用户不存在', 404) }
-  const credDel = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)$/); if (credDel) return deleteProviderCredential(credDel[1])
+  const credDel = path.match(/^admin\/provider-credentials\/([0-9a-f-]+)$/); if (credDel) return deleteProviderCredential(actor, credDel[1])
   const modelId = modelDeleteIdFromPath(path); if (modelId) return deleteModel(actor, modelId)
   const promptSetDel = path.match(/^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)$/); if (promptSetDel) return deletePromptTemplateSet(actor, promptSetDel[1])
   const promptEntryDel = path.match(/^admin\/prompt-templates\/entries\/([0-9a-fA-F-]+)$/); if (promptEntryDel) return deletePromptTemplateEntry(actor, promptEntryDel[1])

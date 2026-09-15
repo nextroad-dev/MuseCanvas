@@ -153,6 +153,75 @@ test('language model http errors carry sanitized upstream diagnostics', async ()
   }
 })
 
+function restoreEnv(key: string, previous: string | undefined) {
+  if (previous === undefined) delete process.env[key]
+  else process.env[key] = previous
+}
+
+test('callLanguageModel rejects private configured baseUrls unless env-allowed', async () => {
+  const previous = process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL
+  delete process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL
+  try {
+    for (const baseUrl of ['https://192.168.1.10/v1', 'https://localhost:8443', 'https://10.0.0.7/v1', 'https://172.16.0.9/v1']) {
+      await assert.rejects(
+        () => callLanguageModel({ protocol: 'openai_chat', vendorModelId: 'gpt', baseUrl, apiKey: 'secret', system: 'system', user: 'user', maxOutputTokens: 100, timeoutMs: 1000 }),
+        (error: unknown) => {
+          assert.equal(error instanceof LanguageModelHttpError, true)
+          assert.equal((error as LanguageModelHttpError).message, 'PROMPT_OPTIMIZATION_REJECTED')
+          const diagnostic = (error as LanguageModelHttpError).diagnostic
+          assert.equal(diagnostic.status, 0)
+          assert.equal(diagnostic.statusText, 'unsafe_url')
+          assert.equal(diagnostic.endpoint, '/v1/chat/completions')
+          return true
+        },
+      )
+    }
+  } finally { restoreEnv('ALLOW_PRIVATE_PROVIDER_BASE_URL', previous) }
+
+  process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL = 'true'
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ id: 'ok', choices: [{ message: { content: 'hi' } }] }), { status: 200, headers: { 'content-type': 'application/json' } })
+  try {
+    const result = await callLanguageModel({ protocol: 'openai_chat', vendorModelId: 'gpt', baseUrl: 'https://10.1.2.3/v1', apiKey: 'secret', system: 'system', user: 'user', maxOutputTokens: 100, timeoutMs: 1000 })
+    assert.equal(result.text, 'hi')
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('ALLOW_PRIVATE_PROVIDER_BASE_URL', previous)
+  }
+})
+
+test('callLanguageModel maps unsafe redirect targets to PROMPT_OPTIMIZATION_REJECTED', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: 'https://evil.example.com/v1/chat/completions' } })
+  try {
+    await assert.rejects(
+      () => callLanguageModel({ protocol: 'openai_chat', vendorModelId: 'gpt', apiKey: 'secret', system: 'system', user: 'user', maxOutputTokens: 100, timeoutMs: 1000 }),
+      (error: unknown) => {
+        assert.equal(error instanceof LanguageModelHttpError, true)
+        assert.equal((error as LanguageModelHttpError).message, 'PROMPT_OPTIMIZATION_REJECTED')
+        assert.equal((error as LanguageModelHttpError).diagnostic.status, 0)
+        assert.equal((error as LanguageModelHttpError).diagnostic.statusText, 'unsafe_url')
+        return true
+      },
+    )
+  } finally { globalThis.fetch = originalFetch }
+})
+
+test('callLanguageModel maps timeouts and transport failures to PROMPT_OPTIMIZATION_TEMPORARY_ERROR', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => { throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }) }
+  try {
+    await assert.rejects(
+      () => callLanguageModel({ protocol: 'openai_chat', vendorModelId: 'gpt', apiKey: 'secret', system: 'system', user: 'user', maxOutputTokens: 100, timeoutMs: 1000 }),
+      (error: unknown) => {
+        assert.equal(error instanceof LanguageModelHttpError, false)
+        assert.equal((error as Error).message, 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR')
+        return true
+      },
+    )
+  } finally { globalThis.fetch = originalFetch }
+})
+
 test('validates Seedream way-two pixel sizes by model', () => {
   assert.equal(normalizeSeedreamSize('1024x1024', 'doubao-seedream-4-0-250828'), '1024x1024')
   assert.equal(normalizeSeedreamSize('1280x720', 'doubao-seedream-4-0-250828'), '1280x720')

@@ -33,12 +33,21 @@ packages/
   contracts/ 浏览器可安全使用的 DTO、共享类型和错误码
   database/  migration、事务和数据访问
   domain/    框架无关的业务规则和状态机
-  providers/ 图像生成、对象存储和邮件服务适配器
+  providers/ 图像/视频生成插件与凭据加密（对象存储客户端在 apps/worker，SMTP 在 apps/api）
 docs/        功能设计、实现记录和设计系统
 deploy/      Compose 编排、Dockerfile 与 Nginx 配置
 scripts/     本地和部署辅助脚本
 .github/     GitHub Actions 工作流
 ```
+
+## 插件开发指南
+
+模型供应商插件（图像 / 视频）的开发规范独立维护在 [MuseCanvas-Connector](https://github.com/nextroad-dev/MuseCanvas-Connector) 仓库，主仓库不再保留 `wiki/` 副本：
+
+- [媒体插件开发规范](https://github.com/nextroad-dev/MuseCanvas-Connector/blob/main/wiki/video-plugin-spec.md)：media provider 内核契约、插件生命周期与状态机、输出契约、安全边界、错误模型、参数校验与测试门禁。
+- [规范索引与适用范围](https://github.com/nextroad-dev/MuseCanvas-Connector/blob/main/wiki/README.md)：仓库说明与参考实现指引。
+
+改动 `packages/providers/src/core/` 或 `packages/providers/src/plugins/*` 前请先通读该规范；违反契约门禁（`tests/integration/media-provider-contract.test.ts`）的改动不予合入。
 
 ## Docker / Compose 文件说明
 

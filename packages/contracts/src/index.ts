@@ -241,6 +241,11 @@ export type ProviderRunStatus =
   | 'failed'
   | 'canceled'
 
+/**
+ * Worker-internal contract. `clientToken`/`leaseToken` are worker lease secrets
+ * and MUST NOT be serialized to API clients; project responses through
+ * `ProviderRunPublic` instead.
+ */
 export interface ProviderRun {
   id: string
   jobId: string
@@ -253,6 +258,9 @@ export interface ProviderRun {
   leaseExpiresAt?: string | null
   error?: { code: string; message: string; retryable?: boolean; details?: unknown } | null
 }
+
+/** Client-safe projection of `ProviderRun` (strips worker lease secrets). */
+export type ProviderRunPublic = Omit<ProviderRun, 'clientToken' | 'leaseToken' | 'leaseExpiresAt'>
 
 // Existing Billing Types (Preserved)
 export type BillingState = 'reserved' | 'settled' | 'released'

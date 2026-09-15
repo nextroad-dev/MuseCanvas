@@ -4,7 +4,7 @@ import { releaseGenerationCredits } from '../../../../../packages/database/src/i
 export async function deleteJobWithAssets(userId: string, jobId: string) {
   return transaction(async (client) => {
     const current = await client.query(
-      'SELECT id,prompt_optimization_id,deleted_at,status FROM generation_jobs WHERE id=$1 AND created_by=$2 FOR UPDATE',
+      'SELECT id,prompt_optimization_id,deleted_at,status,attempt FROM generation_jobs WHERE id=$1 AND created_by=$2 FOR UPDATE',
       [jobId, userId],
     )
     const job = current.rows[0]
@@ -15,6 +15,21 @@ export async function deleteJobWithAssets(userId: string, jobId: string) {
         `UPDATE generation_jobs SET deleted_at=now(),updated_at=now(),status=CASE WHEN status IN('queued','retry_wait','running') THEN 'canceled' ELSE status END,completed_at=CASE WHEN status IN('queued','retry_wait','running') THEN COALESCE(completed_at,now()) ELSE completed_at END WHERE id=$1 AND created_by=$2`,
         [jobId, userId],
       )
+      if (String(job.status) === 'running') {
+        // Mirror the cooperative cancel flow of the API cancel endpoint: record
+        // local intent and enqueue provider cancel work so an in-flight remote
+        // run reaches a terminal state instead of polling a deleted job.
+        await client.query('UPDATE generation_jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),updated_at=now() WHERE id=$1', [jobId])
+        try {
+          await client.query("UPDATE provider_runs SET operation_state='canceling',next_action_at=now(),updated_at=now() WHERE job_id=$1 AND operation_state IN ('submitting','submission_unknown','waiting','importing')", [jobId])
+        } catch {
+          // provider_runs table may not exist on older databases; outbox carries the intent.
+        }
+        await client.query(
+          "INSERT INTO outbox_events(event_type,aggregate_id,payload,dedupe_key) VALUES('generation.cancel.requested',$1,$2,$3) ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING",
+          [jobId, { jobId }, `cancel:${jobId}:a${job.attempt}`],
+        )
+      }
     }
 
     // Release credits if charge was reserved

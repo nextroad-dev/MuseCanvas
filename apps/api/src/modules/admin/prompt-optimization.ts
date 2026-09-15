@@ -1,6 +1,7 @@
 import { db, transaction } from '../../../../../packages/database/src/index'
 import { type Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
+import { writeAudit } from '../../shared/audit'
 import { decryptApiKey } from '../../auth/security'
 import { callLanguageModel } from '../../../../../packages/providers/src/index'
 
@@ -36,7 +37,7 @@ export async function updatePromptOptimizationSettings(
     return fail('INVALID_INPUT', '语言模型无效')
   if (modelId) {
     const model = await db().query(
-      `SELECT m.id FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.enabled=true AND m.deleted_at IS NULL AND pc.enabled=true AND pc.api_key_encrypted IS NOT NULL`,
+      `SELECT m.id FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.enabled=true AND m.deleted_at IS NULL AND pc.enabled=true AND COALESCE(NULLIF(pc.payload_encrypted,''),pc.api_key_encrypted) IS NOT NULL`,
       [modelId],
     )
     if (!model.rows[0])
@@ -44,19 +45,19 @@ export async function updatePromptOptimizationSettings(
   }
   if (enabled && !modelId) return fail('PROMPT_MODEL_NOT_CONFIGURED', '启用前请先选择语言模型')
   const timeoutMs = 600_000
+  const allowUserReadFinalPrompt =
+    input.allowUserReadFinalPrompt === undefined
+      ? current.allow_user_read_final_prompt
+      : input.allowUserReadFinalPrompt
   const updated = await transaction(async (client) => {
     const r = await client.query(
       `UPDATE prompt_optimization_settings SET enabled=$1,allow_user_read_final_prompt=$2,language_model_config_id=$3,timeout_ms=$4,updated_by=$5,updated_at=now() WHERE singleton=true RETURNING *`,
-      [
-        enabled,
-        input.allowUserReadFinalPrompt === undefined
-          ? current.allow_user_read_final_prompt
-          : input.allowUserReadFinalPrompt,
-        modelId,
-        timeoutMs,
-        actor.id,
-      ],
+      [enabled, allowUserReadFinalPrompt, modelId, timeoutMs, actor.id],
     )
+    await writeAudit(client, actor.id, 'prompt_optimization_settings.update', 'settings', 'singleton', {
+      enabled,
+      allowUserReadFinalPrompt,
+    })
     return r.rows[0]
   })
   return ok(optimizationSettingsDto(updated))

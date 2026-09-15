@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS asset_deletion_jobs (id uuid PRIMARY KEY DEFAULT gen_
 CREATE TABLE IF NOT EXISTS orphan_object_deletion_jobs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),object_key text NOT NULL UNIQUE,created_at timestamptz NOT NULL DEFAULT now(),attempts integer NOT NULL DEFAULT 0,last_error_code text,completed_at timestamptz);
 CREATE UNIQUE INDEX IF NOT EXISTS asset_deletion_active_key ON asset_deletion_jobs(asset_id) WHERE completed_at IS NULL;
 CREATE TABLE IF NOT EXISTS audit_logs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),actor_id uuid NOT NULL REFERENCES users(id),action text NOT NULL,target_type text NOT NULL,target_id text NOT NULL,summary jsonb NOT NULL DEFAULT '{}',created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE audit_logs ALTER COLUMN actor_id DROP NOT NULL;
 CREATE TABLE IF NOT EXISTS oauth_identities (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid NOT NULL REFERENCES users(id),provider oauth_provider NOT NULL,provider_subject text NOT NULL,email_at_link text NOT NULL,email_verified boolean NOT NULL DEFAULT true,display_name text,avatar_url text,linked_at timestamptz NOT NULL DEFAULT now(),last_login_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz);
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_provider_subject_active_key ON oauth_identities(provider,provider_subject) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_user_provider_active_key ON oauth_identities(user_id,provider) WHERE deleted_at IS NULL;

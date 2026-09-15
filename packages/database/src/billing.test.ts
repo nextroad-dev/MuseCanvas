@@ -7,6 +7,7 @@ import {
   ensureCreditAccount,
   reserveGenerationCredits,
   captureGenerationCredits,
+  releaseGenerationCredits,
   adjustCredits,
   toSafeInt,
   toCreditBalance,
@@ -98,6 +99,12 @@ test('billing primitives mock client workflow: ensure, reserve, capture, release
           acc.available_credits = params[0] as number
           return { rows: [acc] }
         }
+      }
+
+      // SELECT user_id FROM generation_charges WHERE job_id = $1 (owner pre-read before locking)
+      if (normalized.startsWith('SELECT user_id FROM generation_charges WHERE job_id = $1')) {
+        const ch = charges[params[0] as string]
+        return { rows: ch ? [{ user_id: ch.user_id }] : [] }
       }
 
       // SELECT * FROM generation_charges WHERE job_id = $1
@@ -284,5 +291,102 @@ test('billing primitives mock client workflow: ensure, reserve, capture, release
       })
     },
     (err: unknown) => err instanceof BillingError && err.code === BillingErrorCode.INVALID_CREDIT_AMOUNT
+  )
+})
+
+test('capture and release acquire locks in account -> charge order (deadlock-safe with reserve)', async () => {
+  const account: CreditAccountRow = {
+    user_id: 'user-1',
+    available_credits: 100,
+    reserved_credits: 10,
+    created_at: new Date(),
+    updated_at: new Date(),
+  }
+  const charge: GenerationChargeRow = {
+    job_id: 'job-1',
+    user_id: 'user-1',
+    quoted_credits: 10,
+    state: 'reserved',
+    billing_cycle: 1,
+    pricing_snapshot: {},
+    reserved_at: new Date(),
+    settled_at: null,
+    released_at: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  }
+  const lockOrder: string[] = []
+
+  const mockClient = {
+    async query(sql: string, params: unknown[] = []) {
+      const normalized = sql.trim().replace(/\s+/g, ' ')
+
+      // Owner pre-read (no lock)
+      if (normalized.startsWith('SELECT user_id FROM generation_charges WHERE job_id = $1')) {
+        return { rows: [{ user_id: charge.user_id }] }
+      }
+      if (normalized.startsWith('SELECT * FROM credit_accounts WHERE user_id = $1')) {
+        lockOrder.push('account')
+        return { rows: [account] }
+      }
+      if (normalized.startsWith('SELECT * FROM generation_charges WHERE job_id = $1')) {
+        lockOrder.push('charge')
+        return { rows: [charge] }
+      }
+      if (normalized.startsWith('SELECT * FROM credit_ledger WHERE idempotency_key = $1')) {
+        return { rows: [] }
+      }
+      if (normalized.includes('UPDATE credit_accounts')) {
+        if (normalized.includes('SET reserved_credits = $1')) {
+          account.reserved_credits = params[0] as number
+        } else if (normalized.includes('SET available_credits = $1, reserved_credits = $2')) {
+          account.available_credits = params[0] as number
+          account.reserved_credits = params[1] as number
+        }
+        return { rows: [account] }
+      }
+      if (normalized.includes('UPDATE generation_charges')) {
+        if (normalized.includes("SET state = 'settled'")) {
+          charge.state = 'settled'
+          charge.settled_at = new Date()
+        } else if (normalized.includes("SET state = 'released'")) {
+          charge.state = 'released'
+          charge.released_at = new Date()
+        }
+        return { rows: [charge] }
+      }
+      return { rows: [] }
+    },
+  } as unknown as pg.PoolClient
+
+  const cap = await captureGenerationCredits(mockClient, { jobId: 'job-1' })
+  assert.equal(cap.charge.state, 'settled')
+  assert.equal(cap.alreadyProcessed, false)
+  assert.deepEqual(lockOrder, ['account', 'charge'])
+
+  // Reset state for the release path
+  charge.state = 'reserved'
+  charge.settled_at = null
+  account.reserved_credits = 10
+  lockOrder.length = 0
+
+  const rel = await releaseGenerationCredits(mockClient, { jobId: 'job-1' })
+  assert.equal(rel.charge.state, 'released')
+  assert.equal(rel.alreadyProcessed, false)
+  assert.deepEqual(lockOrder, ['account', 'charge'])
+})
+
+test('capture rejects with BILLING_STATE_CONFLICT when charge does not exist', async () => {
+  const mockClient = {
+    async query() {
+      return { rows: [] }
+    },
+  } as unknown as pg.PoolClient
+
+  await assert.rejects(
+    async () => {
+      await captureGenerationCredits(mockClient, { jobId: 'missing-job' })
+    },
+    (err: unknown) => err instanceof BillingError && err.code === BillingErrorCode.BILLING_STATE_CONFLICT
   )
 })

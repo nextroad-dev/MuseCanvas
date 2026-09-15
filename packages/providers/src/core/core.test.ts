@@ -158,6 +158,84 @@ test('DefaultSafeHttpClient enforces HTTPS and allowed hosts without global fetc
   assert.equal(fetchedOptions.method, 'POST')
 })
 
+test('DefaultSafeHttpClient matches *- prefixes on a single DNS label only', async () => {
+  const mockFetch = (async () => new Response('{}', { status: 200 })) as typeof globalThis.fetch
+  const client = new DefaultSafeHttpClient({
+    pluginId: 'test-plugin',
+    version: '1.0.0',
+    allowedHosts: ['*-aiplatform.googleapis.com'],
+    fetchImpl: mockFetch,
+  })
+
+  // Single-label prefix (us-central1) passes.
+  const res = await client.get('https://us-central1-aiplatform.googleapis.com/v1/projects/x')
+  assert.equal(res.ok, true)
+
+  // Multi-label prefix (dot inside the '*' portion) must not match the wildcard.
+  await assert.rejects(
+    () => client.get('https://evil.com-aiplatform.googleapis.com/v1/projects/x'),
+    (err: unknown) => {
+      assert.equal(err instanceof NormalizedProviderError, true)
+      assert.equal((err as NormalizedProviderError).diagnostic.code, 'UNSAFE_URL')
+      return true
+    },
+  )
+})
+
+test('DefaultSafeHttpClient rejects http unless allowInsecureProtocol is explicitly set', async () => {
+  const mockFetch = (async () => new Response('{}', { status: 200 })) as typeof globalThis.fetch
+  const client = new DefaultSafeHttpClient({
+    pluginId: 'test-plugin',
+    version: '1.0.0',
+    allowedHosts: ['api.openai.com'],
+    fetchImpl: mockFetch,
+  })
+
+  await assert.rejects(
+    () => client.get('http://api.openai.com/v1/models'),
+    (err: unknown) => {
+      assert.equal((err as NormalizedProviderError).diagnostic.code, 'UNSAFE_URL')
+      assert.match((err as NormalizedProviderError).diagnostic.detail, /Insecure protocol/)
+      return true
+    },
+  )
+
+  // Opt-in only permits http; other protocols stay rejected.
+  await assert.rejects(
+    () => client.get('ftp://api.openai.com/v1/models', { allowInsecureProtocol: true }),
+    (err: unknown) => {
+      assert.equal((err as NormalizedProviderError).diagnostic.code, 'UNSAFE_URL')
+      return true
+    },
+  )
+
+  const res = await client.get('http://api.openai.com/v1/models', { allowInsecureProtocol: true })
+  assert.equal(res.ok, true)
+})
+
+test('DefaultSafeHttpClient honors per-request allowedHosts overrides and rejects others', async () => {
+  const mockFetch = (async () => new Response('{}', { status: 200 })) as typeof globalThis.fetch
+  const client = new DefaultSafeHttpClient({
+    pluginId: 'test-plugin',
+    version: '1.0.0',
+    allowedHosts: ['api.openai.com'],
+    fetchImpl: mockFetch,
+  })
+
+  const res = await client.get('https://custom.provider.example.com/v1/models', {
+    allowedHosts: ['custom.provider.example.com'],
+  })
+  assert.equal(res.ok, true)
+
+  await assert.rejects(
+    () => client.get('https://malicious.example.com/v1/models', { allowedHosts: ['custom.provider.example.com'] }),
+    (err: unknown) => {
+      assert.equal((err as NormalizedProviderError).diagnostic.code, 'UNSAFE_URL')
+      return true
+    },
+  )
+})
+
 test('readBoundedOutput bounds memory and extracts image dimensions', async () => {
   // Build a valid 16x16 PNG header
   const pngHeader = Buffer.from([

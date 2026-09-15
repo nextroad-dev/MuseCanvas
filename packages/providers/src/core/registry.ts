@@ -88,6 +88,7 @@ export class MediaProviderRegistry {
       try {
         const u = new URL(options.config.baseUrl)
         if (!allowedHosts.includes(u.hostname)) {
+          console.warn('[registry] appending configured baseUrl host to allowlist', { pluginId, host: u.hostname })
           allowedHosts.push(u.hostname)
         }
       } catch {

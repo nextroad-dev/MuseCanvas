@@ -122,6 +122,19 @@ test('worker uses leases, XAUTOCLAIM, capacity reservation without sleep loops',
   assert.ok(/cancel_requested_at/.test(maintenanceSrc), 'maintenance must handle cooperative cancellation')
 })
 
+test('in-flight messages carry heartbeats and stale claims skip live ones', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)))
+  const queueSrc = readFileSync(join(root, 'queue', 'index.ts'), 'utf8')
+  const { HEARTBEAT_TTL_MS, HEARTBEAT_RENEW_MS, STALE_PENDING_IDLE_MS } = await import('./shared/infra')
+  assert.ok(HEARTBEAT_TTL_MS > STALE_PENDING_IDLE_MS, 'dead-worker retry must wait for the heartbeat to lapse, not the idle threshold alone')
+  assert.ok(HEARTBEAT_RENEW_MS < HEARTBEAT_TTL_MS, 'renewal period must be shorter than the heartbeat TTL')
+  assert.ok(/hb:gen-msg:\$\{/.test(queueSrc), 'queue must key heartbeats per stream message id')
+  assert.ok(/type: 'PX', value: HEARTBEAT_TTL_MS/.test(queueSrc), 'heartbeat keys must use a PX TTL')
+  assert.ok(/setInterval\(/.test(queueSrc), 'queue must renew heartbeats while processing')
+  assert.ok(/finally \{\s*clearInterval/.test(queueSrc), 'queue must stop heartbeat renewal in finally')
+  assert.ok(/exists\(heartbeatKey\(/.test(queueSrc), 'claimStalePending must skip messages whose heartbeat is still alive')
+})
+
 test('synchronous retry only resubmits explicit 429 non-acceptance', () => {
   assert.equal(MAX_SYNC_SUBMIT_ATTEMPTS, 3)
   assert.equal(SYNC_RETRYABLE_HTTP_STATUS, 429)

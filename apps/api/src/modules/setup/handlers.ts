@@ -32,7 +32,8 @@ import type {
   SetupStatusResponse,
 } from '@musecanvas/contracts'
 import { hashOtp, hashToken, randomToken, verifyOtpHash, actorFrom, shouldUseSecureCookie } from '../../auth/security'
-import { body, emailValid, fail, ok } from '../../shared/http'
+import { writeAudit } from '../../shared/audit'
+import { body, clientIpFromRequest, emailValid, fail, ok } from '../../shared/http'
 import { userDto } from '../../shared/dto'
 import { sendMail, verifySmtpConnection, testStorageConnection } from '../../shared/services'
 import { limited, redisPing } from '../../shared/redis'
@@ -81,7 +82,12 @@ async function setupSessionValid(raw: string | undefined): Promise<boolean> {
 }
 
 export async function hasSetupAccess(request: NextRequest): Promise<boolean> {
-  if (await setupSessionValid(request.cookies.get(SETUP_COOKIE)?.value)) return true
+  if (await setupSessionValid(request.cookies.get(SETUP_COOKIE)?.value)) {
+    // A setup session only grants access while onboarding is open; after
+    // completion, leftover sessions fall through to the admin role check.
+    const state = await getOnboardingState(db()).catch((): null => null)
+    if (state?.status !== 'complete') return true
+  }
   try {
     const actor = await actorFrom(request)
     return !!actor && actor.role === 'admin'
@@ -168,11 +174,21 @@ async function ensureSetupClaim(): Promise<void> {
       && row.claim_expires_at !== null
       && new Date(row.claim_expires_at).getTime() > Date.now()
     if (live) return
+    if (row.claim_consumed_at !== null) {
+      // A consumed claim is reinstalled only when no valid setup session
+      // remains, so an active operator never gets a second claimable code.
+      const sessions = await client.query('SELECT count(*)::int AS cnt FROM setup_sessions WHERE consumed_at IS NULL AND expires_at > now()')
+      if (sessions.rows[0].cnt > 0) return
+    }
     const code = randomToken(24)
     await installSetupClaim(client, {
       tokenHash: hmacForPurpose(code, 'setup-session'),
       expiresInSeconds: CLAIM_TTL_SECONDS,
     })
+    // Sole channel for obtaining the claim code during bootstrap (no API ever
+    // returns it); regeneration is guarded above (a live claim, or any
+    // unconsumed setup session, suppresses a new code). Sensitive: readable
+    // only via server logs; setupComplete sweeps all setup sessions on completion.
     console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes, printed once): ${code}`)
   })
 }
@@ -234,7 +250,7 @@ export async function setupClaim(request: NextRequest, input: Record<string, unk
   if (typeof code !== 'string' || !code.trim() || code.length > 256) {
     return fail('INVALID_INPUT', '验证码无效')
   }
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+  const ip = clientIpFromRequest(request)
   if (await limited(`setup-claim:${ip}`, 10, 600)) {
     return fail('RATE_LIMITED', '验证尝试过多，请稍后再试', 429)
   }
@@ -245,6 +261,7 @@ export async function setupClaim(request: NextRequest, input: Record<string, unk
     token = await transaction(async (client) => {
       const next = await verifyAndConsumeSetupClaim(client, hmacForPurpose(code.trim(), 'setup-session'))
       if (!next || next.status === 'complete') return null
+      await writeAudit(client, null, 'setup.claim.consume', 'onboarding', 'singleton')
       const issued = randomToken()
       await createSetupSession(client, {
         tokenHash: hmacForPurpose(issued, 'setup-session'),
@@ -318,6 +335,7 @@ export async function setupSite(request: NextRequest, input: Record<string, unkn
     { siteName: valid.siteName, siteUrl: valid.siteUrl },
     await actorId(request),
   )
+  await writeAudit(db(), null, 'setup.site.update', 'onboarding', 'singleton', { siteName: saved.siteName, siteUrl: saved.siteUrl })
   invalidateRuntimeSettings()
   return ok(siteSettingsDto(saved))
 }
@@ -369,6 +387,7 @@ export async function setupSmtpTest(request: NextRequest, input: Record<string, 
       },
       await actorId(request),
     )
+    await writeAudit(db(), null, 'setup.smtp.test', 'onboarding', 'singleton', { status: 'success' })
   } catch {
     return fail('INTERNAL_ERROR', '保存 SMTP 设置失败', 500)
   }
@@ -398,7 +417,7 @@ export async function setupSmtp(request: NextRequest, input: Record<string, unkn
   }
   try {
     const secret = merged.password ? encryptForPurpose(merged.password, 'smtp-credentials') : null
-    await updateSmtpSettings(
+    const saved = await updateSmtpSettings(
       db(),
       {
         host: merged.host,
@@ -416,6 +435,10 @@ export async function setupSmtp(request: NextRequest, input: Record<string, unkn
       },
       await actorId(request),
     )
+    await writeAudit(db(), null, 'setup.smtp.update', 'onboarding', 'singleton', {
+      host: saved.host, port: saved.port, tlsMode: saved.tlsMode, username: saved.username,
+      fromAddress: saved.fromAddress, fromName: saved.fromName, status: saved.status,
+    })
   } catch {
     return fail('INTERNAL_ERROR', '保存 SMTP 设置失败', 500)
   }
@@ -474,6 +497,7 @@ export async function setupStorageTest(request: NextRequest, input: Record<strin
       },
       await actorId(request),
     )
+    await writeAudit(db(), null, 'setup.storage.test', 'onboarding', 'singleton', { status: 'success' })
   } catch {
     return fail('INTERNAL_ERROR', '保存对象存储设置失败', 500)
   }
@@ -505,7 +529,7 @@ export async function setupStorage(request: NextRequest, input: Record<string, u
     const encrypted = merged.secretAccessKey
       ? encryptForPurpose(merged.secretAccessKey, 'object-storage-credentials')
       : null
-    await updateStorageSettings(
+    const saved = await updateStorageSettings(
       db(),
       {
         endpoint: merged.endpoint,
@@ -523,6 +547,10 @@ export async function setupStorage(request: NextRequest, input: Record<string, u
       },
       await actorId(request),
     )
+    await writeAudit(db(), null, 'setup.storage.update', 'onboarding', 'singleton', {
+      endpoint: saved.endpoint, publicEndpoint: saved.publicEndpoint, region: saved.region,
+      bucket: saved.bucket, accessKeyId: saved.accessKeyId, status: saved.status,
+    })
   } catch {
     return fail('INTERNAL_ERROR', '保存对象存储设置失败', 500)
   }
@@ -536,6 +564,7 @@ export async function setupRuntime(request: NextRequest, input: Record<string, u
   const valid = validateRuntimeInput(input)
   if (asError(valid)) return fail(valid.code, valid.message)
   const saved = await updateRuntimeSettings(db(), valid, await actorId(request))
+  await writeAudit(db(), null, 'setup.runtime.update', 'onboarding', 'singleton', { ...valid })
   invalidateRuntimeSettings()
   return ok(runtimeSettingsDto(saved))
 }
@@ -563,6 +592,7 @@ export async function setupTemplatesImport(
       })),
     })
     await markOnboardingSection(client, 'templates', 'complete', uid)
+    await writeAudit(client, null, 'setup.templates.import', 'onboarding', 'singleton', { name: next.name, entryCount: next.entries.length })
     return next
   })
   invalidateRuntimeSettings()
@@ -585,14 +615,16 @@ export async function setupComplete(request: NextRequest): Promise<NextResponse>
   if (!outcome.completed) return fail('SETUP_INCOMPLETE', '仍有必填步骤未完成', 409)
   invalidateRuntimeSettings()
   const raw = request.cookies.get(SETUP_COOKIE)?.value
-  if (raw) {
-    try {
+  try {
+    if (raw) {
       await db().query('UPDATE setup_sessions SET consumed_at=now() WHERE token_hash=$1', [
         hmacForPurpose(raw, 'setup-session'),
       ])
-    } catch {
-      // The cookie is cleared below regardless; a stale row simply expires.
     }
+    // Sweep every remaining session so no setup access survives completion.
+    await db().query('UPDATE setup_sessions SET consumed_at=now() WHERE consumed_at IS NULL')
+  } catch {
+    // The cookie is cleared below regardless; a stale row simply expires.
   }
   const response = ok({
     completed: true,
@@ -612,7 +644,7 @@ export async function setupAdminRequest(request: NextRequest, input: Record<stri
   if (!emailValid(input.email)) return fail('INVALID_INPUT', '邮箱格式不正确')
 
   const email = input.email.trim().toLowerCase()
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+  const ip = clientIpFromRequest(request)
   if (await limited(`setup:${email}:${ip}`, 5, 600)) {
     return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
   }
@@ -664,6 +696,7 @@ export async function setupAdminVerify(request: NextRequest, input: Record<strin
       [email],
     )
     const user = userResult.rows[0]
+    await writeAudit(client, user.id, 'setup.admin.create', 'user', user.id, { email })
     await client.query('UPDATE otp_challenges SET consumed_at=now() WHERE id=$1', [challenge.id])
     await markOnboardingSection(client, 'admin', 'complete', user.id)
     const token = randomToken()

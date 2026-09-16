@@ -84,7 +84,7 @@ function setPopover(name: ToolbarPopover, open: boolean) {
       <div
         class="pointer-events-none absolute -inset-px rounded-[calc(var(--radius-panel)+1px)] opacity-0 transition-opacity duration-500"
         :class="isFocused ? 'opacity-100' : ''"
-        style="background: linear-gradient(135deg, var(--color-primary) 0%, transparent 50%, var(--color-primary-soft) 100%); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; padding: 1px;"
+        style="background: linear-gradient(135deg, var(--color-primary) 0%, transparent 50%, var(--color-primary-soft) 100%); -webkit-mask: linear-gradient(var(--color-foreground-inverse) 0 0) content-box, linear-gradient(var(--color-foreground-inverse) 0 0); -webkit-mask-composite: xor; mask-composite: exclude; padding: 1px;"
         aria-hidden="true"
       />
 
@@ -92,7 +92,7 @@ function setPopover(name: ToolbarPopover, open: boolean) {
       <div
         class="relative flex flex-col overflow-visible rounded-[var(--radius-panel)] border bg-surface/95 shadow-md backdrop-blur-sm transition-all duration-300"
         :class="isFocused
-          ? 'border-primary/50 shadow-[0_0_0_4px_var(--color-primary-soft),0_8px_32px_-4px_rgba(22,138,73,0.15)]'
+          ? 'border-primary/50 shadow-[0_0_0_4px_var(--color-primary-soft),0_8px_32px_-4px_color-mix(in_srgb,var(--color-primary)_15%,transparent)]'
           : 'border-border hover:border-border-strong hover:shadow-lg'"
       >
         <!-- Textarea -->
@@ -269,7 +269,7 @@ function setPopover(name: ToolbarPopover, open: boolean) {
   background: linear-gradient(
     105deg,
     transparent 30%,
-    rgba(255, 255, 255, 0.25) 50%,
+    color-mix(in srgb, var(--color-foreground-inverse) 25%, transparent) 50%,
     transparent 70%
   );
   background-size: 200% 100%;

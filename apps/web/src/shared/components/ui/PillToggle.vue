@@ -28,7 +28,7 @@ const emit = defineEmits<{
   >
     <span
       :class="[
-        'inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform',
+        'inline-block h-3.5 w-3.5 rounded-full bg-foreground-inverse shadow transition-transform',
         modelValue ? 'translate-x-[18px]' : 'translate-x-0.5',
       ]"
     />

@@ -31,27 +31,27 @@ const toneClasses: Record<typeof config.value.tone, { soft: string; outline: str
   neutral: {
     soft: 'bg-neutral-soft text-neutral-status',
     outline: 'border border-border bg-transparent text-foreground',
-    solid: 'bg-neutral-status text-white',
+    solid: 'bg-neutral-status text-foreground-inverse',
   },
   info: {
     soft: 'bg-info-soft text-info',
     outline: 'border border-info bg-transparent text-info',
-    solid: 'bg-info text-white',
+    solid: 'bg-info text-foreground-inverse',
   },
   success: {
     soft: 'bg-success-soft text-success',
     outline: 'border border-success bg-transparent text-success',
-    solid: 'bg-success text-white',
+    solid: 'bg-success text-foreground-inverse',
   },
   danger: {
     soft: 'bg-danger-soft text-danger',
     outline: 'border border-danger bg-transparent text-danger',
-    solid: 'bg-danger text-white',
+    solid: 'bg-danger text-foreground-inverse',
   },
   warning: {
     soft: 'bg-warning-soft text-warning',
     outline: 'border border-warning bg-transparent text-warning',
-    solid: 'bg-warning text-white',
+    solid: 'bg-warning text-foreground-inverse',
   },
 }
 

@@ -220,7 +220,7 @@ onUnmounted(() => stopTimer())
               loading="lazy"
             />
             <span
-              class="pointer-events-none absolute left-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-[9px] font-medium text-white"
+              class="pointer-events-none absolute left-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-overlay/60 text-[9px] font-medium text-foreground-inverse"
             >
               {{ idx + 1 }}
             </span>

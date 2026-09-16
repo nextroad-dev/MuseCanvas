@@ -139,9 +139,9 @@ function previewInputImage(idx: number) {
             controls
             preload="metadata"
             playsinline
-            class="block max-h-[55vh] w-full bg-black"
+            class="block max-h-[55vh] w-full bg-overlay"
           />
-          <span class="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
+          <span class="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/60 px-2 py-0.5 text-[11px] font-medium text-foreground-inverse backdrop-blur-sm">
             <Film class="h-3 w-3" />
             视频
           </span>
@@ -158,8 +158,8 @@ function previewInputImage(idx: number) {
             loading="lazy"
           />
           <!-- Hover overlay -->
-          <div class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-300 group-hover:bg-black/20">
-            <div class="flex scale-75 items-center gap-2 rounded-full border border-white/30 bg-black/50 px-4 py-2 text-sm font-medium text-white opacity-0 backdrop-blur-sm transition-all duration-300 group-hover:scale-100 group-hover:opacity-100">
+          <div class="absolute inset-0 flex items-center justify-center bg-overlay/0 transition-colors duration-300 group-hover:bg-overlay/20">
+            <div class="flex scale-75 items-center gap-2 rounded-full border border-foreground-inverse/30 bg-overlay/50 px-4 py-2 text-sm font-medium text-foreground-inverse opacity-0 backdrop-blur-sm transition-all duration-300 group-hover:scale-100 group-hover:opacity-100">
               <ZoomIn class="h-4 w-4" />
               点击放大
             </div>
@@ -187,10 +187,10 @@ function previewInputImage(idx: number) {
               controls
               preload="metadata"
               playsinline
-              class="block h-auto w-full bg-black"
+              class="block h-auto w-full bg-overlay"
               @click.stop
             />
-            <span class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
+            <span class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/60 px-2 py-0.5 text-[11px] font-medium text-foreground-inverse backdrop-blur-sm">
               <Film class="h-3 w-3" />
               视频
             </span>
@@ -203,13 +203,13 @@ function previewInputImage(idx: number) {
               loading="lazy"
             />
             <!-- Hover overlay -->
-            <div class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-300 group-hover:bg-black/25">
-              <ZoomIn class="h-6 w-6 scale-50 text-white opacity-0 transition-all duration-300 drop-shadow group-hover:scale-100 group-hover:opacity-100" />
+            <div class="absolute inset-0 flex items-center justify-center bg-overlay/0 transition-colors duration-300 group-hover:bg-overlay/25">
+              <ZoomIn class="h-6 w-6 scale-50 text-foreground-inverse opacity-0 transition-all duration-300 drop-shadow group-hover:scale-100 group-hover:opacity-100" />
             </div>
           </template>
           <!-- Download button on hover -->
           <button
-            class="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/50 text-white opacity-0 backdrop-blur-sm transition-all duration-200 hover:bg-black/70 group-hover:opacity-100"
+            class="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-overlay/50 text-foreground-inverse opacity-0 backdrop-blur-sm transition-all duration-200 hover:bg-overlay/70 group-hover:opacity-100"
             :title="`下载 ${downloadFilename(output)}`"
             @click.stop="emit('download', outputUrl(output))"
           >
@@ -296,7 +296,7 @@ function previewInputImage(idx: number) {
               loading="lazy"
             />
             <span
-              class="pointer-events-none absolute left-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-[9px] font-medium text-white"
+              class="pointer-events-none absolute left-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-overlay/60 text-[9px] font-medium text-foreground-inverse"
             >
               {{ idx + 1 }}
             </span>

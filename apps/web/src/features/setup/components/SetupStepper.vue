@@ -41,9 +41,9 @@ const currentStep = computed(() => props.steps[currentIndex.value])
             :class="[
               'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-medium transition-colors sm:h-8 sm:w-8 sm:text-sm',
               step.id === currentId
-                ? 'bg-primary text-primary-foreground'
+                ? 'bg-primary text-foreground-inverse'
                 : completed[step.id]
-                  ? 'bg-success text-white'
+                  ? 'bg-success text-foreground-inverse'
                   : 'bg-surface-subtle text-muted-foreground',
             ]"
             aria-hidden="true"

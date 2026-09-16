@@ -37,7 +37,7 @@ const isVideoJob = computed(() =>
           controls
           preload="metadata"
           playsinline
-          class="max-h-[50vh] max-w-full bg-black"
+          class="max-h-[50vh] max-w-full bg-overlay"
         />
         <img
           v-else
@@ -65,7 +65,7 @@ const isVideoJob = computed(() =>
             controls
             preload="metadata"
             playsinline
-            class="h-full w-full bg-black"
+            class="h-full w-full bg-overlay"
           />
           <img
             v-else
@@ -77,7 +77,7 @@ const isVideoJob = computed(() =>
           />
           <span
             v-if="isVideoOutput(output)"
-            class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white"
+            class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/60 px-2 py-0.5 text-[11px] font-medium text-foreground-inverse"
           >
             <Film class="h-3 w-3" />
             视频

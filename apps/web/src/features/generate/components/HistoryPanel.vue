@@ -196,7 +196,7 @@ function taskTitle() {
                 controls
                 preload="metadata"
                 playsinline
-                class="max-h-[50vh] w-auto max-w-full rounded-[var(--radius-card)] bg-black"
+                class="max-h-[50vh] w-auto max-w-full rounded-[var(--radius-card)] bg-overlay"
               />
               <img
                 v-else
@@ -220,7 +220,7 @@ function taskTitle() {
                   controls
                   preload="metadata"
                   playsinline
-                  class="h-full w-full bg-black"
+                  class="h-full w-full bg-overlay"
                 />
                 <button
                   v-else
@@ -230,7 +230,7 @@ function taskTitle() {
                 >
                   <img :src="output.url || output.imageUrl" :alt="taskTitle()" class="h-full w-full object-contain" loading="lazy" />
                 </button>
-                <span v-if="output.mediaKind === 'video'" class="absolute left-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white">视频</span>
+                <span v-if="output.mediaKind === 'video'" class="absolute left-2 top-2 rounded bg-overlay/65 px-1.5 py-0.5 text-[11px] font-medium text-foreground-inverse">视频</span>
               </div>
             </div>
           </div>

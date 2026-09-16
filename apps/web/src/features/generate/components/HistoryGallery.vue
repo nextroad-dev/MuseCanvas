@@ -77,23 +77,23 @@ function titleText(job: GenerationJob) {
 
         <!-- Media kind badge -->
         <div v-if="job.outputs[0]?.mediaKind === 'video' || job.mediaKind === 'video'" class="absolute bottom-1 right-1">
-          <span class="flex items-center rounded bg-black/65 px-1 py-px text-[9px] font-semibold text-white">视频</span>
+          <span class="flex items-center rounded bg-overlay/65 px-1 py-px text-[9px] font-semibold text-foreground-inverse">视频</span>
         </div>
 
         <!-- Status badges overlay on thumbnail -->
         <div v-if="isActive(job)" class="absolute left-1 top-1">
           <span class="flex h-4 w-4 items-center justify-center rounded-full bg-primary shadow-sm">
-            <Loader2 class="h-2.5 w-2.5 animate-spin text-white" />
+            <Loader2 class="h-2.5 w-2.5 animate-spin text-foreground-inverse" />
           </span>
         </div>
         <div v-else-if="job.status === 'failed'" class="absolute left-1 top-1">
           <span class="flex h-4 w-4 items-center justify-center rounded-full bg-danger shadow-sm">
-            <AlertCircle class="h-2.5 w-2.5 text-white" />
+            <AlertCircle class="h-2.5 w-2.5 text-foreground-inverse" />
           </span>
         </div>
         <div v-else-if="job.status === 'canceled'" class="absolute left-1 top-1">
           <span class="flex h-4 w-4 items-center justify-center rounded-full bg-neutral-status/80 shadow-sm">
-            <XCircle class="h-2.5 w-2.5 text-white" />
+            <XCircle class="h-2.5 w-2.5 text-foreground-inverse" />
           </span>
         </div>
       </div>

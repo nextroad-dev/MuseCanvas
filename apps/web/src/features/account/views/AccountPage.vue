@@ -153,7 +153,7 @@ const initials = computed(() => {
       <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-sm">
         <div class="flex items-center justify-between">
           <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Coins class="h-4 w-4 text-amber-500" />
+            <Coins class="h-4 w-4 text-credit" />
             积分余额
           </h3>
           <button
@@ -255,7 +255,7 @@ const initials = computed(() => {
               <div class="text-right">
                 <span
                   class="font-semibold"
-                  :class="entry.availableDelta > 0 ? 'text-emerald-500' : entry.availableDelta < 0 ? 'text-rose-500' : 'text-muted-foreground'"
+                  :class="entry.availableDelta > 0 ? 'text-positive' : entry.availableDelta < 0 ? 'text-negative' : 'text-muted-foreground'"
                 >
                   {{ entry.availableDelta > 0 ? `+${entry.availableDelta}` : entry.availableDelta }}
                 </span>
@@ -263,7 +263,7 @@ const initials = computed(() => {
               </div>
 
               <div v-if="entry.reservedDelta !== 0" class="text-right text-muted-foreground">
-                <span :class="entry.reservedDelta > 0 ? 'text-amber-500' : 'text-muted-foreground'">
+                <span :class="entry.reservedDelta > 0 ? 'text-credit' : 'text-muted-foreground'">
                   {{ entry.reservedDelta > 0 ? `+${entry.reservedDelta}` : entry.reservedDelta }}
                 </span>
                 <span> 冻结</span>

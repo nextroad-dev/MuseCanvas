@@ -81,11 +81,11 @@ const statusText = computed(() => {
             :class="cn(
               'flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-colors',
               index < currentStep
-                ? 'bg-success text-white'
+                ? 'bg-success text-foreground-inverse'
                 : index === currentStep && !isFailed && !isCanceled
-                  ? 'bg-primary text-white'
+                  ? 'bg-primary text-foreground-inverse'
                   : isFailed
-                    ? 'bg-danger text-white'
+                    ? 'bg-danger text-foreground-inverse'
                     : 'bg-surface-subtle text-muted-foreground',
             )"
           >

@@ -287,7 +287,7 @@ function clearAll() {
 
           <!-- Order badge -->
           <span
-            class="pointer-events-none absolute left-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/65 text-[10px] font-semibold text-white backdrop-blur-xs"
+            class="pointer-events-none absolute left-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-overlay/65 text-[10px] font-semibold text-foreground-inverse backdrop-blur-xs"
           >
             {{ index + 1 }}
           </span>
@@ -295,12 +295,12 @@ function clearAll() {
           <!-- Status overlay: Uploading -->
           <div
             v-if="img.status === 'uploading' || img.status === 'pending'"
-            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 p-1 text-white backdrop-blur-xs"
+            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-overlay/60 p-1 text-foreground-inverse backdrop-blur-xs"
           >
             <div class="relative flex h-8 w-8 items-center justify-center">
               <svg class="h-8 w-8 -rotate-90" viewBox="0 0 36 36">
                 <path
-                  class="text-white/20"
+                  class="text-foreground-inverse/20"
                   stroke-width="3.5"
                   stroke="currentColor"
                   fill="none"
@@ -319,29 +319,29 @@ function clearAll() {
               </svg>
               <span class="absolute text-[9px] font-bold">{{ img.progress }}%</span>
             </div>
-            <span class="mt-0.5 text-[9px] text-white/90">上传中</span>
+            <span class="mt-0.5 text-[9px] text-foreground-inverse/90">上传中</span>
           </div>
 
           <!-- Status overlay: Processing -->
           <div
             v-else-if="img.status === 'processing'"
-            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 p-1 text-white backdrop-blur-xs"
+            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-overlay/60 p-1 text-foreground-inverse backdrop-blur-xs"
           >
             <Loader2 class="h-5 w-5 animate-spin text-primary" />
-            <span class="mt-1 text-[9px] text-white/90">处理中</span>
+            <span class="mt-1 text-[9px] text-foreground-inverse/90">处理中</span>
           </div>
 
           <!-- Status overlay: Error -->
           <div
             v-else-if="img.status === 'error'"
-            class="absolute inset-0 z-40 flex flex-col items-center justify-center bg-danger/85 p-1 text-white backdrop-blur-xs"
+            class="absolute inset-0 z-40 flex flex-col items-center justify-center bg-danger/85 p-1 text-foreground-inverse backdrop-blur-xs"
           >
             <AlertCircle class="h-4 w-4" />
             <span class="mt-0.5 text-center text-[9px] leading-tight">上传失败</span>
             <button
               type="button"
               :disabled="props.disabled"
-              class="mt-1 flex items-center gap-0.5 rounded bg-white/20 px-1.5 py-0.5 text-[9px] font-medium hover:bg-white/30"
+              class="mt-1 flex items-center gap-0.5 rounded bg-foreground-inverse/20 px-1.5 py-0.5 text-[9px] font-medium hover:bg-foreground-inverse/30"
               :aria-label="`重试上传参考图 ${index + 1}`"
               title="重试"
               @click.stop="!props.disabled && store.retryUpload(img.localId)"
@@ -353,7 +353,7 @@ function clearAll() {
 
           <span
             v-else-if="img.status === 'ready'"
-            class="pointer-events-none absolute bottom-7 right-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-white shadow-xs"
+            class="pointer-events-none absolute bottom-7 right-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-foreground-inverse shadow-xs"
             title="已就绪"
           >
             <Check class="h-2.5 w-2.5 stroke-[3]" />
@@ -366,7 +366,7 @@ function clearAll() {
             <button
               type="button"
               :disabled="props.disabled"
-              class="pointer-events-auto flex h-5 w-5 items-center justify-center rounded-full bg-black/75 text-white shadow-sm transition-colors hover:bg-danger disabled:cursor-not-allowed disabled:opacity-50"
+              class="pointer-events-auto flex h-5 w-5 items-center justify-center rounded-full bg-overlay/75 text-foreground-inverse shadow-sm transition-colors hover:bg-danger disabled:cursor-not-allowed disabled:opacity-50"
               :aria-label="`移除参考图 ${index + 1}`"
               title="移除此参考图"
               @click.stop="!props.disabled && store.removeStagedImage(img.localId)"
@@ -384,7 +384,7 @@ function clearAll() {
               v-if="index > 0"
               type="button"
               :disabled="props.disabled"
-              class="pointer-events-auto flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+              class="pointer-events-auto flex h-4 w-4 items-center justify-center rounded-full bg-overlay/70 text-foreground-inverse hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
               :aria-label="`向左移动参考图 ${index + 1}`"
               title="向前移动 (Alt+←)"
               @click.stop="!props.disabled && store.reorderStagedImages(index, index - 1)"
@@ -395,7 +395,7 @@ function clearAll() {
               v-if="index < store.stagedImages.length - 1"
               type="button"
               :disabled="props.disabled"
-              class="pointer-events-auto flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+              class="pointer-events-auto flex h-4 w-4 items-center justify-center rounded-full bg-overlay/70 text-foreground-inverse hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
               :aria-label="`向右移动参考图 ${index + 1}`"
               title="向后移动 (Alt+→)"
               @click.stop="!props.disabled && store.reorderStagedImages(index, index + 1)"
@@ -410,7 +410,7 @@ function clearAll() {
               :disabled="props.disabled"
               :aria-label="`第 ${index + 1} 张图的输入角色`"
               title="输入角色：首帧须首位，尾帧须末位"
-              class="w-full cursor-pointer rounded bg-black/70 px-1 py-0.5 text-center text-[10px] font-medium text-white backdrop-blur-xs transition-colors hover:bg-black/85 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              class="w-full cursor-pointer rounded bg-overlay/70 px-1 py-0.5 text-center text-[10px] font-medium text-foreground-inverse backdrop-blur-xs transition-colors hover:bg-overlay/85 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               @change="store.setStagedImageRole(img.localId, ($event.target as HTMLSelectElement).value as 'reference_image' | 'first_frame' | 'last_frame')"
             >
               <option value="reference_image">参考图</option>

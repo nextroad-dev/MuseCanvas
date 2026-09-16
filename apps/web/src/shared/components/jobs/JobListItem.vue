@@ -51,7 +51,7 @@ const firstOutput = computed(() => props.job.outputs?.[0])
         loading="lazy"
       />
       <ImageIcon v-else class="h-4 w-4 text-muted-foreground" />
-      <span v-if="firstOutput?.mediaKind === 'video'" class="absolute bottom-0.5 right-0.5 rounded bg-black/65 px-1 text-[9px] font-semibold text-white">视频</span>
+      <span v-if="firstOutput?.mediaKind === 'video'" class="absolute bottom-0.5 right-0.5 rounded bg-overlay/65 px-1 text-[9px] font-semibold text-foreground-inverse">视频</span>
     </div>
 
     <!-- Info -->

@@ -89,7 +89,7 @@ onMounted(() => {
           class="flex items-center gap-1.5 rounded-[var(--radius-control)] border border-border/80 bg-surface-subtle px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary-soft/30 hover:text-primary"
           title="可用积分"
         >
-          <Coins class="h-3.5 w-3.5 text-amber-500" />
+          <Coins class="h-3.5 w-3.5 text-credit" />
           <span>{{ account.creditBalance ? account.creditBalance.availableCredits : '—' }}</span>
           <span class="text-[10px] text-muted-foreground">积分</span>
         </RouterLink>
@@ -174,7 +174,7 @@ onMounted(() => {
         @click="drawerOpen = false"
       >
         <span class="flex items-center gap-2">
-          <Coins class="h-4 w-4 text-amber-500" />
+          <Coins class="h-4 w-4 text-credit" />
           我的积分
         </span>
         <span class="text-xs font-semibold text-foreground">

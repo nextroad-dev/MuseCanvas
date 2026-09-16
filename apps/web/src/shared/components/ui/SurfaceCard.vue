@@ -16,7 +16,7 @@ const toneClasses: Record<Tone, string> = {
   default: 'bg-surface border-border',
   subtle: 'bg-surface-subtle border-border',
   brand: 'bg-primary-soft border-primary-soft-hover',
-  danger: 'bg-danger-soft border-red-200',
+  danger: 'bg-danger-soft border-danger-border',
 }
 
 const paddingClasses: Record<Padding, string> = {

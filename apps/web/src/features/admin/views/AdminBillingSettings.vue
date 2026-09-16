@@ -103,7 +103,7 @@ async function handleSave() {
         <div class="flex items-center justify-between gap-4">
           <div>
             <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <Coins class="h-4 w-4 text-amber-500" />
+              <Coins class="h-4 w-4 text-credit" />
               全局积分计费系统
             </h3>
             <p class="mt-1 text-xs text-muted-foreground">

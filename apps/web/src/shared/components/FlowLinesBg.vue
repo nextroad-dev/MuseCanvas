@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { readCssVar, resolveCssColor, type Rgb } from '@/shared/lib/css-color'
 
 interface FlowLine {
   x: number
@@ -46,65 +47,9 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-function parseHexColor(hex: string): { r: number; g: number; b: number } | null {
-  const normalized = hex.trim()
-  const shorthand = /^#([a-f\d])([a-f\d])([a-f\d])$/i.exec(normalized)
-  if (shorthand) {
-    return {
-      r: parseInt(shorthand[1] + shorthand[1], 16),
-      g: parseInt(shorthand[2] + shorthand[2], 16),
-      b: parseInt(shorthand[3] + shorthand[3], 16),
-    }
-  }
-  const full = /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(normalized)
-  if (full) {
-    return {
-      r: parseInt(full[1], 16),
-      g: parseInt(full[2], 16),
-      b: parseInt(full[3], 16),
-    }
-  }
-  return null
-}
-
-function parseRgbColor(input: string): { r: number; g: number; b: number } | null {
-  const match = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(input)
-  if (match) {
-    return {
-      r: parseInt(match[1], 10),
-      g: parseInt(match[2], 10),
-      b: parseInt(match[3], 10),
-    }
-  }
-  return null
-}
-
-function parseCssColor(input: string): { r: number; g: number; b: number } | null {
-  const fromHex = parseHexColor(input)
-  if (fromHex) return fromHex
-  const fromRgb = parseRgbColor(input)
-  if (fromRgb) return fromRgb
-
-  // Fallback: let the browser resolve the color by applying it to a temporary element.
-  const probe = document.createElement('div')
-  probe.style.color = input
-  probe.style.position = 'fixed'
-  probe.style.opacity = '0'
-  probe.style.pointerEvents = 'none'
-  document.body.appendChild(probe)
-  const computed = window.getComputedStyle(probe).color
-  document.body.removeChild(probe)
-  return parseRgbColor(computed)
-}
-
-function resolveColor(): { r: number; g: number; b: number } {
-  let raw = props.color
-  if (raw === 'primary') {
-    raw = getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim()
-  }
-  const parsed = parseCssColor(raw || '#168A49')
-  if (parsed) return parsed
-  return { r: 22, g: 138, b: 73 }
+function resolveColor(): Rgb | null {
+  const raw = props.color === 'primary' ? readCssVar('--color-primary') : props.color
+  return resolveCssColor(raw)
 }
 
 function createLines(width: number, height: number): FlowLine[] {
@@ -149,7 +94,10 @@ onMounted(() => {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
 
-  const color = resolveColor()
+  const resolved = resolveColor()
+  // Design token missing or unresolvable: render nothing rather than a hardcoded color.
+  if (!resolved) return
+  const color: Rgb = resolved
   const dpr = window.devicePixelRatio || 1
   let width = canvas.offsetWidth
   let height = canvas.offsetHeight

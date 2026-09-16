@@ -130,7 +130,7 @@ const firstOutputPoster = computed(() => {
           controls
           preload="metadata"
           playsinline
-          class="block max-h-48 w-full bg-black"
+          class="block max-h-48 w-full bg-overlay"
         />
         <img
           v-else
@@ -202,13 +202,13 @@ const firstOutputPoster = computed(() => {
               loading="lazy"
             />
             <span
-              class="pointer-events-none absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/65 text-[10px] font-semibold text-white"
+              class="pointer-events-none absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-overlay/65 text-[10px] font-semibold text-foreground-inverse"
             >
               {{ idx + 1 }}
             </span>
             <span
               v-if="img.width && img.height"
-              class="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/50 px-1 py-0.5 text-center text-[9px] text-white/90 backdrop-blur-xs"
+              class="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-overlay/50 px-1 py-0.5 text-center text-[9px] text-foreground-inverse/90 backdrop-blur-xs"
             >
               {{ img.width }}x{{ img.height }}
             </span>
@@ -221,7 +221,7 @@ const firstOutputPoster = computed(() => {
     <div class="shrink-0 space-y-2 border-t border-border/60 p-4">
       <button
         v-if="isComplete"
-        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-foreground-inverse transition-colors hover:bg-primary-hover"
         @click="handleDownloadAll"
       >
         <Download class="h-4 w-4" />
@@ -229,7 +229,7 @@ const firstOutputPoster = computed(() => {
       </button>
       <button
         v-if="isFailed"
-        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-foreground-inverse transition-colors hover:bg-primary-hover"
         @click="$emit('retry')"
       >
         <RotateCcw class="h-4 w-4" />

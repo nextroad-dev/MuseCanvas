@@ -42,7 +42,7 @@ const sizeMap = {
     <Transition name="modal">
       <div v-if="open" class="fixed inset-0 z-overlay flex items-center justify-center p-4">
         <!-- Backdrop -->
-        <div class="absolute inset-0 bg-black/40" @click="close" />
+        <div class="absolute inset-0 bg-overlay/40" @click="close" />
 
         <!-- Dialog -->
         <div

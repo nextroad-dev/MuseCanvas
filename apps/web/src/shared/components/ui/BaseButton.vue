@@ -37,10 +37,10 @@ const isButton = computed(() => tag.value === 'button')
 const baseClasses = 'inline-flex items-center justify-center gap-1.5 font-medium transition-colors focus-visible:outline-none'
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-primary text-primary-foreground hover:bg-primary-hover active:bg-primary-active disabled:opacity-50',
+  primary: 'bg-primary text-foreground-inverse hover:bg-primary-hover active:bg-primary-active disabled:opacity-50',
   secondary: 'border border-border bg-surface text-foreground hover:bg-surface-subtle active:bg-primary-soft disabled:opacity-50',
   ghost: 'text-foreground hover:bg-surface-subtle active:bg-primary-soft disabled:opacity-50',
-  danger: 'bg-danger text-white hover:bg-red-700 active:bg-red-800 disabled:opacity-50',
+  danger: 'bg-danger text-foreground-inverse hover:bg-danger-hover active:bg-danger-active disabled:opacity-50',
   'danger-ghost': 'text-danger hover:bg-danger-soft active:bg-danger-soft disabled:opacity-50',
 }
 

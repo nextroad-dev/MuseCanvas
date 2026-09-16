@@ -77,7 +77,7 @@ const aspectClass = computed(() => {
         class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
         loading="lazy"
       />
-      <span v-if="showVideo" class="absolute left-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white">视频</span>
+      <span v-if="showVideo" class="absolute left-2 top-2 rounded bg-overlay/65 px-1.5 py-0.5 text-[11px] font-medium text-foreground-inverse">视频</span>
     </div>
 
     <!-- Hover overlay: prompt + actions -->
@@ -85,13 +85,13 @@ const aspectClass = computed(() => {
       class="absolute inset-0 flex flex-col justify-end opacity-0 transition-opacity duration-200 group-hover:opacity-100"
     >
       <!-- Gradient mask -->
-      <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
+      <div class="absolute inset-0 bg-gradient-to-t from-overlay/80 via-overlay/30 to-transparent" />
 
       <!-- Actions -->
       <div class="relative z-10 flex items-center justify-center gap-2 pb-3">
         <button
           :class="[
-            'flex items-center justify-center rounded-full bg-white/90 text-foreground shadow-sm transition-colors hover:bg-white hover:text-foreground',
+            'flex items-center justify-center rounded-full bg-foreground-inverse/90 text-foreground shadow-sm transition-colors hover:bg-foreground-inverse hover:text-foreground',
             densityClasses.action,
           ]"
           @click.stop="$emit('view', asset)"
@@ -100,7 +100,7 @@ const aspectClass = computed(() => {
         </button>
         <button
           :class="[
-            'flex items-center justify-center rounded-full bg-white/90 text-foreground shadow-sm transition-colors hover:bg-white hover:text-foreground',
+            'flex items-center justify-center rounded-full bg-foreground-inverse/90 text-foreground shadow-sm transition-colors hover:bg-foreground-inverse hover:text-foreground',
             densityClasses.action,
           ]"
           @click.stop="$emit('download', asset)"
@@ -109,7 +109,7 @@ const aspectClass = computed(() => {
         </button>
         <button
           :class="[
-            'flex items-center justify-center rounded-full bg-white/90 text-foreground shadow-sm transition-colors hover:bg-white hover:text-danger',
+            'flex items-center justify-center rounded-full bg-foreground-inverse/90 text-foreground shadow-sm transition-colors hover:bg-foreground-inverse hover:text-danger',
             densityClasses.action,
           ]"
           @click.stop="$emit('delete', asset)"
@@ -120,7 +120,7 @@ const aspectClass = computed(() => {
 
       <!-- Prompt -->
       <div class="relative z-10 px-3 pb-4 pt-1">
-        <p class="text-xs leading-relaxed text-white/90 line-clamp-2">
+        <p class="text-xs leading-relaxed text-foreground-inverse/90 line-clamp-2">
           {{ asset.prompt }}
         </p>
       </div>

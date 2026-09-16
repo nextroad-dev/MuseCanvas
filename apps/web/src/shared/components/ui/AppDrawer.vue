@@ -39,7 +39,7 @@ const sizeMap = {
     <Transition name="drawer">
       <div v-if="open" class="fixed inset-0 z-overlay">
         <!-- Backdrop -->
-        <div class="absolute inset-0 bg-black/40" @click="close" />
+        <div class="absolute inset-0 bg-overlay/40" @click="close" />
         <!-- Drawer -->
         <div
           ref="drawerRef"

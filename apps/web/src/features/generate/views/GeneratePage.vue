@@ -465,7 +465,7 @@ onUnmounted(() => {
         @click.self="closeDetail"
       >
         <!-- Backdrop -->
-        <div class="absolute inset-0 bg-black/30 backdrop-blur-[2px]" @click="closeDetail" />
+        <div class="absolute inset-0 bg-overlay/30 backdrop-blur-[2px]" @click="closeDetail" />
 
         <!-- Sheet panel -->
         <Transition

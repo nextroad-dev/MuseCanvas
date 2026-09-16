@@ -223,7 +223,7 @@ function taskTitle() {
                 controls
                 preload="metadata"
                 playsinline
-                class="max-h-[60vh] w-full bg-black"
+                class="max-h-[60vh] w-full bg-overlay"
               />
               <img
                 v-else
@@ -247,7 +247,7 @@ function taskTitle() {
                   controls
                   preload="metadata"
                   playsinline
-                  class="h-full w-full bg-black"
+                  class="h-full w-full bg-overlay"
                 />
                 <button
                   v-else
@@ -257,7 +257,7 @@ function taskTitle() {
                 >
                   <img :src="output.url || output.imageUrl" :alt="taskTitle()" class="h-full w-full object-contain" loading="lazy" />
                 </button>
-                <span v-if="output.mediaKind === 'video'" class="absolute left-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white">视频</span>
+                <span v-if="output.mediaKind === 'video'" class="absolute left-2 top-2 rounded bg-overlay/65 px-1.5 py-0.5 text-[11px] font-medium text-foreground-inverse">视频</span>
               </div>
             </div>
           </div>
@@ -381,13 +381,13 @@ function taskTitle() {
                 loading="lazy"
               />
               <span
-                class="pointer-events-none absolute left-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/65 text-[10px] font-semibold text-white"
+                class="pointer-events-none absolute left-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-overlay/65 text-[10px] font-semibold text-foreground-inverse"
               >
                 {{ idx + 1 }}
               </span>
               <span
                 v-if="img.width && img.height"
-                class="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/50 px-1 py-0.5 text-center text-[8px] text-white/90 backdrop-blur-xs"
+                class="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-overlay/50 px-1 py-0.5 text-center text-[8px] text-foreground-inverse/90 backdrop-blur-xs"
               >
                 {{ img.width }}x{{ img.height }}
               </span>

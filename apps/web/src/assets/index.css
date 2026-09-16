@@ -7,6 +7,7 @@
   --color-surface: #ffffff;
   --color-surface-subtle: #F3F5F2;
   --color-foreground: #111713;
+  --color-foreground-inverse: #ffffff;
   --color-muted-foreground: #667069;
   --color-border: #E2E7E3;
   --color-border-strong: #CBD3CD;
@@ -17,7 +18,9 @@
   --color-primary-active: #0D6133;
   --color-primary-soft: #E7F6EC;
   --color-primary-soft-hover: #D8EFDF;
-  --color-primary-foreground: #ffffff;
+
+  /* Credit / quota accent */
+  --color-credit: #F59E0B;
 
   /* Status - foreground */
   --color-success: #15803D;
@@ -25,20 +28,20 @@
   --color-warning: #B45309;
   --color-warning-soft: #FFF7E6;
   --color-danger: #DC2626;
+  --color-danger-hover: #B91C1C;
+  --color-danger-active: #991B1B;
   --color-danger-soft: #FEF2F2;
+  --color-danger-border: #FECACA;
   --color-info: #2563EB;
   --color-info-soft: #EFF6FF;
   --color-neutral-status: #59615B;
   --color-neutral-soft: #F1F3F2;
 
-  /* Legacy aliases for compatibility — DO NOT ADD NEW USAGES */
-  --color-muted: #f5f5f5;
-  --color-danger-hover: #dc2626;
+  /* Ledger deltas */
+  --color-positive: #10B981;
+  --color-negative: #F43F5E;
 
-  /* Overlay / dark surfaces */
-  --color-surface-dark: #050505;
-  --color-surface-dark-muted: #111111;
-  --color-surface-dark-border: #262626;
+  /* Scrim / media backdrop */
   --color-overlay: #000000;
 
   /* Z-Index scale */

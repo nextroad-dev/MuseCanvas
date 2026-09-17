@@ -89,38 +89,46 @@ function previewInputImage(idx: number) {
   <div class="flex w-full flex-col items-center px-4 py-6">
 
     <!-- ===== Failed state ===== -->
-    <div v-if="isFailed" class="flex w-full max-w-lg flex-col items-center gap-5 rounded-[var(--radius-panel)] border border-danger/20 bg-danger-soft/30 px-8 py-12 text-center">
-      <div class="flex h-14 w-14 items-center justify-center rounded-full bg-danger-soft">
-        <XCircle class="h-7 w-7 text-danger" />
+    <div
+      v-if="isFailed"
+      class="flex w-full max-w-lg flex-col items-center gap-5 rounded-[var(--radius-panel)] border border-danger-border bg-danger-soft px-8 py-12 text-center"
+      role="status"
+    >
+      <div class="flex h-14 w-14 items-center justify-center rounded-full bg-surface text-danger">
+        <XCircle class="h-7 w-7" aria-hidden="true" />
       </div>
       <div class="space-y-1">
-        <p class="text-lg font-semibold text-foreground">生成失败</p>
-        <p v-if="job.errorCode" class="text-sm text-muted-foreground font-mono">{{ job.errorCode }}</p>
+        <p class="text-base font-medium text-foreground">生成失败</p>
+        <p v-if="job.errorCode" class="font-mono text-xs text-muted-foreground">{{ job.errorCode }}</p>
         <p v-else class="text-sm text-muted-foreground">任务执行过程中发生了错误</p>
       </div>
       <div class="flex flex-wrap justify-center gap-2 pt-2">
         <BaseButton variant="secondary" @click="emit('regenerate')">
-          <RotateCcw class="h-4 w-4" />
+          <RotateCcw class="h-4 w-4" aria-hidden="true" />
           重试
         </BaseButton>
         <BaseButton variant="primary" @click="emit('newGeneration')">
-          <Plus class="h-4 w-4" />
+          <Plus class="h-4 w-4" aria-hidden="true" />
           新建生成
         </BaseButton>
       </div>
     </div>
 
     <!-- ===== Canceled state ===== -->
-    <div v-else-if="isCanceled" class="flex w-full max-w-lg flex-col items-center gap-5 rounded-[var(--radius-panel)] border border-border bg-surface/80 px-8 py-12 text-center">
+    <div
+      v-else-if="isCanceled"
+      class="flex w-full max-w-lg flex-col items-center gap-5 rounded-[var(--radius-panel)] border border-border bg-surface px-8 py-12 text-center"
+      role="status"
+    >
       <div class="flex h-14 w-14 items-center justify-center rounded-full bg-surface-subtle">
-        <XCircle class="h-7 w-7 text-muted-foreground" />
+        <XCircle class="h-7 w-7 text-muted-foreground" aria-hidden="true" />
       </div>
       <div class="space-y-1">
-        <p class="text-lg font-semibold text-foreground">任务已取消</p>
+        <p class="text-base font-medium text-foreground">任务已取消</p>
         <p class="text-sm text-muted-foreground">可以重新创建或修改提示词后再次生成</p>
       </div>
       <BaseButton variant="primary" @click="emit('newGeneration')">
-        <Plus class="h-4 w-4" />
+        <Plus class="h-4 w-4" aria-hidden="true" />
         新建生成
       </BaseButton>
     </div>
@@ -131,7 +139,7 @@ function previewInputImage(idx: number) {
       <div v-if="hasSingleOutput" class="w-full max-w-2xl">
         <div
           v-if="isVideoOutput(job.outputs[0])"
-          class="group relative overflow-hidden rounded-[var(--radius-card)] border border-border/60 bg-surface shadow-md"
+          class="relative overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface"
         >
           <video
             :src="outputUrl(job.outputs[0])"
@@ -141,30 +149,33 @@ function previewInputImage(idx: number) {
             playsinline
             class="block max-h-[55vh] w-full bg-overlay"
           />
-          <span class="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/60 px-2 py-0.5 text-[11px] font-medium text-foreground-inverse backdrop-blur-sm">
-            <Film class="h-3 w-3" />
+          <span class="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/70 px-2 py-0.5 text-xs font-medium text-foreground-inverse">
+            <Film class="h-3 w-3" aria-hidden="true" />
             视频
           </span>
         </div>
-        <div
+        <button
           v-else
-          class="group relative cursor-zoom-in overflow-hidden rounded-[var(--radius-card)] border border-border/60 bg-surface shadow-md transition-all duration-300 hover:border-border-strong hover:shadow-xl"
+          type="button"
+          class="group relative block w-full cursor-zoom-in overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface"
+          :aria-label="`放大查看生成结果：${promptText}`"
           @click="handlePreview(job.outputs[0])"
         >
           <img
             :src="outputUrl(job.outputs[0])"
             :alt="promptText"
-            class="block h-auto max-h-[55vh] w-full object-contain transition-transform duration-500 group-hover:scale-[1.02]"
+            class="block h-auto max-h-[55vh] w-full object-contain"
             loading="lazy"
           />
-          <!-- Hover overlay -->
-          <div class="absolute inset-0 flex items-center justify-center bg-overlay/0 transition-colors duration-300 group-hover:bg-overlay/20">
-            <div class="flex scale-75 items-center gap-2 rounded-full border border-foreground-inverse/30 bg-overlay/50 px-4 py-2 text-sm font-medium text-foreground-inverse opacity-0 backdrop-blur-sm transition-all duration-300 group-hover:scale-100 group-hover:opacity-100">
-              <ZoomIn class="h-4 w-4" />
+          <!-- Hover hint: opacity only, and always visible on narrow viewports. -->
+          <span class="media-scrim pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-[var(--motion-base)] group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />
+          <span class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+            <span class="inline-flex items-center gap-2 rounded-full bg-overlay/70 px-4 py-2 text-sm font-medium text-foreground-inverse opacity-100 transition-opacity duration-[var(--motion-base)] md:opacity-0 md:group-hover:opacity-100 md:group-focus-visible:opacity-100">
+              <ZoomIn class="h-4 w-4" aria-hidden="true" />
               点击放大
-            </div>
-          </div>
-        </div>
+            </span>
+          </span>
+        </button>
       </div>
 
       <!-- Multiple outputs grid -->
@@ -176,9 +187,7 @@ function previewInputImage(idx: number) {
         <div
           v-for="output in job.outputs"
           :key="output.id"
-          class="group relative overflow-hidden rounded-[var(--radius-card)] border border-border/60 bg-surface shadow-sm transition-all duration-300 hover:border-border-strong hover:shadow-lg"
-          :class="{ 'cursor-zoom-in': !isVideoOutput(output) }"
-          @click="handlePreview(output)"
+          class="group relative overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface"
         >
           <template v-if="isVideoOutput(output)">
             <video
@@ -188,32 +197,39 @@ function previewInputImage(idx: number) {
               preload="metadata"
               playsinline
               class="block h-auto w-full bg-overlay"
-              @click.stop
             />
-            <span class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/60 px-2 py-0.5 text-[11px] font-medium text-foreground-inverse backdrop-blur-sm">
-              <Film class="h-3 w-3" />
+            <span class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/70 px-2 py-0.5 text-xs font-medium text-foreground-inverse">
+              <Film class="h-3 w-3" aria-hidden="true" />
               视频
             </span>
           </template>
           <template v-else>
-            <img
-              :src="outputUrl(output)"
-              :alt="promptText"
-              class="block h-auto w-full object-contain transition-transform duration-500 group-hover:scale-[1.04]"
-              loading="lazy"
-            />
-            <!-- Hover overlay -->
-            <div class="absolute inset-0 flex items-center justify-center bg-overlay/0 transition-colors duration-300 group-hover:bg-overlay/25">
-              <ZoomIn class="h-6 w-6 scale-50 text-foreground-inverse opacity-0 transition-all duration-300 drop-shadow group-hover:scale-100 group-hover:opacity-100" />
-            </div>
+            <button
+              type="button"
+              class="block w-full cursor-zoom-in"
+              :aria-label="`放大查看生成结果：${promptText}`"
+              @click="handlePreview(output)"
+            >
+              <img
+                :src="outputUrl(output)"
+                :alt="promptText"
+                class="block h-auto w-full object-contain"
+                loading="lazy"
+              />
+            </button>
+            <!-- Hover affordance: opacity only, reachable by keyboard focus. -->
+            <span class="pointer-events-none absolute inset-0 flex items-center justify-center bg-overlay/25 opacity-0 transition-opacity duration-[var(--motion-base)] group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">
+              <ZoomIn class="h-6 w-6 text-foreground-inverse" />
+            </span>
           </template>
-          <!-- Download button on hover -->
+          <!-- Download: always available on touch, revealed on hover/focus. -->
           <button
-            class="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-overlay/50 text-foreground-inverse opacity-0 backdrop-blur-sm transition-all duration-200 hover:bg-overlay/70 group-hover:opacity-100"
-            :title="`下载 ${downloadFilename(output)}`"
+            type="button"
+            class="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-full bg-overlay/70 text-foreground-inverse opacity-100 transition-opacity duration-[var(--motion-base)] hover:bg-overlay md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+            :aria-label="`下载 ${downloadFilename(output)}`"
             @click.stop="emit('download', outputUrl(output))"
           >
-            <Download class="h-3.5 w-3.5" />
+            <Download class="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -221,14 +237,14 @@ function previewInputImage(idx: number) {
 
     <!-- No outputs fallback -->
     <div v-else class="flex flex-col items-center gap-3 py-12 text-muted-foreground">
-      <component :is="isVideoJob ? Film : ImageIcon" class="h-10 w-10" />
+      <component :is="isVideoJob ? Film : ImageIcon" class="h-10 w-10" aria-hidden="true" />
       <p class="text-sm">{{ isVideoJob ? '任务已完成，但未返回视频' : '任务已完成，但未返回图片' }}</p>
     </div>
 
     <!-- ===== Prompt + Meta info ===== -->
     <div v-if="!isFailed && !isCanceled" class="mt-5 w-full max-w-2xl space-y-3">
       <!-- Prompt text -->
-      <p v-if="promptText" class="line-clamp-2 text-center text-sm text-muted-foreground">
+      <p v-if="promptText" class="line-clamp-2 text-center text-sm leading-[1.59] text-muted-foreground">
         {{ promptText }}
       </p>
 
@@ -238,35 +254,35 @@ function previewInputImage(idx: number) {
           v-if="job.modelName"
           class="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted-foreground"
         >
-          <Cpu class="h-3 w-3" />
+          <Cpu class="h-3 w-3" aria-hidden="true" />
           {{ job.modelName }}
         </span>
         <span
           v-if="isVideoJob"
-          class="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary-soft px-2.5 py-1 text-xs font-medium text-primary"
+          class="inline-flex items-center gap-1.5 rounded-full border border-accent-soft bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent-strong"
         >
-          <Film class="h-3 w-3" />
+          <Film class="h-3 w-3" aria-hidden="true" />
           视频
         </span>
         <span
           v-if="videoMeta"
-          class="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted-foreground"
+          class="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs tabular-nums text-muted-foreground"
         >
-          <Ruler class="h-3 w-3" />
+          <Ruler class="h-3 w-3" aria-hidden="true" />
           {{ videoMeta }}
         </span>
         <span
           v-else-if="job.size"
-          class="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted-foreground"
+          class="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs tabular-nums text-muted-foreground"
         >
-          <Ruler class="h-3 w-3" />
+          <Ruler class="h-3 w-3" aria-hidden="true" />
           {{ job.size }}
         </span>
         <span
           v-if="durationLabel"
-          class="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted-foreground"
+          class="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs tabular-nums text-muted-foreground"
         >
-          <Clock class="h-3 w-3" />
+          <Clock class="h-3 w-3" aria-hidden="true" />
           {{ durationLabel }}
         </span>
       </div>
@@ -277,7 +293,7 @@ function previewInputImage(idx: number) {
         class="mt-3 flex flex-col items-center gap-1.5"
       >
         <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <ImageIcon class="h-3.5 w-3.5 text-primary" />
+          <ImageIcon class="h-3.5 w-3.5 text-accent-strong" aria-hidden="true" />
           <span>输入参考图 ({{ job.inputImages.length }})</span>
         </div>
         <div class="flex flex-wrap items-center justify-center gap-2">
@@ -285,18 +301,18 @@ function previewInputImage(idx: number) {
             v-for="(img, idx) in job.inputImages"
             :key="img.id || idx"
             type="button"
-            class="group relative h-12 w-12 cursor-zoom-in overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface shadow-xs transition-all hover:border-primary hover:shadow-sm"
+            class="relative h-12 w-12 cursor-zoom-in overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface transition-colors hover:border-border-control"
             :aria-label="`查看参考图 ${idx + 1}`"
             @click="previewInputImage(idx)"
           >
             <img
               :src="img.imageUrl"
               :alt="`参考图 ${idx + 1}`"
-              class="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+              class="h-full w-full object-cover"
               loading="lazy"
             />
             <span
-              class="pointer-events-none absolute left-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-overlay/60 text-[9px] font-medium text-foreground-inverse"
+              class="pointer-events-none absolute left-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-overlay/65 text-xs font-medium tabular-nums text-foreground-inverse"
             >
               {{ idx + 1 }}
             </span>
@@ -312,7 +328,7 @@ function previewInputImage(idx: number) {
         variant="secondary"
         @click="handleDownloadAll"
       >
-        <Download class="h-4 w-4" />
+        <Download class="h-4 w-4" aria-hidden="true" />
         {{ hasSingleOutput ? '下载' : '全部下载' }}
       </BaseButton>
       <BaseButton
@@ -320,11 +336,11 @@ function previewInputImage(idx: number) {
         variant="secondary"
         @click="emit('regenerate')"
       >
-        <RotateCcw class="h-4 w-4" />
+        <RotateCcw class="h-4 w-4" aria-hidden="true" />
         再来一次
       </BaseButton>
-      <BaseButton variant="primary" class="font-semibold" @click="emit('newGeneration')">
-        <Plus class="h-4 w-4" />
+      <BaseButton variant="primary" @click="emit('newGeneration')">
+        <Plus class="h-4 w-4" aria-hidden="true" />
         新建生成
       </BaseButton>
     </div>

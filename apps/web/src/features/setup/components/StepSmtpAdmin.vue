@@ -7,6 +7,7 @@ import BaseButton from '@/shared/components/ui/BaseButton.vue'
 import TextInput from '@/shared/components/ui/TextInput.vue'
 import Field from '@/shared/components/ui/Field.vue'
 import AppAlert from '@/shared/components/ui/AppAlert.vue'
+import { inputClass } from '@/shared/lib/field-styles'
 import SurfaceCard from '@/shared/components/ui/SurfaceCard.vue'
 
 const setup = useSetupStore()
@@ -120,7 +121,7 @@ async function handleVerifyOtp() {
 <template>
   <div class="space-y-8">
     <div>
-      <h3 class="mb-1 text-lg font-semibold text-foreground">邮件与管理员</h3>
+      <h3 class="mb-1 text-subtitle font-normal leading-[1.4] text-foreground">邮件与管理员</h3>
       <p class="text-sm text-muted-foreground">先验证 SMTP 发信能力（必填），再创建管理员账号。两节都完成后才能继续。</p>
     </div>
 
@@ -159,7 +160,7 @@ async function handleVerifyOtp() {
         <Field label="加密方式">
           <select
             v-model="tlsMode"
-            class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            :class="inputClass"
           >
             <option value="none">不加密</option>
             <option value="starttls">STARTTLS</option>

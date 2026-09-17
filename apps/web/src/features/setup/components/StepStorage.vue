@@ -84,7 +84,7 @@ async function handleSave() {
 <template>
   <div class="space-y-5">
     <div>
-      <h3 class="mb-1 text-lg font-semibold text-foreground">对象存储</h3>
+      <h3 class="mb-1 text-subtitle font-normal leading-[1.4] text-foreground">对象存储</h3>
       <p class="text-sm text-muted-foreground">S3 兼容对象存储，用于存放生成产物。测试通过（服务端实际读写校验）后才能继续。</p>
     </div>
 

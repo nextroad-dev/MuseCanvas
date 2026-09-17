@@ -18,18 +18,19 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="flex flex-wrap gap-2">
+  <div class="flex flex-wrap gap-2" role="group">
     <button
       v-for="option in options"
       :key="option.value"
       type="button"
       :disabled="disabled"
+      :aria-pressed="modelValue === option.value"
       :class="
         cn(
-          'rounded-full border px-4 py-1.5 text-sm font-medium transition-colors',
+          'min-h-8 rounded-full border px-4 text-sm font-medium transition-colors',
           modelValue === option.value
-            ? 'border-primary bg-primary text-foreground-inverse'
-            : 'border-border bg-surface text-muted-foreground hover:border-border-strong hover:bg-surface-subtle',
+            ? 'border-accent bg-accent-soft text-accent-strong'
+            : 'border-border-control bg-surface text-muted-foreground hover:bg-surface-subtle hover:text-foreground',
           disabled && 'cursor-not-allowed opacity-50',
         )
       "

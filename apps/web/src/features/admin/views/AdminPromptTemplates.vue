@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useAdminStore } from '@/features/admin/stores/admin'
 import { toast } from '@/shared/composables/useToast'
 import { parseTemplateImportFile } from '@/features/setup/lib/templateImport'
@@ -30,6 +30,9 @@ import Badge from '@/shared/components/ui/Badge.vue'
 import AppAlert from '@/shared/components/ui/AppAlert.vue'
 import EmptyState from '@/shared/components/ui/EmptyState.vue'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
+import { cn } from '@/shared/lib/utils'
+import { inputClass } from '@/shared/lib/field-styles'
+import { focusFirstInvalidEl } from '@/shared/lib/focus'
 
 type PromptTemplateEntryRow = PromptTemplateEntryDto & Record<string, unknown>
 type PromptTemplateSetRow = PromptTemplateSetSummaryDto & Record<string, unknown>
@@ -92,6 +95,9 @@ const showEntryDialog = ref(false)
 const editingEntry = ref<PromptTemplateEntryDto | null>(null)
 const entrySaving = ref(false)
 const entryError = ref('')
+const entryFormRef = ref<HTMLElement | null>(null)
+const nameFieldError = computed(() => (entryError.value === '请填写模板名称' ? entryError.value : ''))
+const instructionFieldError = computed(() => (entryError.value === '请填写指令内容' ? entryError.value : ''))
 const entryForm = ref({ name: '', description: '', instruction: '', sortOrder: '' })
 
 function openCreateEntry() {
@@ -140,10 +146,12 @@ async function handleSaveEntry() {
   }
   if (!entryForm.value.name.trim()) {
     entryError.value = '请填写模板名称'
+    void nextTick(() => focusFirstInvalidEl(entryFormRef.value))
     return
   }
   if (!entryForm.value.instruction.trim()) {
     entryError.value = '请填写指令内容'
+    void nextTick(() => focusFirstInvalidEl(entryFormRef.value))
     return
   }
   entrySaving.value = true
@@ -166,6 +174,7 @@ async function handleSaveEntry() {
     toast(editingEntry.value ? '模板条目已更新（已生成新版本）' : '模板条目已添加（已生成新版本）', 'success')
   } else {
     entryError.value = res.error?.message || '保存失败'
+    void nextTick(() => focusFirstInvalidEl(entryFormRef.value))
   }
 }
 
@@ -453,7 +462,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
       </template>
     </PageHeader>
 
-    <div v-if="loading" class="py-12 text-center text-xs text-muted-foreground">加载中…</div>
+    <div v-if="loading" class="py-12 text-center text-xs text-muted-foreground" role="status">加载中…</div>
 
     <div v-else-if="loadError" class="space-y-3">
       <AppAlert type="error" title="加载失败" :message="loadError" />
@@ -462,6 +471,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
 
     <div v-else-if="!hasAnySet">
       <EmptyState
+        kind="first-use"
         title="暂无提示词模板"
         description="导入一份标准 JSON（{name, version, templates: [{name, description, instruction}]}）即可创建第一个版本。"
       >
@@ -475,7 +485,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
       <!-- Active version summary -->
       <section aria-label="当前版本" class="rounded-[var(--radius-card)] border border-border bg-surface p-4">
         <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-sm font-semibold text-foreground">
+          <h2 class="text-sm font-medium text-foreground">
             {{ viewingSet?.name || admin.activePromptTemplateSet?.name || '—' }}
           </h2>
           <Badge v-if="!isViewingHistory" tone="success">当前生效</Badge>
@@ -502,7 +512,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
         </dl>
         <p v-if="isViewingHistory" class="mt-3 text-xs text-muted-foreground">
           正在查看历史版本，该版本只读；条目增删改请在当前生效版本中操作。
-          <button class="text-xs text-foreground underline hover:no-underline" @click="backToActive">
+          <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline" @click="backToActive">
             返回当前生效版本
           </button>
         </p>
@@ -516,12 +526,12 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
       <!-- Entries -->
       <section aria-label="模板条目" class="space-y-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="text-sm font-semibold text-foreground">模板条目（{{ entries.length }}）</h2>
+          <h2 class="text-sm font-medium text-foreground">模板条目（{{ entries.length }}）</h2>
           <BaseButton variant="secondary" size="sm" :disabled="!canEditEntries" @click="openCreateEntry">
             添加条目
           </BaseButton>
         </div>
-        <div v-if="detailLoading" class="py-8 text-center text-xs text-muted-foreground">版本详情加载中…</div>
+        <div v-if="detailLoading" class="py-8 text-center text-xs text-muted-foreground" role="status">版本详情加载中…</div>
         <DataTable
           v-else
           :columns="entryColumns"
@@ -534,10 +544,10 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
           </template>
           <template #cell-instruction="{ row }">
             <div class="max-w-xl">
-              <pre class="whitespace-pre-wrap break-words font-mono text-xs text-foreground">{{ isExpanded(row.id) ? row.instruction : truncate(row.instruction) }}</pre>
+              <pre :class="cn(inputClass, 'whitespace-pre-wrap break-words font-mono text-xs')">{{ isExpanded(row.id) ? row.instruction : truncate(row.instruction) }}</pre>
               <button
                 v-if="row.instruction.length > 160"
-                class="mt-1 text-xs text-foreground underline hover:no-underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                class="mt-1 min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline"
                 :aria-expanded="isExpanded(row.id)"
                 @click="toggleExpanded(row.id)"
               >
@@ -552,27 +562,27 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
                 <span class="text-xs text-muted-foreground">#{{ row.sortOrder }}</span>
               </div>
               <p v-if="row.description" class="text-xs text-muted-foreground">{{ row.description }}</p>
-              <pre class="whitespace-pre-wrap break-words font-mono text-xs text-foreground">{{ isExpanded(row.id) ? row.instruction : truncate(row.instruction) }}</pre>
+              <pre :class="cn(inputClass, 'whitespace-pre-wrap break-words font-mono text-xs')">{{ isExpanded(row.id) ? row.instruction : truncate(row.instruction) }}</pre>
               <button
                 v-if="row.instruction.length > 160"
-                class="text-xs text-foreground underline hover:no-underline"
+                class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline"
                 :aria-expanded="isExpanded(row.id)"
                 @click="toggleExpanded(row.id)"
               >
                 {{ isExpanded(row.id) ? '收起' : '展开' }}
               </button>
               <div class="flex items-center gap-3 pt-1">
-                <button class="text-xs text-foreground underline hover:no-underline" @click="useEntryForPreview(row)">预览</button>
-                <button class="text-xs text-foreground underline hover:no-underline disabled:opacity-50" :disabled="!canEditEntries" @click="openEditEntry(row)">编辑</button>
-                <button class="text-xs text-danger underline hover:no-underline disabled:opacity-50" :disabled="!canEditEntries" @click="deleteEntryTarget = row">删除</button>
+                <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline" @click="useEntryForPreview(row)">预览</button>
+                <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline disabled:cursor-not-allowed disabled:opacity-50" :disabled="!canEditEntries" @click="openEditEntry(row)">编辑</button>
+                <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-danger underline transition-colors hover:bg-danger-soft hover:no-underline disabled:cursor-not-allowed disabled:opacity-50" :disabled="!canEditEntries" @click="deleteEntryTarget = row">删除</button>
               </div>
             </div>
           </template>
           <template #actions="{ row }">
             <div class="flex items-center justify-end gap-3">
-              <button class="text-xs text-foreground hover:underline" @click="useEntryForPreview(row)">预览</button>
-              <button class="text-xs text-foreground hover:underline disabled:opacity-50 disabled:hover:no-underline" :disabled="!canEditEntries" @click="openEditEntry(row)">编辑</button>
-              <button class="text-xs text-danger hover:underline disabled:opacity-50 disabled:hover:no-underline" :disabled="!canEditEntries" @click="deleteEntryTarget = row">删除</button>
+              <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground transition-colors hover:bg-surface-subtle" @click="useEntryForPreview(row)">预览</button>
+              <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground transition-colors hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-50" :disabled="!canEditEntries" @click="openEditEntry(row)">编辑</button>
+              <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-danger transition-colors hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-50" :disabled="!canEditEntries" @click="deleteEntryTarget = row">删除</button>
             </div>
           </template>
         </DataTable>
@@ -580,7 +590,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
 
       <!-- Preview -->
       <section aria-label="渲染预览" class="space-y-3 rounded-[var(--radius-card)] border border-border bg-surface p-4">
-        <h2 class="text-sm font-semibold text-foreground">渲染预览</h2>
+        <h2 class="text-sm font-medium text-foreground">渲染预览</h2>
         <Field label="指令内容" hint="支持 {{input_prompt}} 等模板变量，提交后由服务端渲染。">
           <Textarea
             :model-value="previewInstruction"
@@ -618,7 +628,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
         </div>
         <AppAlert v-if="previewError" type="error" title="预览失败" :message="previewError" />
         <div v-if="previewResult" class="space-y-2">
-          <pre class="whitespace-pre-wrap break-words rounded-[var(--radius-control)] border border-border bg-background p-3 font-mono text-xs text-foreground">{{ previewResult.rendered }}</pre>
+          <pre :class="cn(inputClass, 'whitespace-pre-wrap break-words font-mono text-xs')">{{ previewResult.rendered }}</pre>
           <div class="flex flex-wrap items-center gap-1.5">
             <span class="text-xs text-muted-foreground">已使用变量：</span>
             <Badge v-for="name in previewResult.usedVariables" :key="name" tone="info">{{ name }}</Badge>
@@ -630,7 +640,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
 
       <!-- Version history -->
       <section aria-label="版本历史" class="space-y-3">
-        <h2 class="text-sm font-semibold text-foreground">版本历史（{{ history.length }}）</h2>
+        <h2 class="text-sm font-medium text-foreground">版本历史（{{ history.length }}）</h2>
         <DataTable
           :columns="historyColumns"
           :data="history"
@@ -639,7 +649,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
         >
           <template #cell-name="{ row }">
             <button
-              class="text-foreground underline hover:no-underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              class="min-h-8 rounded-[var(--radius-control)] px-1 text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline"
               :aria-label="`查看版本 v${row.version} 的详情`"
               @click="viewSet(row.id)"
             >
@@ -657,16 +667,16 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
               </div>
               <p class="text-xs text-muted-foreground">{{ row.entryCount }} 条 · {{ fmtDate(row.updatedAt) }}</p>
               <div class="flex items-center gap-3 pt-1">
-                <button class="text-xs text-foreground underline hover:no-underline" @click="viewSet(row.id)">查看</button>
+                <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline" @click="viewSet(row.id)">查看</button>
                 <button
-                  class="text-xs text-foreground underline hover:no-underline disabled:opacity-50"
+                  class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground underline transition-colors hover:bg-surface-subtle hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="row.isActive || activatingId === row.id"
                   @click="handleActivate(row)"
                 >
                   {{ activatingId === row.id ? '切换中…' : '设为生效' }}
                 </button>
                 <button
-                  class="text-xs text-danger underline hover:no-underline disabled:opacity-50"
+                  class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-danger underline transition-colors hover:bg-danger-soft hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="row.isActive"
                   @click="deleteSetTarget = row"
                 >
@@ -677,16 +687,16 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
           </template>
           <template #actions="{ row }">
             <div class="flex items-center justify-end gap-3">
-              <button class="text-xs text-foreground hover:underline" @click="viewSet(row.id)">查看</button>
+              <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground transition-colors hover:bg-surface-subtle" @click="viewSet(row.id)">查看</button>
               <button
-                class="text-xs text-foreground hover:underline disabled:opacity-50 disabled:hover:no-underline"
+                class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground transition-colors hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="row.isActive || activatingId === row.id"
                 @click="handleActivate(row)"
               >
                 {{ activatingId === row.id ? '切换中…' : '设为生效' }}
               </button>
               <button
-                class="text-xs text-danger hover:underline disabled:opacity-50 disabled:hover:no-underline"
+                class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-danger transition-colors hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="row.isActive"
                 @click="deleteSetTarget = row"
               >
@@ -700,29 +710,35 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
 
     <!-- Entry dialog -->
     <AppModal v-model:open="showEntryDialog" size="lg" :title="editingEntry ? '编辑模板条目' : '添加模板条目'">
-      <div class="space-y-3">
+      <div ref="entryFormRef" class="space-y-3">
         <p v-if="editingEntry" class="text-xs text-muted-foreground">
           保存后将基于「{{ viewingSet?.name }}」v{{ viewingSet?.version }} 生成新版本，历史版本保持不变。
         </p>
-        <Field label="模板名称" required>
-          <TextInput v-model="entryForm.name" type="text" placeholder="例如：通用图像增强" />
+        <Field label="模板名称" required :error="nameFieldError || undefined">
+          <TextInput
+            v-model="entryForm.name"
+            type="text"
+            placeholder="例如：通用图像增强"
+            :invalid="!!nameFieldError"
+          />
         </Field>
         <Field label="描述">
           <TextInput v-model="entryForm.description" type="text" placeholder="一句话说明该模板的用途（可选）" />
         </Field>
-        <Field label="指令内容" required hint="支持 {{input_prompt}} 等模板变量；保存后以新版本生效。">
+        <Field label="指令内容" required :hint="instructionFieldError ? undefined : '支持 {{input_prompt}} 等模板变量；保存后以新版本生效。'" :error="instructionFieldError || undefined">
           <Textarea
             v-model="entryForm.instruction"
             :rows="8"
             placeholder="输入提示词模板指令…"
             spellcheck="false"
             class="font-mono text-xs"
+            :invalid="!!instructionFieldError"
           />
         </Field>
         <Field label="排序" hint="数字越小越靠前，留空由服务端安排。">
           <TextInput v-model="entryForm.sortOrder" type="text" inputmode="numeric" placeholder="例如：0" />
         </Field>
-        <div v-if="entryError" class="text-xs text-danger" role="alert">{{ entryError }}</div>
+        <p v-if="entryError && !nameFieldError && !instructionFieldError" class="text-xs text-danger" role="alert">{{ entryError }}</p>
       </div>
       <template #footer="{ close }">
         <BaseButton variant="secondary" @click="close">取消</BaseButton>
@@ -748,7 +764,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
           <TextInput v-model="importName" type="text" placeholder="例如：2026 秋季模板" />
         </Field>
         <div class="flex items-center gap-2">
-          <PillToggle v-model="importActivate" />
+          <PillToggle v-model="importActivate" label="导入后设为生效" />
           <span class="text-xs font-medium text-foreground">导入后设为生效</span>
         </div>
         <div>
@@ -760,7 +776,7 @@ const historyColumns: Column<PromptTemplateSetRow>[] = [
             ref="fileInput"
             type="file"
             accept="application/json,.json"
-            class="block w-full text-xs text-foreground file:mr-3 file:rounded-[var(--radius-control)] file:border file:border-border file:bg-surface-subtle file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+            class="block w-full text-xs text-foreground file:mr-3 file:min-h-10 file:rounded-[var(--radius-control)] file:border file:border-border-control file:bg-surface-subtle file:px-3 file:text-xs file:font-medium file:text-foreground"
             @change="handleFileChange"
           />
         </div>

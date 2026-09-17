@@ -1,9 +1,20 @@
 import { onMounted, onUnmounted, type Ref } from 'vue'
 
+export interface UseClickOutsideOptions {
+  /**
+   * Close on Escape. Default `true`; set to `false` when a menu keyboard
+   * composable owns Escape (it also returns focus to the trigger).
+   */
+  escape?: boolean
+}
+
 export function useClickOutside(
   targetRef: Ref<HTMLElement | null | undefined>,
-  handler: () => void
+  handler: () => void,
+  options: UseClickOutsideOptions = {},
 ) {
+  const { escape = true } = options
+
   function onClick(event: MouseEvent) {
     const target = event.target as Node
     if (targetRef.value && !targetRef.value.contains(target)) {
@@ -19,11 +30,11 @@ export function useClickOutside(
 
   onMounted(() => {
     document.addEventListener('click', onClick)
-    document.addEventListener('keydown', onKeydown)
+    if (escape) document.addEventListener('keydown', onKeydown)
   })
 
   onUnmounted(() => {
     document.removeEventListener('click', onClick)
-    document.removeEventListener('keydown', onKeydown)
+    if (escape) document.removeEventListener('keydown', onKeydown)
   })
 }

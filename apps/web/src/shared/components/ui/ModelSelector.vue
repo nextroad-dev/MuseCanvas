@@ -20,7 +20,7 @@ const options = computed(() =>
 
 <template>
   <div class="flex flex-col gap-1.5">
-    <label class="text-sm font-medium text-foreground">模型</label>
+    <span class="text-sm font-medium text-foreground">模型</span>
     <BaseDropdown v-model="model" :options="options" :disabled="disabled" />
   </div>
 </template>

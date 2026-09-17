@@ -11,8 +11,6 @@ import ConfirmDialog from '@/shared/components/ui/ConfirmDialog.vue'
 import AppModal from '@/shared/components/ui/AppModal.vue'
 import { toast } from '@/shared/composables/useToast'
 import Lightbox from '@/shared/components/ui/Lightbox.vue'
-import FlowLinesBg from '@/shared/components/FlowLinesBg.vue'
-import MatrixBg from '@/shared/components/MatrixBg.vue'
 import { useJobPolling } from '@/shared/composables/useJobPolling'
 import type { GenerationJob } from '@/shared/types'
 import { canCancelJob } from '@/shared/lib/job'
@@ -241,7 +239,7 @@ onUnmounted(() => {
     <!-- ===== DESKTOP: Left history sidebar (≥ 1024px) ===== -->
     <aside
       v-if="!isMobile"
-      class="flex h-full shrink-0 flex-col border-r border-border/60 bg-surface transition-all duration-300"
+      class="flex h-full shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-[var(--motion-base)] ease-standard"
       :class="historyCollapsed ? 'w-[48px]' : 'w-[340px]'"
     >
       <!-- Collapsed State -->
@@ -250,9 +248,9 @@ onUnmounted(() => {
           <button
             v-for="job in store.jobs"
             :key="job.id"
-            class="relative h-8 w-8 shrink-0 overflow-hidden rounded-[var(--radius-control)] border border-border/50 bg-surface-subtle transition-all hover:ring-2 hover:ring-primary/50"
-            :class="{ 'ring-2 ring-primary': job.id === detailJobId }"
-            :title="job.prompt"
+            class="relative h-9 w-9 shrink-0 overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface-subtle transition-colors hover:border-border-control"
+            :class="{ 'border-accent': job.id === detailJobId }"
+            :aria-label="`查看历史任务：${job.prompt || '未命名任务'}`"
             @click="handleSelectJob(job)"
           >
             <video
@@ -270,18 +268,19 @@ onUnmounted(() => {
               loading="lazy"
             />
             <div v-else-if="job.status === 'running' || job.status === 'queued' || job.status === 'retry_wait'" class="flex h-full w-full items-center justify-center">
-              <Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+              <Loader2 class="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
             </div>
           </button>
         </div>
         <!-- Footer for collapsed -->
-        <div class="flex h-12 shrink-0 items-center justify-center border-t border-border/60">
+        <div class="flex h-14 shrink-0 items-center justify-center border-t border-border">
           <button
-            class="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
+            type="button"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
+            aria-label="展开历史画廊"
             @click="historyCollapsed = false"
-            title="展开"
           >
-            <PanelLeftOpen class="h-4 w-4" />
+            <PanelLeftOpen class="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </template>
@@ -289,8 +288,8 @@ onUnmounted(() => {
       <!-- Expanded State -->
       <template v-else>
         <!-- Sidebar header -->
-        <div class="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-4">
-          <span class="text-sm font-semibold text-foreground">历史画廊</span>
+        <div class="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+          <span class="text-sm font-medium text-foreground">历史画廊</span>
           <span
             v-if="store.jobs.length"
             class="text-xs text-muted-foreground"
@@ -310,20 +309,22 @@ onUnmounted(() => {
         </div>
 
         <!-- Footer for expanded -->
-        <div class="flex h-12 shrink-0 items-center justify-between border-t border-border/60 px-4">
-            <button
-              class="text-xs text-muted-foreground hover:text-foreground transition-colors underline-offset-4 hover:underline"
-              @click="updateLogOpen = true"
-              title="查看更新日志"
-            >
-              v2026.06.28
-            </button>
+        <div class="flex h-14 shrink-0 items-center justify-between border-t border-border px-4">
           <button
-            class="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
-            @click="historyCollapsed = true"
-            title="折叠"
+            type="button"
+            class="min-h-8 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+            aria-label="查看更新日志"
+            @click="updateLogOpen = true"
           >
-            <PanelLeftClose class="h-4 w-4" />
+            v2026.06.28
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
+            aria-label="折叠历史画廊"
+            @click="historyCollapsed = true"
+          >
+            <PanelLeftClose class="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </template>
@@ -334,67 +335,38 @@ onUnmounted(() => {
       class="relative flex min-h-0 flex-1 flex-col overflow-auto bg-canvas"
       :class="isMobile && mobileTab === 'history' ? 'hidden' : ''"
     >
-      <!-- Animated background layers -->
-      <FlowLinesBg class="opacity-30" :density="0.5" :speed="0.25" :layers="3" :line-width="0.8" />
-      <MatrixBg class="opacity-15" :grid-spacing="56" :dot-size="1" :line-opacity="0.04" :dot-opacity="0.14" :pulse-speed="0.4" :speed="0.4" />
-      <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_15%,var(--color-primary-soft)_0%,transparent_38%),linear-gradient(to_bottom,var(--color-canvas)_0%,transparent_40%,var(--color-canvas)_100%)]" />
+      <!-- No decorative background layers: the canvas stays plain. -->
 
       <!-- Content -->
       <div
         class="relative z-10 flex w-full flex-1 flex-col items-center px-4 pb-24"
         :class="isMobile ? 'pt-6' : 'pt-[8vh]'"
       >
-        <!-- Idle: prompt console (always shown unless generating OR result) -->
-        <Transition
-          enter-active-class="transition-all duration-500 ease-out"
-          enter-from-class="opacity-0 translate-y-4"
-          enter-to-class="opacity-100 translate-y-0"
-          leave-active-class="transition-all duration-300 ease-in"
-          leave-from-class="opacity-100 translate-y-0"
-          leave-to-class="opacity-0 -translate-y-4"
-        >
-          <div v-if="mainView !== 'result'" class="flex w-full justify-center">
-            <IdleConsole
-              :generating="selectedJobIsActive"
-              @generate="handleGenerate"
-              @cancel="handleCancel"
-            />
-          </div>
-        </Transition>
+        <!-- Idle: prompt console (always shown unless generating OR result).
+             No entrance animation: state changes are instant. -->
+        <div v-if="mainView !== 'result'" class="flex w-full justify-center">
+          <IdleConsole
+            :generating="selectedJobIsActive"
+            @generate="handleGenerate"
+            @cancel="handleCancel"
+          />
+        </div>
 
         <!-- Generating state -->
-        <Transition
-          enter-active-class="transition-all duration-500 ease-out"
-          enter-from-class="opacity-0 translate-y-4"
-          enter-to-class="opacity-100 translate-y-0"
-          leave-active-class="transition-all duration-300 ease-in"
-          leave-from-class="opacity-100 translate-y-0"
-          leave-to-class="opacity-0 -translate-y-4"
-        >
-          <div v-if="mainView === 'generating' && selectedJob" class="mt-5 flex w-full justify-center">
-            <GeneratingView @cancel="handleCancel" />
-          </div>
-        </Transition>
+        <div v-if="mainView === 'generating' && selectedJob" class="mt-5 flex w-full justify-center">
+          <GeneratingView @cancel="handleCancel" />
+        </div>
 
         <!-- Result state -->
-        <Transition
-          enter-active-class="transition-all duration-600 ease-out"
-          enter-from-class="opacity-0 translate-y-6 scale-[0.98]"
-          enter-to-class="opacity-100 translate-y-0 scale-100"
-          leave-active-class="transition-all duration-300 ease-in"
-          leave-from-class="opacity-100 translate-y-0"
-          leave-to-class="opacity-0 -translate-y-4"
-        >
-          <div v-if="mainView === 'result' && selectedJob" class="flex w-full flex-col items-center">
-            <ResultView
-              :job="selectedJob"
-              @regenerate="handleRetry"
-              @new-generation="handleNewGeneration"
-              @download="handleDownload"
-              @preview="handlePreview"
-            />
-          </div>
-        </Transition>
+        <div v-if="mainView === 'result' && selectedJob" class="flex w-full flex-col items-center">
+          <ResultView
+            :job="selectedJob"
+            @regenerate="handleRetry"
+            @new-generation="handleNewGeneration"
+            @download="handleDownload"
+            @preview="handlePreview"
+          />
+        </div>
       </div>
     </main>
 
@@ -403,11 +375,11 @@ onUnmounted(() => {
       v-if="isMobile && mobileTab === 'history'"
       class="flex h-full flex-1 flex-col overflow-auto bg-canvas pb-16"
     >
-      <div class="flex h-12 shrink-0 items-center border-b border-border/60 px-4">
-        <span class="text-sm font-semibold text-foreground">历史画廊</span>
+      <div class="flex h-14 shrink-0 items-center border-b border-border px-4">
+        <span class="text-sm font-medium text-foreground">历史画廊</span>
         <span
           v-if="store.jobs.length"
-          class="ml-2 rounded-full bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+          class="ml-2 rounded-full bg-surface-subtle px-2 py-0.5 text-xs font-medium tabular-nums text-muted-foreground"
         >
           {{ store.jobs.length }}
         </span>
@@ -424,38 +396,38 @@ onUnmounted(() => {
     <!-- ===== MOBILE: Bottom Tab Bar (< 1024px) ===== -->
     <nav
       v-if="isMobile"
-      class="fixed bottom-0 left-0 right-0 z-30 flex items-center border-t border-border/60 bg-surface/90 backdrop-blur-md"
+      class="fixed bottom-0 left-0 right-0 z-30 flex items-center border-t border-border bg-surface"
       style="padding-bottom: env(safe-area-inset-bottom)"
     >
       <button
         class="flex flex-1 flex-col items-center gap-1 px-4 py-2.5 transition-colors"
-        :class="mobileTab === 'create' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
+        :class="mobileTab === 'create' ? 'text-accent-strong' : 'text-muted-foreground hover:text-foreground'"
         @click="mobileTab = 'create'"
       >
-        <Brush class="h-5 w-5" />
-        <span class="text-[10px] font-medium">创作</span>
+        <Brush class="h-5 w-5" aria-hidden="true" />
+        <span class="text-xs font-medium">创作</span>
       </button>
       <button
         class="relative flex flex-1 flex-col items-center gap-1 px-4 py-2.5 transition-colors"
-        :class="mobileTab === 'history' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
+        :class="mobileTab === 'history' ? 'text-accent-strong' : 'text-muted-foreground hover:text-foreground'"
         @click="mobileTab = 'history'"
       >
-        <Clock class="h-5 w-5" />
-        <span class="text-[10px] font-medium">历史</span>
+        <Clock class="h-5 w-5" aria-hidden="true" />
+        <span class="text-xs font-medium">历史</span>
         <!-- Active job indicator dot -->
         <span
           v-if="selectedJobIsActive"
-          class="absolute right-6 top-2 h-2 w-2 rounded-full bg-primary"
+          class="absolute right-6 top-2 h-2 w-2 rounded-full bg-accent"
         />
       </button>
     </nav>
 
     <!-- ===== Bottom Detail Sheet (both desktop & mobile) ===== -->
     <Transition
-      enter-active-class="transition-all duration-300 ease-out"
+      enter-active-class="transition duration-[var(--motion-base)] ease-standard"
       enter-from-class="opacity-0"
       enter-to-class="opacity-100"
-      leave-active-class="transition-all duration-200 ease-in"
+      leave-active-class="transition duration-[var(--motion-fast)] ease-standard"
       leave-from-class="opacity-100"
       leave-to-class="opacity-0"
     >
@@ -464,53 +436,45 @@ onUnmounted(() => {
         class="fixed inset-0 z-40 flex items-center justify-center p-4 md:p-6"
         @click.self="closeDetail"
       >
-        <!-- Backdrop -->
-        <div class="absolute inset-0 bg-overlay/30 backdrop-blur-[2px]" @click="closeDetail" />
+        <!-- Scrim -->
+        <div class="absolute inset-0 bg-overlay/40" @click="closeDetail" />
 
         <!-- Sheet panel -->
-        <Transition
-          enter-active-class="transition-all duration-300 ease-out"
-          enter-from-class="translate-y-full opacity-0"
-          enter-to-class="translate-y-0 opacity-100"
-          leave-active-class="transition-all duration-200 ease-in"
-          leave-from-class="translate-y-0 opacity-100"
-          leave-to-class="translate-y-full opacity-0"
+        <div
+          class="relative z-50 flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface shadow-lg"
         >
-          <div
-            v-if="detailSheetOpen && detailJob"
-            class="relative z-50 flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border/60 bg-surface shadow-xl md:rounded-2xl"
-          >
-            <!-- Sheet handle -->
-            <div class="flex shrink-0 items-center justify-center pt-3 md:hidden">
-              <div class="h-1 w-10 rounded-full bg-border" />
-            </div>
-
-            <!-- Sheet header -->
-            <div class="flex shrink-0 items-center justify-between border-b border-border/60 px-5 py-3">
-              <span class="text-sm font-semibold text-foreground">任务详情</span>
-              <button
-                class="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
-                @click="closeDetail"
-              >
-                <X class="h-4 w-4" />
-              </button>
-            </div>
-
-            <!-- Detail panel content -->
-            <div class="flex-1 overflow-auto">
-              <JobDetailPanel
-                :job="detailJob"
-                :hide-header="true"
-                @close="closeDetail"
-                @reuse-prompt="handleReusePrompt"
-                @new-generation="handleNewGeneration"
-                @retry="handleRetryFromDetail"
-                @delete="requestDeleteJob"
-                @download="handleDownload"
-              />
-            </div>
+          <!-- Sheet handle -->
+          <div class="flex shrink-0 items-center justify-center pt-3 md:hidden">
+            <div class="h-1 w-10 rounded-full bg-border" aria-hidden="true" />
           </div>
-        </Transition>
+
+          <!-- Sheet header -->
+          <div class="flex shrink-0 items-center justify-between border-b border-border px-5 py-3">
+            <span class="text-base font-medium text-foreground">任务详情</span>
+            <button
+              type="button"
+              class="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
+              aria-label="关闭任务详情"
+              @click="closeDetail"
+            >
+              <X class="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+
+          <!-- Detail panel content -->
+          <div class="flex-1 overflow-auto">
+            <JobDetailPanel
+              :job="detailJob"
+              :hide-header="true"
+              @close="closeDetail"
+              @reuse-prompt="handleReusePrompt"
+              @new-generation="handleNewGeneration"
+              @retry="handleRetryFromDetail"
+              @delete="requestDeleteJob"
+              @download="handleDownload"
+            />
+          </div>
+        </div>
       </div>
     </Transition>
 
@@ -538,14 +502,14 @@ onUnmounted(() => {
     >
       <div class="space-y-4 text-sm text-foreground">
         <div>
-          <h3 class="font-semibold text-base mb-2 text-foreground">v2026.06.28 更新</h3>
+          <h3 class="mb-2 text-base font-medium text-foreground">v2026.06.28 更新</h3>
           <ul class="list-disc pl-5 space-y-1.5 text-muted-foreground">
             <li>多图生成支持一键「全部下载图片」，并优化了并发下载防拦截和自动重命名机制。</li>
             <li>任务详情面板顶部增加图片大尺寸预览区域，便于随时检视生成结果。</li>
           </ul>
         </div>
         <div>
-          <h3 class="font-semibold text-base mb-2 text-foreground">v2026.06.27 极简升级</h3>
+          <h3 class="mb-2 text-base font-medium text-foreground">v2026.06.27 极简升级</h3>
           <ul class="list-disc pl-5 space-y-1.5 text-muted-foreground">
             <li>历史画廊调整为底部横条式布局，支持折叠。</li>
             <li>各个组件大小放大，提升点击舒适度。</li>

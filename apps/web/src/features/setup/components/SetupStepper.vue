@@ -27,7 +27,7 @@ const currentStep = computed(() => props.steps[currentIndex.value])
       :aria-valuemax="steps.length"
       :aria-label="`初始化进度：第 ${currentIndex + 1} 步，共 ${steps.length} 步`"
     >
-      <div class="h-full rounded-full bg-primary transition-all" :style="{ width: `${progress}%` }" />
+      <div class="h-full rounded-full bg-accent transition-[width] duration-[var(--motion-base)] ease-standard" :style="{ width: `${progress}%` }"/>
     </div>
     <ol class="flex flex-wrap items-start justify-center gap-x-1 gap-y-2 sm:gap-x-2">
       <li
@@ -41,7 +41,7 @@ const currentStep = computed(() => props.steps[currentIndex.value])
             :class="[
               'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-medium transition-colors sm:h-8 sm:w-8 sm:text-sm',
               step.id === currentId
-                ? 'bg-primary text-foreground-inverse'
+                ? 'bg-accent text-foreground-inverse'
                 : completed[step.id]
                   ? 'bg-success text-foreground-inverse'
                   : 'bg-surface-subtle text-muted-foreground',
@@ -60,7 +60,7 @@ const currentStep = computed(() => props.steps[currentIndex.value])
             <span v-if="step.optional" class="text-muted-foreground">·可选</span>
           </span>
         </span>
-        <span v-if="i < steps.length - 1" class="mx-1 h-px w-3 bg-border sm:w-6" aria-hidden="true" />
+        <span v-if="i < steps.length - 1" class="mx-1 h-px w-3 bg-border sm:w-6" aria-hidden="true"/>
       </li>
     </ol>
   </nav>

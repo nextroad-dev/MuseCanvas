@@ -65,55 +65,65 @@ function handleDownload() {
       <div
         v-if="open"
         ref="containerRef"
-        class="fixed inset-0 z-overlay flex items-center justify-center bg-overlay/80"
+        class="fixed inset-0 z-overlay flex items-center justify-center bg-overlay/90"
+        role="dialog"
+        aria-modal="true"
+        aria-label="媒体预览"
         @click="close"
         @keydown="handleKeydown"
       >
         <!-- Close -->
         <button
-          class="absolute right-4 top-4 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full bg-overlay/40 text-foreground-inverse hover:bg-overlay/60"
+          type="button"
+          class="absolute right-4 top-4 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full bg-overlay/60 text-foreground-inverse transition-colors hover:bg-overlay"
           aria-label="关闭"
           @click.stop="close"
         >
-          <X class="h-5 w-5" aria-hidden="true" />
+          <X class="h-5 w-5" aria-hidden="true"/>
         </button>
 
         <!-- Prev -->
         <button
           v-if="images.length > 1 && currentIndex > 0"
-          class="absolute left-4 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-overlay/40 text-foreground-inverse hover:bg-overlay/60"
+          type="button"
+          class="absolute left-4 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-overlay/60 text-foreground-inverse transition-colors hover:bg-overlay"
           aria-label="上一张"
           @click.stop="prev"
         >
-          <ChevronLeft class="h-5 w-5" aria-hidden="true" />
+          <ChevronLeft class="h-5 w-5" aria-hidden="true"/>
         </button>
 
         <!-- Next -->
         <button
           v-if="images.length > 1 && currentIndex < images.length - 1"
-          class="absolute right-14 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-overlay/40 text-foreground-inverse hover:bg-overlay/60"
+          type="button"
+          class="absolute right-4 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-overlay/60 text-foreground-inverse transition-colors hover:bg-overlay sm:right-16"
           aria-label="下一张"
           @click.stop="next"
         >
-          <ChevronRight class="h-5 w-5" aria-hidden="true" />
+          <ChevronRight class="h-5 w-5" aria-hidden="true"/>
         </button>
 
-        <!-- Image -->
+        <!-- Media -->
         <div class="relative flex max-h-[85vh] max-w-[90vw] flex-col items-center justify-center" @click.stop>
           <img
             :src="currentImage?.url"
             :alt="currentImage?.alt || currentImage?.prompt || ''"
-            class="max-h-[80vh] max-w-full rounded-lg shadow-2xl object-contain"
+            class="max-h-[80vh] max-w-full rounded-[var(--radius-card)] object-contain"
           />
           <div class="mt-3 flex items-center justify-between gap-4">
-            <p v-if="currentImage?.prompt" class="max-w-lg text-xs text-foreground-inverse/70">
+            <p v-if="currentImage?.prompt" class="line-clamp-2 max-w-lg text-xs text-foreground-inverse">
               {{ currentImage.prompt }}
             </p>
+            <span v-if="images.length > 1" class="text-xs tabular-nums text-foreground-inverse">
+              {{ currentIndex + 1 }} / {{ images.length }}
+            </span>
             <button
-              class="inline-flex h-8 items-center gap-1 rounded-md bg-foreground-inverse/10 px-3 text-xs text-foreground-inverse hover:bg-foreground-inverse/20"
+              type="button"
+              class="inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] bg-foreground-inverse/15 px-3 text-xs font-medium text-foreground-inverse transition-colors hover:bg-foreground-inverse/25"
               @click.stop="handleDownload"
             >
-              <Download class="h-3.5 w-3.5" aria-hidden="true" />
+              <Download class="h-3.5 w-3.5" aria-hidden="true"/>
               下载
             </button>
           </div>
@@ -126,7 +136,7 @@ function handleDownload() {
 <style scoped>
 .lightbox-enter-active,
 .lightbox-leave-active {
-  transition: opacity var(--motion-slow) ease;
+  transition: opacity var(--motion-base) var(--ease-standard);
 }
 .lightbox-enter-from,
 .lightbox-leave-to {

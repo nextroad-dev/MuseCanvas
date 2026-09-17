@@ -12,13 +12,25 @@ export const toasts = ref<Toast[]>([])
 
 let idCounter = 0
 
-export function toast(message: string, type: ToastType = 'info', duration = 5000) {
+/**
+ * Auto-dismiss windows. Blocking problems stay until they are dismissed by the
+ * user; successes and neutral confirmations fade on their own.
+ */
+const AUTO_DISMISS: Record<ToastType, number> = {
+  success: 4000,
+  info: 5000,
+  warning: 8000,
+  error: 0,
+}
+
+export function toast(message: string, type: ToastType = 'info', duration?: number) {
   const id = `${Date.now()}-${++idCounter}`
   const t: Toast = { id, type, message }
   toasts.value.push(t)
 
-  if (duration > 0) {
-    setTimeout(() => removeToast(id), duration)
+  const timeout = duration ?? AUTO_DISMISS[type]
+  if (timeout > 0) {
+    setTimeout(() => removeToast(id), timeout)
   }
 }
 
@@ -27,6 +39,11 @@ export function removeToast(id: string) {
   if (idx > -1) {
     toasts.value.splice(idx, 1)
   }
+}
+
+/** Errors and warnings need reading (or an action), so they are dismissible. */
+export function isPersistentToast(type: ToastType): boolean {
+  return AUTO_DISMISS[type] === 0
 }
 
 export function useToast() {

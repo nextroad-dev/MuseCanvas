@@ -27,19 +27,23 @@ function select(id: string) {
   <SelectPopover
     :open="open"
     :disabled="disabled"
-    panel-class="left-0 top-full z-popover mt-1.5 w-72 p-2"
+    popup-label="选择模型"
+    panel-class="w-72"
     @update:open="emit('update:open', $event)"
   >
     <template #trigger-label>{{ selectedModel?.displayName || '选择模型' }}</template>
     <template #default>
-      <div class="px-3 pb-2 text-xs font-medium text-muted-foreground">选择模型</div>
-      <div class="max-h-64 overflow-auto flex flex-col gap-1">
+      <div class="max-h-64 overflow-auto flex flex-col gap-1" role="listbox" aria-label="选择模型">
         <button
           v-for="model in models"
           :key="model.id"
           type="button"
-          class="flex w-full items-center rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors hover:bg-surface-subtle"
-          :class="model.id === modelValue ? 'bg-primary-soft text-primary' : 'text-foreground'"
+          role="option"
+          data-menu-item
+          tabindex="-1"
+          :aria-selected="model.id === modelValue"
+          class="flex min-h-10 w-full items-center rounded-[var(--radius-control)] px-3 text-left transition-colors hover:bg-surface-subtle"
+          :class="model.id === modelValue ? 'bg-accent-soft text-accent-strong' : 'text-foreground'"
           @click="select(model.id)"
         >
           <div class="min-w-0 flex-1">
@@ -47,15 +51,15 @@ function select(id: string) {
               <span class="truncate">{{ model.displayName }}</span>
               <span
                 v-if="model.modelKind === 'video' || (model as any).mediaKind === 'video'"
-                class="shrink-0 rounded bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary"
+                class="shrink-0 rounded-[var(--radius-control)] bg-accent-soft px-1.5 py-0.5 text-xs font-medium text-accent-strong"
               >视频</span>
               <span
                 v-else-if="model.modelKind === 'language'"
-                class="shrink-0 rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
+                class="shrink-0 rounded-[var(--radius-control)] bg-surface-subtle px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
               >语言</span>
             </p>
           </div>
-          <span class="ml-2 shrink-0 rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+          <span class="ml-2 shrink-0 rounded-[var(--radius-control)] bg-surface-subtle px-1.5 py-0.5 text-xs font-medium tabular-nums text-muted-foreground">
             {{ model.pricing?.scheme === 'per_second_v1' ? `${(model.pricing as any).creditsPerSecond} 积分/秒` : `${model.creditsPerImage ?? 0} 积分/${model.modelKind === 'video' ? '次' : '张'}` }}
           </span>
         </button>

@@ -57,7 +57,7 @@ async function handleSave() {
 <template>
   <div class="space-y-5">
     <div>
-      <h3 class="mb-1 text-lg font-semibold text-foreground">站点设置</h3>
+      <h3 class="mb-1 text-subtitle font-normal leading-[1.4] text-foreground">站点设置</h3>
       <p class="text-sm text-muted-foreground">站点名称与公开访问地址，用于拼接回调与外链。保存后自动标记本节完成。</p>
     </div>
 

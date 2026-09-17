@@ -21,17 +21,18 @@ const firstOutput = computed(() => props.job.outputs?.[0])
 </script>
 
 <template>
+  <!-- A real button: Enter/Space activation comes from the platform, no
+       duplicated keydown handlers. -->
   <button
+    type="button"
     :class="cn(
-      'group flex w-full items-center gap-3 border-b border-border px-4 py-3 text-left transition-colors',
+      'group flex w-full items-center gap-3 border-b border-border border-l-2 px-4 py-3 text-left transition-colors',
       selected
-        ? 'border-l-[3px] border-l-primary bg-primary-soft'
-        : 'border-l-[3px] border-l-transparent hover:bg-surface-subtle',
+        ? 'border-l-accent bg-accent-soft'
+        : 'border-l-transparent hover:bg-surface-subtle',
     )"
     :aria-current="selected ? 'true' : undefined"
     @click="emit('select', job.id)"
-    @keydown.enter.prevent="emit('select', job.id)"
-    @keydown.space.prevent="emit('select', job.id)"
   >
     <!-- Thumbnail -->
     <div class="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
@@ -50,8 +51,8 @@ const firstOutput = computed(() => props.job.outputs?.[0])
         class="h-full w-full object-cover"
         loading="lazy"
       />
-      <ImageIcon v-else class="h-4 w-4 text-muted-foreground" />
-      <span v-if="firstOutput?.mediaKind === 'video'" class="absolute bottom-0.5 right-0.5 rounded bg-overlay/65 px-1 text-[9px] font-semibold text-foreground-inverse">视频</span>
+      <ImageIcon v-else class="h-4 w-4 text-muted-foreground" aria-hidden="true"/>
+      <span v-if="firstOutput?.mediaKind === 'video'" class="absolute bottom-0.5 right-0.5 rounded-[var(--radius-control)] bg-overlay/65 px-1 text-xs font-medium text-foreground-inverse">视频</span>
     </div>
 
     <!-- Info -->
@@ -59,7 +60,7 @@ const firstOutput = computed(() => props.job.outputs?.[0])
       <p class="truncate text-sm text-foreground">{{ titleText }}</p>
       <div class="mt-1 flex items-center gap-2">
         <StatusBadge :status="job.status" variant="soft" />
-        <span class="text-[10px] text-muted-foreground tabular-nums">
+        <span class="font-mono text-xs tabular-nums text-muted-foreground">
           {{ new Date(job.createdAt).toLocaleDateString('zh-CN') }}
         </span>
       </div>

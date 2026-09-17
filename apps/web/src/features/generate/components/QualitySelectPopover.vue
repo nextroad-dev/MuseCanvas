@@ -49,23 +49,28 @@ function selectResolution(resolution: string) {
   <SelectPopover
     :open="open"
     :disabled="disabled"
-    panel-class="left-0 top-full z-popover mt-1.5 w-52 p-2"
+    popup-label="选择质量与分辨率"
+    panel-class="w-52"
     @update:open="emit('update:open', $event)"
   >
     <template #trigger-label>{{ [hasQualityOptions ? selectedLabel : '', currentResolution].filter(Boolean).join(' ') || '质量' }}</template>
     <template #default>
       <div v-if="hasResolutionOptions">
         <div class="mb-2 px-1 text-xs font-medium text-muted-foreground">分辨率</div>
-        <div class="grid grid-cols-2 gap-1.5">
+        <div class="grid grid-cols-2 gap-1.5" role="listbox" aria-label="选择分辨率">
           <button
             v-for="resolution in resolutionOptions"
             :key="resolution.value"
             type="button"
+            role="option"
+            data-menu-item
+            tabindex="-1"
+            :aria-selected="resolution.value === currentResolution"
             :class="cn(
-              'flex items-center justify-center rounded-[var(--radius-control)] border py-1.5 text-sm font-medium transition-colors',
+              'flex min-h-10 items-center justify-center rounded-[var(--radius-control)] border text-sm font-medium transition-colors tabular-nums',
               resolution.value === currentResolution
-                ? 'border-primary bg-primary-soft text-primary'
-                : 'border-border bg-transparent text-foreground hover:bg-surface-subtle'
+                ? 'border-accent bg-accent-soft text-accent-strong'
+                : 'border-border-control bg-transparent text-foreground hover:bg-surface-subtle'
             )"
             @click="selectResolution(resolution.value)"
           >
@@ -76,15 +81,19 @@ function selectResolution(resolution: string) {
 
       <div v-if="hasQualityOptions" :class="hasResolutionOptions ? 'mt-3 border-t border-border pt-2' : ''">
         <div class="mb-2 px-1 text-xs font-medium text-muted-foreground">选择质量</div>
-        <div class="flex flex-col gap-1">
+        <div class="flex flex-col gap-1" role="listbox" aria-label="选择质量">
           <button
             v-for="q in options"
             :key="q"
             type="button"
+            role="option"
+            data-menu-item
+            tabindex="-1"
+            :aria-selected="q === modelValue"
             :class="cn(
-              'flex items-center rounded-[var(--radius-control)] px-3 py-1.5 text-left transition-colors',
+              'flex min-h-10 items-center rounded-[var(--radius-control)] px-3 text-left transition-colors',
               q === modelValue
-                ? 'bg-primary-soft text-primary'
+                ? 'bg-accent-soft text-accent-strong'
                 : 'text-foreground hover:bg-surface-subtle'
             )"
             @click="select(q)"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useAdminStore } from '@/features/admin/stores/admin'
 import PageHeader from '@/shared/components/ui/PageHeader.vue'
@@ -12,6 +12,8 @@ import Field from '@/shared/components/ui/Field.vue'
 import type { AdminModel, LanguageProtocol, ModelAdapter, ModelPreset, PromptOptimizationSettings, ReasoningEffort } from '@/shared/types'
 import type { Column } from '@/shared/components/ui/DataTable.vue'
 import AppModal from '@/shared/components/ui/AppModal.vue'
+import { inputClass } from '@/shared/lib/field-styles'
+import { focusFirstInvalidEl } from '@/shared/lib/focus'
 import { toast } from '@/shared/composables/useToast'
 import { credentialsForPreset, presetPluginKey } from '@/features/admin/lib/provider-templates'
 
@@ -25,6 +27,8 @@ const promptEnabled = ref(false)
 const promptAllowRead = ref(false)
 const promptLanguageModelId = ref('')
 const promptSettingsSaving = ref(false)
+const creditsError = ref('')
+const dialogRef = ref<HTMLElement | null>(null)
 
 const promptLanguageModelOptions = computed(() => [
   { value: '', label: '请选择语言模型' },
@@ -228,11 +232,14 @@ function openEdit(model: AdminModel) {
 
 async function handleSave() {
   if (!canSave.value) return
+  creditsError.value = ''
   if (selectedPreset.value?.modelKind === 'image') {
     const rawCredits = form.value.creditsPerImage
     const credits = Number(rawCredits)
     if (rawCredits === null || rawCredits === undefined || (rawCredits as unknown) === '' || !Number.isSafeInteger(credits) || credits < 0) {
+      creditsError.value = '请填写非负整数，例如 10'
       toast('积分单价必须是非负整数', 'error')
+      void nextTick(() => focusFirstInvalidEl(dialogRef.value))
       return
     }
   }
@@ -363,7 +370,7 @@ const modelColumns: Column<AdminModel>[] = [
       empty-text="暂无模型配置"
     >
       <template #cell-enabled="{ row }">
-        <PillToggle :model-value="row.enabled" @update:model-value="() => handleToggleEnabled(row)" />
+        <PillToggle :model-value="row.enabled" :label="`启用模型 ${row.displayName}`" @update:model-value="() => handleToggleEnabled(row)" />
       </template>
 
       <template #actions="{ row }">
@@ -389,10 +396,10 @@ const modelColumns: Column<AdminModel>[] = [
       :title="editingModel ? '编辑模型' : '添加模型'"
       size="lg"
     >
-      <div class="grid gap-4 lg:grid-cols-2">
+      <div ref="dialogRef" class="grid gap-4 lg:grid-cols-2">
         <div class="lg:col-span-2">
-          <label class="mb-1 block text-xs font-medium text-foreground">模型预设</label>
-          <BaseDropdown :model-value="form.presetId" :options="presetOptions" @update:model-value="applyPreset" />
+          <span id="model-preset-label" class="mb-1 block text-xs font-medium text-foreground">模型预设</span>
+          <BaseDropdown :model-value="form.presetId" :options="presetOptions" label="模型预设" aria-labelledby="model-preset-label" @update:model-value="applyPreset" />
         </div>
 
         <div v-if="selectedPreset" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 lg:row-span-2">
@@ -406,39 +413,41 @@ const modelColumns: Column<AdminModel>[] = [
         </div>
 
         <div v-if="selectedPreset?.modelKind === 'language'">
-          <label class="mb-1 block text-xs font-medium text-foreground">供应商凭据</label>
+          <span id="model-language-credential-label" class="mb-1 block text-xs font-medium text-foreground">供应商凭据</span>
           <BaseDropdown
             :model-value="form.providerCredentialId"
             :options="languageCredentialOptions"
+            label="供应商凭据"
+            aria-labelledby="model-language-credential-label"
             @update:model-value="applyCredential"
           />
           <p class="mt-1 text-xs text-muted-foreground">
             OpenAI Chat 与 OpenAI Responses 使用不同请求格式；此处仅列出与当前模型协议供应商匹配、已启用且已配置 API Key 的凭据。
-            <RouterLink to="/admin/providers" class="text-primary hover:underline">前往配置凭据</RouterLink>
+            <RouterLink to="/admin/providers" class="text-accent-strong hover:underline">前往配置凭据</RouterLink>
           </p>
         </div>
 
         <div v-if="selectedPreset?.modelKind === 'image'">
-          <label class="mb-1 block text-xs font-medium text-foreground">供应商凭据（API Key）</label>
-          <BaseDropdown v-model="form.providerCredentialId" :options="imageCredentialOptions" />
+          <span id="model-image-credential-label" class="mb-1 block text-xs font-medium text-foreground">供应商凭据（API Key）</span>
+          <BaseDropdown v-model="form.providerCredentialId" :options="imageCredentialOptions" label="供应商凭据" aria-labelledby="model-image-credential-label" />
           <p class="mt-1 text-xs text-muted-foreground">
             仅列出与当前预设供应商匹配且已启用的凭据。
-            <RouterLink to="/admin/providers" class="text-primary hover:underline">前往配置凭据</RouterLink>
+            <RouterLink to="/admin/providers" class="text-accent-strong hover:underline">前往配置凭据</RouterLink>
           </p>
         </div>
 
         <div v-if="selectedPreset?.modelKind === 'video'">
-          <label class="mb-1 block text-xs font-medium text-foreground">供应商凭据（插件密钥）</label>
-          <BaseDropdown v-model="form.providerCredentialId" :options="imageCredentialOptions" />
+          <span id="model-video-credential-label" class="mb-1 block text-xs font-medium text-foreground">供应商凭据（插件密钥）</span>
+          <BaseDropdown v-model="form.providerCredentialId" :options="imageCredentialOptions" label="供应商凭据" aria-labelledby="model-video-credential-label" />
           <p class="mt-1 text-xs text-muted-foreground">
             视频模型通过插件调用供应商（如 Veo / Seedance），凭据密钥仅写入不可回读。
-            <RouterLink to="/admin/providers" class="text-primary hover:underline">前往配置凭据</RouterLink>
+            <RouterLink to="/admin/providers" class="text-accent-strong hover:underline">前往配置凭据</RouterLink>
           </p>
         </div>
 
         <div v-if="selectedPreset?.modelKind === 'language'">
-          <label class="mb-1 block text-xs font-medium text-foreground">思考等级</label>
-          <BaseDropdown v-model="form.reasoningEffort" :options="reasoningEffortOptions" />
+          <span id="model-reasoning-label" class="mb-1 block text-xs font-medium text-foreground">思考等级</span>
+          <BaseDropdown v-model="form.reasoningEffort" :options="reasoningEffortOptions" label="思考等级" aria-labelledby="model-reasoning-label" />
         </div>
 
         <p v-if="selectedPreset?.modelKind === 'image'" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 text-xs text-muted-foreground lg:col-span-2">尺寸、质量和生成张数由生成页统一提供常用预设，也支持用户自定义安全尺寸。</p>
@@ -447,12 +456,13 @@ const modelColumns: Column<AdminModel>[] = [
         <p v-if="selectedPreset && selectedPreset.modelKind !== 'language'" class="rounded-[var(--radius-card)] bg-surface-subtle px-3 py-2 text-xs text-muted-foreground lg:col-span-2">内置媒体插件的能力描述、计费与默认参数由服务端按插件版本派生，无需填写自定义覆盖。</p>
 
         <div class="grid gap-4 lg:col-span-2" :class="selectedPreset?.modelKind === 'image' ? 'grid-cols-3' : 'grid-cols-2'">
-          <Field v-if="selectedPreset?.modelKind === 'image'" label="积分单价 (张)">
+          <Field v-if="selectedPreset?.modelKind === 'image'" label="积分单价 (张)" :error="creditsError || undefined">
             <input
               v-model.number="form.creditsPerImage"
               type="number"
               min="0"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              :class="inputClass"
+              :aria-invalid="creditsError ? 'true' : undefined"
             />
           </Field>
           <Field label="并发上限">
@@ -461,16 +471,16 @@ const modelColumns: Column<AdminModel>[] = [
               type="number"
               min="1"
               max="50"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              :class="inputClass"
             />
           </Field>
           <Field label="排序">
-            <input v-model.number="form.sortOrder" type="number" class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm focus:border-primary focus:outline-none" />
+            <input v-model.number="form.sortOrder" type="number" :class="inputClass"/>
           </Field>
         </div>
 
         <div v-if="selectedPreset?.modelKind === 'image' && selectedPreset.adapter === 'seedream'" class="flex items-center gap-2 pt-1">
-          <PillToggle v-model="form.watermark" />
+          <PillToggle v-model="form.watermark" label="启用供应商水印" />
           <span class="text-xs font-medium text-foreground">启用供应商水印</span>
         </div>
       </div>
@@ -491,11 +501,13 @@ const modelColumns: Column<AdminModel>[] = [
       </div>
       <div class="space-y-3">
         <div>
-          <label class="mb-1 block text-xs font-medium text-foreground">语言模型</label>
+          <span id="prompt-language-model-label" class="mb-1 block text-xs font-medium text-foreground">语言模型</span>
           <BaseDropdown
             :model-value="promptLanguageModelId"
             :options="promptLanguageModelOptions"
             :disabled="promptSettingsSaving"
+            label="语言模型"
+            aria-labelledby="prompt-language-model-label"
             @update:model-value="handlePromptLanguageModelChange"
           />
         </div>
@@ -504,6 +516,7 @@ const modelColumns: Column<AdminModel>[] = [
             <PillToggle
               :model-value="promptEnabled"
               :disabled="promptSettingsSaving"
+              label="启用提示词前处理"
               @update:model-value="handlePromptEnabledChange"
             />
             <span class="text-sm text-foreground">启用提示词前处理</span>
@@ -512,6 +525,7 @@ const modelColumns: Column<AdminModel>[] = [
             <PillToggle
               :model-value="promptAllowRead"
               :disabled="promptSettingsSaving"
+              label="允许用户读取最终提示词"
               @update:model-value="handlePromptAllowReadChange"
             />
             <span class="text-sm text-foreground">允许用户读取最终提示词</span>

@@ -30,22 +30,27 @@ function select(value: number) {
   <SelectPopover
     :open="open"
     :disabled="disabled"
-    panel-class="left-0 top-full z-popover mt-1.5 w-32 p-2"
+    popup-label="选择生成数量"
+    panel-class="w-32"
     @update:open="emit('update:open', $event)"
   >
     <template #trigger-label>{{ modelValue }}</template>
     <template #default>
       <div class="mb-2 px-1 text-xs font-medium text-muted-foreground">生成数量</div>
-      <div class="grid grid-cols-2 gap-1.5">
+      <div class="grid grid-cols-2 gap-1.5" role="listbox" aria-label="选择生成数量">
         <button
           v-for="n in options"
           :key="n"
           type="button"
+          role="option"
+          data-menu-item
+          tabindex="-1"
+          :aria-selected="n === modelValue"
           :class="cn(
-            'flex items-center justify-center rounded-[var(--radius-control)] border py-1.5 text-sm font-medium transition-colors',
+            'flex min-h-10 items-center justify-center rounded-[var(--radius-control)] border text-sm font-medium tabular-nums transition-colors',
             n === modelValue
-              ? 'border-primary bg-primary-soft text-primary'
-              : 'border-border bg-transparent text-foreground hover:bg-surface-subtle'
+              ? 'border-accent bg-accent-soft text-accent-strong'
+              : 'border-border-control bg-transparent text-foreground hover:bg-surface-subtle'
           )"
           @click="select(n)"
         >

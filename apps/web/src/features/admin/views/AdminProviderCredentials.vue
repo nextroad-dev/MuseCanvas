@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useAdminStore } from '@/features/admin/stores/admin'
 import PageHeader from '@/shared/components/ui/PageHeader.vue'
 import DataTable from '@/shared/components/ui/DataTable.vue'
+import EmptyState from '@/shared/components/ui/EmptyState.vue'
 import type { Column } from '@/shared/components/ui/DataTable.vue'
 import BaseDropdown from '@/shared/components/ui/BaseDropdown.vue'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
@@ -13,7 +14,6 @@ import TextInput from '@/shared/components/ui/TextInput.vue'
 import Textarea from '@/shared/components/ui/Textarea.vue'
 import Field from '@/shared/components/ui/Field.vue'
 import Badge from '@/shared/components/ui/Badge.vue'
-import { Plug } from 'lucide-vue-next'
 import { toast } from '@/shared/composables/useToast'
 import type { BuiltinProviderTemplate, ProviderCredential, ProviderCredentialInput, ModelAdapter } from '@/shared/types'
 import { buildTemplateCredentialInput, findTemplateForCredential, parseServiceAccountJson, templateConfiguredCount } from '@/features/admin/lib/provider-templates'
@@ -338,12 +338,12 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
         <h2 class="text-sm font-medium text-foreground">内置插件</h2>
         <p class="text-xs text-muted-foreground">选择插件卡片直接配置，无需填写标识符；语言模型与自定义供应商继续使用下方添加入口。</p>
       </div>
-      <div v-if="templatesLoading" class="py-6 text-center text-xs text-muted-foreground">
+      <div v-if="templatesLoading" class="py-6 text-center text-xs text-muted-foreground" role="status">
         内置插件加载中…
       </div>
       <div v-else-if="templatesError" class="py-4 text-center">
         <p class="text-xs text-danger">{{ templatesError }}</p>
-        <button class="mt-2 text-xs font-medium text-primary hover:underline" @click="loadProviderTemplates">重试</button>
+        <button class="mt-2 min-h-8 rounded-[var(--radius-control)] px-2 text-xs font-medium text-accent-strong transition-colors hover:bg-surface-subtle" @click="loadProviderTemplates">重试</button>
       </div>
       <div v-else class="grid gap-4 sm:grid-cols-2">
         <div
@@ -371,21 +371,24 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
     </section>
 
     <!-- Loading -->
-    <div v-if="loading" class="py-12 text-center text-xs text-muted-foreground">
+    <div v-if="loading" class="py-12 text-center text-xs text-muted-foreground" role="status">
       加载中…
     </div>
     <!-- Load error -->
     <div v-else-if="loadError" class="py-8 text-center">
       <p class="text-xs text-danger">{{ loadError }}</p>
-      <button class="mt-3 text-xs font-medium text-primary hover:underline" @click="() => admin.fetchProviderCredentials()">重试</button>
+      <button class="mt-3 min-h-8 rounded-[var(--radius-control)] px-2 text-xs font-medium text-accent-strong transition-colors hover:bg-surface-subtle" @click="() => admin.fetchProviderCredentials()">重试</button>
     </div>
 
     <!-- Empty -->
-    <div v-else-if="isEmpty" class="py-12 text-center">
-      <Plug class="mx-auto h-8 w-8 text-muted-foreground" />
-      <p class="mt-3 text-sm text-muted-foreground">暂无供应商凭据</p>
-      <p class="mt-1 text-xs text-muted-foreground">添加凭据后，可在模型管理中关联使用。</p>
-    </div>
+    <EmptyState
+      v-else-if="isEmpty"
+      kind="first-use"
+      title="暂无供应商凭据"
+      description="添加凭据后，可在模型管理中关联使用。"
+      action-label="添加自定义凭据"
+      @action="openCreate"
+    />
 
     <!-- Table -->
     <DataTable
@@ -397,11 +400,11 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
     >
       <template #cell-hasApiKey="{ row }">
         <span v-if="row.hasApiKey || row.hasCredential" class="inline-flex items-center gap-1.5 text-xs text-foreground">
-          <span class="inline-block h-1.5 w-1.5 rounded-full bg-success" />
+          <span class="inline-block h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
           已配置<span v-if="row.keyFingerprint || row.credentialFingerprint" class="font-mono text-muted-foreground">·{{ row.keyFingerprint || row.credentialFingerprint }}</span>
         </span>
         <span v-else class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span class="inline-block h-1.5 w-1.5 rounded-full bg-border" />
+          <span class="inline-block h-1.5 w-1.5 rounded-full bg-border-control" aria-hidden="true" />
           未配置
         </span>
       </template>
@@ -414,20 +417,20 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
       </template>
 
       <template #cell-enabled="{ row }">
-        <PillToggle :model-value="row.enabled" @update:model-value="() => handleToggle(row)" />
+        <PillToggle :model-value="row.enabled" :label="`启用凭据 ${row.displayName}`" @update:model-value="() => handleToggle(row)" />
       </template>
 
       <template #actions="{ row }">
         <div class="flex items-center justify-end gap-3">
           <button
-            class="text-xs text-foreground hover:underline disabled:opacity-50"
+            class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground transition-colors hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="testingId === row.id"
             @click="handleTest(row)"
           >
             {{ testingId === row.id ? '测试中…' : '测试连接' }}
           </button>
-          <button class="text-xs text-foreground hover:underline" @click="openEdit(row)">编辑</button>
-          <button class="text-xs text-danger hover:underline" @click="deleteTarget = row">删除</button>
+          <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground transition-colors hover:bg-surface-subtle" @click="openEdit(row)">编辑</button>
+          <button class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-danger transition-colors hover:bg-danger-soft" @click="deleteTarget = row">删除</button>
         </div>
       </template>
     </DataTable>
@@ -447,8 +450,14 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
           <p class="mt-1">插件标识与地址已锁定，仅可修改名称、启用状态与密钥（填写新值即轮换，留空保持不变）。</p>
         </div>
         <div v-if="!editingIsBuiltin">
-          <label class="mb-1 block text-xs font-medium text-foreground">供应商类型</label>
-          <BaseDropdown v-model="form.adapter" :options="adapterOptions" :disabled="!!editing" />
+          <span id="credential-adapter-label" class="mb-1 block text-xs font-medium text-foreground">供应商类型</span>
+          <BaseDropdown
+            v-model="form.adapter"
+            :options="adapterOptions"
+            :disabled="!!editing"
+            label="供应商类型"
+            aria-labelledby="credential-adapter-label"
+          />
           <p v-if="editing" class="mt-1 text-xs text-muted-foreground">供应商类型创建后不可修改。</p>
         </div>
         <Field v-if="!editingIsBuiltin" label="供应商 ID（可选）">
@@ -502,7 +511,7 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
           <p class="text-xs text-muted-foreground md:col-span-2">AK/SK 仅加密写入，保存后不可回读；填写新值即轮换。</p>
         </div>
         <div class="flex items-center gap-2">
-          <PillToggle v-model="form.enabled" />
+          <PillToggle v-model="form.enabled" label="启用该凭据" />
           <span class="text-xs font-medium text-foreground">启用该凭据</span>
         </div>
         <div v-if="formError" class="text-xs text-danger">{{ formError }}</div>
@@ -548,10 +557,10 @@ const isEmpty = computed(() => !loading.value && !loadError.value && admin.provi
           />
         </Field>
         <div class="flex items-center gap-2">
-          <PillToggle v-model="templateForm.enabled" />
+          <PillToggle v-model="templateForm.enabled" label="启用该凭据" />
           <span class="text-xs font-medium text-foreground">启用该凭据</span>
         </div>
-        <div v-if="templateError" class="text-xs text-danger">{{ templateError }}</div>
+        <p v-if="templateError" class="text-xs text-danger" role="alert">{{ templateError }}</p>
       </div>
       <template #footer="{ close }">
         <BaseButton variant="secondary" @click="close">

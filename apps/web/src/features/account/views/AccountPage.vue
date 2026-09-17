@@ -110,122 +110,122 @@ const initials = computed(() => {
 </script>
 
 <template>
-  <div class="flex h-full w-full justify-center overflow-auto p-6">
+  <div class="flex h-full w-full justify-center overflow-auto bg-canvas p-4 sm:p-6">
     <h1 class="sr-only">账户设置</h1>
-    <div class="w-full max-w-2xl space-y-6">
-      <!-- Profile Card -->
-      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-sm">
+    <!-- Sections are separated by dividers instead of nested cards. -->
+    <div class="w-full max-w-2xl divide-y divide-border rounded-[var(--radius-panel)] border border-border bg-surface px-6">
+      <!-- Profile -->
+      <section class="py-6" aria-labelledby="account-profile">
         <div class="flex items-center gap-4">
-          <div class="flex h-14 w-14 items-center justify-center rounded-full bg-primary-soft text-lg font-semibold text-primary">
+          <div class="flex h-14 w-14 items-center justify-center rounded-full bg-accent-soft text-base font-medium text-accent-strong">
             {{ initials }}
           </div>
           <div class="min-w-0 flex-1">
-            <p class="truncate text-base font-semibold text-foreground">{{ user?.email }}</p>
-            <div class="mt-1 flex items-center gap-2">
-              <span class="inline-flex items-center rounded-full bg-primary-soft px-2 py-0.5 text-xs font-medium text-primary">
+            <p id="account-profile" class="truncate text-base font-medium text-foreground">{{ user?.email }}</p>
+            <div class="mt-1">
+              <Badge :tone="user?.role === 'admin' ? 'brand' : 'neutral'">
                 {{ user?.role === 'admin' ? '管理员' : '用户' }}
-              </span>
+              </Badge>
             </div>
           </div>
         </div>
 
-        <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div class="flex items-start gap-3 rounded-[var(--radius-card)] bg-surface-subtle p-4">
-            <Mail class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-            <div>
-              <p class="text-xs text-muted-foreground">邮箱</p>
-              <p class="mt-0.5 text-sm font-medium text-foreground">{{ user?.email }}</p>
+        <dl class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div class="flex items-start gap-3 rounded-[var(--radius-control)] bg-surface-subtle p-4">
+            <Mail class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <div class="min-w-0">
+              <dt class="text-xs text-muted-foreground">邮箱</dt>
+              <dd class="mt-0.5 truncate text-sm font-medium text-foreground">{{ user?.email }}</dd>
             </div>
           </div>
-          <div class="flex items-start gap-3 rounded-[var(--radius-card)] bg-surface-subtle p-4">
-            <Calendar class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <div class="flex items-start gap-3 rounded-[var(--radius-control)] bg-surface-subtle p-4">
+            <Calendar class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <div>
-              <p class="text-xs text-muted-foreground">注册时间</p>
-              <p class="mt-0.5 text-sm font-medium text-foreground">
+              <dt class="text-xs text-muted-foreground">注册时间</dt>
+              <dd class="mt-0.5 text-sm font-medium tabular-nums text-foreground">
                 {{ user?.createdAt ? formatDate(user.createdAt) : '-' }}
-              </p>
+              </dd>
             </div>
           </div>
-        </div>
-      </div>
+        </dl>
+      </section>
 
-      <!-- Balance Card -->
-      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-sm">
-        <div class="flex items-center justify-between">
-          <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Coins class="h-4 w-4 text-credit" />
+      <!-- Credits -->
+      <section class="py-6" aria-labelledby="account-credits">
+        <div class="flex items-center justify-between gap-3">
+          <h2 id="account-credits" class="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Coins class="h-4 w-4 text-credit" aria-hidden="true" />
             积分余额
-          </h3>
+          </h2>
           <button
             type="button"
-            class="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            class="inline-flex min-h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-xs text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
             @click="refreshBilling"
           >
-            <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': account.creditsLoading || account.ledgerLoading }" />
+            <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': account.creditsLoading || account.ledgerLoading }" aria-hidden="true" />
             刷新
           </button>
         </div>
 
         <div
           v-if="account.creditsError"
-          class="mt-3 flex items-center justify-between rounded-[var(--radius-card)] border border-danger/30 bg-danger/10 p-3 text-xs text-danger"
+          class="mt-3 flex items-center justify-between gap-3 rounded-[var(--radius-card)] border border-danger-border bg-danger-soft p-3 text-xs text-danger"
+          role="alert"
         >
           <span>{{ account.creditsError }}</span>
           <button
             type="button"
-            class="font-medium underline hover:no-underline"
+            class="min-h-8 font-medium underline hover:no-underline"
             @click="account.fetchCredits"
           >
             重试
           </button>
         </div>
 
-        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div class="rounded-[var(--radius-card)] bg-surface-subtle p-4">
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div class="rounded-[var(--radius-control)] bg-surface-subtle p-4">
             <p class="text-xs text-muted-foreground">可用积分</p>
-            <p class="mt-1 text-2xl font-bold text-foreground">
+            <p class="mt-1 text-2xl font-medium tabular-nums text-foreground">
               <span v-if="account.creditsLoading && !account.creditsLoaded" class="text-base font-normal text-muted-foreground">加载中...</span>
               <span v-else-if="account.creditsError && !account.creditsLoaded" class="text-base font-normal text-danger">加载失败</span>
               <span v-else>{{ account.creditBalance ? account.creditBalance.availableCredits : '-' }}</span>
             </p>
           </div>
-          <div class="rounded-[var(--radius-card)] bg-surface-subtle p-4">
+          <div class="rounded-[var(--radius-control)] bg-surface-subtle p-4">
             <p class="text-xs text-muted-foreground">冻结中积分</p>
-            <p class="mt-1 text-2xl font-bold text-muted-foreground">
+            <p class="mt-1 text-2xl font-medium tabular-nums text-muted-foreground">
               <span v-if="account.creditsLoading && !account.creditsLoaded" class="text-base font-normal text-muted-foreground">加载中...</span>
               <span v-else-if="account.creditsError && !account.creditsLoaded" class="text-base font-normal text-danger">加载失败</span>
               <span v-else>{{ account.creditBalance ? account.creditBalance.reservedCredits : '-' }}</span>
             </p>
           </div>
-          <div class="rounded-[var(--radius-card)] bg-surface-subtle p-4">
+          <div class="rounded-[var(--radius-control)] bg-surface-subtle p-4">
             <p class="text-xs text-muted-foreground">总积分</p>
-            <p class="mt-1 text-2xl font-bold text-primary">
+            <p class="mt-1 text-2xl font-medium tabular-nums text-accent-strong">
               <span v-if="account.creditsLoading && !account.creditsLoaded" class="text-base font-normal text-muted-foreground">加载中...</span>
               <span v-else-if="account.creditsError && !account.creditsLoaded" class="text-base font-normal text-danger">加载失败</span>
               <span v-else>{{ account.creditBalance ? account.creditBalance.totalCredits : '-' }}</span>
             </p>
           </div>
         </div>
-        <p v-if="account.creditBalance?.updatedAt" class="mt-3 text-right text-[11px] text-muted-foreground">
+        <p v-if="account.creditBalance?.updatedAt" class="mt-3 text-right font-mono text-xs text-muted-foreground">
           更新时间：{{ formatDateTime(account.creditBalance.updatedAt) }}
         </p>
-      </div>
+      </section>
 
-      <!-- Ledger Card -->
-      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-sm">
-        <div class="mb-4 flex items-center justify-between">
-          <div>
-            <h3 class="text-sm font-semibold text-foreground">积分明细流水</h3>
-            <p class="text-xs text-muted-foreground">记录每一笔积分变动记录（共 {{ account.ledgerTotal }} 笔）</p>
-          </div>
+      <!-- Ledger -->
+      <section class="py-6" aria-labelledby="account-ledger">
+        <div class="mb-4">
+          <h2 id="account-ledger" class="text-sm font-medium text-foreground">积分明细流水</h2>
+          <p class="text-xs tabular-nums text-muted-foreground">记录每一笔积分变动记录（共 {{ account.ledgerTotal }} 笔）</p>
         </div>
 
-        <div v-if="account.ledgerLoading && !account.ledgerLoaded" class="py-8 text-center text-sm text-muted-foreground">
+        <div v-if="account.ledgerLoading && !account.ledgerLoaded" class="py-8 text-center text-sm text-muted-foreground" role="status">
           正在加载积分流水记录...
         </div>
-        <div v-else-if="account.ledgerError && !account.ledgerLoaded" class="py-6 text-center text-xs text-danger">
+        <div v-else-if="account.ledgerError && !account.ledgerLoaded" class="py-6 text-center text-xs text-danger" role="alert">
           <p>{{ account.ledgerError }}</p>
-          <button type="button" class="mt-2 text-primary underline" @click="account.fetchLedger({ reset: true })">点击重试</button>
+          <button type="button" class="mt-2 min-h-8 text-accent-strong underline" @click="account.fetchLedger({ reset: true })">点击重试</button>
         </div>
         <div v-else-if="account.creditLedger.length === 0" class="py-8 text-center text-sm text-muted-foreground">
           暂无积分变动流水记录
@@ -235,7 +235,7 @@ const initials = computed(() => {
           <div
             v-for="entry in account.creditLedger"
             :key="entry.id"
-            class="flex flex-col gap-2 rounded-[var(--radius-card)] border border-border/80 bg-surface-subtle p-3 text-xs sm:flex-row sm:items-center sm:justify-between"
+            class="flex flex-col gap-2 rounded-[var(--radius-card)] border border-border bg-surface-subtle p-3 text-xs sm:flex-row sm:items-center sm:justify-between"
           >
             <div class="flex items-center gap-3">
               <Badge :tone="getOperationMeta(entry.operation).tone" class="shrink-0">
@@ -245,16 +245,16 @@ const initials = computed(() => {
                 <p class="truncate font-medium text-foreground">
                   {{ entry.note || (entry.referenceType ? `${entry.referenceType}:${entry.referenceId}` : '—') }}
                 </p>
-                <p class="text-[11px] text-muted-foreground">
+                <p class="font-mono text-xs text-muted-foreground">
                   {{ formatDateTime(entry.createdAt) }}
                 </p>
               </div>
             </div>
 
-            <div class="flex items-center justify-between gap-4 border-t border-border/50 pt-2 sm:border-0 sm:pt-0">
+            <div class="flex items-center justify-between gap-4 border-t border-border pt-2 sm:border-0 sm:pt-0">
               <div class="text-right">
                 <span
-                  class="font-semibold"
+                  class="font-medium tabular-nums"
                   :class="entry.availableDelta > 0 ? 'text-positive' : entry.availableDelta < 0 ? 'text-negative' : 'text-muted-foreground'"
                 >
                   {{ entry.availableDelta > 0 ? `+${entry.availableDelta}` : entry.availableDelta }}
@@ -262,14 +262,14 @@ const initials = computed(() => {
                 <span class="text-muted-foreground"> 可用</span>
               </div>
 
-              <div v-if="entry.reservedDelta !== 0" class="text-right text-muted-foreground">
+              <div v-if="entry.reservedDelta !== 0" class="text-right tabular-nums text-muted-foreground">
                 <span :class="entry.reservedDelta > 0 ? 'text-credit' : 'text-muted-foreground'">
                   {{ entry.reservedDelta > 0 ? `+${entry.reservedDelta}` : entry.reservedDelta }}
                 </span>
                 <span> 冻结</span>
               </div>
 
-              <div class="text-right text-[11px] text-muted-foreground">
+              <div class="text-right text-xs tabular-nums text-muted-foreground">
                 <span>变动后可用: {{ entry.availableAfter }}</span>
               </div>
             </div>
@@ -286,25 +286,25 @@ const initials = computed(() => {
             </BaseButton>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- OAuth Card -->
-      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-sm">
-        <h3 class="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
-          <ShieldCheck class="h-4 w-4 text-muted-foreground" />
+      <!-- Linked third-party accounts -->
+      <section class="py-6" aria-labelledby="account-oauth">
+        <h2 id="account-oauth" class="mb-4 flex items-center gap-2 text-sm font-medium text-foreground">
+          <ShieldCheck class="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           第三方账户
-        </h3>
+        </h2>
         <p class="mb-4 text-xs text-muted-foreground">绑定后可使用第三方账户快速登录；仅可绑定与当前邮箱一致的账户。</p>
 
         <div class="space-y-3">
           <div
             v-for="p in PROVIDERS"
             :key="p.provider"
-            class="flex items-center justify-between rounded-[var(--radius-card)] border border-border px-4 py-3 transition-colors hover:bg-surface-subtle"
+            class="flex items-center justify-between gap-3 rounded-[var(--radius-card)] border border-border px-4 py-3"
           >
             <div class="flex items-center gap-3">
               <div class="flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] bg-surface-subtle">
-                <Github v-if="p.provider === 'github'" class="h-5 w-5 text-foreground" />
+                <Github v-if="p.provider === 'github'" class="h-5 w-5 text-foreground" aria-hidden="true" />
                 <GoogleIcon v-else class="h-5 w-5" />
               </div>
               <div>
@@ -322,25 +322,25 @@ const initials = computed(() => {
               @click="unlinkTarget = p.provider"
             >
               <template #icon>
-                <Unlink class="h-3.5 w-3.5" />
+                <Unlink class="h-3.5 w-3.5" aria-hidden="true" />
               </template>
               解绑
             </BaseButton>
             <BaseButton
               v-else
               size="sm"
+              variant="secondary"
               :disabled="!providerEnabled(p.provider)"
               @click="account.linkOAuth(p.provider)"
             >
               <template #icon>
-                <Link2 class="h-3.5 w-3.5" />
+                <Link2 class="h-3.5 w-3.5" aria-hidden="true" />
               </template>
               绑定
             </BaseButton>
           </div>
         </div>
-      </div>
-
+      </section>
     </div>
 
     <ConfirmDialog

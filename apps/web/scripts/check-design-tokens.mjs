@@ -39,6 +39,12 @@ const DEFAULT_PALETTE = [
  * Lint rules for source files. Each rule is `{ id, description, pattern }` and is
  * matched line by line. Keep this table granular so new rules (for example a
  * `z-<number>` stacking-order rule) can be appended without restructuring.
+ *
+ * Optional fields:
+ * - `allowLiteralFiles`: skip the third-party brand-mark allowlist files.
+ * - `filter(match, { file, text, index })`: returns `false` to accept a match.
+ * - `nativeTagOnly`: only report matches that sit inside a native HTML tag
+ *   (component props such as `<PageHeader title="…">` are not tooltips).
  */
 const SOURCE_RULES = [
   {
@@ -65,7 +71,74 @@ const SOURCE_RULES = [
     pattern: /rgba?\(\s*\d/g,
     allowLiteralFiles: true,
   },
+  {
+    id: 'no-raw-radius',
+    description: 'use rounded-[var(--radius-*)] (optionally with a side prefix) or rounded-full instead of a raw radius utility',
+    pattern: /\brounded(?:-[a-zA-Z0-9]+)*(?:-\[[^\]]*\])?/g,
+    filter: (match) => !/^rounded(?:-(?:t|r|b|l|s|e|tl|tr|br|bl|ss|se|ee|es))?(?:-full|-\[var\(--radius-[a-z-]+\)\])$/.test(match),
+  },
+  {
+    id: 'no-all-property-transition',
+    description: 'transition a specific property (colors, opacity, transform); the all-property transition is not used',
+    pattern: new RegExp('\\btransition-a[l]l\\b', 'g'),
+  },
+  {
+    id: 'no-interaction-scale',
+    description: 'interactive states must not scale: use color/opacity changes instead',
+    pattern: /\b(?:group-|peer-)?(?:hover|active|focus|focus-within|focus-visible):(?:[a-z-]+:)?scale-/g,
+  },
+  {
+    id: 'no-decorative-gradient',
+    description: 'decorative gradients are not part of the design baseline; use tonal surfaces and dividers',
+    pattern: /\b(?:bg-(?:gradient-to|linear|radial|conic)[a-z-]*|bg-\[(?:linear|radial|conic)-gradient|conic-gradient)\b/g,
+  },
+  {
+    id: 'no-glass-blur',
+    description: 'no glassmorphism: surfaces stay opaque and media uses the .media-scrim utility',
+    pattern: /\bbackdrop-blur(?:-[a-z0-9]+)?\b/g,
+  },
+  {
+    id: 'no-oversized-shadow',
+    description: 'only the md shadow (popovers) and the lg shadow (overlays) are allowed; larger steps are not',
+    pattern: /\bshadow-(?:xl|2xl)\b/g,
+  },
+  {
+    id: 'no-sub-min-text',
+    description: 'auxiliary text is text-xs (12px) at the smallest; arbitrary sizes below that are not used',
+    pattern: /\btext-\[(?:8|9|10|11)px\]/g,
+  },
+  {
+    id: 'no-bold-weight',
+    description: 'headings are 400 and labels are 500: semibold and bold weights are not used',
+    pattern: /\bfont-(?:semibold|bold)\b/g,
+  },
+  {
+    id: 'no-title-attribute',
+    description: 'use aria-label for accessible names and AppTooltip for explanatory hints instead of a native title attribute',
+    pattern: /(?::title|\btitle)\s*=\s*"/g,
+    nativeTagOnly: true,
+  },
 ]
+
+/** Lowercase tag names that are real HTML elements (as opposed to components). */
+const NATIVE_TAGS = new Set([
+  'a', 'abbr', 'area', 'article', 'aside', 'audio', 'b', 'bdi', 'bdo', 'blockquote', 'br', 'button',
+  'canvas', 'caption', 'code', 'col', 'colgroup', 'data', 'dd', 'del', 'details', 'dfn', 'dialog',
+  'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2',
+  'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'i', 'iframe', 'img', 'input', 'ins', 'kbd', 'label',
+  'legend', 'li', 'main', 'map', 'mark', 'menu', 'meter', 'nav', 'object', 'ol', 'optgroup', 'option',
+  'output', 'p', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'section', 'select',
+  'slot', 'small', 'source', 'span', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td',
+  'template', 'textarea', 'tfoot', 'th', 'thead', 'time', 'tr', 'track', 'u', 'ul', 'var', 'video', 'wbr',
+])
+
+/** Nearest enclosing tag name for a match offset (null when it cannot be resolved). */
+function enclosingTag(text, index) {
+  const before = text.slice(0, index)
+  const match = /<([a-zA-Z][a-zA-Z0-9.-]*)[^<>]*$/.exec(before)
+  if (!match) return null
+  return match[1]
+}
 
 const violations = []
 
@@ -98,14 +171,32 @@ const sourceFiles = walk(SRC_DIR, ['.vue', '.ts'])
 
 for (const absolute of sourceFiles) {
   const relative = toRelative(absolute)
-  const lines = readFileSync(absolute, 'utf8').split(/\r?\n/)
+  const text = readFileSync(absolute, 'utf8')
+  const rawLines = text.split('\n')
+  // Offsets come from the raw lines so CRLF files stay aligned; matching runs
+  // against the version without the trailing carriage return.
+  const lines = rawLines.map((line) => line.replace(/\r$/, ''))
+  const lineStarts = []
+  let start = 0
+  for (const line of rawLines) {
+    lineStarts.push(start)
+    start += line.length + 1
+  }
 
   lines.forEach((line, index) => {
     for (const rule of SOURCE_RULES) {
       if (rule.allowLiteralFiles && ALLOWED_LITERAL_FILES.has(relative)) continue
       rule.pattern.lastIndex = 0
-      if (rule.pattern.test(line)) {
-        report(relative, index + 1, rule.id, rule.description, line)
+      let match
+      while ((match = rule.pattern.exec(line)) !== null) {
+        const index2 = lineStarts[index] + match.index
+        if (rule.nativeTagOnly) {
+          const tag = enclosingTag(text, index2)
+          if (!tag || !NATIVE_TAGS.has(tag.toLowerCase())) continue
+        }
+        if (rule.filter && !rule.filter(match[0], { file: relative, text, index: index2 })) continue
+        report(relative, index + 1, rule.id, rule.description, match[0])
+        break
       }
     }
   })

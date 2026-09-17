@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useAdminStore } from '@/features/admin/stores/admin'
 import PageHeader from '@/shared/components/ui/PageHeader.vue'
 import PillToggle from '@/shared/components/ui/PillToggle.vue'
+import { inputClass } from '@/shared/lib/field-styles'
 import BaseButton from '@/shared/components/ui/BaseButton.vue'
 import Field from '@/shared/components/ui/Field.vue'
 import { toast } from '@/shared/composables/useToast'
@@ -73,37 +74,37 @@ async function handleSave() {
           @click="handleSave"
         >
           <template #icon>
-            <Save class="h-3.5 w-3.5" />
+            <Save class="h-3.5 w-3.5" aria-hidden="true" />
           </template>
           保存设置
         </BaseButton>
       </template>
     </PageHeader>
 
-    <div v-if="loadError" class="max-w-2xl rounded-[var(--radius-card)] border border-danger/30 bg-danger/10 p-4 text-xs text-danger flex items-center justify-between gap-4">
+    <div v-if="loadError" class="flex max-w-2xl items-center justify-between gap-4 rounded-[var(--radius-card)] border border-danger-border bg-danger-soft p-4 text-xs text-danger">
       <div class="flex items-center gap-2">
-        <AlertCircle class="h-4 w-4 shrink-0 text-danger" />
+        <AlertCircle class="h-4 w-4 shrink-0 text-danger" aria-hidden="true" />
         <span>{{ loadError }}</span>
       </div>
       <BaseButton variant="secondary" size="sm" :loading="loading" @click="loadSettings">
         <template #icon>
-          <RefreshCw class="h-3 w-3" :class="{ 'animate-spin': loading }" />
+          <RefreshCw class="h-3 w-3" :class="{ 'animate-spin': loading }" aria-hidden="true" />
         </template>
         重试
       </BaseButton>
     </div>
 
     <div v-else-if="loading && !loaded" class="max-w-2xl py-12 text-center text-sm text-muted-foreground">
-      <RefreshCw class="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
+      <RefreshCw class="mx-auto h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
       <p class="mt-2 text-xs">正在加载计费设置...</p>
     </div>
 
     <div v-if="loaded" class="max-w-2xl space-y-6">
-      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-sm">
+      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6">
         <div class="flex items-center justify-between gap-4">
           <div>
-            <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <Coins class="h-4 w-4 text-credit" />
+            <h3 class="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Coins class="h-4 w-4 text-credit" aria-hidden="true" />
               全局积分计费系统
             </h3>
             <p class="mt-1 text-xs text-muted-foreground">
@@ -112,13 +113,14 @@ async function handleSave() {
           </div>
           <PillToggle
             v-model="form.enabled"
+            label="启用全局积分计费系统"
           />
         </div>
       </div>
 
       <!-- Pricing Parameters Card -->
-      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-sm space-y-4">
-        <h3 class="text-sm font-semibold text-foreground">积分策略参数</h3>
+      <div class="rounded-[var(--radius-card)] border border-border bg-surface p-6 space-y-4">
+        <h3 class="text-sm font-medium text-foreground">积分策略参数</h3>
 
         <Field label="新用户注册默认赠送积分" hint="新用户完成注册时自动发放的初始可用积分数量。">
           <input
@@ -126,7 +128,7 @@ async function handleSave() {
             type="number"
             min="0"
             step="1"
-            class="mt-1 block w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            :class="inputClass"
           />
         </Field>
 
@@ -136,7 +138,7 @@ async function handleSave() {
             type="number"
             min="0"
             step="1"
-            class="mt-1 block w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            :class="inputClass"
           />
         </Field>
       </div>

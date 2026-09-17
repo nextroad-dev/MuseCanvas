@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue'
 import { X, RotateCcw, Copy, Plus, Trash2, ChevronDown, Download } from 'lucide-vue-next'
 import StatusBadge from '@/shared/components/ui/StatusBadge.vue'
+import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import Popover from '@/shared/components/ui/Popover.vue'
 import type { GenerationJob, GenerationOutput } from '@/shared/types'
 import Lightbox from '@/shared/components/ui/Lightbox.vue'
 const props = defineProps<{
@@ -18,7 +20,7 @@ const emit = defineEmits<{
   download: [url: string]
 }>()
 
-const showReuseMenu = ref(false)
+const reuseMenuOpen = ref(false)
 const lightboxOpen = ref(false)
 const lightboxIndex = ref(0)
 const lightboxImages = computed(() =>
@@ -51,7 +53,7 @@ const optimizedPromptNotice = computed(() => {
 })
 
 function handleReuse(kind: 'original' | 'optimized') {
-  showReuseMenu.value = false
+  reuseMenuOpen.value = false
   emit('reuse-prompt', kind)
 }
 
@@ -77,7 +79,7 @@ const durationLabel = computed(() => {
 const fields = computed(() => [
   { label: '任务 ID', value: props.job.id, mono: true },
   { label: '使用模型', value: props.job.modelName || '—', mono: false },
-  ...(props.job.quotedCredits != null ? [{ label: '消耗积分', value: `${props.job.quotedCredits} 积分`, mono: false }] : []),
+  { label: '消耗积分', value: props.job.quotedCredits != null ? `${props.job.quotedCredits} 积分` : '—', mono: false },
   { label: '耗时', value: durationLabel.value, mono: false },
   { label: '选择模板', value: props.job.templateName || '无', mono: false },
 ])
@@ -110,13 +112,15 @@ const firstOutputPoster = computed(() => {
 
 <template>
   <div class="flex h-full flex-col">
-    <div v-if="!hideHeader" class="flex h-12 items-center justify-between border-b border-border/60 px-4">
+    <div v-if="!hideHeader" class="flex h-14 items-center justify-between border-b border-border px-4">
       <span class="text-sm font-medium text-foreground">任务详情</span>
       <button
-        class="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
+        type="button"
+        class="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
+        aria-label="关闭任务详情"
         @click="$emit('close')"
       >
-        <X class="h-4 w-4" />
+        <X class="h-4 w-4" aria-hidden="true"/>
       </button>
     </div>
 
@@ -135,18 +139,18 @@ const firstOutputPoster = computed(() => {
         <img
           v-else
           :src="firstOutputUrl"
-          alt="Preview"
+          alt="生成结果预览"
           class="block h-auto max-h-48 w-full object-cover"
         />
-        <div v-if="job.outputs.length > 1" class="border-t border-border bg-surface/50 px-2 py-1 text-center text-xs text-muted-foreground backdrop-blur-sm">
+        <div v-if="job.outputs.length > 1" class="border-t border-border bg-surface-subtle px-2 py-1 text-center text-xs tabular-nums text-muted-foreground">
           共 {{ job.outputs.length }} {{ isVideoJob ? '个视频' : '张图片' }}（仅预览第一个）
         </div>
       </div>
 
-      <div class="mb-5">
+      <div class="mb-5" role="status" aria-atomic="true">
         <StatusBadge :status="job.status" variant="soft" />
         <p class="mt-2 line-clamp-2 text-sm font-medium text-foreground">{{ titleText }}</p>
-        <p class="mt-1 text-xs text-muted-foreground">{{ createdLabel }}</p>
+        <p class="mt-1 font-mono text-xs tabular-nums text-muted-foreground">{{ createdLabel }}</p>
       </div>
 
       <dl class="space-y-4">
@@ -154,61 +158,61 @@ const firstOutputPoster = computed(() => {
           <dt class="text-xs text-muted-foreground">{{ f.label }}</dt>
           <dd
             class="mt-1 break-all text-sm text-foreground"
-            :class="f.mono ? 'font-mono' : ''"
+            :class="f.mono ? 'font-mono text-xs' : 'tabular-nums'"
           >{{ f.value }}</dd>
         </div>
       </dl>
 
-      <div class="mt-5 border-t border-border/60 pt-5">
+      <div class="mt-5 border-t border-border pt-5">
         <p class="text-xs font-medium text-muted-foreground">原提示词</p>
-        <p class="mt-2 max-h-28 overflow-auto whitespace-pre-wrap rounded-[var(--radius-card)] border border-border bg-surface-subtle px-3 py-2 text-sm leading-relaxed text-foreground">
+        <p class="mt-2 max-h-28 overflow-auto whitespace-pre-wrap rounded-[var(--radius-card)] border border-border bg-surface-subtle px-3 py-2 text-sm leading-[1.59] text-foreground">
           {{ originalPrompt || '—' }}
         </p>
 
-        <div v-if="canUseOptimizedPrompt" class="mt-3 border-t border-border/40 pt-3">
+        <div v-if="canUseOptimizedPrompt" class="mt-3 border-t border-border pt-3">
           <p class="text-xs font-medium text-muted-foreground">优化后提示词</p>
-          <p class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-[var(--radius-card)] border border-border bg-surface-subtle px-3 py-2 text-sm leading-relaxed text-foreground">
+          <p class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-[var(--radius-card)] border border-border bg-surface-subtle px-3 py-2 text-sm leading-[1.59] text-foreground">
             {{ optimizedPrompt }}
           </p>
         </div>
 
         <p
           v-else-if="optimizedPromptNotice"
-          class="mt-3 rounded-[var(--radius-control)] bg-surface-subtle px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+          class="mt-3 rounded-[var(--radius-control)] bg-surface-subtle px-3 py-2 text-xs leading-[1.5] text-muted-foreground"
         >
           {{ optimizedPromptNotice }}
         </p>
       </div>
 
       <!-- Reference Images Section -->
-      <div v-if="job.inputImages && job.inputImages.length > 0" class="mt-5 border-t border-border/60 pt-5">
+      <div v-if="job.inputImages && job.inputImages.length > 0" class="mt-5 border-t border-border pt-5">
         <div class="flex items-center justify-between">
           <p class="text-xs font-medium text-muted-foreground">输入参考图 ({{ job.inputImages.length }})</p>
-          <span class="text-[11px] text-muted-foreground">点击预览</span>
+          <span class="text-xs text-muted-foreground">点击预览</span>
         </div>
         <div class="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <button
             v-for="(img, idx) in job.inputImages"
             :key="img.id || idx"
             type="button"
-            class="group relative aspect-square overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface-subtle transition-all hover:border-primary hover:shadow-sm"
+            class="group relative aspect-square overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface-subtle transition-colors hover:border-border-strong"
             :aria-label="`查看参考图 ${idx + 1}`"
             @click="previewInputImage(idx)"
           >
             <img
               :src="img.imageUrl"
               :alt="`参考图 ${idx + 1}`"
-              class="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+              class="h-full w-full object-cover"
               loading="lazy"
             />
             <span
-              class="pointer-events-none absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-overlay/65 text-[10px] font-semibold text-foreground-inverse"
+              class="pointer-events-none absolute left-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-overlay/65 text-xs font-medium tabular-nums text-foreground-inverse"
             >
               {{ idx + 1 }}
             </span>
             <span
               v-if="img.width && img.height"
-              class="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-overlay/50 px-1 py-0.5 text-center text-[9px] text-foreground-inverse/90 backdrop-blur-xs"
+              class="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-overlay/60 px-1 py-0.5 text-center text-xs tabular-nums text-foreground-inverse"
             >
               {{ img.width }}x{{ img.height }}
             </span>
@@ -218,78 +222,89 @@ const firstOutputPoster = computed(() => {
     </div>
 
     <!-- Actions -->
-    <div class="shrink-0 space-y-2 border-t border-border/60 p-4">
-      <button
+    <div class="shrink-0 space-y-2 border-t border-border p-4">
+      <BaseButton
         v-if="isComplete"
-        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-foreground-inverse transition-colors hover:bg-primary-hover"
+        variant="primary"
+        class="w-full"
         @click="handleDownloadAll"
       >
-        <Download class="h-4 w-4" />
+        <template #icon>
+          <Download class="h-4 w-4" aria-hidden="true"/>
+        </template>
         {{ (job.outputs?.length ?? 0) > 1 ? (isVideoJob ? '全部下载视频' : '全部下载图片') : (isVideoJob ? '下载视频' : '下载图片') }}
-      </button>
-      <button
+      </BaseButton>
+
+      <BaseButton
         v-if="isFailed"
-        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-foreground-inverse transition-colors hover:bg-primary-hover"
+        variant="primary"
+        class="w-full"
         @click="$emit('retry')"
       >
-        <RotateCcw class="h-4 w-4" />
+        <template #icon>
+          <RotateCcw class="h-4 w-4" aria-hidden="true"/>
+        </template>
         重试
-      </button>
-      <!-- Reuse prompt dropdown -->
-      <div class="relative">
-        <button
-          class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-4 text-sm text-foreground transition-colors hover:border-border-strong hover:bg-surface-subtle"
-          @click="showReuseMenu = !showReuseMenu"
-        >
-          <Copy class="h-4 w-4" />
-          <span>复用提示词</span>
-          <ChevronDown
-            class="h-4 w-4 transition-transform duration-200"
-            :class="{ 'rotate-180': showReuseMenu }"
-          />
-        </button>
-        <Transition
-          enter-active-class="transition ease-out duration-100"
-          enter-from-class="transform opacity-0 scale-95 -translate-y-1"
-          enter-to-class="transform opacity-100 scale-100 translate-y-0"
-          leave-active-class="transition ease-in duration-75"
-          leave-from-class="transform opacity-100 scale-100 translate-y-0"
-          leave-to-class="transform opacity-0 scale-95 -translate-y-1"
-        >
-          <div
-            v-show="showReuseMenu"
-            class="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface shadow-lg"
+      </BaseButton>
+
+      <!-- Reuse prompt menu -->
+      <Popover
+        v-model="reuseMenuOpen"
+        role="menu"
+        label="复用提示词"
+        panel-class="left-0 right-0 min-w-0"
+      >
+        <template #trigger="{ open: isOpen, toggle }">
+          <BaseButton variant="secondary" class="w-full" aria-haspopup="menu" :aria-expanded="isOpen" @click.stop="toggle">
+            <template #icon>
+              <Copy class="h-4 w-4" aria-hidden="true"/>
+            </template>
+            <span>复用提示词</span>
+            <ChevronDown
+              class="h-4 w-4 transition-transform"
+              :class="{ 'rotate-180': isOpen }"
+              aria-hidden="true"
+            />
+          </BaseButton>
+        </template>
+        <div role="presentation" class="flex flex-col gap-1">
+          <button
+            type="button"
+            role="menuitem"
+            data-menu-item
+            tabindex="-1"
+            class="flex min-h-10 w-full items-center rounded-[var(--radius-control)] px-3 text-left text-sm text-foreground transition-colors hover:bg-surface-subtle"
+            @click="handleReuse('original')"
           >
-            <button
-              class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-surface-subtle"
-              @click="handleReuse('original')"
-            >
-              原提示词
-            </button>
-            <button
-              v-if="canUseOptimizedPrompt"
-              class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-surface-subtle"
-              @click="handleReuse('optimized')"
-            >
-              优化后提示词
-            </button>
-          </div>
-        </Transition>
-      </div>
-      <button
-        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-4 text-sm text-foreground transition-colors hover:border-border-strong hover:bg-surface-subtle"
-        @click="$emit('new-generation')"
-      >
-        <Plus class="h-4 w-4" />
+            原提示词
+          </button>
+          <button
+            v-if="canUseOptimizedPrompt"
+            type="button"
+            role="menuitem"
+            data-menu-item
+            tabindex="-1"
+            class="flex min-h-10 w-full items-center rounded-[var(--radius-control)] px-3 text-left text-sm text-foreground transition-colors hover:bg-surface-subtle"
+            @click="handleReuse('optimized')"
+          >
+            优化后提示词
+          </button>
+        </div>
+      </Popover>
+
+      <BaseButton variant="secondary" class="w-full" @click="$emit('new-generation')">
+        <template #icon>
+          <Plus class="h-4 w-4" aria-hidden="true"/>
+        </template>
         新建生成
-      </button>
-      <button
-        class="flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border border-danger/30 bg-surface px-4 text-sm text-danger transition-colors hover:bg-danger-soft"
-        @click="$emit('delete')"
-      >
-        <Trash2 class="h-4 w-4" />
+      </BaseButton>
+
+      <BaseButton variant="danger-ghost" class="w-full" @click="$emit('delete')">
+        <template #icon>
+          <Trash2 class="h-4 w-4" aria-hidden="true"/>
+        </template>
         删除任务
-      </button>
+      </BaseButton>
     </div>
 
     <!-- Lightbox for reference images -->

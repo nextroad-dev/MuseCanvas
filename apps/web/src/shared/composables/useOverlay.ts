@@ -15,12 +15,32 @@ export interface UseOverlayOptions {
 }
 
 /**
- * Shared overlay behavior used by Modal, Drawer, Lightbox and menus.
+ * Shared overlay behavior used by Modal, Drawer and Lightbox.
  *
  * - Focus trap on open + restore on close
  * - Document-level Escape handler
  * - Body scroll lock
+ * - Marks the application root `inert` while the trap is active so the page
+ *   behind the overlay cannot be reached by keyboard or AT (nested overlays are
+ *   counted, so the attribute is only removed when the last one closes).
+ *   All three overlays teleport to `body`, so `#app` never contains them.
  */
+let inertHolders = 0
+
+function acquireInert() {
+  inertHolders += 1
+  if (inertHolders === 1) {
+    document.getElementById('app')?.setAttribute('inert', '')
+  }
+}
+
+function releaseInert() {
+  inertHolders = Math.max(0, inertHolders - 1)
+  if (inertHolders === 0) {
+    document.getElementById('app')?.removeAttribute('inert')
+  }
+}
+
 export function useOverlay(
   containerRef: Ref<HTMLElement | null>,
   openRef: Ref<boolean>,
@@ -49,6 +69,7 @@ export function useOverlay(
     }
 
     if (trapFocus) {
+      acquireInert()
       activateTrap()
     }
 
@@ -61,6 +82,7 @@ export function useOverlay(
 
     if (trapFocus) {
       deactivateTrap()
+      releaseInert()
     }
 
     if (lockScroll) {

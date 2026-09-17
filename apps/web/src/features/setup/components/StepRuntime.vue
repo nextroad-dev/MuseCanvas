@@ -93,7 +93,7 @@ async function handleSave() {
 <template>
   <div class="space-y-5">
     <div>
-      <h3 class="mb-1 text-lg font-semibold text-foreground">高级运行时设置</h3>
+      <h3 class="mb-1 text-subtitle font-normal leading-[1.4] text-foreground">高级运行时设置</h3>
       <p class="text-sm text-muted-foreground">表单已按服务端当前值（缺省时为服务端默认值）预填，均为正整数。保存后标记本节完成。</p>
     </div>
 

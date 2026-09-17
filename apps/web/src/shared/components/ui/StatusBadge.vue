@@ -29,33 +29,33 @@ const config = computed(() => {
 
 const toneClasses: Record<typeof config.value.tone, { soft: string; outline: string; solid: string }> = {
   neutral: {
-    soft: 'bg-neutral-soft text-neutral-status',
-    outline: 'border border-border bg-transparent text-foreground',
-    solid: 'bg-neutral-status text-foreground-inverse',
+    soft: 'border-neutral-soft bg-neutral-soft text-neutral-status',
+    outline: 'border-border bg-transparent text-foreground',
+    solid: 'border-neutral-status bg-neutral-status text-foreground-inverse',
   },
   info: {
-    soft: 'bg-info-soft text-info',
-    outline: 'border border-info bg-transparent text-info',
-    solid: 'bg-info text-foreground-inverse',
+    soft: 'border-info-soft bg-info-soft text-info',
+    outline: 'border-info bg-transparent text-info',
+    solid: 'border-info bg-info text-foreground-inverse',
   },
   success: {
-    soft: 'bg-success-soft text-success',
-    outline: 'border border-success bg-transparent text-success',
-    solid: 'bg-success text-foreground-inverse',
+    soft: 'border-success-soft bg-success-soft text-success',
+    outline: 'border-success bg-transparent text-success',
+    solid: 'border-success bg-success text-foreground-inverse',
   },
   danger: {
-    soft: 'bg-danger-soft text-danger',
-    outline: 'border border-danger bg-transparent text-danger',
-    solid: 'bg-danger text-foreground-inverse',
+    soft: 'border-danger-soft bg-danger-soft text-danger',
+    outline: 'border-danger bg-transparent text-danger',
+    solid: 'border-danger bg-danger text-foreground-inverse',
   },
   warning: {
-    soft: 'bg-warning-soft text-warning',
-    outline: 'border border-warning bg-transparent text-warning',
-    solid: 'bg-warning text-foreground-inverse',
+    soft: 'border-warning-soft bg-warning-soft text-warning',
+    outline: 'border-warning bg-transparent text-warning',
+    solid: 'border-warning bg-warning text-foreground-inverse',
   },
 }
 
-const baseClasses = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium'
+const baseClasses = 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap'
 
 const variantClasses = computed(() => {
   return toneClasses[config.value.tone][props.variant || 'soft']

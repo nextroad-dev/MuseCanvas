@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { RouterLink, useRouter } from 'vue-router'
 import { ArrowRight, Brush, Check, Layers3, Library, PanelTop, Sparkles, WandSparkles, Zap } from 'lucide-vue-next'
-import FlowLinesBg from '@/shared/components/FlowLinesBg.vue'
-import MatrixBg from '@/shared/components/MatrixBg.vue'
 import BaseButton from '@/shared/components/ui/BaseButton.vue'
 
 const router = useRouter()
@@ -46,6 +44,13 @@ const workflowSteps = [
   },
 ]
 
+const capabilities = [
+  { icon: WandSparkles, label: '提示词前置思考' },
+  { icon: Layers3, label: '多模型与画幅' },
+  { icon: Zap, label: '任务队列与重试' },
+  { icon: Library, label: '图库与历史沉淀' },
+]
+
 function goToLogin() {
   router.push('/login')
 }
@@ -53,9 +58,9 @@ function goToLogin() {
 
 <template>
   <div class="min-h-screen bg-canvas text-foreground antialiased">
-    <nav class="fixed inset-x-0 top-0 z-50 border-b border-border bg-surface/90 backdrop-blur-md">
-      <div class="mx-auto flex h-14 max-w-[1440px] items-center justify-between px-4 sm:px-6">
-        <RouterLink to="/" class="flex items-center rounded-[var(--radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-soft">
+    <nav class="sticky inset-x-0 top-0 z-50 border-b border-border bg-surface">
+      <div class="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-4 sm:px-6">
+        <RouterLink to="/" class="flex items-center rounded-[var(--radius-control)]" aria-label="MuseCanvas 首页">
           <img
             src="/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/03_wordmark_transparent_trimmed.png"
             alt="MuseCanvas"
@@ -65,37 +70,38 @@ function goToLogin() {
         <div class="flex items-center gap-2">
           <RouterLink
             to="/terms"
-            class="hidden rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-soft sm:inline-flex"
+            class="hidden min-h-10 items-center rounded-[var(--radius-control)] px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground sm:inline-flex"
           >
             用户协议
           </RouterLink>
-          <BaseButton size="sm" @click="goToLogin">
+          <BaseButton size="md" @click="goToLogin">
             登录
-            <ArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
+            <ArrowRight class="h-4 w-4" aria-hidden="true" />
           </BaseButton>
         </div>
       </div>
     </nav>
 
     <main>
-      <section class="relative isolate flex min-h-[calc(100svh-48px)] items-center overflow-hidden px-4 pb-12 pt-24 sm:px-6 sm:pt-28">
-        <div class="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,var(--color-border)_1px,transparent_1px),linear-gradient(to_bottom,var(--color-border)_1px,transparent_1px)] bg-[size:72px_72px] opacity-30" />
-        <FlowLinesBg class="opacity-75" :density="0.8" :speed="0.38" :layers="4" :line-width="1" />
-        <MatrixBg class="opacity-20" :grid-spacing="68" :dot-size="1.1" :line-opacity="0.05" :dot-opacity="0.18" :pulse-speed="0.5" :speed="0.45" />
-        <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_28%,var(--color-primary-soft)_0%,transparent_32%),linear-gradient(to_bottom,var(--color-canvas)_0%,transparent_20%,transparent_72%,var(--color-canvas)_100%)]" />
+      <!-- Hero: type and whitespace carry the hierarchy. -->
+      <section class="border-b border-border">
+        <div class="mx-auto grid max-w-[1200px] gap-12 px-4 py-20 sm:px-6 sm:py-24 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.7fr)] lg:items-start lg:py-28">
+          <div class="max-w-3xl">
+            <p class="mb-5 inline-flex items-center gap-2 rounded-full bg-accent-soft px-3 py-1 text-xs font-medium text-accent-strong">
+              <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
+              AI 图像工作台
+            </p>
 
-        <div class="relative z-10 mx-auto grid w-full max-w-[1440px] gap-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,0.68fr)] lg:items-center">
-          <div class="mx-auto max-w-4xl text-center lg:mx-0 lg:text-left">
-            <h1 class="text-[36px] font-semibold leading-[1.08] text-foreground sm:text-[56px]">
+            <h1 class="text-display font-normal leading-[1.05] tracking-[-0.0175em] text-foreground">
               MuseCanvas
-              <span class="block text-primary">把灵感整理成可生成的画面</span>
+              <span class="mt-2 block text-muted-foreground">把灵感整理成可生成的画面</span>
             </h1>
 
-            <p class="mx-auto mt-6 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg lg:mx-0">
+            <p class="mt-7 max-w-2xl text-base leading-[1.59] text-muted-foreground">
               面向创作者的 AI 图像工作台。从提示词、模型前置思考到任务历史和作品图库，保持在同一条清晰的创作路径里。
             </p>
 
-            <div class="mt-8 flex flex-col items-center gap-3 sm:flex-row lg:justify-start">
+            <div class="mt-9 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
               <BaseButton size="lg" @click="goToLogin">
                 开始创作
                 <template #icon>
@@ -104,112 +110,110 @@ function goToLogin() {
               </BaseButton>
               <a
                 href="#workflow"
-                class="inline-flex h-12 items-center justify-center rounded-[var(--radius-control)] border border-border bg-surface px-6 text-sm font-medium text-foreground transition-colors hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-soft"
+                class="inline-flex min-h-12 items-center justify-center rounded-[var(--radius-control)] border border-border-control bg-surface px-6 text-sm font-medium text-foreground transition-colors hover:bg-surface-subtle"
               >
                 查看流程
               </a>
             </div>
+
+            <ul class="mt-10 flex flex-wrap gap-x-6 gap-y-3">
+              <li v-for="capability in capabilities" :key="capability.label" class="flex items-center gap-2 text-sm text-muted-foreground">
+                <component :is="capability.icon" class="h-4 w-4 text-accent-strong" aria-hidden="true" />
+                {{ capability.label }}
+              </li>
+            </ul>
           </div>
 
-          <div class="relative mx-auto hidden w-full max-w-[520px] lg:block" aria-hidden="true">
-            <div class="absolute -left-8 top-8 h-20 w-32 rounded-[var(--radius-panel)] border border-border bg-surface/80 shadow-sm backdrop-blur-sm" />
-            <div class="absolute -right-6 bottom-12 h-24 w-24 rounded-[var(--radius-panel)] border border-primary/20 bg-primary-soft/70 shadow-sm backdrop-blur-sm" />
-            <div class="relative overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface/88 p-4 shadow-md backdrop-blur-md">
-              <div class="flex items-center justify-between border-b border-border pb-3">
-                <div class="flex items-center gap-2">
-                  <span class="flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] bg-primary-soft text-primary">
-                    <Brush class="h-4 w-4" />
-                  </span>
-                  <span class="text-sm font-semibold">创作控制台</span>
-                </div>
-                <span class="rounded-full bg-success-soft px-2.5 py-1 text-xs font-medium text-success">就绪</span>
+          <!-- Product preview: a plain surface, no glass, no decoration. -->
+          <div class="w-full rounded-[var(--radius-panel)] border border-border bg-surface p-5">
+            <div class="flex items-center justify-between border-b border-border pb-4">
+              <div class="flex items-center gap-2">
+                <span class="flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] bg-accent-soft text-accent-strong">
+                  <Brush class="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span class="text-sm font-medium">创作控制台</span>
               </div>
+              <span class="rounded-full bg-success-soft px-2.5 py-1 text-xs font-medium text-success">就绪</span>
+            </div>
 
-              <div class="grid gap-3 py-4">
-                <div
-                  v-for="tile in canvasTiles"
-                  :key="tile.title"
-                  class="rounded-[var(--radius-card)] border border-border bg-surface-subtle p-4"
-                >
-                  <div class="mb-2 flex items-center justify-between">
-                    <span class="text-xs font-medium text-muted-foreground">{{ tile.title }}</span>
-                    <Check class="h-3.5 w-3.5 text-primary" />
-                  </div>
-                  <p class="text-sm leading-6 text-foreground">{{ tile.text }}</p>
-                </div>
+            <dl class="divide-y divide-border">
+              <div v-for="tile in canvasTiles" :key="tile.title" class="py-4">
+                <dt class="mb-1.5 flex items-center justify-between text-xs font-medium text-muted-foreground">
+                  {{ tile.title }}
+                  <Check class="h-3.5 w-3.5 text-accent-strong" aria-hidden="true" />
+                </dt>
+                <dd class="text-sm leading-[1.59] text-foreground">{{ tile.text }}</dd>
               </div>
+            </dl>
 
-              <div class="grid grid-cols-3 gap-3 border-t border-border pt-4">
-                <div class="aspect-square rounded-[var(--radius-card)] bg-primary-soft p-3">
-                  <Layers3 class="h-4 w-4 text-primary" />
-                  <div class="mt-8 h-2 rounded-full bg-primary/20" />
-                </div>
-                <div class="aspect-square rounded-[var(--radius-card)] border border-border bg-background p-3">
-                  <Zap class="h-4 w-4 text-primary" />
-                  <div class="mt-8 h-2 rounded-full bg-surface-subtle" />
-                </div>
-                <div class="aspect-square rounded-[var(--radius-card)] border border-border bg-background p-3">
-                  <Library class="h-4 w-4 text-primary" />
-                  <div class="mt-8 h-2 rounded-full bg-surface-subtle" />
-                </div>
+            <div class="grid grid-cols-3 gap-3 border-t border-border pt-4">
+              <div class="rounded-[var(--radius-card)] bg-accent-soft p-3">
+                <Layers3 class="h-4 w-4 text-accent-strong" aria-hidden="true" />
+                <div class="mt-6 h-1.5 rounded-full bg-accent/25" />
+              </div>
+              <div class="rounded-[var(--radius-card)] border border-border bg-canvas p-3">
+                <Zap class="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <div class="mt-6 h-1.5 rounded-full bg-surface-subtle-strong" />
+              </div>
+              <div class="rounded-[var(--radius-card)] border border-border bg-canvas p-3">
+                <Library class="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <div class="mt-6 h-1.5 rounded-full bg-surface-subtle-strong" />
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="border-y border-border bg-surface">
-        <div class="mx-auto grid max-w-[1440px] gap-px bg-border md:grid-cols-3">
+      <!-- Features: tonal band with dividers instead of stacked cards. -->
+      <section class="border-b border-border bg-surface-subtle">
+        <div class="mx-auto grid max-w-[1200px] divide-y divide-border px-4 sm:px-6 md:grid-cols-3 md:divide-x md:divide-y-0">
           <article
             v-for="feature in featureCards"
             :key="feature.title"
-            class="bg-surface p-6 transition-colors hover:bg-surface-subtle sm:p-8"
+            class="py-8 md:px-8 md:first:pl-0 md:last:pr-0"
           >
-            <div class="mb-5 flex h-11 w-11 items-center justify-center rounded-[var(--radius-control)] border border-border bg-surface-subtle text-primary">
+            <div class="mb-5 flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] border border-border bg-surface text-accent-strong">
               <component :is="feature.icon" class="h-5 w-5" aria-hidden="true" />
             </div>
-            <h2 class="text-lg font-semibold leading-7 text-foreground">{{ feature.title }}</h2>
-            <p class="mt-3 max-w-md text-sm leading-6 text-muted-foreground">{{ feature.description }}</p>
+            <h2 class="text-subtitle font-normal leading-[1.4] text-foreground">{{ feature.title }}</h2>
+            <p class="mt-3 max-w-md text-sm leading-[1.59] text-muted-foreground">{{ feature.description }}</p>
           </article>
         </div>
       </section>
 
-      <section id="workflow" class="relative overflow-hidden px-4 py-20 sm:px-6 sm:py-28">
-        <FlowLinesBg class="opacity-25" :density="0.32" :speed="0.22" :layers="2" :line-width="0.8" />
-        <div class="pointer-events-none absolute inset-0 bg-gradient-to-r from-canvas via-canvas/90 to-canvas" />
-
-        <div class="relative mx-auto grid max-w-[1440px] gap-10 lg:grid-cols-[0.72fr_1fr] lg:items-start">
+      <section id="workflow" class="border-b border-border">
+        <div class="mx-auto grid max-w-[1200px] gap-12 px-4 py-20 sm:px-6 sm:py-24 lg:grid-cols-[0.75fr_1fr] lg:items-start">
           <div class="max-w-xl">
-            <p class="text-sm font-medium text-primary">创作路径</p>
-            <h2 class="mt-3 text-[28px] font-semibold leading-[1.2] text-foreground sm:text-[36px]">不把灵感塞进表单，而是放进流程</h2>
-            <p class="mt-4 text-sm leading-6 text-muted-foreground sm:text-base">
+            <p class="text-sm font-medium text-accent-strong">创作路径</p>
+            <h2 class="mt-3 text-section font-normal leading-[1.35] text-foreground">不把灵感塞进表单，而是放进流程</h2>
+            <p class="mt-4 text-base leading-[1.59] text-muted-foreground">
               首页之后进入的不是复杂后台，而是一个专注的生成工作区。你只需要描述画面，模型会先理解意图并自动选择合适模板，再进入生成、结果和历史沉淀。
             </p>
           </div>
 
-          <div class="grid gap-4">
-            <article
+          <ol class="divide-y divide-border border-t border-border">
+            <li
               v-for="(step, index) in workflowSteps"
               :key="step.title"
-              class="grid gap-4 rounded-[var(--radius-card)] border border-border bg-surface p-5 shadow-sm sm:grid-cols-[72px_1fr] sm:p-6"
+              class="grid gap-4 py-6 sm:grid-cols-[56px_1fr]"
             >
-              <div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary-soft text-sm font-semibold tabular-nums text-primary sm:h-14 sm:w-14">
+              <span class="flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-sm font-medium tabular-nums text-accent-strong">
                 {{ String(index + 1).padStart(2, '0') }}
-              </div>
+              </span>
               <div>
-                <h3 class="text-base font-semibold leading-6 text-foreground">{{ step.title }}</h3>
-                <p class="mt-2 text-sm leading-6 text-muted-foreground">{{ step.description }}</p>
+                <h3 class="text-base font-medium leading-[1.5] text-foreground">{{ step.title }}</h3>
+                <p class="mt-2 text-sm leading-[1.59] text-muted-foreground">{{ step.description }}</p>
               </div>
-            </article>
-          </div>
+            </li>
+          </ol>
         </div>
       </section>
 
-      <section class="border-t border-border bg-surface px-4 py-16 sm:px-6 sm:py-20">
-        <div class="mx-auto flex max-w-[1120px] flex-col items-start justify-between gap-8 md:flex-row md:items-center">
+      <section class="bg-surface-subtle px-4 py-16 sm:px-6 sm:py-20">
+        <div class="mx-auto flex max-w-[1200px] flex-col items-start justify-between gap-8 md:flex-row md:items-center">
           <div>
-            <h2 class="text-[28px] font-semibold leading-[1.2] text-foreground sm:text-[36px]">准备让第一张图成形？</h2>
-            <p class="mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
+            <h2 class="text-section font-normal leading-[1.35] text-foreground">准备让第一张图成形？</h2>
+            <p class="mt-3 max-w-xl text-base leading-[1.59] text-muted-foreground">
               登录后即可进入创作台，输入提示词、选择基础输出参数，并把生成结果保存到你的图库。
             </p>
           </div>
@@ -221,12 +225,12 @@ function goToLogin() {
       </section>
     </main>
 
-    <footer class="border-t border-border bg-canvas py-8">
-      <div class="mx-auto flex max-w-[1440px] flex-col items-center justify-between gap-4 px-4 text-center sm:flex-row sm:px-6 sm:text-left">
+    <footer class="border-t border-border bg-surface py-8">
+      <div class="mx-auto flex max-w-[1200px] flex-col items-center justify-between gap-4 px-4 text-center sm:flex-row sm:px-6 sm:text-left">
         <img
           src="/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/04_monochrome_logo_transparent_trimmed.png"
           alt="MuseCanvas"
-          class="h-6 w-auto opacity-70"
+          class="h-6 w-auto"
         />
         <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
           <RouterLink to="/terms" class="transition-colors hover:text-foreground">用户协议</RouterLink>

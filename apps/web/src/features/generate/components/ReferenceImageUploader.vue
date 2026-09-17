@@ -166,14 +166,14 @@ function clearAll() {
     <!-- Unsupported Model Warning Banner -->
     <div
       v-if="store.stagedImages.length > 0 && !store.isModelSupportingImages"
-      class="flex items-start justify-between gap-3 rounded-[var(--radius-control)] border border-warning/40 bg-warning-soft px-3.5 py-2.5 text-xs text-warning"
+      class="flex items-start justify-between gap-3 rounded-[var(--radius-card)] border border-warning-soft bg-warning-soft px-3.5 py-2.5 text-xs text-warning"
       role="alert"
     >
       <div class="flex items-start gap-2">
-        <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
+        <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
         <div>
-          <p class="font-semibold">当前模型不支持参考图</p>
-          <p class="mt-0.5 text-foreground/80">
+          <p class="font-medium">当前模型不支持参考图</p>
+          <p class="mt-0.5 text-foreground">
             当前模型（{{ store.selectedModel?.displayName || '未选择' }}）不支持带参考图生成。请切换至支持参考图的模型（如 GPT Image 2、Seedream 4.0），或移除已添加的参考图后继续。
           </p>
         </div>
@@ -181,11 +181,11 @@ function clearAll() {
       <button
         type="button"
         :disabled="props.disabled"
-        class="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] border border-warning/50 bg-surface px-2.5 py-1 text-xs font-medium text-warning hover:bg-surface-subtle"
+        class="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] border border-warning bg-surface px-2.5 text-xs font-medium text-warning transition-colors hover:bg-surface-subtle"
         aria-label="清空所有参考图"
         @click="clearAll"
       >
-        <Trash2 class="h-3 w-3" />
+        <Trash2 class="h-3 w-3" aria-hidden="true" />
         清空参考图
       </button>
     </div>
@@ -193,30 +193,30 @@ function clearAll() {
     <!-- Inline Upload Error Banner -->
     <div
       v-if="store.inlineUploadError"
-      class="flex items-center justify-between gap-2 rounded-[var(--radius-control)] border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger"
+      class="flex items-center justify-between gap-2 rounded-[var(--radius-card)] border border-danger-border bg-danger-soft px-3 py-2 text-xs text-danger"
       role="alert"
     >
       <div class="flex items-center gap-1.5">
-        <AlertCircle class="h-4 w-4 shrink-0" />
+        <AlertCircle class="h-4 w-4 shrink-0"/>
         <span>{{ store.inlineUploadError }}</span>
       </div>
       <button
         type="button"
-        class="rounded p-1 hover:bg-danger/10"
-        aria-label="关闭提示"
+        class="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-danger transition-colors hover:bg-danger-soft"
+        aria-label="关闭上传错误提示"
         @click="store.inlineUploadError = null"
       >
-        <X class="h-3.5 w-3.5" />
+        <X class="h-3.5 w-3.5"/>
       </button>
     </div>
 
     <!-- Dropzone / Thumbnail Strip Container -->
     <div
-      class="relative flex flex-col gap-2 rounded-[var(--radius-card)] border-2 border-dashed p-3 transition-colors duration-200"
+      class="relative flex flex-col gap-2 rounded-[var(--radius-card)] border-2 border-dashed border-border-control bg-surface-subtle p-3 transition-colors"
       :class="[
         isDraggingOver
-          ? 'border-primary bg-primary-soft/50 ring-2 ring-primary/20'
-          : 'border-border/80 bg-surface-subtle/50 hover:border-border-strong',
+          ? 'border-accent bg-accent-soft'
+          : 'border-border-control bg-surface-subtle hover:bg-surface-subtle-strong',
       ]"
       @dragover.prevent="onDragOver"
       @dragleave.prevent="onDragLeave"
@@ -225,13 +225,13 @@ function clearAll() {
       <!-- Header row: label + counter -->
       <div class="flex items-center justify-between text-xs text-muted-foreground">
         <div class="flex items-center gap-1.5 font-medium text-foreground">
-          <ImagePlus class="h-3.5 w-3.5 text-primary" />
+          <ImagePlus class="h-3.5 w-3.5 text-accent-strong" aria-hidden="true" />
           <span>{{ store.isVideo ? '输入图片 (首帧 / 尾帧 / 参考)' : '参考图 (图生图)' }}</span>
-          <span class="text-[11px] font-normal text-muted-foreground">
+          <span class="text-xs font-normal text-muted-foreground">
             {{ store.stagedImages.length }}/{{ maxAllowed }}
           </span>
         </div>
-        <div class="flex items-center gap-2 text-[11px]">
+        <div class="flex items-center gap-2 text-xs">
           <span>总计: {{ totalSizeFormatted }} / 20MB</span>
           <button
             v-if="store.stagedImages.length > 0"
@@ -251,14 +251,14 @@ function clearAll() {
         <div
           v-for="(img, index) in store.stagedImages"
           :key="img.localId"
-          class="group relative flex h-20 w-20 shrink-0 flex-col items-center justify-center overflow-hidden rounded-[var(--radius-control)] border bg-surface shadow-xs transition-all duration-200"
+          class="group relative flex h-20 w-20 shrink-0 flex-col items-center justify-center overflow-hidden rounded-[var(--radius-control)] border bg-surface transition-colors"
           :class="[
             img.status === 'error'
-              ? 'border-danger ring-1 ring-danger/30'
+              ? 'border-danger'
               : img.status === 'ready'
-                ? 'border-border hover:border-primary/60 hover:shadow-sm'
-                : 'border-primary/40',
-            draggedThumbIndex === index ? 'opacity-40 scale-95' : '',
+                ? 'border-border hover:border-border-control'
+                : 'border-accent',
+            draggedThumbIndex === index ? 'opacity-50' : '',
           ]"
           :draggable="!props.disabled"
           role="group"
@@ -287,7 +287,7 @@ function clearAll() {
 
           <!-- Order badge -->
           <span
-            class="pointer-events-none absolute left-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-overlay/65 text-[10px] font-semibold text-foreground-inverse backdrop-blur-xs"
+            class="pointer-events-none absolute left-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-overlay/70 text-xs font-medium tabular-nums text-foreground-inverse"
           >
             {{ index + 1 }}
           </span>
@@ -295,7 +295,7 @@ function clearAll() {
           <!-- Status overlay: Uploading -->
           <div
             v-if="img.status === 'uploading' || img.status === 'pending'"
-            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-overlay/60 p-1 text-foreground-inverse backdrop-blur-xs"
+            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-overlay/70 p-1 text-foreground-inverse"
           >
             <div class="relative flex h-8 w-8 items-center justify-center">
               <svg class="h-8 w-8 -rotate-90" viewBox="0 0 36 36">
@@ -307,7 +307,7 @@ function clearAll() {
                   d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                 />
                 <path
-                  class="text-primary transition-all duration-200"
+                  class="text-accent transition-[stroke-dashoffset] duration-[var(--motion-base)]"
                   stroke-dasharray="100, 100"
                   :stroke-dashoffset="100 - img.progress"
                   stroke-width="3.5"
@@ -317,90 +317,85 @@ function clearAll() {
                   d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                 />
               </svg>
-              <span class="absolute text-[9px] font-bold">{{ img.progress }}%</span>
+              <span class="absolute text-xs font-medium">{{ img.progress }}%</span>
             </div>
-            <span class="mt-0.5 text-[9px] text-foreground-inverse/90">上传中</span>
+            <span class="mt-0.5 text-xs text-foreground-inverse/90">上传中</span>
           </div>
 
           <!-- Status overlay: Processing -->
           <div
             v-else-if="img.status === 'processing'"
-            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-overlay/60 p-1 text-foreground-inverse backdrop-blur-xs"
+            class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-overlay/70 p-1 text-foreground-inverse"
           >
-            <Loader2 class="h-5 w-5 animate-spin text-primary" />
-            <span class="mt-1 text-[9px] text-foreground-inverse/90">处理中</span>
+            <Loader2 class="h-5 w-5 animate-spin text-accent" aria-hidden="true" />
+            <span class="mt-1 text-xs text-foreground-inverse/90">处理中</span>
           </div>
 
           <!-- Status overlay: Error -->
           <div
             v-else-if="img.status === 'error'"
-            class="absolute inset-0 z-40 flex flex-col items-center justify-center bg-danger/85 p-1 text-foreground-inverse backdrop-blur-xs"
+            class="absolute inset-0 z-40 flex flex-col items-center justify-center bg-danger p-1 text-foreground-inverse"
           >
-            <AlertCircle class="h-4 w-4" />
-            <span class="mt-0.5 text-center text-[9px] leading-tight">上传失败</span>
+            <AlertCircle class="h-4 w-4" aria-hidden="true" />
+            <span class="mt-0.5 text-center text-xs leading-tight">上传失败</span>
             <button
               type="button"
               :disabled="props.disabled"
-              class="mt-1 flex items-center gap-0.5 rounded bg-foreground-inverse/20 px-1.5 py-0.5 text-[9px] font-medium hover:bg-foreground-inverse/30"
+              class="mt-1 flex items-center gap-0.5 rounded-[var(--radius-control)] bg-foreground-inverse/20 px-1.5 py-0.5 text-xs font-medium hover:bg-foreground-inverse/30"
               :aria-label="`重试上传参考图 ${index + 1}`"
-              title="重试"
               @click.stop="!props.disabled && store.retryUpload(img.localId)"
             >
-              <RotateCcw class="h-2.5 w-2.5" />
+              <RotateCcw class="h-2.5 w-2.5" aria-hidden="true" />
               重试
             </button>
           </div>
 
           <span
             v-else-if="img.status === 'ready'"
-            class="pointer-events-none absolute bottom-7 right-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-foreground-inverse shadow-xs"
-            title="已就绪"
+            class="pointer-events-none absolute bottom-7 right-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-accent text-foreground-inverse"
           >
-            <Check class="h-2.5 w-2.5 stroke-[3]" />
+            <Check class="h-2.5 w-2.5 stroke-[3]" aria-hidden="true" />
           </span>
           <!-- Action buttons overlay on hover / focus-within -->
           <div
-            class="pointer-events-none absolute inset-0 z-30 flex items-start justify-end p-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+            class="pointer-events-none absolute inset-0 z-30 flex items-start justify-end p-1 opacity-0 transition-opacity duration-[var(--motion-fast)] group-hover:opacity-100 group-focus-within:opacity-100"
           >
             <!-- Delete button -->
             <button
               type="button"
               :disabled="props.disabled"
-              class="pointer-events-auto flex h-5 w-5 items-center justify-center rounded-full bg-overlay/75 text-foreground-inverse shadow-sm transition-colors hover:bg-danger disabled:cursor-not-allowed disabled:opacity-50"
+              class="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-full bg-overlay/75 text-foreground-inverse transition-colors hover:bg-danger disabled:cursor-not-allowed disabled:opacity-50"
               :aria-label="`移除参考图 ${index + 1}`"
-              title="移除此参考图"
               @click.stop="!props.disabled && store.removeStagedImage(img.localId)"
             >
-              <X class="h-3 w-3" />
+              <X class="h-3 w-3" aria-hidden="true" />
             </button>
           </div>
 
           <!-- Reorder controls (left / right arrows) on hover -->
           <div
             v-if="store.stagedImages.length > 1"
-            class="pointer-events-none absolute bottom-7 left-1 z-30 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+            class="pointer-events-none absolute bottom-7 left-1 z-30 flex items-center gap-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] group-hover:opacity-100 group-focus-within:opacity-100"
           >
             <button
               v-if="index > 0"
               type="button"
               :disabled="props.disabled"
-              class="pointer-events-auto flex h-4 w-4 items-center justify-center rounded-full bg-overlay/70 text-foreground-inverse hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
-              :aria-label="`向左移动参考图 ${index + 1}`"
-              title="向前移动 (Alt+←)"
+              class="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-full bg-overlay/75 text-foreground-inverse transition-colors hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
+              :aria-label="`向左移动参考图 ${index + 1}（Alt+左方向键）`"
               @click.stop="!props.disabled && store.reorderStagedImages(index, index - 1)"
             >
-              <ChevronLeft class="h-3 w-3" />
+              <ChevronLeft class="h-3 w-3" aria-hidden="true" />
             </button>
             <button
               v-if="index < store.stagedImages.length - 1"
               type="button"
               :disabled="props.disabled"
-              class="pointer-events-auto flex h-4 w-4 items-center justify-center rounded-full bg-overlay/70 text-foreground-inverse hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
-              :aria-label="`向右移动参考图 ${index + 1}`"
-              title="向后移动 (Alt+→)"
+              class="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-full bg-overlay/75 text-foreground-inverse transition-colors hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
+              :aria-label="`向右移动参考图 ${index + 1}（Alt+右方向键）`"
               @click.stop="!props.disabled && store.reorderStagedImages(index, index + 1)"
             >
-              <ChevronRight class="h-3 w-3" />
+              <ChevronRight class="h-3 w-3" aria-hidden="true" />
             </button>
           </div>
           <!-- Input role selector -->
@@ -408,9 +403,8 @@ function clearAll() {
             <select
               :value="img.role || 'reference_image'"
               :disabled="props.disabled"
-              :aria-label="`第 ${index + 1} 张图的输入角色`"
-              title="输入角色：首帧须首位，尾帧须末位"
-              class="w-full cursor-pointer rounded bg-overlay/70 px-1 py-0.5 text-center text-[10px] font-medium text-foreground-inverse backdrop-blur-xs transition-colors hover:bg-overlay/85 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              :aria-label="`第 ${index + 1} 张图的输入角色。首帧须放在首位，尾帧须放在末位`"
+              class="w-full cursor-pointer rounded-[var(--radius-control)] bg-overlay/75 px-1 py-0.5 text-center text-xs font-medium text-foreground-inverse transition-colors hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
               @change="store.setStagedImageRole(img.localId, ($event.target as HTMLSelectElement).value as 'reference_image' | 'first_frame' | 'last_frame')"
             >
               <option value="reference_image">参考图</option>
@@ -424,19 +418,17 @@ function clearAll() {
         <button
           v-if="canAddMore"
           type="button"
-          class="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-[var(--radius-control)] border border-dashed border-border-strong bg-surface/80 text-muted-foreground transition-all duration-200 hover:border-primary hover:bg-primary-soft/40 hover:text-primary active:scale-95"
+          class="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-[var(--radius-control)] border border-dashed border-border-control bg-surface text-muted-foreground transition-colors hover:border-accent hover:bg-accent-soft hover:text-accent-strong"
           aria-label="添加参考图"
           @click="triggerFileInput"
-          @keydown.enter.prevent="triggerFileInput"
-          @keydown.space.prevent="triggerFileInput"
         >
-          <ImagePlus class="h-5 w-5" />
-          <span class="text-[10px] font-medium">添加图片</span>
+          <ImagePlus class="h-5 w-5" aria-hidden="true" />
+          <span class="text-xs font-medium">添加图片</span>
         </button>
       </div>
 
       <!-- Drag & drop prompt / hint -->
-      <div class="flex items-center justify-between text-[11px] text-muted-foreground/80">
+      <div class="flex items-center justify-between text-xs text-muted-foreground">
         <span>支持 PNG/JPEG，单张 &le; 10MB，总大小 &le; 20MB</span>
         <span v-if="store.stagedImages.length > 1" class="hidden sm:inline">
           可拖拽或按 Alt+方向键调整顺序

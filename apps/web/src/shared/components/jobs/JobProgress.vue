@@ -48,28 +48,28 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div v-if="inline" class="inline-flex items-center gap-2 text-sm text-foreground">
-    <Loader2 v-if="!isFailed && !isCanceled && status !== 'succeeded'" class="h-4 w-4 animate-spin text-primary" />
-    <AlertCircle v-else-if="isFailed || isCanceled" class="h-4 w-4 text-danger" />
-    <Check v-else class="h-4 w-4 text-success" />
+  <div v-if="inline" class="inline-flex items-center gap-2 text-sm text-foreground" role="status" aria-atomic="true">
+    <Loader2 v-if="!isFailed && !isCanceled && status !== 'succeeded'" class="h-4 w-4 animate-spin text-accent" aria-hidden="true"/>
+    <AlertCircle v-else-if="isFailed || isCanceled" class="h-4 w-4 text-danger" aria-hidden="true"/>
+    <Check v-else class="h-4 w-4 text-success" aria-hidden="true"/>
     <span>{{ statusText }}</span>
   </div>
 
-  <div v-else :class="cn('flex flex-col items-center text-center', compact ? 'py-4' : 'py-8')">
+  <div v-else :class="cn('flex flex-col items-center text-center', compact ? 'py-4' : 'py-8')" role="status" aria-atomic="true">
     <!-- Status graphic -->
     <div v-if="!isFailed && !isCanceled" class="relative mb-6 flex h-24 w-24 items-center justify-center">
-      <div class="absolute inset-0 rounded-full border-2 border-primary/20" />
-      <div class="absolute inset-2 rounded-full border-2 border-primary/30" />
-      <Loader2 v-if="status !== 'succeeded'" class="h-8 w-8 animate-spin text-primary" />
-      <Check v-else class="h-8 w-8 text-success" />
+      <div class="absolute inset-0 rounded-full border-2 border-accent/20" aria-hidden="true"/>
+      <div class="absolute inset-2 rounded-full border-2 border-accent/30" aria-hidden="true"/>
+      <Loader2 v-if="status !== 'succeeded'" class="h-8 w-8 animate-spin text-accent" aria-hidden="true"/>
+      <Check v-else class="h-8 w-8 text-success" aria-hidden="true"/>
     </div>
 
     <div v-else class="mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-danger-soft">
-      <AlertCircle class="h-8 w-8 text-danger" />
+      <AlertCircle class="h-8 w-8 text-danger" aria-hidden="true"/>
     </div>
 
     <!-- Status text -->
-    <h3 :class="['font-semibold text-foreground', compact ? 'text-sm' : 'text-base']">
+    <h3 :class="['font-medium text-foreground', compact ? 'text-sm' : 'text-base']">
       {{ statusText }}
     </h3>
 
@@ -79,22 +79,22 @@ const statusText = computed(() => {
         <div class="flex flex-1 flex-col items-center gap-1.5">
           <div
             :class="cn(
-              'flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-colors',
+              'flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-colors tabular-nums',
               index < currentStep
                 ? 'bg-success text-foreground-inverse'
                 : index === currentStep && !isFailed && !isCanceled
-                  ? 'bg-primary text-foreground-inverse'
+                  ? 'bg-accent text-foreground-inverse'
                   : isFailed
                     ? 'bg-danger text-foreground-inverse'
                     : 'bg-surface-subtle text-muted-foreground',
             )"
           >
-            <Check v-if="index < currentStep" class="h-4 w-4" />
+            <Check v-if="index < currentStep" class="h-4 w-4" aria-hidden="true"/>
             <span v-else>{{ index + 1 }}</span>
           </div>
           <span class="text-xs text-muted-foreground">{{ step.label }}</span>
         </div>
-        <div v-if="index < steps.length - 1" class="h-0.5 flex-1 bg-border" />
+        <div v-if="index < steps.length - 1" class="h-0.5 flex-1 bg-border" aria-hidden="true"/>
       </template>
     </div>
   </div>

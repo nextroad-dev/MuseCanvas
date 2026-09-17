@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, toRef } from 'vue'
+import { computed, ref, toRef, useId } from 'vue'
 import { X } from 'lucide-vue-next'
 import { useOverlay } from '@/shared/composables/useOverlay'
 import { cn } from '@/shared/lib/utils'
@@ -16,15 +16,15 @@ const emit = defineEmits<{
 }>()
 
 const drawerRef = ref<HTMLElement | null>(null)
+const uid = useId()
+const titleId = `drawer-title-${uid}`
+const hasTitle = computed(() => !!props.title)
 
 function close() {
   emit('update:open', false)
 }
 
-useOverlay(drawerRef, toRef(props, 'open'), {
-  onOpen: () => { /* scroll lock + focus trap handled by useOverlay */ },
-  onClose: () => { /* cleanup handled by useOverlay */ },
-})
+useOverlay(drawerRef, toRef(props, 'open'), {})
 
 const sizeMap = {
   sm: 'w-[min(320px,calc(100vw-48px))]',
@@ -38,30 +38,35 @@ const sizeMap = {
   <Teleport to="body">
     <Transition name="drawer">
       <div v-if="open" class="fixed inset-0 z-overlay">
-        <!-- Backdrop -->
-        <div class="absolute inset-0 bg-overlay/40" @click="close" />
+        <!-- Scrim -->
+        <div class="absolute inset-0 bg-overlay/40" @click="close"/>
         <!-- Drawer -->
         <div
           ref="drawerRef"
           :data-position="position || 'right'"
           :class="cn(
-            'absolute top-0 h-full bg-surface shadow-lg',
-            position === 'right' ? 'right-0' : 'left-0',
+            'absolute top-0 h-full border border-border bg-surface shadow-lg',
+            position === 'right'
+              ? 'right-0 rounded-l-[var(--radius-panel)]'
+              : 'left-0 rounded-r-[var(--radius-panel)]',
             sizeMap[size || 'sm'],
           )"
           role="dialog"
           aria-modal="true"
+          :aria-labelledby="hasTitle ? titleId : undefined"
+          :aria-label="hasTitle ? undefined : '抽屉面板'"
         >
           <div class="flex h-full flex-col">
             <div v-if="title || $slots.header" class="flex items-center justify-between border-b border-border px-5 py-4">
-              <h3 v-if="title" class="text-sm font-semibold text-foreground">{{ title }}</h3>
+              <h2 v-if="title" :id="titleId" class="text-subtitle font-normal leading-[1.4] text-foreground">{{ title }}</h2>
               <slot name="header" />
               <button
-                class="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground hover:bg-surface-subtle"
+                type="button"
+                class="ml-auto inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
                 aria-label="关闭"
                 @click="close"
               >
-                <X class="h-4 w-4" aria-hidden="true" />
+                <X class="h-4 w-4" aria-hidden="true"/>
               </button>
             </div>
             <div class="flex-1 overflow-auto p-5">
@@ -80,22 +85,22 @@ const sizeMap = {
 <style scoped>
 .drawer-enter-active,
 .drawer-leave-active {
-  transition: opacity var(--motion-slow) ease;
+  transition: opacity var(--motion-base) var(--ease-standard);
 }
 .drawer-enter-from,
 .drawer-leave-to {
   opacity: 0;
 }
-.drawer-enter-active .absolute:last-child,
-.drawer-leave-active .absolute:last-child {
-  transition: transform var(--motion-slow) ease;
+.drawer-enter-active > :last-child,
+.drawer-leave-active > :last-child {
+  transition: transform var(--motion-base) var(--ease-standard);
 }
-.drawer-enter-from .absolute:last-child,
-.drawer-leave-to .absolute:last-child {
-  transform: translateX(100%);
+.drawer-enter-from > :last-child,
+.drawer-leave-to > :last-child {
+  transform: translateX(4px);
 }
-.drawer-enter-from .absolute:last-child[data-position="left"],
-.drawer-leave-to .absolute:last-child[data-position="left"] {
-  transform: translateX(-100%);
+.drawer-enter-from > :last-child[data-position="left"],
+.drawer-leave-to > :last-child[data-position="left"] {
+  transform: translateX(-4px);
 }
 </style>

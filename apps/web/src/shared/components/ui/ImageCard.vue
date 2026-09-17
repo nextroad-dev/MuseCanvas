@@ -21,7 +21,7 @@ defineEmits<{
 const densityClasses = computed(() => {
   if (props.density === 'compact') {
     return {
-      container: 'rounded-lg',
+      container: 'rounded-[var(--radius-control)]',
       action: 'h-8 w-8',
       icon: 'h-4 w-4',
     }
@@ -29,14 +29,14 @@ const densityClasses = computed(() => {
 
   if (props.density === 'spacious') {
     return {
-      container: 'rounded-2xl',
+      container: 'rounded-[var(--radius-card)]',
       action: 'h-10 w-10',
       icon: 'h-5 w-5',
     }
   }
 
   return {
-    container: 'rounded-xl',
+    container: 'rounded-[var(--radius-card)]',
     action: 'h-9 w-9',
     icon: 'h-4 w-4',
   }
@@ -55,12 +55,17 @@ const aspectClass = computed(() => {
 
 <template>
   <div
-    class="group relative cursor-pointer overflow-hidden border border-border bg-surface transition-shadow hover:shadow-md"
+    class="group relative overflow-hidden border border-border bg-surface"
     :class="densityClasses.container"
-    @click="$emit('view', asset)"
   >
     <!-- Media -->
-    <div class="relative overflow-hidden bg-surface-subtle" :class="aspectClass">
+    <button
+      type="button"
+      class="relative block w-full cursor-zoom-in overflow-hidden bg-surface-subtle"
+      :class="aspectClass"
+      :aria-label="`查看作品大图：${asset.prompt}`"
+      @click="$emit('view', asset)"
+    >
       <video
         v-if="showVideo"
         :src="playbackUrl"
@@ -74,53 +79,60 @@ const aspectClass = computed(() => {
         v-else
         :src="asset.imageUrl"
         :alt="asset.prompt"
-        class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+        class="h-full w-full object-cover"
         loading="lazy"
       />
-      <span v-if="showVideo" class="absolute left-2 top-2 rounded bg-overlay/65 px-1.5 py-0.5 text-[11px] font-medium text-foreground-inverse">视频</span>
-    </div>
+      <span v-if="showVideo" class="absolute left-2 top-2 rounded-[var(--radius-control)] bg-overlay/65 px-1.5 py-0.5 text-xs font-medium text-foreground-inverse">视频</span>
+    </button>
 
-    <!-- Hover overlay: prompt + actions -->
+    <!-- Overlay: prompt + actions. Reachable with pointer, keyboard and touch
+         (always visible on narrow viewports, opacity-only transitions). -->
     <div
-      class="absolute inset-0 flex flex-col justify-end opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+      class="pointer-events-none absolute inset-0 flex flex-col justify-end opacity-100 transition-opacity duration-[var(--motion-base)] md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
     >
-      <!-- Gradient mask -->
-      <div class="absolute inset-0 bg-gradient-to-t from-overlay/80 via-overlay/30 to-transparent" />
+      <!-- Functional scrim for prompt legibility -->
+      <div class="media-scrim absolute inset-0" aria-hidden="true"/>
 
       <!-- Actions -->
       <div class="relative z-10 flex items-center justify-center gap-2 pb-3">
         <button
+          type="button"
           :class="[
-            'flex items-center justify-center rounded-full bg-foreground-inverse/90 text-foreground shadow-sm transition-colors hover:bg-foreground-inverse hover:text-foreground',
+            'pointer-events-auto flex items-center justify-center rounded-full bg-foreground-inverse text-foreground transition-colors hover:bg-surface-subtle',
             densityClasses.action,
           ]"
+          :aria-label="`查看作品大图：${asset.prompt}`"
           @click.stop="$emit('view', asset)"
         >
-          <Maximize2 :class="densityClasses.icon" />
+          <Maximize2 :class="densityClasses.icon" aria-hidden="true"/>
         </button>
         <button
+          type="button"
           :class="[
-            'flex items-center justify-center rounded-full bg-foreground-inverse/90 text-foreground shadow-sm transition-colors hover:bg-foreground-inverse hover:text-foreground',
+            'pointer-events-auto flex items-center justify-center rounded-full bg-foreground-inverse text-foreground transition-colors hover:bg-surface-subtle',
             densityClasses.action,
           ]"
+          :aria-label="`下载作品：${asset.prompt}`"
           @click.stop="$emit('download', asset)"
         >
-          <Download :class="densityClasses.icon" />
+          <Download :class="densityClasses.icon" aria-hidden="true"/>
         </button>
         <button
+          type="button"
           :class="[
-            'flex items-center justify-center rounded-full bg-foreground-inverse/90 text-foreground shadow-sm transition-colors hover:bg-foreground-inverse hover:text-danger',
+            'pointer-events-auto flex items-center justify-center rounded-full bg-foreground-inverse text-danger transition-colors hover:bg-danger-soft',
             densityClasses.action,
           ]"
+          :aria-label="`删除作品：${asset.prompt}`"
           @click.stop="$emit('delete', asset)"
         >
-          <Trash2 :class="densityClasses.icon" />
+          <Trash2 :class="densityClasses.icon" aria-hidden="true"/>
         </button>
       </div>
 
       <!-- Prompt -->
       <div class="relative z-10 px-3 pb-4 pt-1">
-        <p class="text-xs leading-relaxed text-foreground-inverse/90 line-clamp-2">
+        <p class="line-clamp-2 text-xs leading-relaxed text-foreground-inverse">
           {{ asset.prompt }}
         </p>
       </div>

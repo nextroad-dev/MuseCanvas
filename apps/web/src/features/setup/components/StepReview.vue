@@ -87,7 +87,7 @@ async function handleRecheck() {
 <template>
   <div class="space-y-6">
     <div>
-      <h3 class="mb-1 text-lg font-semibold text-foreground">检查并完成</h3>
+      <h3 class="mb-1 text-subtitle font-normal leading-[1.4] text-foreground">检查并完成</h3>
       <p class="text-sm text-muted-foreground">确认必填节均已完成，然后结束初始化。供应商、模型、第三方登录与模板为可选，不影响完成。</p>
     </div>
 

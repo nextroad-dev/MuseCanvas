@@ -15,6 +15,7 @@ import TextInput from '@/shared/components/ui/TextInput.vue'
 import Textarea from '@/shared/components/ui/Textarea.vue'
 import Field from '@/shared/components/ui/Field.vue'
 import AppAlert from '@/shared/components/ui/AppAlert.vue'
+import { inputClass } from '@/shared/lib/field-styles'
 
 const admin = useAdminStore()
 const setup = useSetupStore()
@@ -174,7 +175,7 @@ async function handleRetry() {
 <template>
   <div class="space-y-8">
     <div>
-      <h3 class="mb-1 text-lg font-semibold text-foreground">供应商与模型 <span class="text-sm font-normal text-muted-foreground">（可选，可跳过）</span></h3>
+      <h3 class="mb-1 text-subtitle font-normal leading-[1.4] text-foreground">供应商与模型 <span class="text-sm font-normal text-muted-foreground">（可选，可跳过）</span></h3>
       <p class="text-sm text-muted-foreground">按内置插件配置凭据并创建模型。保存失败会停留在本项并显示错误，不会自动进入下一步。</p>
     </div>
 
@@ -270,7 +271,7 @@ async function handleRetry() {
         <Field label="模型预设">
           <select
             v-model="selectedPresetId"
-            class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            :class="inputClass"
           >
             <option value="">请选择模型预设</option>
             <option v-for="preset in admin.modelPresets" :key="preset.id" :value="preset.id">
@@ -281,7 +282,7 @@ async function handleRetry() {
         <Field label="供应商凭据" hint="按插件精确匹配，缺插件身份时回退到 providerId">
           <select
             v-model="selectedCredentialId"
-            class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            :class="inputClass"
           >
             <option value="">未关联（任务将因缺少凭据失败）</option>
             <option v-for="cred in credentialOptions" :key="cred.id" :value="cred.id">

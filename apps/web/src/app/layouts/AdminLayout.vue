@@ -9,6 +9,7 @@ import {
 import AppDrawer from '@/shared/components/ui/AppDrawer.vue'
 import BaseButton from '@/shared/components/ui/BaseButton.vue'
 import NavLink from '@/shared/components/ui/NavLink.vue'
+import Avatar from '@/shared/components/ui/Avatar.vue'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -47,33 +48,31 @@ const navGroups: NavGroup[] = [
 
 <template>
   <div class="flex h-screen flex-col bg-canvas text-foreground">
-    <!-- Top bar -->
-    <header class="flex h-16 shrink-0 items-center border-b border-border bg-surface px-4 sm:px-6">
-      <BaseButton to="/generate" size="sm">
+    <!-- Top bar: opaque surface with a bottom border (no glass, no blur). -->
+    <header class="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-surface px-4 sm:px-6">
+      <BaseButton to="/generate" variant="secondary" size="md">
         <template #icon>
-          <ArrowLeft class="h-4 w-4" />
+          <ArrowLeft class="h-4 w-4" aria-hidden="true" />
         </template>
         返回创作端
       </BaseButton>
 
-      <span class="ml-4 hidden text-sm font-semibold text-foreground md:inline">管理后台</span>
+      <span class="hidden text-sm font-medium text-foreground md:inline">管理后台</span>
 
-      <!-- Mobile menu -->
-      <button
-        class="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground hover:bg-surface-subtle md:hidden"
-        aria-label="打开菜单"
-        @click="drawerOpen = true"
-      >
-        <Menu class="h-5 w-5" />
-      </button>
-
-      <div class="ml-auto hidden items-center gap-3 md:flex">
+      <div class="ml-auto flex items-center gap-3">
         <span class="text-xs text-muted-foreground">{{ auth.user?.email }}</span>
+        <!-- Display-only identity: nothing to activate, so it is not a button. -->
+        <Avatar :name="auth.user?.email" size="md" />
+
+        <!-- Mobile menu -->
         <button
-          class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary-soft text-primary transition-all hover:ring-2 hover:ring-primary/30 hover:bg-primary/20 active:scale-95"
-          :title="auth.user?.email"
+          type="button"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground md:hidden"
+          aria-label="打开导航菜单"
+          aria-haspopup="dialog"
+          @click="drawerOpen = true"
         >
-          <span class="text-sm font-medium">{{ auth.user?.email?.charAt(0).toUpperCase() }}</span>
+          <Menu class="h-5 w-5" aria-hidden="true" />
         </button>
       </div>
     </header>
@@ -81,14 +80,14 @@ const navGroups: NavGroup[] = [
     <div class="flex min-h-0 flex-1 overflow-hidden">
       <!-- Sidebar -->
       <aside class="hidden w-60 shrink-0 border-r border-border bg-surface py-3 md:flex">
-        <nav class="flex w-full flex-col gap-4 px-2">
+        <nav class="flex w-full flex-col gap-4 px-2" aria-label="管理后台导航">
           <div v-for="group in navGroups" :key="group.title || group.items[0]?.name" class="flex flex-col gap-0.5">
-            <div
+            <h2
               v-if="group.title"
-              class="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground"
+              class="px-3 py-1 text-xs font-medium text-muted-foreground"
             >
               {{ group.title }}
-            </div>
+            </h2>
             <NavLink
               v-for="item in group.items"
               :key="item.name"
@@ -96,7 +95,7 @@ const navGroups: NavGroup[] = [
               :active="route.name === item.name"
               class="flex items-center gap-2"
             >
-              <component :is="item.icon" class="h-4 w-4 shrink-0" />
+              <component :is="item.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
               <span class="truncate">{{ item.label }}</span>
             </NavLink>
           </div>
@@ -117,11 +116,11 @@ const navGroups: NavGroup[] = [
     position="left"
     @update:open="drawerOpen = $event"
   >
-    <nav class="flex flex-col gap-1">
+    <nav class="flex flex-col gap-1" aria-label="管理后台导航">
       <div v-for="group in navGroups" :key="group.title || group.items[0]?.name" class="flex flex-col gap-0.5">
-        <div v-if="group.title" class="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 v-if="group.title" class="px-3 py-1 text-xs font-medium text-muted-foreground">
           {{ group.title }}
-        </div>
+        </h2>
         <NavLink
           v-for="item in group.items"
           :key="item.name"
@@ -130,7 +129,7 @@ const navGroups: NavGroup[] = [
           class="flex items-center gap-2"
           @click="drawerOpen = false"
         >
-          <component :is="item.icon" class="h-4 w-4 shrink-0" />
+          <component :is="item.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
           {{ item.label }}
         </NavLink>
       </div>

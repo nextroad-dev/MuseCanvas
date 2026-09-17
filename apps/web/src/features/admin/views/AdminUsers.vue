@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, nextTick } from 'vue'
 import { useAdminStore } from '@/features/admin/stores/admin'
 import DataTable from '@/shared/components/ui/DataTable.vue'
 import StatusBadge from '@/shared/components/ui/StatusBadge.vue'
@@ -10,6 +10,8 @@ import PageHeader from '@/shared/components/ui/PageHeader.vue'
 import BaseButton from '@/shared/components/ui/BaseButton.vue'
 import TextInput from '@/shared/components/ui/TextInput.vue'
 import Field from '@/shared/components/ui/Field.vue'
+import { inputClass } from '@/shared/lib/field-styles'
+import { focusFirstInvalidEl } from '@/shared/lib/focus'
 import { toast } from '@/shared/composables/useToast'
 import type { AdminUser, Invitation } from '@/shared/types'
 import type { Column } from '@/shared/components/ui/DataTable.vue'
@@ -28,6 +30,7 @@ const adjustAmount = ref<number | null>(null)
 const adjustNote = ref('')
 const adjustLoading = ref(false)
 const adjustIdempotencyKey = ref('')
+const adjustFormRef = ref<HTMLElement | null>(null)
 
 function generateIdempotencyKey() {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -57,7 +60,10 @@ const isAdjustValid = () => {
 }
 
 async function handleConfirmAdjust() {
-  if (!adjustTarget.value || !isAdjustValid()) return
+  if (!adjustTarget.value || !isAdjustValid()) {
+    void nextTick(() => focusFirstInvalidEl(adjustFormRef.value))
+    return
+  }
   const amt = adjustAmount.value!
   const finalAmount = adjustType.value === 'add' ? amt : -amt
 
@@ -133,18 +139,20 @@ const userColumns: Column<AdminUser>[] = [
   {
     key: 'credits',
     label: '积分余额',
+    align: 'right',
     render: (row) => row.credits ? `${row.credits.availableCredits} (冻结 ${row.credits.reservedCredits})` : '0',
   },
   { key: 'status', label: '状态' },
   {
     key: 'createdAt',
     label: '注册时间',
+    mono: true,
     render: (row) => new Date(row.createdAt).toLocaleDateString('zh-CN'),
   },
 ]
 
 const inviteColumns: Column<Invitation>[] = [
-  { key: 'code', label: '邀请码', render: (row) => row.code || '-' },
+  { key: 'code', label: '邀请码', mono: true, render: (row) => row.code || '-' },
   {
     key: 'used',
     label: '状态',
@@ -153,6 +161,7 @@ const inviteColumns: Column<Invitation>[] = [
   {
     key: 'createdAt',
     label: '创建时间',
+    mono: true,
     render: (row) => new Date(row.createdAt).toLocaleString('zh-CN'),
   },
 ]
@@ -180,6 +189,7 @@ const inviteColumns: Column<Invitation>[] = [
         <span class="text-xs font-medium text-foreground">使用邀请码</span>
         <PillToggle
           :model-value="admin.requiresInvitation"
+          label="新用户注册需要邀请码"
           @update:model-value="handleRegistrationToggle"
         />
       </div>
@@ -196,21 +206,24 @@ const inviteColumns: Column<Invitation>[] = [
       </template>
 
       <template #actions="{ row }">
-        <div class="flex items-center justify-end gap-2">
+        <div class="flex items-center justify-end gap-1">
           <button
-            class="text-xs text-primary hover:underline"
+            type="button"
+            class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-accent-strong transition-colors hover:bg-surface-subtle"
             @click="openAdjustDialog(row)"
           >
             调账
           </button>
           <button
-            class="text-xs text-foreground hover:underline"
+            type="button"
+            class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-foreground transition-colors hover:bg-surface-subtle"
             @click="handleToggleStatus(row)"
           >
             {{ row.status === 'active' ? '停用' : '恢复' }}
           </button>
           <button
-            class="text-xs text-danger hover:underline"
+            type="button"
+            class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-danger transition-colors hover:bg-danger-soft"
             @click="handleDelete(row)"
           >
             删除
@@ -220,7 +233,9 @@ const inviteColumns: Column<Invitation>[] = [
     </DataTable>
 
     <div v-if="admin.usersNextCursor" class="text-center">
-      <button class="h-8 rounded-[var(--radius-control)] border border-border px-4 text-xs text-muted-foreground hover:bg-surface-subtle" @click="admin.fetchUsers(true)">加载更多</button>
+      <BaseButton variant="secondary" size="sm" @click="admin.fetchUsers(true)">
+        加载更多
+      </BaseButton>
     </div>
 
     <section class="space-y-3">
@@ -243,7 +258,8 @@ const inviteColumns: Column<Invitation>[] = [
         <template #actions="{ row }">
           <button
             v-if="!row.used && !row.revoked"
-            class="text-xs text-danger hover:underline"
+            type="button"
+            class="min-h-8 rounded-[var(--radius-control)] px-2 text-xs text-danger transition-colors hover:bg-danger-soft"
             @click="handleRevoke(row)"
           >
             撤销
@@ -290,33 +306,33 @@ const inviteColumns: Column<Invitation>[] = [
       title="用户积分调账"
       @update:open="(v: boolean) => { showAdjustDialog = v; if (!v) { adjustTarget = null; adjustIdempotencyKey = '' } }"
     >
-      <div v-if="adjustTarget" class="space-y-4">
+      <div v-if="adjustTarget" ref="adjustFormRef" class="space-y-4">
         <div class="rounded-[var(--radius-card)] bg-surface-subtle p-3 text-xs text-muted-foreground">
-          <p>目标用户：<strong class="text-foreground">{{ adjustTarget.email }}</strong></p>
-          <p class="mt-1">
-            当前可用积分：<strong class="text-foreground">{{ adjustTarget.credits?.availableCredits ?? 0 }}</strong>
+          <p>目标用户：<span class="font-medium text-foreground">{{ adjustTarget.email }}</span></p>
+          <p class="mt-1 tabular-nums">
+            当前可用积分：<span class="font-medium text-foreground">{{ adjustTarget.credits?.availableCredits ?? 0 }}</span>
             （冻结中：{{ adjustTarget.credits?.reservedCredits ?? 0 }}）
           </p>
         </div>
 
         <div>
-          <label class="block text-xs font-medium text-foreground">调账方向</label>
-          <div class="mt-1.5 flex gap-3">
-            <label class="flex items-center gap-1.5 text-xs text-foreground cursor-pointer">
+          <span id="adjust-direction" class="block text-xs font-medium text-foreground">调账方向</span>
+          <div class="mt-1.5 flex gap-3" role="radiogroup" aria-labelledby="adjust-direction">
+            <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground">
               <input
                 v-model="adjustType"
                 type="radio"
                 value="add"
-                class="text-primary focus:ring-primary"
+                class="h-4 w-4 accent-[var(--color-accent)]"
               />
               增加积分
             </label>
-            <label class="flex items-center gap-1.5 text-xs text-foreground cursor-pointer">
+            <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground">
               <input
                 v-model="adjustType"
                 type="radio"
                 value="deduct"
-                class="text-primary focus:ring-primary"
+                class="h-4 w-4 accent-[var(--color-accent)]"
               />
               扣减积分
             </label>
@@ -330,7 +346,8 @@ const inviteColumns: Column<Invitation>[] = [
             min="1"
             step="1"
             placeholder="输入正整数，例如 100"
-            class="mt-1 block w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            :class="inputClass"
+            :aria-invalid="adjustType === 'deduct' && adjustAmount && adjustAmount > (adjustTarget.credits?.availableCredits ?? 0) ? 'true' : undefined"
           />
         </Field>
 

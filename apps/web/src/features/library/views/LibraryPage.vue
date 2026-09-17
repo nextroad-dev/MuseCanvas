@@ -176,23 +176,25 @@ async function confirmDelete() {
     <h1 class="sr-only">图库</h1>
     <!-- Toolbar -->
     <div class="flex min-h-12 shrink-0 items-center justify-end gap-2 border-b border-border px-4 py-2 sm:px-6">
-      <div class="flex items-center gap-1 rounded-[var(--radius-control)] border border-border bg-surface p-1 shadow-sm">
+      <div class="flex items-center gap-1 rounded-[var(--radius-control)] border border-border bg-surface p-0.5">
         <button
-          class="inline-flex h-8 w-8 items-center justify-center rounded-[calc(var(--radius-control)-4px)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground disabled:opacity-50"
+          type="button"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="columnCount >= 6"
+          aria-label="减少每行图片数量，缩小网格"
           @click="selectColumn(Math.min(6, columnCount + 1) as ColumnCount)"
-          title="缩小网格"
         >
-          <ZoomOut class="h-4 w-4" />
+          <ZoomOut class="h-4 w-4" aria-hidden="true" />
         </button>
-        <div class="h-4 w-px bg-border"></div>
+        <div class="h-6 w-px bg-border" aria-hidden="true"></div>
         <button
-          class="inline-flex h-8 w-8 items-center justify-center rounded-[calc(var(--radius-control)-4px)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground disabled:opacity-50"
+          type="button"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="columnCount <= 2"
+          aria-label="增加每行图片数量，放大网格"
           @click="selectColumn(Math.max(2, columnCount - 1) as ColumnCount)"
-          title="放大网格"
         >
-          <ZoomIn class="h-4 w-4" />
+          <ZoomIn class="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -201,15 +203,15 @@ async function confirmDelete() {
     <div class="flex-1 overflow-auto p-4 sm:p-6">
       <EmptyState
         v-if="!library.loading && displayedAssets.length === 0"
+        kind="first-use"
         title="暂无作品"
         description="生成后的作品会出现在这里"
-        @action="() => {}"
-      >
-        <template #action-label>去创作</template>
-      </EmptyState>
+        action-label="去创作"
+        @action="$router.push('/generate')"
+      />
 
       <!-- Loading skeleton -->
-      <div v-else-if="library.loading" :class="gridClass">
+      <div v-else-if="library.loading" :class="gridClass" aria-busy="true">
         <SkeletonBlock
           v-for="i in 8"
           :key="i"

@@ -131,7 +131,7 @@ function resetFileInput() {
 <template>
   <div class="space-y-8">
     <div>
-      <h3 class="mb-1 text-lg font-semibold text-foreground">第三方登录与提示词模板 <span class="text-sm font-normal text-muted-foreground">（可选，可跳过）</span></h3>
+      <h3 class="mb-1 text-subtitle font-normal leading-[1.4] text-foreground">第三方登录与提示词模板 <span class="text-sm font-normal text-muted-foreground">（可选，可跳过）</span></h3>
       <p class="text-sm text-muted-foreground">配置 GitHub / Google 登录，并可导入提示词模板索引 JSON。</p>
     </div>
 
@@ -147,17 +147,18 @@ function resetFileInput() {
       >
         <div class="flex items-center justify-between gap-3">
           <p class="font-medium text-foreground">{{ provider.label }}</p>
-          <label class="flex items-center gap-2 text-xs text-muted-foreground">
+          <span class="flex items-center gap-2 text-xs text-muted-foreground">
             启用
             <PillToggle
               :model-value="oauthForms[provider.provider]?.enabled ?? false"
+              :label="`启用 ${provider.label} 登录`"
               @update:model-value="(v: boolean) => { if (oauthForms[provider.provider]) oauthForms[provider.provider].enabled = v }"
             />
-          </label>
+          </span>
         </div>
-        <div class="rounded-[var(--radius-control)] border border-border bg-background p-2.5">
+        <div class="rounded-[var(--radius-control)] border border-border bg-surface p-2.5">
           <p class="mb-1 text-xs text-muted-foreground">回调地址（需在开发者控制台配置）</p>
-          <code class="break-all text-xs text-primary">{{ provider.redirectUri || '加载中...' }}</code>
+          <code class="break-all text-xs text-accent-strong">{{ provider.redirectUri || '加载中...' }}</code>
         </div>
         <div class="grid gap-3 sm:grid-cols-2">
           <Field label="Client ID">

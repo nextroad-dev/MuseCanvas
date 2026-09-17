@@ -142,7 +142,7 @@ watch(currentStepId, () => {
   <div class="flex min-h-screen flex-col items-center bg-canvas px-4 py-6 text-foreground sm:justify-center sm:py-10">
     <div class="w-full max-w-3xl">
       <div class="mb-6 text-center">
-        <h1 class="mb-1 text-2xl font-bold text-foreground sm:text-3xl">MuseCanvas 初始化</h1>
+        <h1 class="mb-1 text-title font-normal leading-[1.25] text-foreground">MuseCanvas 初始化</h1>
         <p class="text-sm text-muted-foreground">按步骤完成实例配置，进度会自动保存，刷新后可从服务端状态恢复</p>
       </div>
 
@@ -172,7 +172,7 @@ watch(currentStepId, () => {
           <h2
             ref="stepHeading"
             tabindex="-1"
-            class="mb-4 text-xl font-semibold text-foreground focus:outline-none"
+            class="mb-4 text-subtitle font-normal leading-[1.4] text-foreground"
           >
             第 {{ currentIndex + 1 }} 步：{{ currentStep.label }}
             <span v-if="currentStep.optional" class="ml-1 align-middle text-xs font-normal text-muted-foreground">（可选，可跳过）</span>

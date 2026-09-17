@@ -16,7 +16,7 @@ onMounted(() => {
 })
 
 const jobColumns: Column<AdminJob>[] = [
-  { key: 'id', label: '任务 ID' },
+  { key: 'id', label: '任务 ID', mono: true },
   { key: 'modelName', label: '模型' },
   {
     key: 'status',
@@ -25,6 +25,7 @@ const jobColumns: Column<AdminJob>[] = [
   {
     key: 'createdAt',
     label: '创建时间',
+    mono: true,
     render: (row) => new Date(row.createdAt).toLocaleString('zh-CN'),
   },
 ]

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/features/auth/stores/auth'
 import { Github } from 'lucide-vue-next'
-import SurfaceCard from '@/shared/components/ui/SurfaceCard.vue'
 import GoogleIcon from '@/shared/components/ui/GoogleIcon.vue'
 import BaseButton from '@/shared/components/ui/BaseButton.vue'
+import Field from '@/shared/components/ui/Field.vue'
+import { inputClass } from '@/shared/lib/field-styles'
+import { focusFirstInvalidEl } from '@/shared/lib/focus'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -18,6 +20,18 @@ const otpCode = ref('')
 const invitationCode = ref('')
 const loading = ref(false)
 const error = ref('')
+const formRef = ref<HTMLElement | null>(null)
+const errorId = 'login-error'
+
+/** Report a failure and move focus to the field it belongs to. */
+function setError(message: string) {
+  error.value = message
+  void nextTick(() => focusFirstInvalidEl(formRef.value))
+}
+
+function clearError() {
+  error.value = ''
+}
 
 // OAuth invitation challenge (invite-only registration via a third-party login).
 const oauthChallengeId = ref('')
@@ -59,23 +73,26 @@ onMounted(async () => {
 
 async function handleOAuthInvitation() {
   if (!invitationCode.value.trim()) {
-    error.value = '请输入邀请码'
+    setError('请输入邀请码')
     return
   }
-  error.value = ''
+  clearError()
   loading.value = true
   const res = await auth.completeOAuthInvitation(oauthChallengeId.value, invitationCode.value.trim())
   loading.value = false
   if (res.success) {
     router.push(auth.isAdmin ? '/admin' : '/generate')
   } else {
-    error.value = res.error?.message || '注册失败，请重试'
+    setError(res.error?.message || '注册失败，请重试')
   }
 }
 
 async function handleSendOtp() {
-  if (!email.value.trim()) return
-  error.value = ''
+  if (!email.value.trim()) {
+    setError('请输入邮箱地址')
+    return
+  }
+  clearError()
   loading.value = true
 
   const res = await auth.requestOtp(email.value.trim())
@@ -84,23 +101,23 @@ async function handleSendOtp() {
   if (res.success && res.data) {
     step.value = res.data.nextStep
   } else {
-    error.value = res.error?.message || '发送失败，请重试'
+    setError(res.error?.message || '发送失败，请重试')
   }
 }
 
 async function handleInvitationOtp() {
   if (!invitationCode.value.trim()) {
-    error.value = '请输入邀请码'
+    setError('请输入邀请码')
     return
   }
-  error.value = ''
+  clearError()
   loading.value = true
   const res = await auth.requestOtp(email.value.trim(), invitationCode.value.trim())
   loading.value = false
   if (res.success && res.data?.nextStep === 'otp') {
     step.value = 'otp'
   } else {
-    error.value = res.error?.message || '发送失败，请重试'
+    setError(res.error?.message || '发送失败，请重试')
   }
 }
 
@@ -108,12 +125,15 @@ function backToEmail() {
   step.value = 'email'
   otpCode.value = ''
   invitationCode.value = ''
-  error.value = ''
+  clearError()
 }
 
 async function handleVerify() {
-  if (!otpCode.value.trim()) return
-  error.value = ''
+  if (!otpCode.value.trim()) {
+    setError('请输入验证码')
+    return
+  }
+  clearError()
   loading.value = true
 
   const res = await auth.verifyOtp(email.value.trim(), otpCode.value.trim(), invitationCode.value || undefined)
@@ -122,13 +142,13 @@ async function handleVerify() {
   if (res.success) {
     router.push(auth.isAdmin ? '/admin' : '/generate')
   } else {
-    error.value = res.error?.message || '验证失败，请重试'
+    setError(res.error?.message || '验证失败，请重试')
   }
 }
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-canvas px-4">
+  <div class="flex min-h-screen items-center justify-center bg-canvas px-4 py-10">
     <h1 class="sr-only">登录</h1>
     <div class="w-full max-w-sm">
       <!-- Brand -->
@@ -137,22 +157,24 @@ async function handleVerify() {
         <p class="mt-2 text-sm text-muted-foreground">AI 图像生成平台</p>
       </div>
 
-      <!-- Form card -->
-      <SurfaceCard>
+      <!-- Form panel: white surface with a border, 40px controls. -->
+      <div ref="formRef" class="rounded-[var(--radius-card)] border border-border bg-surface p-6">
         <!-- Step: Email -->
         <template v-if="step === 'email'">
-          <div class="mb-4">
-            <label class="mb-1.5 block text-xs font-medium text-foreground">邮箱地址</label>
+          <Field label="邮箱地址" class="mb-4">
             <input
               v-model="email"
               type="email"
+              autocomplete="email"
               placeholder="your@email.com"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              :class="inputClass"
+              :aria-invalid="error ? 'true' : undefined"
+              :aria-describedby="error ? errorId : undefined"
               @keydown.enter="handleSendOtp"
             />
-          </div>
+          </Field>
 
-          <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
+          <p v-if="error" :id="errorId" class="mb-3 text-xs text-danger" role="alert">{{ error }}</p>
 
           <BaseButton
             size="md"
@@ -167,9 +189,9 @@ async function handleVerify() {
 
           <p class="mt-3 text-center text-xs text-muted-foreground">
             继续即表示你同意
-            <RouterLink to="/terms" class="text-primary underline-offset-2 hover:underline">《用户协议》</RouterLink>
+            <RouterLink to="/terms" class="text-accent-strong underline-offset-2 hover:underline">《用户协议》</RouterLink>
             和
-            <RouterLink to="/privacy" class="text-primary underline-offset-2 hover:underline">《隐私政策》</RouterLink>
+            <RouterLink to="/privacy" class="text-accent-strong underline-offset-2 hover:underline">《隐私政策》</RouterLink>
           </p>
 
           <!-- Third-party login (hidden when no provider is configured) -->
@@ -189,7 +211,7 @@ async function handleVerify() {
                 @click="auth.startOAuth('github')"
               >
                 <template #icon>
-                  <Github class="h-4 w-4" />
+                  <Github class="h-4 w-4" aria-hidden="true" />
                 </template>
                 使用 GitHub 继续
               </BaseButton>
@@ -214,22 +236,24 @@ async function handleVerify() {
         <template v-else-if="step === 'oauth_invitation'">
           <div class="mb-4">
             <p class="text-sm font-medium text-foreground">完成注册</p>
-            <p class="mt-1 text-xs text-muted-foreground">
+            <p class="mt-1 text-xs leading-[1.5] text-muted-foreground">
               已通过{{ oauthProvider === 'github' ? ' GitHub ' : oauthProvider === 'google' ? ' Google ' : '第三方' }}验证邮箱
               <span class="font-medium text-foreground">{{ email }}</span>，当前为邀请注册模式，请输入邀请码。
             </p>
           </div>
-          <div class="mb-4">
-            <label class="mb-1.5 block text-xs font-medium text-foreground">邀请码</label>
+          <Field label="邀请码" class="mb-4">
             <input
               v-model="invitationCode"
               type="text"
+              autocomplete="off"
               placeholder="输入与邮箱绑定的邀请码"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              :class="inputClass"
+              :aria-invalid="error ? 'true' : undefined"
+              :aria-describedby="error ? errorId : undefined"
               @keydown.enter="handleOAuthInvitation"
             />
-          </div>
-          <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
+          </Field>
+          <p v-if="error" :id="errorId" class="mb-3 text-xs text-danger" role="alert">{{ error }}</p>
           <BaseButton
             size="md"
             type="button"
@@ -240,32 +264,34 @@ async function handleVerify() {
           >
             完成注册并登录
           </BaseButton>
-          <button class="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground" @click="backToEmail">
+          <BaseButton variant="ghost" size="md" class="mt-3 w-full" @click="backToEmail">
             使用邮箱登录
-          </button>
+          </BaseButton>
         </template>
 
         <!-- Step: Invitation -->
         <template v-else-if="step === 'invitation'">
           <div class="mb-4">
             <p class="text-sm font-medium text-foreground">新用户注册</p>
-            <p class="mt-1 text-xs text-muted-foreground">
+            <p class="mt-1 text-xs leading-[1.5] text-muted-foreground">
               <span class="font-medium text-foreground">{{ email }}</span> 尚未注册，请先填写邀请码。
             </p>
           </div>
 
-          <div class="mb-4">
-            <label class="mb-1.5 block text-xs font-medium text-foreground">邀请码</label>
+          <Field label="邀请码" class="mb-4">
             <input
               v-model="invitationCode"
               type="text"
+              autocomplete="off"
               placeholder="输入与邮箱绑定的邀请码"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              :class="inputClass"
+              :aria-invalid="error ? 'true' : undefined"
+              :aria-describedby="error ? errorId : undefined"
               @keydown.enter="handleInvitationOtp"
             />
-          </div>
+          </Field>
 
-          <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
+          <p v-if="error" :id="errorId" class="mb-3 text-xs text-danger" role="alert">{{ error }}</p>
 
           <BaseButton
             size="md"
@@ -278,31 +304,34 @@ async function handleVerify() {
             验证邀请码并发送验证码
           </BaseButton>
 
-          <button class="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground" @click="backToEmail">
+          <BaseButton variant="ghost" size="md" class="mt-3 w-full" @click="backToEmail">
             返回修改邮箱
-          </button>
+          </BaseButton>
         </template>
 
         <!-- Step: OTP -->
         <template v-else>
-          <div class="mb-1 text-xs text-muted-foreground">
+          <p class="text-xs leading-[1.5] text-muted-foreground">
             验证码已发送至 <span class="font-medium text-foreground">{{ email }}</span>
-          </div>
+          </p>
 
-          <div class="mb-4 mt-3">
-            <label class="mb-1.5 block text-xs font-medium text-foreground">验证码</label>
+          <Field label="验证码" class="mb-4 mt-3">
             <input
               v-model="otpCode"
               type="text"
               inputmode="numeric"
               maxlength="6"
+              autocomplete="one-time-code"
               placeholder="6 位验证码"
-              class="h-9 w-full rounded-[var(--radius-control)] border border-border bg-background px-3 text-center text-sm tracking-widest text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              class="text-center tabular-nums tracking-[0.3em]"
+              :class="inputClass"
+              :aria-invalid="error ? 'true' : undefined"
+              :aria-describedby="error ? errorId : undefined"
               @keydown.enter="handleVerify"
             />
-          </div>
+          </Field>
 
-          <div v-if="error" class="mb-3 text-xs text-danger">{{ error }}</div>
+          <p v-if="error" :id="errorId" class="mb-3 text-xs text-danger" role="alert">{{ error }}</p>
 
           <BaseButton
             size="md"
@@ -315,14 +344,11 @@ async function handleVerify() {
             登录 / 注册
           </BaseButton>
 
-          <button
-            class="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
-            @click="backToEmail"
-          >
+          <BaseButton variant="ghost" size="md" class="mt-3 w-full" @click="backToEmail">
             返回修改邮箱
-          </button>
+          </BaseButton>
         </template>
-      </SurfaceCard>
+      </div>
     </div>
   </div>
 </template>

@@ -79,13 +79,13 @@ function copyRedirectUri(uri: string) {
       description="配置 GitHub 与 Google 登录应用。Client Secret 仅加密写入，保存后不可回读。"
     />
 
-    <div v-if="loading" class="py-12 text-center text-xs text-muted-foreground">
+    <div v-if="loading" class="py-12 text-center text-xs text-muted-foreground" role="status">
       加载中...
     </div>
 
-    <div v-else-if="loadError" class="py-8 text-center">
+    <div v-else-if="loadError" class="py-8 text-center" role="alert">
       <p class="text-xs text-danger">{{ loadError }}</p>
-      <button class="mt-3 text-xs font-medium text-primary hover:underline" @click="admin.fetchOAuthProviders">
+      <button class="mt-3 text-xs font-medium text-accent-strong hover:underline" @click="admin.fetchOAuthProviders">
         重试
       </button>
     </div>
@@ -95,11 +95,11 @@ function copyRedirectUri(uri: string) {
         <div class="flex items-start justify-between gap-4">
           <div class="flex items-center gap-3">
             <span class="flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-surface-subtle text-foreground">
-              <Github v-if="provider.provider === 'github'" class="h-5 w-5" />
-              <GoogleIcon v-else class="h-5 w-5" />
+              <Github v-if="provider.provider === 'github'" class="h-5 w-5" aria-hidden="true" />
+              <GoogleIcon v-else class="h-5 w-5" aria-hidden="true" />
             </span>
             <div>
-              <h2 class="text-sm font-semibold text-foreground">{{ provider.label }}</h2>
+              <h2 class="text-sm font-medium text-foreground">{{ provider.label }}</h2>
               <p class="mt-1 text-xs text-muted-foreground">{{ sourceLabel(provider.source) }}</p>
             </div>
           </div>
@@ -115,7 +115,7 @@ function copyRedirectUri(uri: string) {
                 :model-value="provider.redirectUri"
                 type="text"
                 readonly
-                class="flex-1 text-xs"
+                class="flex-1 font-mono text-xs"
               />
               <BaseButton
                 variant="secondary"
@@ -123,7 +123,7 @@ function copyRedirectUri(uri: string) {
                 aria-label="复制 Redirect URI"
               >
                 <template #icon>
-                  <Copy class="h-4 w-4" />
+                  <Copy class="h-4 w-4" aria-hidden="true" />
                 </template>
               </BaseButton>
             </div>
@@ -144,7 +144,7 @@ function copyRedirectUri(uri: string) {
             />
           </Field>
           <div class="flex items-center gap-2">
-            <PillToggle v-model="forms[provider.provider].enabled" />
+            <PillToggle v-model="forms[provider.provider].enabled" label="启用该登录方式" />
             <span class="text-xs font-medium text-foreground">启用该登录方式</span>
           </div>
           <BaseButton

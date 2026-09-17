@@ -77,9 +77,9 @@ const isVideoJob = computed(() =>
           />
           <span
             v-if="isVideoOutput(output)"
-            class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/60 px-2 py-0.5 text-[11px] font-medium text-foreground-inverse"
+            class="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-overlay/60 px-2 py-0.5 text-xs font-medium text-foreground-inverse"
           >
-            <Film class="h-3 w-3" />
+            <Film class="h-3 w-3" aria-hidden="true" />
             视频
           </span>
         </div>
@@ -88,7 +88,7 @@ const isVideoJob = computed(() =>
 
     <!-- No output fallback -->
     <div v-else class="flex flex-col items-center gap-3 py-12 text-muted-foreground">
-      <component :is="isVideoJob ? Film : ImageIcon" class="h-12 w-12" />
+      <component :is="isVideoJob ? Film : ImageIcon" class="h-12 w-12"/>
       <p class="text-sm">{{ isVideoJob ? '该任务没有可显示的视频' : '该任务没有可显示的图片' }}</p>
     </div>
 

@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
+import { FIELD_CONTEXT_KEY } from '@/shared/lib/field-context'
+import { fieldClass } from '@/shared/lib/field-styles'
 
 export interface TextInputProps {
   modelValue?: string
@@ -20,14 +22,10 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
-const rootClasses = computed(() => {
-  return [
-    'h-9 w-full rounded-[var(--radius-control)] border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground transition-colors',
-    'focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary',
-    'disabled:cursor-not-allowed disabled:opacity-50',
-    props.invalid ? 'border-danger' : 'border-border',
-  ]
-})
+const field = inject(FIELD_CONTEXT_KEY, null)
+
+const rootClasses = computed(() => fieldClass(props.invalid || field?.invalid()))
+const isInvalid = computed(() => props.invalid || field?.invalid() || false)
 
 function handleInput(event: Event) {
   emit('update:modelValue', (event.target as HTMLInputElement).value)
@@ -36,6 +34,7 @@ function handleInput(event: Event) {
 
 <template>
   <input
+    :id="field?.controlId"
     :type="type"
     :value="modelValue"
     :placeholder="placeholder"
@@ -43,6 +42,8 @@ function handleInput(event: Event) {
     :readonly="readonly"
     :autocomplete="autocomplete"
     :inputmode="inputmode"
+    :aria-invalid="isInvalid || undefined"
+    :aria-describedby="field?.describedBy()"
     :class="rootClasses"
     @input="handleInput"
   />

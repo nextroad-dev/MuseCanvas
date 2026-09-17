@@ -1,48 +1,75 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens — single source of truth for the whole web app.
+ *
+ * Usage rules (enforced by scripts/check-design-tokens.mjs):
+ *   main action            -> primary (ink solid)
+ *   selected/active/progress -> accent / accent-strong / accent-soft
+ *   neutral hover          -> surface-subtle
+ *   pressed                -> surface-subtle-strong
+ *   credits                -> credit
+ *   semantic status        -> success|warning|danger|info (+ *-soft)
+ *   control outlines        -> border-control (>= 3:1 against surface)
+ *   card/panel             -> border, never a shadow
+ */
 @theme {
-  /* Base colors */
-  --color-background: #ffffff;
-  --color-canvas: #F7F8F6;
-  --color-surface: #ffffff;
-  --color-surface-subtle: #F3F5F2;
-  --color-foreground: #111713;
-  --color-foreground-inverse: #ffffff;
-  --color-muted-foreground: #667069;
-  --color-border: #E2E7E3;
-  --color-border-strong: #CBD3CD;
+  /* Surfaces */
+  --color-canvas: #F7F7F3;
+  --color-surface: #FFFFFF;
+  --color-surface-subtle: #EFEFE9;
+  --color-surface-subtle-strong: #E4E4DC;
+  --color-foreground: #1A1A18;
+  --color-foreground-inverse: #FFFFFF;
+  --color-muted-foreground: #666660;
+  --color-border: #E5E5DD;
+  --color-border-strong: #C9C9C0;
+  --color-border-control: #85857E;
 
-  /* Brand */
-  --color-primary: #168A49;
-  --color-primary-hover: #11763D;
-  --color-primary-active: #0D6133;
-  --color-primary-soft: #E7F6EC;
-  --color-primary-soft-hover: #D8EFDF;
+  /* Primary action (ink) */
+  --color-primary: #1A1A18;
+  --color-primary-hover: #33322E;
+  --color-primary-active: #0C0C0B;
+
+  /* Brand accent (green) — graphics and text-safe shades */
+  --color-accent: #168A49;
+  --color-accent-strong: #0D6133;
+  --color-accent-soft: #E7F6EC;
 
   /* Credit / quota accent */
-  --color-credit: #F59E0B;
+  --color-credit: #8A5100;
 
   /* Status - foreground */
-  --color-success: #15803D;
-  --color-success-soft: #ECFDF3;
-  --color-warning: #B45309;
-  --color-warning-soft: #FFF7E6;
-  --color-danger: #DC2626;
-  --color-danger-hover: #B91C1C;
-  --color-danger-active: #991B1B;
+  --color-success: #166534;
+  --color-success-soft: #F0FDF4;
+  --color-warning: #854D0E;
+  --color-warning-soft: #FEFCE8;
+  --color-danger: #B91C1C;
+  --color-danger-hover: #991B1B;
+  --color-danger-active: #7F1D1D;
   --color-danger-soft: #FEF2F2;
   --color-danger-border: #FECACA;
-  --color-info: #2563EB;
+  --color-info: #1E40AF;
   --color-info-soft: #EFF6FF;
-  --color-neutral-status: #59615B;
-  --color-neutral-soft: #F1F3F2;
+  --color-neutral-status: #57534E;
+  --color-neutral-soft: #E9E9E1;
 
   /* Ledger deltas */
-  --color-positive: #10B981;
-  --color-negative: #F43F5E;
+  --color-positive: #166534;
+  --color-negative: #B91C1C;
 
   /* Scrim / media backdrop */
-  --color-overlay: #000000;
+  --color-overlay: #1A1A18;
+
+  /* Typography */
+  --font-sans: "IBM Plex Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Type scale (line-height / tracking are applied per usage site) */
+  --text-display: clamp(36px, 4vw, 60px);
+  --text-title: 32px;
+  --text-section: 24px;
+  --text-subtitle: 20px;
 
   /* Z-Index scale */
   --z-index-content: 10;
@@ -55,52 +82,70 @@
 
   /* Radius */
   --radius-control: 10px;
-  --radius-card: 16px;
-  --radius-panel: 20px;
+  --radius-popover: 12px;
+  --radius-card: 14px;
+  --radius-panel: 18px;
   --radius-pill: 9999px;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.04), 0 1px 3px 0 rgb(0 0 0 / 0.02);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.06), 0 2px 4px -2px rgb(0 0 0 / 0.04);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  /* Shadows: popovers and overlays only — cards and panels use borders */
+  --shadow-sm: 0 1px 2px 0 rgb(26 26 24 / 0.04);
+  --shadow-md: 0 10px 24px -16px rgb(26 26 24 / 0.20);
+  --shadow-lg: 0 18px 44px -24px rgb(26 26 24 / 0.26);
 
   /* Motion */
   --motion-fast: 120ms;
   --motion-base: 180ms;
-  --motion-slow: 280ms;
+  --motion-slow: 240ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
 html,
 body {
   margin: 0;
   padding: 0;
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.59;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* One focus ring for every focusable element. Components must not redefine it. */
 @layer base {
-  button:focus-visible,
-  [role="button"]:focus-visible,
-  a:focus-visible,
-  input:focus-visible,
-  textarea:focus-visible,
-  select:focus-visible {
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  :focus:not(:focus-visible) {
     outline: none;
-    box-shadow: 0 0 0 2px var(--color-primary), 0 0 0 4px var(--color-background);
   }
 }
 
-/* Reduced motion */
+/* Reduced motion: no spins, flashes, shifts or shimmer. State stays legible
+   through static shape, color and text only. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
+
+@layer utilities {
+  /* Functional scrim for text legibility on top of photos/videos. */
+  .media-scrim {
+    background-image: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--color-overlay) 80%, transparent) 0%,
+      color-mix(in srgb, var(--color-overlay) 30%, transparent) 50%,
+      color-mix(in srgb, var(--color-overlay) 0%, transparent) 100%
+    );
+  }
 }
 
 /* Custom Scrollbar */
@@ -112,7 +157,7 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border-strong);
+  background: var(--color-border-control);
   border-radius: var(--radius-pill);
 }
 ::-webkit-scrollbar-thumb:hover {

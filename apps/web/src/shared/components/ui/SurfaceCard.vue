@@ -15,7 +15,7 @@ withDefaults(defineProps<{
 const toneClasses: Record<Tone, string> = {
   default: 'bg-surface border-border',
   subtle: 'bg-surface-subtle border-border',
-  brand: 'bg-primary-soft border-primary-soft-hover',
+  brand: 'bg-accent-soft border-border',
   danger: 'bg-danger-soft border-danger-border',
 }
 
@@ -28,7 +28,8 @@ const paddingClasses: Record<Padding, string> = {
 </script>
 
 <template>
-  <div :class="cn('rounded-[var(--radius-card)] border shadow-sm', toneClasses[tone], paddingClasses[padding])">
+  <!-- Cards are surfaces with borders: never a shadow, never a card inside a shadow. -->
+  <div :class="cn('rounded-[var(--radius-card)] border', toneClasses[tone], paddingClasses[padding])">
     <div v-if="$slots.header" class="mb-4">
       <slot name="header" />
     </div>

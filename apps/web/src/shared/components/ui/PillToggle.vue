@@ -4,6 +4,8 @@ import { cn } from '@/shared/lib/utils'
 defineProps<{
   modelValue: boolean
   disabled?: boolean
+  /** Accessible name; pass the visible label text so the switch is announced. */
+  label?: string
 }>()
 
 const emit = defineEmits<{
@@ -12,15 +14,20 @@ const emit = defineEmits<{
 </script>
 
 <template>
+  <!-- Tonal track with a distinct thumb: on/off is readable from the thumb
+       position and the border, not from a subtle color difference alone. -->
   <button
     type="button"
     role="switch"
     :aria-checked="modelValue"
+    :aria-label="label"
     :disabled="disabled"
     :class="
       cn(
-        'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1',
-        modelValue ? 'bg-primary' : 'bg-border',
+        'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors',
+        modelValue
+          ? 'border-accent bg-accent'
+          : 'border-border-control bg-surface-subtle-strong hover:bg-surface-subtle',
         disabled && 'cursor-not-allowed opacity-50',
       )
     "
@@ -28,9 +35,10 @@ const emit = defineEmits<{
   >
     <span
       :class="[
-        'inline-block h-3.5 w-3.5 rounded-full bg-foreground-inverse shadow transition-transform',
-        modelValue ? 'translate-x-[18px]' : 'translate-x-0.5',
+        'inline-block h-[18px] w-[18px] rounded-full bg-surface shadow-sm transition-transform',
+        modelValue ? 'translate-x-[21px]' : 'translate-x-[3px]',
       ]"
+      aria-hidden="true"
     />
   </button>
 </template>

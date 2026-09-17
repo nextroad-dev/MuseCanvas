@@ -31,34 +31,39 @@ function select(ratio: string) {
   <SelectPopover
     :open="open"
     :disabled="disabled"
-    panel-class="left-0 top-full z-popover mt-1.5 w-64 p-2"
+    popup-label="选择尺寸比例"
+    panel-class="w-64"
     @update:open="emit('update:open', $event)"
   >
     <template #trigger-label>{{ selected?.label || '比例' }}</template>
     <template #default>
       <div class="mb-2 px-1 text-xs font-medium text-muted-foreground">选择尺寸</div>
-      <div class="grid grid-cols-3 gap-2">
+      <div class="grid grid-cols-3 gap-2" role="listbox" aria-label="选择尺寸比例">
         <button
           v-for="opt in options"
           :key="opt.value"
           type="button"
-          :title="opt.label"
+          role="option"
+          data-menu-item
+          tabindex="-1"
+          :aria-selected="opt.value === selectedRatioValue"
+          :aria-label="opt.label"
           :class="cn(
-            'flex items-center justify-center rounded-[var(--radius-control)] border h-10 transition-colors',
+            'flex min-h-10 items-center justify-center rounded-[var(--radius-control)] border transition-colors',
             opt.value === selectedRatioValue
-              ? 'border-primary bg-primary-soft text-primary'
-              : 'border-border bg-transparent text-foreground hover:bg-surface-subtle'
+              ? 'border-accent bg-accent-soft text-accent-strong'
+              : 'border-border-control bg-transparent text-foreground hover:bg-surface-subtle'
           )"
           @click="select(opt.value)"
         >
           <div :class="[
-             'border-2 border-current rounded-[2px] opacity-80',
-             opt.label === '1:1' ? 'w-4 h-4' :
-             opt.label === '4:3' || opt.label === '3:2' ? 'w-5 h-3.5' :
-             opt.label === '3:4' || opt.label === '2:3' ? 'w-3.5 h-5' :
-             opt.label === '16:9' ? 'w-6 h-3.5' :
-             opt.label === '9:16' ? 'w-3.5 h-6' : 'w-4 h-4'
-           ]" />
+            'border-2 border-current opacity-80',
+            opt.label === '1:1' ? 'w-4 h-4' :
+            opt.label === '4:3' || opt.label === '3:2' ? 'w-5 h-3.5' :
+            opt.label === '3:4' || opt.label === '2:3' ? 'w-3.5 h-5' :
+            opt.label === '16:9' ? 'w-6 h-3.5' :
+            opt.label === '9:16' ? 'w-3.5 h-6' : 'w-4 h-4'
+          ]" />
         </button>
       </div>
     </template>

@@ -62,7 +62,8 @@ const currentStep = computed(() => {
   return 0
 })
 
-// Progress percentage 0–100: prefer server-reported progress when available.
+// Stage progress only: the phases are real, and a server-reported percentage is
+// used when it exists. No synthetic "+8%" padding.
 const progressPercent = computed(() => {
   if (isComplete.value) return 100
   if (isFailed.value || isCanceled.value) return currentStep.value * 25
@@ -70,7 +71,7 @@ const progressPercent = computed(() => {
   if (typeof serverProgress === 'number' && Number.isFinite(serverProgress)) {
     return Math.min(99, Math.max(0, Math.round(serverProgress)))
   }
-  return currentStep.value * 25 + (isTerminal.value ? 0 : 8)
+  return currentStep.value * 25
 })
 
 
@@ -126,19 +127,21 @@ onUnmounted(() => stopTimer())
 
 <template>
   <div v-if="job" class="w-full max-w-3xl">
-    <div class="overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface/95 p-6 shadow-md backdrop-blur-sm md:p-8">
-      
+    <!-- Opaque panel: border only, no glass. -->
+    <div class="rounded-[var(--radius-panel)] border border-border bg-surface p-6 md:p-8">
+
       <!-- Header: Title & Timer & Cancel -->
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-4">
           <div
-            class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition-all duration-300"
+            class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full"
             :class="{
               'bg-danger-soft text-danger': isFailed,
               'bg-neutral-soft text-neutral-status': isCanceled,
               'bg-success-soft text-success': isComplete,
-              'bg-primary-soft text-primary': !isFailed && !isCanceled && !isComplete,
+              'bg-accent-soft text-accent-strong': !isFailed && !isCanceled && !isComplete,
             }"
+            aria-hidden="true"
           >
             <AlertCircle v-if="isFailed" class="h-6 w-6" />
             <XCircle v-else-if="isCanceled" class="h-6 w-6" />
@@ -148,35 +151,43 @@ onUnmounted(() => stopTimer())
               <path class="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
           </div>
-          <div>
-            <h2 class="flex items-center gap-2 text-lg font-semibold text-foreground transition-all duration-300" aria-live="polite">
+          <div role="status" aria-atomic="true">
+            <h2 class="flex items-center gap-2 text-base font-medium text-foreground">
               {{ statusText }}
-              <span v-if="isVideoJob" class="rounded bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary">视频 · {{ progressPercent }}%</span>
+              <span v-if="isVideoJob" class="rounded-[var(--radius-control)] bg-surface-subtle px-1.5 py-0.5 text-xs font-medium text-muted-foreground">视频</span>
             </h2>
-            <p class="mt-1 text-xs text-muted-foreground">{{ statusHint }} · {{ elapsedLabel }}</p>
-        </div>
+            <p class="mt-1 text-xs text-muted-foreground">{{ statusHint }} · <span class="tabular-nums">{{ elapsedLabel }}</span></p>
           </div>
+        </div>
         <BaseButton
           v-if="canCancel"
           variant="secondary"
           size="sm"
           @click="emit('cancel')"
         >
-          <XCircle class="h-3.5 w-3.5" />
+          <XCircle class="h-3.5 w-3.5" aria-hidden="true" />
           取消任务
         </BaseButton>
       </div>
 
-      <!-- Linear Progress Bar -->
-      <div class="mt-6 h-1.5 w-full overflow-hidden rounded-full bg-surface-subtle border border-border/40">
-        <div 
-          class="h-full transition-all duration-700 ease-out"
+      <!-- Linear progress: stage-based, announced as a progressbar. -->
+      <div
+        class="mt-6 h-1.5 w-full overflow-hidden rounded-full border border-border bg-surface-subtle"
+        role="progressbar"
+        aria-label="生成进度"
+        :aria-valuemin="0"
+        :aria-valuemax="100"
+        :aria-valuenow="progressPercent"
+        :aria-valuetext="statusText"
+      >
+        <div
+          class="h-full transition-[width] duration-[var(--motion-base)] ease-standard"
           :class="{
             'bg-danger': isFailed,
             'bg-neutral-status': isCanceled,
             'bg-success': isComplete,
-            'bg-primary': !isFailed && !isCanceled && !isComplete,
-            'w-full': isTerminal
+            'bg-accent': !isFailed && !isCanceled && !isComplete,
+            'w-full': isTerminal,
           }"
           :style="isTerminal ? {} : { width: `${progressPercent}%` }"
         />
@@ -185,9 +196,9 @@ onUnmounted(() => stopTimer())
       <!-- Prompt Preview -->
       <div
         v-if="promptText"
-        class="mt-5 rounded-[var(--radius-card)] border border-border/60 bg-surface-subtle px-4 py-3"
+        class="mt-5 rounded-[var(--radius-card)] border border-border bg-surface-subtle px-4 py-3"
       >
-        <p class="line-clamp-2 text-sm leading-relaxed text-foreground/80">
+        <p class="line-clamp-2 text-sm leading-[1.59] text-foreground">
           "{{ promptText }}"
         </p>
       </div>
@@ -195,32 +206,32 @@ onUnmounted(() => stopTimer())
       <!-- Reference Images Preview -->
       <div
         v-if="job.inputImages && job.inputImages.length > 0"
-        class="mt-4 rounded-[var(--radius-card)] border border-border/60 bg-surface-subtle px-4 py-3"
+        class="mt-4 rounded-[var(--radius-card)] border border-border bg-surface-subtle px-4 py-3"
       >
         <div class="mb-2 flex items-center justify-between text-xs font-medium text-muted-foreground">
           <div class="flex items-center gap-1.5">
-            <ImageIcon class="h-3.5 w-3.5 text-primary" />
+            <ImageIcon class="h-3.5 w-3.5 text-accent-strong" aria-hidden="true" />
             <span>参考图 ({{ job.inputImages.length }})</span>
           </div>
-          <span class="text-[11px] text-muted-foreground/80">点击预览大图</span>
+          <span class="text-muted-foreground">点击预览大图</span>
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <button
             v-for="(img, idx) in job.inputImages"
             :key="img.id || idx"
             type="button"
-            class="group relative h-14 w-14 overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface shadow-xs transition-all hover:border-primary hover:shadow-sm"
+            class="relative h-14 w-14 overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface transition-colors hover:border-border-control"
             :aria-label="`查看参考图 ${idx + 1}`"
             @click="previewInputImage(idx)"
           >
             <img
               :src="img.imageUrl"
               :alt="`参考图 ${idx + 1}`"
-              class="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+              class="h-full w-full object-cover"
               loading="lazy"
             />
             <span
-              class="pointer-events-none absolute left-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-overlay/60 text-[9px] font-medium text-foreground-inverse"
+              class="pointer-events-none absolute left-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-overlay/65 text-xs font-medium tabular-nums text-foreground-inverse"
             >
               {{ idx + 1 }}
             </span>
@@ -235,4 +246,3 @@ onUnmounted(() => stopTimer())
     />
   </div>
 </template>
-

@@ -13,10 +13,10 @@ withDefaults(defineProps<{
 <template>
   <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
     <div class="min-w-0 flex-1">
-      <span v-if="eyebrow" class="mb-1 block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <span v-if="eyebrow" class="mb-1 block text-xs font-medium text-muted-foreground">
         {{ eyebrow }}
       </span>
-      <h1 :id="title" class="text-xl font-semibold tracking-[-0.02em] text-foreground sm:text-2xl">
+      <h1 class="text-title font-normal leading-[1.25] text-foreground">
         {{ title }}
       </h1>
       <p v-if="description" class="mt-1 text-sm text-muted-foreground">

@@ -178,40 +178,6 @@ export interface ModelCapabilities {
   supportedMediaKinds?: MediaKind[]
 }
 
-// Pricing Types
-export type PricingScheme = 'per_image_v1' | 'per_second_v1'
-
-export interface ImagePricingV1 {
-  scheme: 'per_image_v1'
-  creditsPerImage: number
-}
-
-export interface VideoPricingV1 {
-  scheme: 'per_second_v1'
-  creditsPerSecond: number
-  minDurationSeconds?: number
-  maxDurationSeconds?: number
-}
-
-export type ModelPricing = ImagePricingV1 | VideoPricingV1
-
-export interface QuoteMediaGenerationCreditsInput {
-  pricing: ModelPricing
-  count?: number
-  durationSeconds?: number
-  optimizationCredits?: number
-}
-
-export interface MediaCreditsQuote {
-  pricing: ModelPricing
-  count: number
-  durationSeconds?: number
-  baseCredits: number
-  optimizationCredits: number
-  totalCredits: number
-  quotedCredits: number
-}
-
 // Model Configuration Revision & Provider Contracts
 export interface ProviderCredentialEnvelope {
   providerId: string
@@ -226,7 +192,6 @@ export interface ModelConfigRevision {
   pluginId: string
   pluginVersion: string
   capabilities: ModelCapabilities
-  pricing: ModelPricing
   defaults?: Record<string, JsonValue>
   snapshotDigest: string
 }
@@ -261,83 +226,6 @@ export interface ProviderRun {
 
 /** Client-safe projection of `ProviderRun` (strips worker lease secrets). */
 export type ProviderRunPublic = Omit<ProviderRun, 'clientToken' | 'leaseToken' | 'leaseExpiresAt'>
-
-// Existing Billing Types (Preserved)
-export type BillingState = 'reserved' | 'settled' | 'released'
-export type CreditLedgerOperation = 'grant' | 'adjustment' | 'reservation' | 'capture' | 'release'
-
-export interface CreditBalance {
-  userId: string
-  availableCredits: number
-  reservedCredits: number
-  totalCredits: number
-  updatedAt?: string
-}
-
-export interface CreditLedgerEntry {
-  id: string
-  userId: string
-  operation: CreditLedgerOperation
-  availableDelta: number
-  reservedDelta: number
-  availableAfter: number
-  reservedAfter: number
-  referenceType: string
-  referenceId: string
-  billingCycle?: number | null
-  note?: string | null
-  createdAt: string
-}
-
-export interface GenerationBilling {
-  jobId: string
-  userId: string
-  state: BillingState
-  billingCycle: number
-  quotedCredits: number
-  pricingSnapshot: GenerationCreditsQuote
-  reservedAt?: string | null
-  settledAt?: string | null
-  releasedAt?: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export interface BillingSettings {
-  enabled: boolean
-  signupGrant: number
-  promptOptimizationCredits: number
-  updatedAt?: string
-}
-
-export interface QuoteGenerationCreditsInput {
-  creditsPerImage: number
-  count: number
-  optimizationCredits?: number
-}
-
-export interface GenerationCreditsQuote {
-  creditsPerImage: number
-  count: number
-  optimizationCredits: number
-  imageCredits: number
-  totalCredits: number
-  quotedCredits: number
-}
-
-export const BillingErrorCode = {
-  INSUFFICIENT_CREDITS: 'INSUFFICIENT_CREDITS',
-  GENERATION_PRICE_CHANGED: 'GENERATION_PRICE_CHANGED',
-  BILLING_STATE_CONFLICT: 'BILLING_STATE_CONFLICT',
-  INVALID_CREDIT_AMOUNT: 'INVALID_CREDIT_AMOUNT',
-} as const
-
-export type BillingErrorCode = (typeof BillingErrorCode)[keyof typeof BillingErrorCode]
-
-export const INSUFFICIENT_CREDITS = BillingErrorCode.INSUFFICIENT_CREDITS
-export const GENERATION_PRICE_CHANGED = BillingErrorCode.GENERATION_PRICE_CHANGED
-export const BILLING_STATE_CONFLICT = BillingErrorCode.BILLING_STATE_CONFLICT
-export const INVALID_CREDIT_AMOUNT = BillingErrorCode.INVALID_CREDIT_AMOUNT
 
 // Built-in provider configuration templates. The admin API serves these from
 // the provider registry; the browser admin UI mirrors this shape locally.
@@ -691,3 +579,5 @@ export const PromptTemplateErrorCode = {
 } as const
 
 export type PromptTemplateErrorCode = (typeof PromptTemplateErrorCode)[keyof typeof PromptTemplateErrorCode]
+
+export * from './endpoints'

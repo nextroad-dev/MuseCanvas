@@ -1,6 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
+import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { AdminJob } from '@/shared/types'
 import { Loader2, RefreshCw } from 'lucide-react'
@@ -25,7 +26,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
   } = useQuery({
     queryKey: ['admin', 'dashboard'],
     queryFn: async () => {
-      const res = await api<DashboardMetrics>('/api/admin/dashboard')
+      const res = await api<DashboardMetrics>(API_ENDPOINTS.admin.dashboard)
       return res.data || null
     },
     initialData: initialMetrics,
@@ -38,7 +39,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
   } = useQuery({
     queryKey: ['admin', 'jobs', { limit: 10 }],
     queryFn: async () => {
-      const res = await api<{ items: AdminJob[] }>('/api/admin/jobs?limit=10')
+      const res = await api<{ items: AdminJob[] }>(API_ENDPOINTS.admin.jobs, { params: { limit: 10 } })
       return res.data?.items || []
     },
     initialData: initialJobs,

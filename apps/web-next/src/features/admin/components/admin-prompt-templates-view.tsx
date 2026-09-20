@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { API_ENDPOINTS, type PromptTemplateSetDetailDto } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
-import type { PromptTemplate } from '@/shared/types'
-import { FileText, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Download, FileText, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 
 export function AdminPromptTemplatesView() {
   const queryClient = useQueryClient()
@@ -15,29 +15,29 @@ export function AdminPromptTemplatesView() {
   const [actionError, setActionError] = useState('')
 
   const {
-    data: templates = [],
+    data: activeSet,
     isLoading,
     refetch,
-  } = useQuery<PromptTemplate[]>({
+  } = useQuery<PromptTemplateSetDetailDto | null>({
     queryKey: ['admin', 'prompt-templates'],
     queryFn: async () => {
-      const res = await api<{ entries: PromptTemplate[] } | PromptTemplate[]>('/api/admin/prompt-templates')
-      if (Array.isArray(res.data)) return res.data
-      return (res.data as any)?.entries || []
+      const res = await api<PromptTemplateSetDetailDto | null>(API_ENDPOINTS.admin.promptTemplates)
+      return res.success ? res.data ?? null : null
     },
   })
 
+  const entries = activeSet?.entries ?? []
 
   const createMutation = useMutation({
     mutationFn: async () => {
+      if (!activeSet) throw new Error('当前没有激活的模板集，请先通过初始化向导导入模板集')
       if (!name.trim() || !instruction.trim()) throw new Error('请完整填写名称与提示词内容')
-      const res = await api('/api/admin/prompt-templates', {
+      const res = await api(API_ENDPOINTS.admin.promptTemplateSetEntries(activeSet.id), {
         method: 'POST',
         body: {
           name: name.trim(),
-          description: description.trim() || null,
+          description: description.trim() || undefined,
           instruction: instruction.trim(),
-          enabled: true,
         },
       })
       if (!res.success) throw new Error(res.error?.message || '创建模板失败')
@@ -55,10 +55,11 @@ export function AdminPromptTemplatesView() {
     },
   })
 
-
+  // Deleting an entry forks a new set version on the backend, so the whole
+  // active-set query must be refetched rather than patched locally.
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await api(`/api/admin/prompt-templates/${id}`, { method: 'DELETE' })
+      const res = await api(API_ENDPOINTS.admin.promptTemplateEntry(id), { method: 'DELETE' })
       if (!res.success) throw new Error(res.error?.message || '删除模板失败')
       return res.data
     },
@@ -72,16 +73,31 @@ export function AdminPromptTemplatesView() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-foreground">提示词模板</h1>
-          <p className="text-sm text-muted-foreground">管理系统预置与分类提示词模板，供用户在创作台快捷调用。</p>
+          <p className="text-sm text-muted-foreground">
+            {activeSet
+              ? `当前激活模板集：${activeSet.name}（v${activeSet.version}，${activeSet.entryCount} 个条目），供创作台快捷调用。`
+              : '管理系统预置与分类提示词模板，供用户在创作台快捷调用。'}
+          </p>
         </div>
         <div className="flex gap-2">
+          {activeSet && (
+            <a
+              href={`${API_ENDPOINTS.admin.promptTemplatesExport}?setId=${encodeURIComponent(activeSet.id)}`}
+              className="flex min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle"
+            >
+              <Download className="h-3.5 w-3.5" />
+              导出
+            </a>
+          )}
           <button
             type="button"
             onClick={() => {
               setActionError('')
               setCreateModalOpen(true)
             }}
-            className="flex min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-3 text-xs font-medium text-accent-contrast transition-colors hover:bg-accent-hover"
+            disabled={!activeSet}
+            className="flex min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-3 text-xs font-medium text-accent-contrast transition-colors hover:bg-accent-hover disabled:opacity-50"
+            title={activeSet ? undefined : '请先导入并激活模板集'}
           >
             <Plus className="h-3.5 w-3.5" />
             添加模板
@@ -97,13 +113,20 @@ export function AdminPromptTemplatesView() {
         </div>
       </div>
 
+      {!isLoading && !activeSet && (
+        <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-subtle px-4 py-3 text-xs text-muted-foreground">
+          <FileText className="h-3.5 w-3.5" />
+          当前没有激活的模板集。模板集通过初始化向导（/setup）导入；条目管理在激活集上进行。
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         {isLoading ? (
           <div className="col-span-full p-8 text-center text-muted-foreground">
             <Loader2 className="mx-auto h-5 w-5 animate-spin" />
           </div>
-        ) : templates.length > 0 ? (
-          templates.map((t) => (
+        ) : entries.length > 0 ? (
+          entries.map((t) => (
             <div
               key={t.id}
               className="flex flex-col justify-between rounded-[var(--radius-card)] border border-border bg-surface p-4"
@@ -130,11 +153,11 @@ export function AdminPromptTemplatesView() {
               </div>
             </div>
           ))
-        ) : (
+        ) : activeSet ? (
           <div className="col-span-full rounded-[var(--radius-card)] border border-border bg-surface p-8 text-center text-muted-foreground">
             暂无提示词模板
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Create Modal */}
@@ -188,7 +211,7 @@ export function AdminPromptTemplatesView() {
                   rows={4}
                   value={instruction}
                   onChange={(e) => setInstruction(e.target.value)}
-                  placeholder="输入详细的提示词引导模板，支持 {{prompt}} 插值..."
+                  placeholder="输入详细的提示词引导模板，支持 {'{{input_prompt}}'} 插值..."
                   className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none resize-none"
                 />
               </div>

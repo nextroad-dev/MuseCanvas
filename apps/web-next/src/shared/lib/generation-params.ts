@@ -5,12 +5,10 @@
 import type {
   InputSlotDescriptor,
   ModelConfig,
-  ModelPricing,
   ParameterDescriptor,
   StagedReferenceImage,
   GenerationInputItem,
 } from '@/shared/types'
-import { modelMediaKind } from '@/shared/types'
 
 export interface VideoControlState {
   durationSeconds: number
@@ -215,34 +213,4 @@ export function firstLastFrameViolations(
     errors.push('首帧与尾帧不能是同一张图片')
   }
   return errors
-}
-
-export function estimateCredits(
-  pricing: ModelPricing | undefined,
-  legacyCreditsPerImage: number | undefined,
-  opts: { count: number; durationSeconds?: number; optimizationCredits?: number },
-): number {
-  const opt = opts.optimizationCredits ?? 0
-  const count = Math.max(1, Math.floor(opts.count) || 1)
-  if (!pricing) return (legacyCreditsPerImage ?? 0) * count + opt
-  if (pricing.scheme === 'per_second_v1') {
-    const seconds = Math.max(0, opts.durationSeconds ?? 0)
-    return Math.ceil(pricing.creditsPerSecond * seconds * count) + opt
-  }
-  return pricing.creditsPerImage * count + opt
-}
-
-/** Quote helper that picks per-second vs per-image pricing by model kind. */
-export function estimateModelCredits(
-  model: Pick<ModelConfig, 'modelKind' | 'mediaKind' | 'pricing' | 'creditsPerImage'> | null | undefined,
-  opts: { count: number; durationSeconds?: number; optimizationCredits?: number },
-): number {
-  if (modelMediaKind(model as ModelConfig) === 'video' || model?.pricing?.scheme === 'per_second_v1') {
-    return estimateCredits(model?.pricing, model?.creditsPerImage, opts)
-  }
-  return estimateCredits(
-    model?.pricing?.scheme === 'per_image_v1' ? model.pricing : undefined,
-    model?.creditsPerImage ?? 0,
-    opts,
-  )
 }

@@ -10,7 +10,6 @@ import {
   Cpu,
   Key,
   FileText,
-  Coins,
   ShieldCheck,
   Settings,
   ListTodo,
@@ -52,7 +51,6 @@ const navGroups: NavGroup[] = [
   {
     title: '系统设置',
     items: [
-      { path: '/admin/billing', label: '计费设置', icon: Coins },
       { path: '/admin/oauth', label: 'OAuth', icon: ShieldCheck },
       { path: '/setup?step=site', label: '系统配置', icon: Settings },
     ],

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { AdminModel, ModelPreset, ProviderCredential } from '@/shared/types'
 import { Cpu, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
@@ -11,7 +12,6 @@ export function AdminModelsView() {
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [selectedPresetId, setSelectedPresetId] = useState('')
   const [selectedCredentialId, setSelectedCredentialId] = useState('')
-  const [creditsPerImage, setCreditsPerImage] = useState(1)
   const [concurrencyLimit, setConcurrencyLimit] = useState(2)
   const [actionError, setActionError] = useState('')
 
@@ -22,31 +22,31 @@ export function AdminModelsView() {
   } = useQuery({
     queryKey: ['admin', 'models'],
     queryFn: async () => {
-      const res = await api<{ items: AdminModel[] }>('/api/admin/models')
-      return res.data?.items || []
+      const res = await api<AdminModel[]>(API_ENDPOINTS.admin.models)
+      return res.data || []
     },
   })
 
   const { data: presets = [] } = useQuery({
     queryKey: ['admin', 'model-presets'],
     queryFn: async () => {
-      const res = await api<{ items: ModelPreset[] }>('/api/admin/model-presets')
-      return res.data?.items || []
+      const res = await api<ModelPreset[]>(API_ENDPOINTS.admin.modelPresets)
+      return res.data || []
     },
   })
 
   const { data: credentials = [] } = useQuery({
     queryKey: ['admin', 'provider-credentials'],
     queryFn: async () => {
-      const res = await api<{ items: ProviderCredential[] }>('/api/admin/provider-credentials')
-      return res.data?.items || []
+      const res = await api<ProviderCredential[]>(API_ENDPOINTS.admin.providerCredentials)
+      return res.data || []
     },
   })
 
   // Toggle model enabled mutation
   const toggleMutation = useMutation({
     mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
-      const res = await api(`/api/admin/models/${id}`, {
+      const res = await api(API_ENDPOINTS.admin.model(id), {
         method: 'PATCH',
         body: { enabled },
       })
@@ -61,7 +61,7 @@ export function AdminModelsView() {
   // Delete model mutation
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await api(`/api/admin/models/${id}`, { method: 'DELETE' })
+      const res = await api(API_ENDPOINTS.admin.model(id), { method: 'DELETE' })
       if (!res.success) throw new Error(res.error?.message || '删除模型失败')
       return res.data
     },
@@ -74,12 +74,11 @@ export function AdminModelsView() {
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!selectedPresetId) throw new Error('请选择模型预设')
-      const res = await api<{ model: AdminModel }>('/api/admin/models', {
+      const res = await api<AdminModel>(API_ENDPOINTS.admin.models, {
         method: 'POST',
         body: {
           presetId: selectedPresetId,
           providerCredentialId: selectedCredentialId || undefined,
-          creditsPerImage,
           concurrencyLimit,
           enabled: true,
         },
@@ -103,7 +102,7 @@ export function AdminModelsView() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-foreground">模型管理</h1>
-          <p className="text-sm text-muted-foreground">配置图像与语言模型、消耗积分、并发限制与关联凭据。</p>
+          <p className="text-sm text-muted-foreground">配置图像与语言模型、并发限制与关联凭据。</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -134,7 +133,6 @@ export function AdminModelsView() {
             <tr>
               <th className="px-4 py-3 font-medium">模型名称</th>
               <th className="px-4 py-3 font-medium">类型</th>
-              <th className="px-4 py-3 font-medium">单次积分</th>
               <th className="px-4 py-3 font-medium">并发上限</th>
               <th className="px-4 py-3 font-medium">状态</th>
               <th className="px-4 py-3 text-right font-medium">操作</th>
@@ -143,7 +141,7 @@ export function AdminModelsView() {
           <tbody className="divide-y divide-border">
             {modelsLoading ? (
               <tr>
-                <td colSpan={6} className="p-8 text-center text-muted-foreground">
+                <td colSpan={5} className="p-8 text-center text-muted-foreground">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                 </td>
               </tr>
@@ -155,7 +153,6 @@ export function AdminModelsView() {
                     <div className="font-mono text-[11px] text-muted-foreground">{m.name}</div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{m.modelKind || 'image'}</td>
-                  <td className="px-4 py-3 font-mono">{m.creditsPerImage} 积分</td>
                   <td className="px-4 py-3 font-mono">{m.concurrencyLimit}</td>
                   <td className="px-4 py-3">
                     <button
@@ -187,7 +184,7 @@ export function AdminModelsView() {
               ))
             ) : (
               <tr>
-                <td colSpan={6} className="p-8 text-center text-muted-foreground">
+                <td colSpan={5} className="p-8 text-center text-muted-foreground">
                   暂无模型配置
                 </td>
               </tr>
@@ -251,27 +248,15 @@ export function AdminModelsView() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">单张扣除积分</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={creditsPerImage}
-                    onChange={(e) => setCreditsPerImage(parseInt(e.target.value, 10) || 0)}
-                    className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">并发执行限制</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={concurrencyLimit}
-                    onChange={(e) => setConcurrencyLimit(parseInt(e.target.value, 10) || 1)}
-                    className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">并发执行限制</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={concurrencyLimit}
+                  onChange={(e) => setConcurrencyLimit(parseInt(e.target.value, 10) || 1)}
+                  className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
+                />
               </div>
             </div>
 

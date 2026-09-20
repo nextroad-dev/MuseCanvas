@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { API_ENDPOINTS, type OAuthProviderName } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { AdminOAuthProvider } from '@/shared/types'
 import { Check, Loader2, RefreshCw, Save, ShieldCheck } from 'lucide-react'
@@ -17,7 +18,7 @@ export function AdminOAuthView() {
   } = useQuery({
     queryKey: ['admin', 'oauth-providers'],
     queryFn: async () => {
-      const res = await api<AdminOAuthProvider[]>('/api/admin/oauth-providers')
+      const res = await api<AdminOAuthProvider[]>(API_ENDPOINTS.admin.oauthProviders)
       return res.data || []
     },
   })
@@ -25,7 +26,7 @@ export function AdminOAuthView() {
 
   const toggleMutation = useMutation({
     mutationFn: async ({ provider, enabled }: { provider: string; enabled: boolean }) => {
-      const res = await api(`/api/admin/oauth-providers/${provider}`, {
+      const res = await api(API_ENDPOINTS.admin.oauthProvider(provider as OAuthProviderName), {
         method: 'PATCH',
         body: { enabled },
       })

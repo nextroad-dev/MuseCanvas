@@ -1,3 +1,4 @@
+import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { serverApi } from '@/shared/services/server-api'
 import { AdminDashboardView } from '@/features/admin/components/admin-dashboard-view'
 import type { AdminJob } from '@/shared/types'
@@ -17,8 +18,8 @@ interface DashboardMetrics {
 
 export default async function AdminDashboardPage() {
   const [metricsRes, jobsRes] = await Promise.all([
-    serverApi.get<DashboardMetrics>('/api/admin/dashboard'),
-    serverApi.get<{ items: AdminJob[] }>('/api/admin/jobs?limit=10'),
+    serverApi.get<DashboardMetrics>(API_ENDPOINTS.admin.dashboard),
+    serverApi.get<{ items: AdminJob[] }>(API_ENDPOINTS.admin.jobs, { params: { limit: '10' } }),
   ])
 
   const initialMetrics = metricsRes.success ? metricsRes.data : null

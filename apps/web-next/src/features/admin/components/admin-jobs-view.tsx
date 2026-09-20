@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { AdminJob } from '@/shared/types'
 import { Loader2, RefreshCw } from 'lucide-react'
@@ -17,11 +18,12 @@ export function AdminJobsView() {
   } = useQuery({
     queryKey: ['admin', 'jobs', { status: statusFilter }],
     queryFn: async () => {
-      const url =
-        statusFilter === 'all'
-          ? '/api/admin/jobs?limit=50'
-          : `/api/admin/jobs?status=${statusFilter}&limit=50`
-      const res = await api<{ items: AdminJob[] }>(url)
+      const res = await api<{ items: AdminJob[] }>(API_ENDPOINTS.admin.jobs, {
+        params: {
+          ...(statusFilter === 'all' ? {} : { status: statusFilter }),
+          limit: 50,
+        },
+      })
       return res.data?.items || []
     },
   })

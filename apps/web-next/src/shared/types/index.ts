@@ -2,7 +2,7 @@
 //
 // Unified image/video vocabulary. The shapes below re-express the shared
 // `@musecanvas/contracts` discriminated contracts (MediaKind, ModelKind,
-// GenerationOutput, ParameterDescriptor, InputSlotDescriptor, ModelPricing,
+// GenerationOutput, ParameterDescriptor, InputSlotDescriptor,
 // GenerationInputItem) so the browser bundle stays dependency-free. Field
 // names and literal values intentionally match the API contract; legacy
 // image-only fields are retained as a compatibility path.
@@ -121,22 +121,6 @@ export interface ModelCapabilities {
   supportedMediaKinds?: MediaKind[]
 }
 
-export type PricingScheme = 'per_image_v1' | 'per_second_v1'
-
-export interface ImagePricingV1 {
-  scheme: 'per_image_v1'
-  creditsPerImage: number
-}
-
-export interface VideoPricingV1 {
-  scheme: 'per_second_v1'
-  creditsPerSecond: number
-  minDurationSeconds?: number
-  maxDurationSeconds?: number
-}
-
-export type ModelPricing = ImagePricingV1 | VideoPricingV1
-
 export interface ModelConfig {
   id: string
   displayName: string
@@ -153,7 +137,6 @@ export interface ModelConfig {
   modes?: GenerationMode[]
   parameters?: ParameterDescriptor[]
   inputSlots?: InputSlotDescriptor[]
-  pricing?: ModelPricing
   defaults?: Record<string, unknown>
   capabilities?: ModelCapabilities
   revision?: number
@@ -165,7 +148,6 @@ export interface ModelConfig {
   enabled: boolean
   sortOrder: number
   maxInputImages?: number
-  creditsPerImage?: number
 }
 
 export interface GenerationInputItem {
@@ -181,7 +163,6 @@ export interface CreateGenerationRequest {
   inputs?: GenerationInputItem[]
   idempotencyKey?: string
   inputLanguage?: string
-  expectedCredits?: number
   // Legacy compatibility path (normalized client-side into parameters/inputs)
   size?: string
   quality?: Quality
@@ -271,8 +252,6 @@ export interface GenerationJob {
   outputs: GenerationOutput[]
   assets?: GenerationOutput[]
   inputImages?: GenerationInputImage[]
-  quotedCredits?: number | null
-  billingState?: BillingState | null
 }
 
 export interface GenerationInputImage {
@@ -290,6 +269,8 @@ export type StagedUploadStatus = 'pending' | 'uploading' | 'processing' | 'ready
 
 export type StagedInputRole = 'reference_image' | 'first_frame' | 'last_frame' | 'prompt_image'
 
+/** A locally picked file that is being uploaded. In-flight XHR handles stay in
+ *  `shared/lib/reference-upload.ts`, never in React state or the store. */
 export interface StagedReferenceImage {
   localId: string
   file: File
@@ -303,7 +284,6 @@ export interface StagedReferenceImage {
   width?: number
   height?: number
   error?: string
-  xhr?: XMLHttpRequest
   /** Input role for unified /api/generations inputs[]. Defaults to reference_image. */
   role?: StagedInputRole
 }
@@ -358,7 +338,6 @@ export interface AdminUser {
   role: UserRole
   status: UserStatus
   createdAt: string
-  credits?: CreditBalance | null
 }
 
 export interface AdminModel extends ModelConfig {
@@ -375,7 +354,6 @@ export interface AdminModel extends ModelConfig {
   providerCredentialId?: string
   providerCredentialName?: string
   capabilitiesJson?: string
-  pricingJson?: string
   defaultsJson?: string
 }
 
@@ -486,13 +464,13 @@ export interface OAuthProviderInput {
 }
 
 export interface OAuthIdentity {
-  provider: 'github' | 'google'
-  providerSubject: string
-  emailAtLink: string
+  id: string
+  provider: OAuthProvider
+  email?: string
   displayName?: string
   avatarUrl?: string
   linkedAt: string
-  lastLoginAt: string
+  lastLoginAt?: string
 }
 
 export interface ModelPreset {
@@ -520,7 +498,6 @@ export interface ModelPreset {
   parameters?: ParameterDescriptor[]
   inputSlots?: InputSlotDescriptor[]
   capabilities?: ModelCapabilities
-  pricing?: ModelPricing
   defaults?: Record<string, unknown>
 }
 
@@ -552,8 +529,6 @@ export interface AdminJob {
   durationMs?: number
   createdAt: string
   completedAt?: string
-  quotedCredits?: number | null
-  billingState?: BillingState | null
 }
 
 // ----- Prompt templates (canonical types live in `@musecanvas/contracts`) -----
@@ -703,86 +678,6 @@ export interface SetupTemplateImportResult {
   version: number
   entryCount: number
 }
-
-export type BillingState = 'reserved' | 'settled' | 'released'
-export type CreditLedgerOperation = 'grant' | 'adjustment' | 'reservation' | 'capture' | 'release'
-
-export interface CreditBalance {
-  userId: string
-  availableCredits: number
-  reservedCredits: number
-  totalCredits: number
-  updatedAt?: string
-}
-
-export interface CreditLedgerEntry {
-  id: string
-  userId: string
-  operation: CreditLedgerOperation
-  availableDelta: number
-  reservedDelta: number
-  availableAfter: number
-  reservedAfter: number
-  referenceType: string
-  referenceId: string
-  billingCycle?: number | null
-  note?: string | null
-  createdAt: string
-}
-
-export type LedgerEntry = CreditLedgerEntry
-
-
-export interface GenerationBilling {
-  jobId: string
-  userId: string
-  state: BillingState
-  billingCycle: number
-  quotedCredits: number
-  pricingSnapshot: GenerationCreditsQuote
-  reservedAt?: string | null
-  settledAt?: string | null
-  releasedAt?: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export interface BillingSettings {
-  enabled: boolean
-  signupGrant: number
-  promptOptimizationEnabled: boolean
-  promptOptimizationCredits: number
-  updatedAt?: string
-}
-
-export interface GenerationCreditsQuote {
-  creditsPerImage: number
-  count: number
-  optimizationCredits: number
-  imageCredits: number
-  totalCredits: number
-}
-
-export interface AdjustCreditsInput {
-  amount: number
-  note: string
-  idempotencyKey: string
-}
-
-export interface UpdateBillingSettingsInput {
-  enabled?: boolean
-  signupGrant?: number
-  promptOptimizationCredits?: number
-}
-
-export const BillingErrorCode = {
-  INSUFFICIENT_CREDITS: 'INSUFFICIENT_CREDITS',
-  GENERATION_PRICE_CHANGED: 'GENERATION_PRICE_CHANGED',
-  BILLING_STATE_CONFLICT: 'BILLING_STATE_CONFLICT',
-  INVALID_CREDIT_AMOUNT: 'INVALID_CREDIT_AMOUNT',
-} as const
-
-export type BillingErrorCode = (typeof BillingErrorCode)[keyof typeof BillingErrorCode]
 
 // ----- Media helpers (browser-safe, no DOM) -----
 

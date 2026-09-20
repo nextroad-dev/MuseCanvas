@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
+import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import {
   CheckCircle2,
@@ -43,7 +44,7 @@ export function SetupWizard() {
   const { data: status, isLoading } = useQuery({
     queryKey: ['setup', 'status'],
     queryFn: async () => {
-      const res = await api<SetupStatus>('/api/setup/status')
+      const res = await api<SetupStatus>(API_ENDPOINTS.setup.status)
       return res.data || null
     },
   })

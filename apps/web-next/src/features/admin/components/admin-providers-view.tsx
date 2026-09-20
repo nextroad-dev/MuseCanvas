@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { ProviderCredential } from '@/shared/types'
 import { Check, Key, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
@@ -24,15 +25,15 @@ export function AdminProvidersView() {
   } = useQuery({
     queryKey: ['admin', 'provider-credentials'],
     queryFn: async () => {
-      const res = await api<{ items: ProviderCredential[] }>('/api/admin/provider-credentials')
-      return res.data?.items || []
+      const res = await api<ProviderCredential[]>(API_ENDPOINTS.admin.providerCredentials)
+      return res.data || []
     },
   })
 
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!displayName.trim()) throw new Error('请输入凭据显示名称')
-      const res = await api('/api/admin/provider-credentials', {
+      const res = await api(API_ENDPOINTS.admin.providerCredentials, {
         method: 'POST',
         body: {
           displayName: displayName.trim(),
@@ -59,7 +60,7 @@ export function AdminProvidersView() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await api(`/api/admin/provider-credentials/${id}`, { method: 'DELETE' })
+      const res = await api(API_ENDPOINTS.admin.providerCredential(id), { method: 'DELETE' })
       if (!res.success) throw new Error(res.error?.message || '删除凭据失败')
       return res.data
     },
@@ -72,13 +73,13 @@ export function AdminProvidersView() {
     setTestingId(id)
     setTestResult(null)
     try {
-      const res = await api<{ valid: boolean; message?: string }>(`/api/admin/provider-credentials/${id}/test`, {
+      const res = await api<{ tested: boolean; status: string }>(API_ENDPOINTS.admin.providerCredentialTest(id), {
         method: 'POST',
       })
-      if (res.success && res.data?.valid) {
+      if (res.success && res.data?.tested && res.data.status === 'success') {
         setTestResult({ id, success: true, msg: '连通性测试通过' })
       } else {
-        setTestResult({ id, success: false, msg: res.data?.message || '连通性测试未通过' })
+        setTestResult({ id, success: false, msg: res.error?.message || '连通性测试未通过' })
       }
     } catch {
       setTestResult({ id, success: false, msg: '测试请求失败' })

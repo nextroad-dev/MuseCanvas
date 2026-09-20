@@ -8,7 +8,6 @@
  *   selected/active/progress -> accent / accent-strong / accent-soft
  *   neutral hover          -> surface-subtle
  *   pressed                -> surface-subtle-strong
- *   credits                -> credit
  *   semantic status        -> success|warning|danger|info (+ *-soft)
  *   control outlines        -> border-control (>= 3:1 against surface)
  *   card/panel             -> border, never a shadow
@@ -35,9 +34,8 @@
   --color-accent: #168A49;
   --color-accent-strong: #0D6133;
   --color-accent-soft: #E7F6EC;
-
-  /* Credit / quota accent */
-  --color-credit: #8A5100;
+  --color-accent-hover: #0D6133;
+  --color-accent-contrast: #FFFFFF;
 
   /* Status - foreground */
   --color-success: #166534;

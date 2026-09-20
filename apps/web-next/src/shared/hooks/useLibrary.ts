@@ -6,6 +6,7 @@ import type { Asset } from '@/shared/types'
 
 export const LIBRARY_QUERY_KEY = ['library'] as const
 
+// Backend GET /api/library ignores kind/favorite/limit/cursor (fixed LIMIT 50).
 export interface LibraryQueryParams {
   kind?: string
   favorite?: boolean

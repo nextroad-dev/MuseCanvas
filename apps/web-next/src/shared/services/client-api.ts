@@ -2,6 +2,15 @@ import type { ApiResponse } from '@/shared/types'
 
 const BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
 
+export class ApiError extends Error {
+  code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+  }
+}
+
 export interface RequestOptions {
   method?: string
   body?: unknown
@@ -49,8 +58,17 @@ export async function clientApi<T>(
       signal,
     })
 
-    const json = (await res.json()) as ApiResponse<T>
-    return json
+    // 后端契约以 body 的 success 字段为唯一判据（POST /api/generations 返回 202），
+    // 这里只兜底非 JSON 响应（nginx 502 HTML、代理错误页等），避免误判为 NETWORK_ERROR。
+    const text = await res.text()
+    if (!text) {
+      return { success: false, error: { code: `HTTP_${res.status}`, message: '上游服务响应异常' } }
+    }
+    try {
+      return JSON.parse(text) as ApiResponse<T>
+    } catch {
+      return { success: false, error: { code: `HTTP_${res.status}`, message: '上游服务响应异常' } }
+    }
   } catch (err: unknown) {
     if (err instanceof DOMException && err.name === 'AbortError') {
       return { success: false, error: { code: 'ABORTED', message: '请求已取消' } }
@@ -58,5 +76,3 @@ export async function clientApi<T>(
     return { success: false, error: { code: 'NETWORK_ERROR', message: '网络连接失败' } }
   }
 }
-
-export const api = clientApi

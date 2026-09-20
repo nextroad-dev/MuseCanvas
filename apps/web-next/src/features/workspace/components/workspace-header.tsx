@@ -4,9 +4,8 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import type { User } from '@/shared/types'
-import { useAccountCredits } from '@/shared/hooks/useAccount'
 import { useLogout } from '@/shared/hooks/useAuth'
-import { Coins, LogOut, Menu, Settings, X } from 'lucide-react'
+import { LogOut, Menu, Settings, X } from 'lucide-react'
 
 interface WorkspaceHeaderProps {
   initialUser: User
@@ -23,7 +22,6 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
 
-  const { data: creditBalance } = useAccountCredits()
   const logoutMutation = useLogout()
 
   const userInitial = initialUser.email?.charAt(0).toUpperCase() || 'U'
@@ -74,18 +72,6 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
         <span className="text-sm font-medium text-foreground md:hidden">{currentPageName}</span>
 
         <div className="ml-auto flex items-center gap-2">
-          {/* Credit balance link */}
-          <Link
-            href="/account"
-            className="flex min-h-10 items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface-subtle px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle-strong"
-          >
-            <Coins className="h-4 w-4 text-credit" aria-hidden="true" />
-            <span className="tabular-nums">
-              {creditBalance ? creditBalance.availableCredits : '—'}
-            </span>
-            <span className="text-muted-foreground">积分</span>
-          </Link>
-
           {/* Admin link if admin */}
           {isAdmin && (
             <Link
@@ -196,20 +182,6 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
                   </Link>
                 )
               })}
-
-              <Link
-                href="/account"
-                onClick={() => setDrawerOpen(false)}
-                className="flex min-h-10 items-center justify-between rounded-[var(--radius-control)] px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
-              >
-                <span className="flex items-center gap-2">
-                  <Coins className="h-4 w-4 text-credit" aria-hidden="true" />
-                  我的积分
-                </span>
-                <span className="text-xs font-medium tabular-nums text-foreground">
-                  {creditBalance ? `${creditBalance.availableCredits} 积分` : '—'}
-                </span>
-              </Link>
 
               {isAdmin && (
                 <div className="mt-4 border-t border-border pt-4">

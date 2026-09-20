@@ -4,12 +4,13 @@ import { useState } from 'react'
 import { useGenerateUiStore } from '@/shared/stores/generate-ui-store'
 import { useModelsQuery } from '@/shared/hooks/useModels'
 import { useJobsQuery, useCreateJob, useCancelJob, useRetryJob } from '@/shared/hooks/useJobs'
-import { useAccountCredits } from '@/shared/hooks/useAccount'
+import { buildGenerationInputs } from '@/shared/lib/generation-params'
+import { clearReferenceImages } from '@/shared/lib/reference-upload'
 import type { GenerationJob } from '@/shared/types'
+import { ReferenceImagesTrigger } from './reference-images-trigger'
 import {
   Brush,
   Clock,
-  Coins,
   Download,
   Loader2,
   Maximize2,
@@ -21,23 +22,24 @@ import {
 } from 'lucide-react'
 
 export function GenerateConsole() {
-  const {
-    prompt,
-    selectedModelId,
-    count,
-    size,
-    quality,
-    selectedJobId,
-    setPrompt,
-    setSelectedModelId,
-    setCount,
-    setSize,
-    setSelectedJobId,
-  } = useGenerateUiStore()
+  const prompt = useGenerateUiStore((s) => s.prompt)
+  const selectedModelId = useGenerateUiStore((s) => s.selectedModelId)
+  const count = useGenerateUiStore((s) => s.count)
+  const size = useGenerateUiStore((s) => s.size)
+  const quality = useGenerateUiStore((s) => s.quality)
+  const selectedJobId = useGenerateUiStore((s) => s.selectedJobId)
+  const setPrompt = useGenerateUiStore((s) => s.setPrompt)
+  const setSelectedModelId = useGenerateUiStore((s) => s.setSelectedModelId)
+  const setCount = useGenerateUiStore((s) => s.setCount)
+  const setSize = useGenerateUiStore((s) => s.setSize)
+  const setSelectedJobId = useGenerateUiStore((s) => s.setSelectedJobId)
+  // Derived primitives, so upload progress ticks never re-render this console.
+  const isReferenceUploadBusy = useGenerateUiStore((s) =>
+    s.stagedImages.some((image) => image.status === 'pending' || image.status === 'uploading' || image.status === 'processing'),
+  )
 
   const { data: models = [], isLoading: modelsLoading } = useModelsQuery()
   const { data: jobs = [], isLoading: jobsLoading } = useJobsQuery(30)
-  const { data: credits } = useAccountCredits()
 
   const createJobMutation = useCreateJob()
   const cancelJobMutation = useCancelJob()
@@ -54,10 +56,6 @@ export function GenerateConsole() {
   const selectedJob = jobs.find((j) => j.id === selectedJobId) || jobs[0] || null
   const isJobActive = selectedJob && ['queued', 'running', 'retry_wait'].includes(selectedJob.status)
 
-  // Calculate estimated credit cost
-  const creditPerImage = currentModel?.creditsPerImage ?? 1
-  const totalCreditCost = creditPerImage * count
-
   async function handleGenerate(e?: React.FormEvent) {
     if (e) e.preventDefault()
     if (!prompt.trim()) {
@@ -66,6 +64,23 @@ export function GenerateConsole() {
     }
     if (!activeModelId) {
       setErrorMessage('请选择生成模型')
+      return
+    }
+
+    // Read the snapshot imperatively so the gate can never be evaluated from a
+    // stale render of an upload that finished between render and click.
+    const stagedImages = useGenerateUiStore.getState().stagedImages
+    if (stagedImages.some((image) => image.status !== 'ready' && image.status !== 'error')) {
+      setErrorMessage('参考图正在上传，请等待完成后再生成')
+      return
+    }
+    if (stagedImages.some((image) => image.status === 'error')) {
+      setErrorMessage('存在上传失败的参考图，请重试或先移除')
+      return
+    }
+    const inputs = buildGenerationInputs(stagedImages)
+    if (stagedImages.length > 0 && inputs.length === 0) {
+      setErrorMessage('没有可用的参考图，请重新上传')
       return
     }
     setErrorMessage('')
@@ -79,8 +94,11 @@ export function GenerateConsole() {
           size,
           quality,
         },
+        ...(inputs.length > 0 ? { inputs } : {}),
       })
       setSelectedJobId(job.id)
+      // The uploads are now attached to the job; only release local object URLs.
+      await clearReferenceImages({ deleteRemote: false })
     } catch (err: any) {
       setErrorMessage(err.message || '创建生成任务失败')
     }
@@ -121,7 +139,7 @@ export function GenerateConsole() {
                   {modelsLoading && <option>加载模型中...</option>}
                   {models.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.displayName} ({m.creditsPerImage}积分/张)
+                      {m.displayName}
                     </option>
                   ))}
                 </select>
@@ -156,20 +174,24 @@ export function GenerateConsole() {
                     </button>
                   ))}
                 </div>
+                {/* Reference Images */}
+                <ReferenceImagesTrigger
+                  model={currentModel}
+                  disabled={createJobMutation.isPending}
+                />
               </div>
 
-              {/* Generate Button & Cost */}
+              {/* Generate Button */}
               <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-                  <Coins className="h-3.5 w-3.5 text-credit" />
-                  消耗 <span className="text-foreground">{totalCreditCost}</span> 积分
-                </span>
+                {isReferenceUploadBusy && (
+                  <span className="text-xs font-medium text-muted-foreground">参考图上传中…</span>
+                )}
 
                 <button
                   type="button"
                   onClick={() => handleGenerate()}
-                  disabled={createJobMutation.isPending || isJobActive}
-                  className="flex min-h-10 items-center gap-2 rounded-[var(--radius-control)] bg-accent px-5 text-sm font-medium text-accent-contrast shadow-sm transition-colors hover:bg-accent-hover disabled:opacity-50"
+                  disabled={createJobMutation.isPending || isJobActive || isReferenceUploadBusy}
+                  className="flex min-h-10 items-center gap-2 rounded-[var(--radius-control)] bg-primary px-5 text-sm font-medium text-canvas transition-colors duration-[var(--motion-fast)] hover:bg-primary-hover disabled:opacity-50"
                 >
                   {createJobMutation.isPending || isJobActive ? (
                     <>

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { serverApi } from '@/shared/services/server-api'
 import { LoginForm } from '@/features/auth/components/login-form'
+import { ServiceUnavailable } from '@/shared/components/service-unavailable'
 import { Suspense } from 'react'
 
 export const dynamic = 'force-dynamic'
@@ -17,10 +18,14 @@ export default async function LoginPage({
 }) {
   const { from } = await searchParams
 
-  // Check if already authenticated via server-side session
-  const meRes = await serverApi.getMe()
-  if (meRes.success && meRes.data) {
+  // Server-side session pre-check: authenticated users redirect; a downed
+  // backend must not render a form whose submit is guaranteed to fail.
+  const sessionRes = await serverApi.getMe()
+  if (sessionRes.success && sessionRes.data?.user) {
     redirect(from || '/generate')
+  }
+  if (sessionRes.error?.code === 'UPSTREAM_UNAVAILABLE') {
+    return <ServiceUnavailable />
   }
 
   return (

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import { useAuthUiStore } from '@/shared/stores/auth-ui-store'
 import type { User } from '@/shared/types'
@@ -34,7 +35,7 @@ export function LoginForm() {
 
     try {
       const res = await api<{ accepted: boolean; nextStep: 'invitation' | 'otp' }>(
-        '/api/auth/otp/request',
+        API_ENDPOINTS.auth.otpRequest,
         {
           method: 'POST',
           body: { email: email.trim(), invitationCode: invitationCode.trim() || undefined },
@@ -63,7 +64,7 @@ export function LoginForm() {
     setLoading(true)
 
     try {
-      const res = await api<{ user: User }>('/api/auth/otp/verify', {
+      const res = await api<{ user: User }>(API_ENDPOINTS.auth.otpVerify, {
         method: 'POST',
         body: {
           email: email.trim(),
@@ -222,13 +223,13 @@ export function LoginForm() {
         <p className="text-center text-xs text-muted-foreground">或者通过第三方授权直接登录</p>
         <div className="mt-3 flex justify-center gap-3">
           <a
-            href="/api/auth/oauth/github/start"
+            href={API_ENDPOINTS.auth.oauthStart('github')}
             className="flex min-h-10 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-4 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle"
           >
             GitHub 登录
           </a>
           <a
-            href="/api/auth/oauth/google/start"
+            href={API_ENDPOINTS.auth.oauthStart('google')}
             className="flex min-h-10 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-4 text-xs font-medium text-foreground transition-colors hover:bg-surface-subtle"
           >
             Google 登录

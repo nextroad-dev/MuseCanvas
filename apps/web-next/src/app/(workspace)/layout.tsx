@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { serverApi } from '@/shared/services/server-api'
+import { ServiceUnavailable } from '@/shared/components/service-unavailable'
 import { WorkspaceHeader } from '@/features/workspace/components/workspace-header'
 
 export const dynamic = 'force-dynamic'
@@ -9,13 +10,15 @@ export default async function WorkspaceLayout({
 }: {
   children: React.ReactNode
 }) {
-  const meRes = await serverApi.getMe()
+  const sessionRes = await serverApi.getMe()
+  const user = sessionRes.success ? sessionRes.data?.user : undefined
 
-  if (!meRes.success || !meRes.data) {
+  if (!user) {
+    if (sessionRes.error?.code === 'UPSTREAM_UNAVAILABLE') {
+      return <ServiceUnavailable />
+    }
     redirect('/login')
   }
-
-  const user = meRes.data
 
   return (
     <div className="flex h-screen flex-col bg-canvas text-foreground">

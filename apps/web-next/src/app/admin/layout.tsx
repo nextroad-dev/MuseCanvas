@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { serverApi } from '@/shared/services/server-api'
+import { ServiceUnavailable } from '@/shared/components/service-unavailable'
 import { AdminShell } from '@/features/admin/components/admin-shell'
 
 export const dynamic = 'force-dynamic'
@@ -14,15 +15,19 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode
 }) {
-  const meRes = await serverApi.getMe()
+  const sessionRes = await serverApi.getMe()
+  const user = sessionRes.success ? sessionRes.data?.user : undefined
 
-  if (!meRes.success || !meRes.data) {
+  if (!user) {
+    if (sessionRes.error?.code === 'UPSTREAM_UNAVAILABLE') {
+      return <ServiceUnavailable />
+    }
     redirect('/login?from=/admin')
   }
 
-  if (meRes.data.role !== 'admin') {
+  if (user.role !== 'admin') {
     redirect('/generate')
   }
 
-  return <AdminShell user={meRes.data}>{children}</AdminShell>
+  return <AdminShell user={user}>{children}</AdminShell>
 }

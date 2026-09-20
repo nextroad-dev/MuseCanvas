@@ -2,29 +2,24 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { API_ENDPOINTS, type OAuthProviderName } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
-import { useAccountCredits } from '@/shared/hooks/useAccount'
-import type { UserProfile, OAuthIdentity, LedgerEntry } from '@/shared/types'
+import type { UserProfile, OAuthIdentity } from '@/shared/types'
 import {
   Calendar,
-  Coins,
-  History,
   Link2,
-  Loader2,
   Mail,
-  RefreshCw,
   ShieldCheck,
   Unlink,
 } from 'lucide-react'
 
 export function AccountView() {
   const queryClient = useQueryClient()
-  const { data: credits, isLoading: creditsLoading, refetch: refetchCredits } = useAccountCredits()
 
   const { data: userProfile, isLoading: profileLoading } = useQuery({
     queryKey: ['account', 'me'],
     queryFn: async () => {
-      const res = await api<UserProfile>('/api/auth/me')
+      const res = await api.getMe()
       return res.data || null
     },
   })
@@ -32,22 +27,14 @@ export function AccountView() {
   const { data: identities = [], refetch: refetchIdentities } = useQuery({
     queryKey: ['account', 'oauth-identities'],
     queryFn: async () => {
-      const res = await api<{ items: OAuthIdentity[] }>('/api/account/oauth-identities')
-      return res.data?.items || []
-    },
-  })
-
-  const { data: ledger = [], isLoading: ledgerLoading, refetch: refetchLedger } = useQuery({
-    queryKey: ['account', 'ledger'],
-    queryFn: async () => {
-      const res = await api<{ items: LedgerEntry[] }>('/api/account/ledger?limit=20')
-      return res.data?.items || []
+      const res = await api<OAuthIdentity[]>(API_ENDPOINTS.account.oauth)
+      return res.data || []
     },
   })
 
   const unlinkMutation = useMutation({
-    mutationFn: async (provider: string) => {
-      const res = await api(`/api/account/oauth-identities/${provider}`, { method: 'DELETE' })
+    mutationFn: async (provider: OAuthProviderName) => {
+      const res = await api(API_ENDPOINTS.account.oauthUnlink(provider), { method: 'DELETE' })
       if (!res.success) throw new Error(res.error?.message || '解除绑定失败')
       return res.data
     },
@@ -64,7 +51,7 @@ export function AccountView() {
       <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-foreground">账户与安全</h1>
-          <p className="text-sm text-muted-foreground">管理您的个人资料、积分配额与第三方授权绑定。</p>
+          <p className="text-sm text-muted-foreground">管理您的个人资料与第三方授权绑定。</p>
         </div>
 
         {/* User profile card */}
@@ -99,46 +86,6 @@ export function AccountView() {
           </div>
         </div>
 
-        {/* Credits Card */}
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-foreground">积分余额</h2>
-            <button
-              type="button"
-              onClick={() => {
-                refetchCredits()
-                refetchLedger()
-              }}
-              className="flex items-center gap-1 rounded-[var(--radius-control)] border border-border bg-surface-subtle px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <RefreshCw className="h-3 w-3" />
-              刷新
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="rounded-[var(--radius-control)] border border-border/80 bg-surface-subtle p-4">
-              <span className="text-xs text-muted-foreground">可用积分</span>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-3xl font-bold tracking-tight text-foreground font-mono">
-                  {credits ? credits.availableCredits : '—'}
-                </span>
-                <span className="text-xs text-muted-foreground">点</span>
-              </div>
-            </div>
-
-            <div className="rounded-[var(--radius-control)] border border-border/80 bg-surface-subtle p-4">
-              <span className="text-xs text-muted-foreground">冻结中积分 (生图中)</span>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-3xl font-bold tracking-tight text-muted-foreground font-mono">
-                  {credits ? credits.reservedCredits : '0'}
-                </span>
-                <span className="text-xs text-muted-foreground">点</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Third-party OAuth Identities */}
         <div className="rounded-[var(--radius-card)] border border-border bg-surface p-6">
           <h2 className="text-sm font-semibold text-foreground mb-4">第三方账号绑定</h2>
@@ -167,7 +114,7 @@ export function AccountView() {
                 </button>
               ) : (
                 <a
-                  href="/api/auth/oauth/github/start"
+                  href={API_ENDPOINTS.account.oauthLinkStart('github')}
                   className="flex items-center gap-1 text-xs text-accent hover:underline"
                 >
                   <Link2 className="h-3 w-3" />
@@ -200,7 +147,7 @@ export function AccountView() {
                 </button>
               ) : (
                 <a
-                  href="/api/auth/oauth/google/start"
+                  href={API_ENDPOINTS.account.oauthLinkStart('google')}
                   className="flex items-center gap-1 text-xs text-accent hover:underline"
                 >
                   <Link2 className="h-3 w-3" />
@@ -208,59 +155,6 @@ export function AccountView() {
                 </a>
               )}
             </div>
-          </div>
-        </div>
-
-        {/* Ledger Transaction History */}
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface p-6">
-          <h2 className="text-sm font-semibold text-foreground mb-4">积分收支明细</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-border bg-surface-subtle text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 font-medium">类型</th>
-                  <th className="px-3 py-2 font-medium">点数变动</th>
-                  <th className="px-3 py-2 font-medium">备注说明</th>
-                  <th className="px-3 py-2 font-medium">记录时间</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {ledgerLoading ? (
-                  <tr>
-                    <td colSpan={4} className="p-6 text-center text-muted-foreground">
-                      <Loader2 className="mx-auto h-4 w-4 animate-spin" />
-                    </td>
-                  </tr>
-                ) : ledger.length > 0 ? (
-                  ledger.map((entry) => {
-                    const delta = entry.availableDelta
-                    return (
-                      <tr key={entry.id} className="hover:bg-surface-subtle/50">
-                        <td className="px-3 py-2 font-medium capitalize">{entry.operation}</td>
-                        <td
-                          className={`px-3 py-2 font-mono font-bold ${
-                            delta > 0 ? 'text-success' : delta < 0 ? 'text-danger' : 'text-muted-foreground'
-                          }`}
-                        >
-                          {delta > 0 ? `+${delta}` : delta}
-                        </td>
-                        <td className="px-3 py-2 text-muted-foreground">{entry.note || '—'}</td>
-                        <td className="px-3 py-2 font-mono text-muted-foreground">
-                          {new Date(entry.createdAt).toLocaleString()}
-                        </td>
-                      </tr>
-                    )
-                  })
-
-                ) : (
-                  <tr>
-                    <td colSpan={4} className="p-6 text-center text-muted-foreground">
-                      暂无积分明细
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
           </div>
         </div>
       </div>

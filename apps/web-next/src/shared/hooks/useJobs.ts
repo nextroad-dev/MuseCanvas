@@ -1,10 +1,9 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/shared/services/api'
+import { api, ApiError } from '@/shared/services/api'
 import type { GenerationJob } from '@/shared/types'
 import { LIBRARY_QUERY_KEY } from './useLibrary'
-import { CREDITS_QUERY_KEY } from './useAccount'
 
 export const JOBS_QUERY_KEY = ['jobs'] as const
 
@@ -14,12 +13,16 @@ export function useJobsQuery(limit?: number) {
     queryFn: async () => {
       const res = await api.getJobs()
       if (!res.success || !res.data) {
-        throw new Error(res.error?.message || '获取任务列表失败')
+        throw new ApiError(res.error?.code || 'UNKNOWN', res.error?.message || '获取任务列表失败')
       }
       const items = (res.data.items || []) as GenerationJob[]
       return limit ? items.slice(0, limit) : items
     },
     refetchInterval: (query) => {
+      // Expired session must stop the 2.5s polling storm, not keep hammering 401s.
+      if (query.state.error instanceof ApiError && query.state.error.code === 'UNAUTHORIZED') {
+        return false
+      }
       const jobs = query.state.data
       if (!jobs || jobs.length === 0) return false
       const hasActive = jobs.some(
@@ -44,7 +47,6 @@ export function useCreateJobMutation() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-      queryClient.invalidateQueries({ queryKey: CREDITS_QUERY_KEY })
     },
   })
 }
@@ -62,7 +64,6 @@ export function useCancelJobMutation() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-      queryClient.invalidateQueries({ queryKey: CREDITS_QUERY_KEY })
     },
   })
 }
@@ -80,7 +81,6 @@ export function useRetryJobMutation() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-      queryClient.invalidateQueries({ queryKey: CREDITS_QUERY_KEY })
     },
   })
 }

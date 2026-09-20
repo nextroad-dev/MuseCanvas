@@ -209,6 +209,11 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
   if (rawNormalized && typeof rawNormalized.parameters === 'object' && rawNormalized.parameters !== null) {
     normalizedParameters = rawNormalized.parameters as Record<string, unknown>
   }
+  // Only the already-sanitised provider detail is user-visible; never spread the object.
+  const providerError = row.provider_error && typeof row.provider_error === 'object'
+    ? row.provider_error as { detail?: unknown }
+    : undefined
+  const providerDetail = typeof providerError?.detail === 'string' ? providerError.detail.trim() : ''
   return {
     id: row.id,
     createdBy: row.created_by,
@@ -240,6 +245,7 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
     count: row.count !== null && row.count !== undefined ? Number(row.count) : undefined,
     status: row.status,
     errorCode: row.error_code || undefined,
+    errorMessage: providerDetail ? providerDetail.slice(0, 300) : undefined,
     createdAt: new Date(row.created_at as string | number | Date).toISOString(),
     startedAt: row.started_at ? new Date(row.started_at as string | number | Date).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at as string | number | Date).toISOString() : undefined,

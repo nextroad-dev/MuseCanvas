@@ -106,6 +106,26 @@ test('user job DTO applies final prompt visibility without changing the original
   assert.equal(visible.finalPrompt, 'optimized'); assert.equal(visible.prompt, 'original')
 })
 
+test('user job DTO exposes only the truncated provider failure detail', async () => {
+  const base = { id: 'job', created_by: 'user', model_id: 'model', model_name: 'Video', prompt: 'p', size: '16:9', count: 1, status: 'failed', error_code: 'PROVIDER_REJECTED', created_at: new Date() }
+  const rejected = await jobDto({ ...base, provider_error: { status: 400, detail: '  Input image resolution is unsupported  ', providerReferenceId: 'nested-ref' } })
+  assert.equal(rejected.errorCode, 'PROVIDER_REJECTED')
+  assert.equal(rejected.errorMessage, 'Input image resolution is unsupported')
+  assert.equal(JSON.stringify(rejected).includes('nested-ref'), false)
+  assert.equal(JSON.stringify(rejected).includes('"status":400'), false)
+  const truncated = await jobDto({ ...base, provider_error: { detail: 'x'.repeat(400) } })
+  assert.equal(truncated.errorMessage?.length, 300)
+  for (const row of [
+    base,
+    { ...base, provider_error: null },
+    { ...base, provider_error: { status: 502 } },
+    { ...base, provider_error: { detail: '   ' } },
+    { ...base, provider_error: 'not-an-object' },
+  ]) {
+    assert.equal((await jobDto(row)).errorMessage, undefined)
+  }
+})
+
 test('manual retry resumes from the correct generation phase', () => {
   assert.deepEqual(retryPreparation({ optimization_mode: 'disabled' }), { phase: 'image_generating', resetOptimization: false })
   assert.deepEqual(retryPreparation({ optimization_mode: 'enabled', prompt_optimization_id: 'po', final_prompt: 'optimized prompt', template_instruction_snapshot: 'template' }), { phase: 'image_generating', resetOptimization: false })

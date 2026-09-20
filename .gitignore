@@ -1,9 +1,12 @@
-# Dependencies
+# Dependencies and package manager caches
 node_modules/
 .pnp/
 .pnp.js
+.npm-cache/
+.pnpm-store/
+.npm/
 
-# Build output
+# Build output and compiler caches
 dist/
 build/
 out/
@@ -11,6 +14,8 @@ out/
 .nuxt/
 .output/
 .vercel/
+.turbo/
+.swc/
 
 # Test and tool caches
 coverage/
@@ -20,6 +25,9 @@ coverage/
 .vite/
 *.tsbuildinfo
 next-env.d.ts
+test-results/
+playwright-report/
+blob-report/
 
 # Logs
 *.log
@@ -36,6 +44,7 @@ pnpm-debug.log*
 # Editors and operating systems
 .idea/
 .vscode/
+.cursor/
 .DS_Store
 Thumbs.db
 Desktop.ini
@@ -62,7 +71,6 @@ CLAUDE.md
 .qoder/
 /skills/
 .runtime/
-
-
-Template
+.zcode/
 .mimosa/
+Template/

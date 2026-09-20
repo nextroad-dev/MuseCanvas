@@ -21,8 +21,8 @@ const nextConfig = {
     return [
       {
         source: '/history',
-        destination: '/generate?tab=history',
-        permanent: true,
+        destination: '/library',
+        permanent: false,
       },
       {
         source: '/admin/registration',

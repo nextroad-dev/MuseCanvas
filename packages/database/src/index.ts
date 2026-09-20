@@ -13,7 +13,6 @@ export async function transaction<T>(fn: (client: pg.PoolClient) => Promise<T>):
   finally { client.release() }
 }
 
-export * from './transactions/billing'
 export * from './repositories/model-config-revisions'
 export * from './repositories/provider-runs'
 export * from './repositories/output-ingestions'

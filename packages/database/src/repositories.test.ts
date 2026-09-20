@@ -49,11 +49,10 @@ test('model_config_revisions repository creates and retrieves revisions with imm
           credential_id: (params[7] as string) || null,
           credential_schema_version: (params[8] as number) || null,
           capabilities: JSON.parse(params[9] as string),
-          pricing: JSON.parse(params[10] as string),
-          normalized_config: JSON.parse(params[11] as string),
-          defaults: JSON.parse(params[12] as string),
-          snapshot_digest: params[13] as string,
-          created_by: (params[14] as string) || null,
+          normalized_config: JSON.parse(params[10] as string),
+          defaults: JSON.parse(params[11] as string),
+          snapshot_digest: params[12] as string,
+          created_by: (params[13] as string) || null,
           created_at: new Date('2026-09-03T12:00:00Z'),
         }
         revisions.push(row)
@@ -82,7 +81,6 @@ test('model_config_revisions repository creates and retrieves revisions with imm
     pluginId: 'seedream-image',
     vendorModelId: 'ep-seedream-1',
     capabilities: { mediaKind: 'image', modes: ['text_to_image'] },
-    pricing: { scheme: 'per_image_v1', creditsPerImage: 10 },
     snapshotDigest: 'sha256-hash',
   })
 
@@ -462,7 +460,6 @@ test('createModelConfigRevision locks model row before MAX query and maps unique
         providerId: 'volcengine',
         pluginId: 'seedream-image',
         capabilities: {},
-        pricing: {},
         snapshotDigest: 'sha256-hash',
       })
     },

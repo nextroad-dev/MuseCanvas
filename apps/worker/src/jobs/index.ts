@@ -11,7 +11,6 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import {
-  captureGenerationCredits,
   acquireModelCapacity,
   acquireWorkerLease,
   db,
@@ -20,7 +19,6 @@ import {
   getModelConfigRevisionById,
   getProviderRunById,
   registerOutputIngestion,
-  releaseGenerationCredits,
   releaseWorkerLease,
   transaction,
   updateOutputIngestion,
@@ -306,10 +304,6 @@ export async function persistJobSuccess(
     "UPDATE generation_jobs SET status='succeeded',phase='completed',progress=100,completed_at=now(),updated_at=now(),error_code=NULL,provider_error=NULL WHERE id=$1",
     [input.jobId],
   )
-  const charge = await client.query('SELECT 1 FROM generation_charges WHERE job_id = $1', [input.jobId])
-  if (charge.rowCount && charge.rowCount > 0) {
-    await captureGenerationCredits(client, { jobId: input.jobId })
-  }
   return true
 }
 
@@ -343,12 +337,6 @@ export async function persistJobFailure(
       input.providerError?.providerReferenceId || null,
     ],
   )
-  if (!input.retryable && updated.rowCount && updated.rowCount > 0) {
-    const charge = await client.query('SELECT 1 FROM generation_charges WHERE job_id = $1', [input.jobId])
-    if (charge.rowCount && charge.rowCount > 0) {
-      await releaseGenerationCredits(client, { jobId: input.jobId })
-    }
-  }
   return Boolean(updated.rowCount && updated.rowCount > 0)
 }
 
@@ -576,10 +564,6 @@ async function cancelJobWithRun(run: ProviderRunEntity, job: Record<string, unkn
       completed: true,
     }).catch(() => null)
     await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running','retry_wait')", [job.id])
-    const charge = await client.query('SELECT 1 FROM generation_charges WHERE job_id=$1', [job.id])
-    if (charge.rowCount && charge.rowCount > 0) {
-      await releaseGenerationCredits(client, { jobId: String(job.id) })
-    }
   })
 }
 
@@ -885,10 +869,6 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
     if (!job || !['queued', 'retry_wait'].includes(String(job.status))) return null
     if (isCancelRequested(job)) {
       await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [job.id])
-      const charge = await client.query('SELECT 1 FROM generation_charges WHERE job_id=$1', [job.id])
-      if (charge.rowCount && charge.rowCount > 0) {
-        await releaseGenerationCredits(client, { jobId: String(job.id) })
-      }
       return { ...(job as object), status: 'canceled', canceledAtClaim: true } as unknown as Record<string, unknown>
     }
     await client.query("UPDATE generation_jobs SET status='running',started_at=COALESCE(started_at,now()),updated_at=now(),attempt=attempt+1,phase=COALESCE(phase,'preprocessing') WHERE id=$1", [job.id])

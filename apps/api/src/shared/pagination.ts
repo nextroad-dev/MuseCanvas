@@ -22,9 +22,8 @@ export const encodeCursor = (row: { created_at: Date; id: string }) =>
 export const boundedLimit = (request: NextRequest) =>
   Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get('limit') || 50) || 50))
 
-export const userJobSelect = `SELECT j.*,po.input_prompt,po.final_prompt,po.template_name_snapshot,po.status optimization_status,s.allow_user_read_final_prompt,gc.quoted_credits,gc.state AS billing_state
+export const userJobSelect = `SELECT j.*,po.input_prompt,po.final_prompt,po.template_name_snapshot,po.status optimization_status,s.allow_user_read_final_prompt
   FROM generation_jobs j LEFT JOIN prompt_optimizations po ON po.id=j.prompt_optimization_id AND po.deleted_at IS NULL
-  LEFT JOIN generation_charges gc ON gc.job_id=j.id
   CROSS JOIN prompt_optimization_settings s`
 
 export type JobInputRecord = {

@@ -141,9 +141,10 @@ export type SyncRetryDiagnostic = { status?: unknown; code?: unknown } | null | 
 /**
  * Synchronous image plugins have no provider-guaranteed idempotency key, so
  * an automatic resubmit is only safe for explicit HTTP 429 diagnostics
- * (known non-acceptance: nothing was charged or created). Timeouts,
- * transport errors, and 5xx TEMPORARY_ERRORs may have been accepted
- * provider-side and must terminate/release instead of resubmitting.
+ * (known non-acceptance: no capacity was consumed and no output was
+ * created). Timeouts, transport errors, and 5xx TEMPORARY_ERRORs may have
+ * been accepted provider-side and must terminate/release instead of
+ * resubmitting.
  */
 export function isSyncRetryableSubmitCode(
   code: string | undefined | null,

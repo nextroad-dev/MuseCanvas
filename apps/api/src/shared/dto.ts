@@ -1,24 +1,11 @@
 import { signedAssetUrl } from './services'
 
-export const userDto = (row: Record<string, unknown>, creditBalance?: Record<string, unknown> | null) => ({
+export const userDto = (row: Record<string, unknown>) => ({
   id: row.id as string,
   email: row.email as string,
   role: row.role as string,
   status: row.status as string,
   createdAt: new Date(row.created_at as string | number | Date).toISOString(),
-  ...(creditBalance !== undefined
-    ? {
-      creditBalance: creditBalance
-        ? {
-          availableCredits: Number((creditBalance as Record<string, unknown>).available_credits || 0),
-          reservedCredits: Number((creditBalance as Record<string, unknown>).reserved_credits || 0),
-          updatedAt: (creditBalance as Record<string, unknown>).updated_at
-            ? new Date((creditBalance as Record<string, unknown>).updated_at as string | number | Date).toISOString()
-            : undefined,
-        }
-        : null,
-    }
-    : {}),
 })
 
 function parseJsonField(value: unknown): Record<string, unknown> | null {
@@ -118,12 +105,6 @@ export function capabilitiesFromRow(row: Record<string, unknown>): {
   }
 }
 
-export function pricingFromRow(row: Record<string, unknown>): Record<string, unknown> {
-  const snapshot = parseJsonField(row.pricing)
-  if (snapshot && typeof snapshot.scheme === 'string') return snapshot
-  return { scheme: 'per_image_v1', creditsPerImage: Number(row.credits_per_image || 0) }
-}
-
 export function defaultsFromRow(row: Record<string, unknown>): Record<string, unknown> {
   return parseJsonField(row.defaults) || {}
 }
@@ -131,7 +112,6 @@ export function defaultsFromRow(row: Record<string, unknown>): Record<string, un
 export const publicModelDto = (row: Record<string, unknown>) => {
   const modelKind = (row.media_kind as string) || (row.model_kind as string) || 'image'
   const capabilities = capabilitiesFromRow(row)
-  const pricing = pricingFromRow(row)
   const defaults = defaultsFromRow(row)
   return {
     id: row.id as string,
@@ -143,7 +123,6 @@ export const publicModelDto = (row: Record<string, unknown>) => {
     modes: capabilities.modes,
     parameters: capabilities.parameters,
     inputSlots: capabilities.inputSlots,
-    pricing,
     defaults,
     // Legacy image fields for compatibility.
     adapter: row.adapter as string,
@@ -153,7 +132,6 @@ export const publicModelDto = (row: Record<string, unknown>) => {
     maxInputImages: row.max_input_images !== undefined && row.max_input_images !== null ? Number(row.max_input_images) : 0,
     enabled: Boolean(row.enabled),
     sortOrder: Number(row.sort_order || 0),
-    creditsPerImage: Number(row.credits_per_image || 0),
   }
 }
 
@@ -262,8 +240,6 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
     count: row.count !== null && row.count !== undefined ? Number(row.count) : undefined,
     status: row.status,
     errorCode: row.error_code || undefined,
-    quotedCredits: row.quoted_credits !== undefined && row.quoted_credits !== null ? Number(row.quoted_credits) : undefined,
-    billingState: (row.billing_state as string) || undefined,
     createdAt: new Date(row.created_at as string | number | Date).toISOString(),
     startedAt: row.started_at ? new Date(row.started_at as string | number | Date).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at as string | number | Date).toISOString() : undefined,
@@ -331,8 +307,6 @@ export function adminJobDto(row: Record<string, unknown>) {
       ? row.provider_error as { status?: number; providerReferenceId?: string; [key: string]: unknown }
       : undefined,
     providerReferenceId: row.provider_reference_id || undefined,
-    quotedCredits: row.quoted_credits !== undefined && row.quoted_credits !== null ? Number(row.quoted_credits) : undefined,
-    billingState: (row.billing_state as string) || undefined,
     durationMs: startedAt && completedAt ? completedAt.getTime() - startedAt.getTime() : undefined,
     createdAt: new Date(row.created_at as string | number | Date).toISOString(),
     completedAt: completedAt?.toISOString(),
@@ -374,30 +348,6 @@ export function oauthIdentityDto(row: Record<string, unknown>) {
     avatarUrl: (row.avatar_url as string) || undefined,
     linkedAt: new Date(row.linked_at as string | number | Date).toISOString(),
     lastLoginAt: row.last_login_at ? new Date(row.last_login_at as string | number | Date).toISOString() : undefined,
-  }
-}
-
-export function creditLedgerDto(row: Record<string, unknown>) {
-  return {
-    id: row.id as string,
-    operation: row.operation as string,
-    availableDelta: Number(row.available_delta || 0),
-    reservedDelta: Number(row.reserved_delta || 0),
-    availableAfter: Number(row.available_after || 0),
-    reservedAfter: Number(row.reserved_after || 0),
-    referenceType: (row.reference_type as string) || undefined,
-    referenceId: (row.reference_id as string) || undefined,
-    note: (row.note as string) || undefined,
-    createdAt: new Date(row.created_at as string | number | Date).toISOString(),
-  }
-}
-
-export function billingSettingsDto(row: Record<string, unknown>, promptOptRow?: Record<string, unknown>) {
-  return {
-    enabled: Boolean(row.enabled),
-    signupGrant: Number(row.signup_grant || 0),
-    promptOptimizationCredits: promptOptRow ? Number(promptOptRow.credits_per_job || 0) : undefined,
-    updatedAt: new Date(row.updated_at as string | number | Date).toISOString(),
   }
 }
 

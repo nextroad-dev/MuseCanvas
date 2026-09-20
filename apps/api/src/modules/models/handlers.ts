@@ -3,7 +3,7 @@ import { db, transaction } from '../../../../../packages/database/src/index'
 import { createModelConfigRevision } from '@musecanvas/database'
 import { type Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
-import { capabilitiesFromRow, defaultsFromRow, modelDto, pricingFromRow } from '../../shared/dto'
+import { capabilitiesFromRow, defaultsFromRow, modelDto } from '../../shared/dto'
 import { normalizedProviderBaseUrl, presetById, sanitizeReasoningEffort } from '../../shared/model-helpers'
 import { globalProviderRegistry, MAX_INPUT_IMAGES } from '../../../../../packages/providers/src/index'
 import type { MediaProviderPlugin } from '../../../../../packages/providers/src/index'
@@ -226,7 +226,6 @@ export function videoPresetRevisionContract(
   preset: ModelPreset | null | undefined,
 ): {
   capabilities: Record<string, unknown>
-  pricing: Record<string, unknown>
   defaults: Record<string, unknown>
 } | null {
   if (!preset || preset.modelKind !== 'video') return null
@@ -238,7 +237,6 @@ export function videoPresetRevisionContract(
       maxCount: preset.maxCount,
       supportedMediaKinds: ['video'],
     },
-    pricing: preset.pricing,
     defaults: preset.defaults,
   }
 }
@@ -296,47 +294,12 @@ function buildPluginCapabilities(
   return { modes: [], parameters: [], inputSlots: [], maxCount: 1, supportedMediaKinds: [mediaKind], mediaKind }
 }
 
-function buildPluginPricing(
-  mediaKind: 'image' | 'video',
-  input: Record<string, unknown>,
-  fallbackCreditsPerImage: number,
-): { pricing: Record<string, unknown>; creditsPerImage: number } {
-  const provided = asRecord(input.pricing)
-  if (provided && typeof provided.scheme === 'string') {
-    if (provided.scheme === 'per_image_v1') {
-      const credits = Number(provided.creditsPerImage)
-      if (!Number.isSafeInteger(credits) || credits < 0) throw new Error('INVALID_PRICING')
-      return { pricing: { scheme: 'per_image_v1', creditsPerImage: credits }, creditsPerImage: credits }
-    }
-    if (provided.scheme === 'per_second_v1') {
-      const credits = Number(provided.creditsPerSecond)
-      if (!Number.isSafeInteger(credits) || credits < 0) throw new Error('INVALID_PRICING')
-      const min = provided.minDurationSeconds !== undefined ? Number(provided.minDurationSeconds) : undefined
-      const max = provided.maxDurationSeconds !== undefined ? Number(provided.maxDurationSeconds) : undefined
-      if ((min !== undefined && (!Number.isInteger(min) || min < 1)) || (max !== undefined && (!Number.isInteger(max) || max < 1))) {
-        throw new Error('INVALID_PRICING')
-      }
-      return {
-        pricing: { scheme: 'per_second_v1', creditsPerSecond: credits, ...(min !== undefined ? { minDurationSeconds: min } : {}), ...(max !== undefined ? { maxDurationSeconds: max } : {}) },
-        creditsPerImage: 0,
-      }
-    }
-    throw new Error('INVALID_PRICING')
-  }
-  if (mediaKind === 'video') {
-    return { pricing: { scheme: 'per_second_v1', creditsPerSecond: 10, minDurationSeconds: 1, maxDurationSeconds: 60 }, creditsPerImage: 0 }
-  }
-  if (!Number.isSafeInteger(fallbackCreditsPerImage) || fallbackCreditsPerImage < 0) throw new Error('INVALID_PRICING')
-  return { pricing: { scheme: 'per_image_v1', creditsPerImage: fallbackCreditsPerImage }, creditsPerImage: fallbackCreditsPerImage }
-}
-
 async function snapshotRevisionForRow(
   client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
   row: Record<string, unknown>,
   actorId: string,
   contract?: {
     capabilities: Record<string, unknown>
-    pricing: Record<string, unknown>
     defaults: Record<string, unknown>
   } | null,
 ): Promise<Record<string, unknown>> {
@@ -344,9 +307,8 @@ async function snapshotRevisionForRow(
   const pluginId = (row.plugin_id as string) || 'legacy-image'
   const pluginVersion = (row.plugin_version as string) || '1.0.0'
   const capabilities = contract?.capabilities ?? capabilitiesFromRow(row) as unknown as Record<string, unknown>
-  const pricing = contract?.pricing ?? pricingFromRow(row)
   const defaults = contract?.defaults ?? { ...(defaultsFromRow(row)), ...(asRecord(row.defaults) || {}) }
-  const digest = snapshotDigest({ modelId: row.id, providerId, pluginId, pluginVersion, capabilities, pricing, defaults })
+  const digest = snapshotDigest({ modelId: row.id, providerId, pluginId, pluginVersion, capabilities, defaults })
   const existing = await client.query(
     'SELECT id FROM model_config_revisions WHERE model_id=$1 AND snapshot_digest=$2 ORDER BY revision DESC LIMIT 1',
     [row.id, digest],
@@ -364,7 +326,6 @@ async function snapshotRevisionForRow(
       credentialId: (row.provider_credential_id as string) || null,
       credentialSchemaVersion: 1,
       capabilities,
-      pricing,
       normalizedConfig: {
         vendorModelId: row.vendor_model_id,
         baseUrl: row.base_url,
@@ -381,7 +342,7 @@ async function snapshotRevisionForRow(
   } else {
     await client.query('UPDATE model_configs SET latest_revision_id=$1 WHERE id=$2', [revisionId, row.id])
   }
-  return { ...row, capabilities, pricing, defaults, revision, latest_revision_id: revisionId }
+  return { ...row, capabilities, defaults, revision, latest_revision_id: revisionId }
 }
 
 export async function upsertModel(
@@ -486,15 +447,6 @@ export async function upsertModel(
     if (!Number.isInteger(concurrencyLimit) || concurrencyLimit < 1 || concurrencyLimit > 50 || !Number.isInteger(sortOrder)) {
       return fail('INVALID_INPUT', '并发或排序配置无效')
     }
-    let pricing: Record<string, unknown>
-    let creditsPerImage = 0
-    try {
-      const built = buildPluginPricing(mediaKind, input, Number(input.creditsPerImage ?? existing?.credits_per_image ?? 0))
-      pricing = built.pricing
-      creditsPerImage = built.creditsPerImage
-    } catch {
-      return fail('INVALID_INPUT', '模型计费配置无效')
-    }
     let capabilities: Record<string, unknown> = buildPluginCapabilities(pluginId, mediaKind, input, existing)
     let defaults: Record<string, unknown> = { ...(asRecord(input.defaults) || {}) }
     const watermark = typeof input.watermark === 'boolean' ? input.watermark : Boolean(existing?.watermark ?? false)
@@ -563,28 +515,28 @@ export async function upsertModel(
           `UPDATE model_configs SET display_name=$1,vendor_model_id=$2,base_url=$3,sizes=$4::jsonb,quality_options=$5::jsonb,max_count=$6,
             concurrency_limit=$7,enabled=$8,watermark=$9,sort_order=$10,
             provider_credential_id=CASE WHEN $11::text IS NULL THEN provider_credential_id WHEN $11::text = '' THEN NULL ELSE $11::uuid END,
-            model_kind=$12,provider_id=$13,plugin_id=$14,plugin_version=$15,max_input_images=$16,credits_per_image=$17,updated_at=now()
-           WHERE id=$18 AND deleted_at IS NULL RETURNING *`,
+            model_kind=$12,provider_id=$13,plugin_id=$14,plugin_version=$15,max_input_images=$16,updated_at=now()
+           WHERE id=$17 AND deleted_at IS NULL RETURNING *`,
           [displayName, vendorModelId, baseUrl === undefined ? existing?.base_url || null : baseUrl || null,
             sizes, qualityOptions, maxCount, concurrencyLimit, enabled, watermark, sortOrder,
             credId === undefined ? null : credId, mediaKind, providerId, pluginId, pluginVersion,
-            maxInputImages, creditsPerImage, id],
+            maxInputImages, id],
         )
         if (!updated.rows[0]) throw new Error('NOT_FOUND')
         record = updated.rows[0]
       } else {
         const inserted = await client.query(
           `INSERT INTO model_configs(display_name,vendor_model_id,base_url,sizes,quality_options,max_count,concurrency_limit,enabled,
-            watermark,sort_order,created_by,provider_credential_id,model_kind,provider_id,plugin_id,plugin_version,max_input_images,credits_per_image)
-           VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+            watermark,sort_order,created_by,provider_credential_id,model_kind,provider_id,plugin_id,plugin_version,max_input_images)
+           VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
           [displayName, vendorModelId, baseUrl || null, sizes, qualityOptions, maxCount, concurrencyLimit, enabled,
             watermark, sortOrder, actor.id,
             typeof effectiveCredId === 'string' && effectiveCredId ? effectiveCredId : null,
-            mediaKind, providerId, pluginId, pluginVersion, maxInputImages, creditsPerImage],
+            mediaKind, providerId, pluginId, pluginVersion, maxInputImages],
         )
         record = inserted.rows[0]
       }
-      const digest = snapshotDigest({ modelId: record.id, providerId, pluginId, pluginVersion, capabilities, pricing, defaults })
+      const digest = snapshotDigest({ modelId: record.id, providerId, pluginId, pluginVersion, capabilities, defaults })
       const created = await createModelConfigRevision(client as never, {
         modelId: record.id as string,
         providerId,
@@ -595,7 +547,6 @@ export async function upsertModel(
         credentialId: (typeof effectiveCredId === 'string' && effectiveCredId ? effectiveCredId : null) as string | null,
         credentialSchemaVersion: 1,
         capabilities,
-        pricing,
         normalizedConfig: { vendorModelId, concurrencyLimit, watermark, modelKind: mediaKind },
         defaults,
         snapshotDigest: digest,
@@ -604,7 +555,7 @@ export async function upsertModel(
       await client.query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5)', [
         actor.id, id ? 'model.update' : 'model.create', 'model', record.id, { pluginId, pluginVersion },
       ])
-      return { ...record, capabilities, pricing, defaults, revision: created.revision, latest_revision_id: created.id }
+      return { ...record, capabilities, defaults, revision: created.revision, latest_revision_id: created.id }
     })
     return ok(modelDto(row))
   }
@@ -612,7 +563,7 @@ export async function upsertModel(
   const forbiddenManualFields = [
     'displayName', 'adapter', 'vendorModelId', 'baseUrl', 'sizes', 'qualityOptions', 'maxCount',
     'modelKind', 'languageProtocol', 'maxOutputTokens', 'temperature', 'maxInputImages',
-    'providerId', 'pluginId', 'pluginVersion', 'capabilities', 'pricing', 'defaults',
+    'providerId', 'pluginId', 'pluginVersion', 'capabilities', 'defaults',
   ]
   if (forbiddenManualFields.some((field) => input[field] !== undefined))
     return fail('INVALID_INPUT', '模型参数只能通过预设选择')
@@ -673,20 +624,10 @@ export async function upsertModel(
   if (reasoningEffort === undefined && targetKind === 'language')
     return fail('INVALID_INPUT', '思考等级无效')
 
-  const creditsPerImage =
-    input.creditsPerImage !== undefined
-      ? Number(input.creditsPerImage)
-      : existing?.credits_per_image !== undefined
-      ? Number(existing.credits_per_image)
-      : 0
-  if (!Number.isSafeInteger(creditsPerImage) || creditsPerImage < 0) {
-    return fail('INVALID_INPUT', '模型单张图片积分必须为大于或等于0的安全整数')
-  }
-
   let result
   if (id && !targetPreset) {
     result = await db().query(
-      `UPDATE model_configs SET concurrency_limit=$1,enabled=COALESCE($2,enabled),watermark=COALESCE($3,watermark),sort_order=$4,provider_credential_id=CASE WHEN $5::text IS NULL THEN provider_credential_id WHEN $5::text = '' THEN NULL ELSE $5::uuid END,reasoning_effort=CASE WHEN model_kind='language' THEN $6 ELSE NULL END,credits_per_image=$7,updated_at=now() WHERE id=$8 AND deleted_at IS NULL RETURNING *`,
+      `UPDATE model_configs SET concurrency_limit=$1,enabled=COALESCE($2,enabled),watermark=COALESCE($3,watermark),sort_order=$4,provider_credential_id=CASE WHEN $5::text IS NULL THEN provider_credential_id WHEN $5::text = '' THEN NULL ELSE $5::uuid END,reasoning_effort=CASE WHEN model_kind='language' THEN $6 ELSE NULL END,updated_at=now() WHERE id=$7 AND deleted_at IS NULL RETURNING *`,
       [
         concurrencyLimit,
         typeof input.enabled === 'boolean' ? input.enabled : null,
@@ -694,13 +635,12 @@ export async function upsertModel(
         sortOrder,
         credId === undefined ? null : credId,
         reasoningEffort ?? null,
-        creditsPerImage,
         id,
       ],
     )
   } else if (id && targetPreset) {
     result = await db().query(
-      `UPDATE model_configs SET preset_id=$1,display_name=$2,adapter=$3,vendor_model_id=$4,base_url=$5,sizes=$6,quality_options=$7,max_count=$8,concurrency_limit=$9,enabled=COALESCE($10,enabled),watermark=$11,sort_order=$12,provider_credential_id=CASE WHEN $13::text IS NULL THEN provider_credential_id WHEN $13::text = '' THEN NULL ELSE $13::uuid END,model_kind=$14,language_protocol=$15,max_output_tokens=$16,temperature=$17,reasoning_effort=$18,max_input_images=$19,credits_per_image=$20,provider_id=$21,plugin_id=$22,plugin_version=$23,updated_at=now() WHERE id=$24 AND deleted_at IS NULL RETURNING *`,
+      `UPDATE model_configs SET preset_id=$1,display_name=$2,adapter=$3,vendor_model_id=$4,base_url=$5,sizes=$6,quality_options=$7,max_count=$8,concurrency_limit=$9,enabled=COALESCE($10,enabled),watermark=$11,sort_order=$12,provider_credential_id=CASE WHEN $13::text IS NULL THEN provider_credential_id WHEN $13::text = '' THEN NULL ELSE $13::uuid END,model_kind=$14,language_protocol=$15,max_output_tokens=$16,temperature=$17,reasoning_effort=$18,max_input_images=$19,provider_id=$20,plugin_id=$21,plugin_version=$22,updated_at=now() WHERE id=$23 AND deleted_at IS NULL RETURNING *`,
       [
         targetPreset.id,
         targetPreset.displayName,
@@ -724,7 +664,6 @@ export async function upsertModel(
           : null,
         targetPreset.modelKind === 'language' ? reasoningEffort ?? null : null,
         targetPreset.modelKind === 'image' ? (targetPreset.maxInputImages ?? 0) : targetPreset.modelKind === 'video' ? 4 : 0,
-        targetPreset.modelKind === 'video' ? 0 : creditsPerImage,
         'providerId' in targetPreset ? targetPreset.providerId : existing?.provider_id || null,
         'pluginId' in targetPreset ? targetPreset.pluginId : existing?.plugin_id || null,
         'pluginVersion' in targetPreset ? targetPreset.pluginVersion : existing?.plugin_version || '1.0.0',
@@ -733,7 +672,7 @@ export async function upsertModel(
     )
   } else if (targetPreset) {
     result = await db().query(
-      'INSERT INTO model_configs(preset_id,display_name,adapter,vendor_model_id,base_url,sizes,quality_options,max_count,concurrency_limit,enabled,watermark,sort_order,created_by,provider_credential_id,model_kind,language_protocol,max_output_tokens,temperature,reasoning_effort,max_input_images,credits_per_image,provider_id,plugin_id,plugin_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *',
+      'INSERT INTO model_configs(preset_id,display_name,adapter,vendor_model_id,base_url,sizes,quality_options,max_count,concurrency_limit,enabled,watermark,sort_order,created_by,provider_credential_id,model_kind,language_protocol,max_output_tokens,temperature,reasoning_effort,max_input_images,provider_id,plugin_id,plugin_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *',
       [
         targetPreset.id,
         targetPreset.displayName,
@@ -758,7 +697,6 @@ export async function upsertModel(
           : null,
         targetPreset.modelKind === 'language' ? reasoningEffort ?? null : null,
         targetPreset.modelKind === 'image' ? (targetPreset.maxInputImages ?? 0) : targetPreset.modelKind === 'video' ? 4 : 0,
-        targetPreset.modelKind === 'video' ? 0 : creditsPerImage,
         'providerId' in targetPreset ? targetPreset.providerId : null,
         'pluginId' in targetPreset ? targetPreset.pluginId : null,
         'pluginVersion' in targetPreset ? targetPreset.pluginVersion : '1.0.0',

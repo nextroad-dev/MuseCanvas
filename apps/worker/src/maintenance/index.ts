@@ -1,5 +1,5 @@
 import { DeleteObjectCommand } from '@aws-sdk/client-s3'
-import { db, releaseGenerationCredits, transaction } from '../../../../packages/database/src/index'
+import { db, transaction } from '../../../../packages/database/src/index'
 import { dispatchOutbox } from '../queue'
 import { getStorageClient } from '../shared/storage'
 import { resolveUploadSignTtlSeconds } from '../shared/runtime'
@@ -65,18 +65,10 @@ async function handleCancellations() {
         if (!current.rows[0] || !['queued', 'retry_wait'].includes(String(current.rows[0].status))) {
           if (current.rows[0] && String(current.rows[0].status) === 'running' && !run) {
             await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [job.id])
-            const charge = await client.query('SELECT 1 FROM generation_charges WHERE job_id=$1', [job.id])
-            if (charge.rowCount && charge.rowCount > 0) {
-              await releaseGenerationCredits(client, { jobId: String(job.id) })
-            }
           }
           return
         }
         await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [job.id])
-        const charge = await client.query('SELECT 1 FROM generation_charges WHERE job_id=$1', [job.id])
-        if (charge.rowCount && charge.rowCount > 0) {
-          await releaseGenerationCredits(client, { jobId: String(job.id) })
-        }
       })
       continue
     }

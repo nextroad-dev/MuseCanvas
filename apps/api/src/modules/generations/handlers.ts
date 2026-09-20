@@ -1,5 +1,4 @@
 import { transaction } from '../../../../../packages/database/src/index'
-import { releaseGenerationCredits } from '../../../../../packages/database/src/index'
 
 export async function deleteJobWithAssets(userId: string, jobId: string) {
   return transaction(async (client) => {
@@ -30,18 +29,6 @@ export async function deleteJobWithAssets(userId: string, jobId: string) {
           [jobId, { jobId }, `cancel:${jobId}:a${job.attempt}`],
         )
       }
-    }
-
-    // Release credits if charge was reserved
-    const chargeRes = await client.query(
-      'SELECT state FROM generation_charges WHERE job_id=$1 FOR UPDATE',
-      [jobId]
-    )
-    if (chargeRes.rows[0]?.state === 'reserved') {
-      await releaseGenerationCredits(client, {
-        jobId,
-        note: `Job deleted by user ${userId}`,
-      })
     }
 
     if (job.prompt_optimization_id)

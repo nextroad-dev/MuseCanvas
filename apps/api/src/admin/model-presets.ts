@@ -60,7 +60,6 @@ export type VideoModelPreset = {
   modes: ('text_to_video' | 'image_to_video')[]
   parameters: VideoParameterDescriptor[]
   inputSlots: VideoInputSlotDescriptor[]
-  pricing: { scheme: 'per_second_v1'; creditsPerSecond: number; minDurationSeconds?: number; maxDurationSeconds?: number }
   defaults: Record<string, string | number | boolean>
   maxCount: number
   concurrencyLimit: number
@@ -142,7 +141,6 @@ export const modelPresets: ModelPreset[] = [
     modes: ['text_to_video', 'image_to_video'],
     parameters: [seedanceDurationParameter, videoAspectParameter, videoResolutionParameter, videoAudioParameter, videoCountParameter],
     inputSlots: videoFrameSlots,
-    pricing: { scheme: 'per_second_v1', creditsPerSecond: 10, minDurationSeconds: 1, maxDurationSeconds: 30 },
     defaults: { durationSeconds: 5, aspectRatio: '16:9', resolution: '720p', audio: true, count: 1 },
     maxCount: 4, concurrencyLimit: 1,
   },
@@ -152,7 +150,6 @@ export const modelPresets: ModelPreset[] = [
     modes: ['text_to_video', 'image_to_video'],
     parameters: [veoDurationParameter, veoAspectParameter, veoResolutionParameter, videoAudioParameter, videoCountParameter],
     inputSlots: videoFrameSlots,
-    pricing: { scheme: 'per_second_v1', creditsPerSecond: 20, minDurationSeconds: 4, maxDurationSeconds: 8 },
     defaults: { durationSeconds: 8, aspectRatio: '16:9', resolution: '1080p', audio: true, count: 1 },
     maxCount: 4, concurrencyLimit: 1,
   },

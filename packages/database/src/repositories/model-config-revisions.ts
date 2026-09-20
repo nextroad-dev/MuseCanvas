@@ -12,7 +12,6 @@ export interface ModelConfigRevisionRow {
   credential_id?: string | null
   credential_schema_version?: number | null
   capabilities: unknown
-  pricing: unknown
   normalized_config: unknown
   defaults: unknown
   snapshot_digest: string
@@ -32,7 +31,6 @@ export interface ModelConfigRevisionEntity {
   credentialId?: string | null
   credentialSchemaVersion?: number | null
   capabilities: Record<string, unknown>
-  pricing: Record<string, unknown>
   normalizedConfig: Record<string, unknown>
   defaults: Record<string, unknown>
   snapshotDigest: string
@@ -53,7 +51,6 @@ export function toModelConfigRevisionEntity(row: ModelConfigRevisionRow): ModelC
     credentialId: row.credential_id ?? null,
     credentialSchemaVersion: row.credential_schema_version ? Number(row.credential_schema_version) : null,
     capabilities: (row.capabilities as Record<string, unknown>) || {},
-    pricing: (row.pricing as Record<string, unknown>) || {},
     normalizedConfig: (row.normalized_config as Record<string, unknown>) || {},
     defaults: (row.defaults as Record<string, unknown>) || {},
     snapshotDigest: row.snapshot_digest,
@@ -72,7 +69,6 @@ export interface CreateModelConfigRevisionInput {
   credentialId?: string | null
   credentialSchemaVersion?: number | null
   capabilities: Record<string, unknown>
-  pricing: Record<string, unknown>
   normalizedConfig?: Record<string, unknown>
   defaults?: Record<string, unknown>
   snapshotDigest: string
@@ -98,8 +94,8 @@ export async function createModelConfigRevision(
       `INSERT INTO model_config_revisions(
          model_id, revision, provider_id, plugin_id, plugin_version,
          vendor_model_id, base_url, credential_id, credential_schema_version,
-         capabilities, pricing, normalized_config, defaults, snapshot_digest, created_by
-       ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         capabilities, normalized_config, defaults, snapshot_digest, created_by
+       ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
       [
         input.modelId,
@@ -112,7 +108,6 @@ export async function createModelConfigRevision(
         input.credentialId || null,
         input.credentialSchemaVersion || null,
         JSON.stringify(input.capabilities || {}),
-        JSON.stringify(input.pricing || {}),
         JSON.stringify(input.normalizedConfig || {}),
         JSON.stringify(input.defaults || {}),
         input.snapshotDigest,

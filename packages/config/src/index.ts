@@ -40,6 +40,7 @@ export const ENCRYPTION_PURPOSES = [
   'oauth-credentials',
   'smtp-credentials',
   'object-storage-credentials',
+  'invitation-codes',
 ] as const;
 export type EncryptionPurpose = (typeof ENCRYPTION_PURPOSES)[number];
 
@@ -66,6 +67,7 @@ const KEY_VERSIONS: { readonly [K in AppKeyId]: KeyVersion } = Object.freeze({
       'oauth-credentials': 'musecanvas/app-v1/oauth-credentials',
       'smtp-credentials': 'musecanvas/app-v1/smtp-credentials',
       'object-storage-credentials': 'musecanvas/app-v1/object-storage-credentials',
+      'invitation-codes': 'musecanvas/app-v1/invitation-codes',
     }),
   },
 });

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS registration_settings (singleton boolean PRIMARY KEY 
 INSERT INTO registration_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS invitations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),email text,code_hash text NOT NULL UNIQUE,expires_at timestamptz NOT NULL,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),consumed_at timestamptz,revoked_at timestamptz);
 ALTER TABLE invitations ALTER COLUMN email DROP NOT NULL;
+ALTER TABLE invitations ADD COLUMN IF NOT EXISTS code_encrypted text;
 CREATE TABLE IF NOT EXISTS model_configs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),display_name text NOT NULL,adapter model_adapter NOT NULL,vendor_model_id text NOT NULL,sizes jsonb NOT NULL,quality_options jsonb NOT NULL DEFAULT '[]',max_count integer NOT NULL CHECK(max_count BETWEEN 1 AND 10),watermark boolean NOT NULL DEFAULT false,concurrency_limit integer NOT NULL CHECK(concurrency_limit > 0),enabled boolean NOT NULL DEFAULT false,sort_order integer NOT NULL DEFAULT 0,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz);
 CREATE TABLE IF NOT EXISTS generation_jobs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),created_by uuid NOT NULL REFERENCES users(id),model_id uuid NOT NULL REFERENCES model_configs(id),model_name text NOT NULL,adapter model_adapter NOT NULL,vendor_model_id text NOT NULL,prompt text,size text NOT NULL,quality text,count integer NOT NULL,watermark boolean NOT NULL DEFAULT false,status job_status NOT NULL DEFAULT 'queued',idempotency_key text NOT NULL,attempt integer NOT NULL DEFAULT 0,error_code text,provider_reference_id text,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),started_at timestamptz,completed_at timestamptz,deleted_at timestamptz,UNIQUE(created_by,idempotency_key));
 ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS base_url text;
@@ -163,66 +164,6 @@ CREATE TABLE IF NOT EXISTS generation_job_inputs (
 );
 CREATE INDEX IF NOT EXISTS generation_job_inputs_job_idx ON generation_job_inputs(job_id,position);
 
-CREATE TABLE IF NOT EXISTS billing_settings (
-  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
-  enabled boolean NOT NULL DEFAULT false,
-  signup_grant bigint NOT NULL DEFAULT 0 CHECK(signup_grant >= 0),
-  updated_by uuid REFERENCES users(id),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-INSERT INTO billing_settings(singleton, enabled, signup_grant) VALUES(true, false, 0) ON CONFLICT DO NOTHING;
-
-CREATE TABLE IF NOT EXISTS credit_accounts (
-  user_id uuid PRIMARY KEY REFERENCES users(id),
-  available_credits bigint NOT NULL DEFAULT 0 CHECK(available_credits >= 0),
-  reserved_credits bigint NOT NULL DEFAULT 0 CHECK(reserved_credits >= 0),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-INSERT INTO credit_accounts(user_id, available_credits, reserved_credits)
-SELECT id, 0, 0 FROM users
-ON CONFLICT (user_id) DO NOTHING;
-
-CREATE TABLE IF NOT EXISTS credit_ledger (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES users(id),
-  operation text NOT NULL CHECK(operation IN ('grant','adjustment','reservation','capture','release')),
-  available_delta bigint NOT NULL,
-  reserved_delta bigint NOT NULL,
-  available_after bigint NOT NULL CHECK(available_after >= 0),
-  reserved_after bigint NOT NULL CHECK(reserved_after >= 0),
-  reference_type text,
-  reference_id text,
-  billing_cycle integer,
-  idempotency_key text UNIQUE,
-  created_by uuid REFERENCES users(id),
-  note text,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS credit_ledger_user_created_idx ON credit_ledger(user_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS generation_charges (
-  job_id uuid PRIMARY KEY REFERENCES generation_jobs(id),
-  user_id uuid NOT NULL REFERENCES users(id),
-  quoted_credits bigint NOT NULL CHECK(quoted_credits >= 0),
-  state text NOT NULL CHECK(state IN ('reserved','settled','released')),
-  billing_cycle integer NOT NULL DEFAULT 1 CHECK(billing_cycle >= 1),
-  pricing_snapshot jsonb NOT NULL DEFAULT '{}',
-  reserved_at timestamptz NOT NULL DEFAULT now(),
-  settled_at timestamptz,
-  released_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS generation_charges_user_created_idx ON generation_charges(user_id, created_at DESC);
-
-ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS credits_per_image bigint NOT NULL DEFAULT 0;
-ALTER TABLE prompt_optimization_settings ADD COLUMN IF NOT EXISTS credits_per_job bigint NOT NULL DEFAULT 0;
-DO $$ BEGIN ALTER TABLE model_configs ADD CONSTRAINT model_configs_credits_per_image_check CHECK(credits_per_image >= 0); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE prompt_optimization_settings ADD CONSTRAINT prompt_optimization_credits_per_job_check CHECK(credits_per_job >= 0); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
 -- ============================================================================
 -- UNIFIED MEDIA ARCHITECTURE EXPAND / BACKFILL (Wave 1)
 -- ============================================================================
@@ -336,7 +277,6 @@ CREATE TABLE IF NOT EXISTS model_config_revisions (
   credential_id uuid REFERENCES provider_credentials(id),
   credential_schema_version integer,
   capabilities jsonb NOT NULL DEFAULT '{}',
-  pricing jsonb NOT NULL DEFAULT '{}',
   normalized_config jsonb NOT NULL DEFAULT '{}',
   defaults jsonb NOT NULL DEFAULT '{}',
   snapshot_digest text NOT NULL,
@@ -360,7 +300,6 @@ DECLARE
   prov_id text;
   p_id text;
   cap jsonb;
-  prc jsonb;
   norm jsonb;
   dflt jsonb;
   dig text;
@@ -408,11 +347,6 @@ BEGIN
         'maxInputImages', COALESCE(rec.max_input_images, 0)
       );
 
-      prc := jsonb_build_object(
-        'scheme', 'per_image_v1',
-        'creditsPerImage', COALESCE(rec.credits_per_image, 0)
-      );
-
       norm := jsonb_strip_nulls(jsonb_build_object(
         'vendorModelId', rec.vendor_model_id,
         'baseUrl', rec.base_url,
@@ -434,16 +368,16 @@ BEGIN
 
       cred_schema_ver := COALESCE(rec.cred_schema_ver, 1);
 
-      dig := encode(digest(concat(rec.id::text, ':', prov_id, ':', p_id, ':', COALESCE(rec.vendor_model_id, ''), ':', cap::text, ':', prc::text), 'sha256'), 'hex');
+      dig := encode(digest(concat(rec.id::text, ':', prov_id, ':', p_id, ':', COALESCE(rec.vendor_model_id, ''), ':', cap::text), 'sha256'), 'hex');
 
       INSERT INTO model_config_revisions(
         model_id, revision, provider_id, plugin_id, plugin_version,
         vendor_model_id, base_url, credential_id, credential_schema_version,
-        capabilities, pricing, normalized_config, defaults, snapshot_digest, created_by, created_at
+        capabilities, normalized_config, defaults, snapshot_digest, created_by, created_at
       ) VALUES (
         rec.id, 1, prov_id, p_id, '1.0.0',
         rec.vendor_model_id, rec.base_url, rec.provider_credential_id, cred_schema_ver,
-        cap, prc, norm, dflt, dig, rec.created_by, rec.created_at
+        cap, norm, dflt, dig, rec.created_by, rec.created_at
       )
       RETURNING id INTO rev_id;
 
@@ -681,7 +615,7 @@ WHERE j.model_revision_id IS NULL
 INSERT INTO model_config_revisions(
   model_id, revision, provider_id, plugin_id, plugin_version,
   vendor_model_id, base_url, credential_id, credential_schema_version,
-  capabilities, pricing, normalized_config, defaults, snapshot_digest, created_by, created_at
+  capabilities, normalized_config, defaults, snapshot_digest, created_by, created_at
 )
 SELECT
   m.id,
@@ -713,7 +647,6 @@ SELECT
     'maxCount', COALESCE(m.max_count, 1),
     'supportedMediaKinds', jsonb_build_array('image'),
     'mediaKind', 'image'),
-  jsonb_build_object('scheme', 'per_image_v1', 'creditsPerImage', COALESCE(m.credits_per_image, 0)),
   jsonb_strip_nulls(jsonb_build_object(
     'vendorModelId', m.vendor_model_id,
     'baseUrl', m.base_url,
@@ -730,7 +663,6 @@ LEFT JOIN provider_credentials cred ON cred.id = latest.credential_id AND cred.d
 WHERE m.deleted_at IS NULL
   AND m.plugin_id IN ('openai-image', 'seedream-image')
   AND m.plugin_version = '1.0.0'
-  AND COALESCE(m.credits_per_image, 0) BETWEEN 0 AND 9007199254740991
   AND latest.credential_id IS NOT DISTINCT FROM m.provider_credential_id
   AND (
     (m.preset_id = 'openai-gpt-image-2' AND m.model_kind = 'image' AND m.vendor_model_id = 'gpt-image-2'
@@ -788,7 +720,6 @@ WHERE r.model_id = m.id
   AND m.plugin_id IN ('openai-image', 'seedream-image')
   AND m.plugin_version = '1.0.0'
   AND r.credential_id IS NOT DISTINCT FROM m.provider_credential_id
-  AND COALESCE(m.credits_per_image, 0) BETWEEN 0 AND 9007199254740991
   AND (
     (m.preset_id = 'openai-gpt-image-2' AND m.model_kind = 'image' AND m.vendor_model_id = 'gpt-image-2'
       AND r.vendor_model_id = 'gpt-image-2'
@@ -965,6 +896,21 @@ INSERT INTO runtime_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
 -- complete; fresh installs stay pending. Never transitions complete -> pending,
 -- so completed status survives later admin deletions.
 UPDATE onboarding_state SET status='complete', completed_at=COALESCE(completed_at, now()), updated_at=now() WHERE singleton=true AND status='pending' AND EXISTS (SELECT 1 FROM users WHERE role='admin' AND status='active' AND deleted_at IS NULL);
+
+-- ============================================================================
+-- REMOVE BILLING/CREDITS (destructive, idempotent; children before parents)
+-- Generations run free; the credit ledger, charge state machine and pricing
+-- metadata are fully retired. This drops historical data by design.
+-- ============================================================================
+DROP TABLE IF EXISTS generation_charges CASCADE;
+DROP TABLE IF EXISTS credit_ledger CASCADE;
+DROP TABLE IF EXISTS credit_accounts CASCADE;
+DROP TABLE IF EXISTS billing_settings CASCADE;
+DO $$ BEGIN ALTER TABLE prompt_optimization_settings DROP CONSTRAINT IF EXISTS prompt_optimization_credits_per_job_check; EXCEPTION WHEN undefined_table THEN NULL; END $$;
+ALTER TABLE prompt_optimization_settings DROP COLUMN IF EXISTS credits_per_job;
+DO $$ BEGIN ALTER TABLE model_configs DROP CONSTRAINT IF EXISTS model_configs_credits_per_image_check; EXCEPTION WHEN undefined_table THEN NULL; END $$;
+ALTER TABLE model_configs DROP COLUMN IF EXISTS credits_per_image;
+ALTER TABLE model_config_revisions DROP COLUMN IF EXISTS pricing;
 `
 await db().query(sql)
 console.log('database migration complete')

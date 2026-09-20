@@ -361,7 +361,7 @@ test('historical 1.0.0 revision rows stay readable through the model DTOs', () =
     id: 'model-legacy', display_name: 'Legacy', adapter: 'seedream', provider_id: 'volcengine',
     plugin_id: 'seedream-image', plugin_version: '1.0.0', model_kind: 'image',
     sizes: JSON.stringify(['1024x1024']), quality_options: JSON.stringify([]),
-    max_count: 4, max_input_images: 4, enabled: true, sort_order: 0, credits_per_image: 5,
+    max_count: 4, max_input_images: 4, enabled: true, sort_order: 0,
   }
   assert.equal(publicModelDto(legacyRow).pluginVersion, '1.0.0')
   assert.equal(modelDto(legacyRow).pluginVersion, '1.0.0')
@@ -371,7 +371,10 @@ test('historical 1.0.0 revision rows stay readable through the model DTOs', () =
 test('image 1.1.0 cutover appends immutable revisions without rewriting history', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const source = readFileSync(join(here, '../../../packages/database/src/migrate.ts'), 'utf8')
-  const cutover = source.slice(source.indexOf('10. Image plugin 1.1.0 cutover'))
+  const cutoverStart = source.indexOf('10. Image plugin 1.1.0 cutover')
+  // Section 10 only: billing retirement lives in a dedicated later block.
+  const cutover = source.slice(cutoverStart, source.indexOf('-- 11. Resumable', cutoverStart))
+  assert.ok(cutover.length > 0)
   assert.ok(cutover.includes("'1.1.0'"))
   assert.ok(cutover.includes('INSERT INTO model_config_revisions'))
   assert.ok(cutover.includes('NOT EXISTS'))
@@ -435,8 +438,22 @@ test('image 1.1.0 cutover appends immutable revisions without rewriting history'
   assert.equal(cutover.includes('latest.capabilities'), false)
   assert.equal(cutover.includes('latest.defaults'), false)
   assert.equal(cutover.includes('latest.pricing'), false)
-  for (const fragment of ['per_image_v1', 'creditsPerImage', '9007199254740991', 'canonical-v1']) {
-    assert.ok(cutover.includes(fragment))
+  // Pricing is retired everywhere: the cutover never rebuilds it, and the
+  // dedicated billing block drops the credit tables and pricing columns.
+  assert.equal(cutover.includes('per_image_v1'), false)
+  assert.equal(cutover.includes('creditsPerImage'), false)
+  const billingRetirement = source.slice(source.indexOf('-- REMOVE BILLING/CREDITS'))
+  assert.ok(billingRetirement.length > 0)
+  for (const fragment of [
+    'DROP TABLE IF EXISTS generation_charges',
+    'DROP TABLE IF EXISTS credit_ledger',
+    'DROP TABLE IF EXISTS credit_accounts',
+    'DROP TABLE IF EXISTS billing_settings',
+    'ALTER TABLE prompt_optimization_settings DROP COLUMN IF EXISTS credits_per_job',
+    'ALTER TABLE model_configs DROP COLUMN IF EXISTS credits_per_image',
+    'ALTER TABLE model_config_revisions DROP COLUMN IF EXISTS pricing',
+  ]) {
+    assert.ok(billingRetirement.includes(fragment))
   }
   // Host checks must apply to the currently linked credential: the copied
   // revision credential must equal the mutable model link.
@@ -632,7 +649,6 @@ test('builtin provider templates expose exactly the four current plugins', () =>
     pluginId: 'veo-video', pluginVersion: '1.0.0', vendorModelId: 'veo-retired-preview',
     baseUrl: 'https://us-central1-aiplatform.googleapis.com', modes: ['text_to_video'],
     parameters: [], inputSlots: [],
-    pricing: { scheme: 'per_second_v1', creditsPerSecond: 20 },
     defaults: {}, maxCount: 1, concurrencyLimit: 1,
   }
   modelPresets.push(stalePreset)
@@ -650,7 +666,6 @@ test('video presets use manifest-supported vendor models, official hosts, and pr
   assert.equal(seedance.baseUrl, 'https://ark.cn-beijing.volces.com/api/v3')
   const seedanceDuration = seedance.parameters.find((parameter) => parameter.name === 'durationSeconds')
   assert.deepEqual(seedanceDuration, { type: 'integer', name: 'durationSeconds', label: '时长（秒）', min: 1, max: 30, defaultValue: 5, required: false })
-  assert.deepEqual(seedance.pricing, { scheme: 'per_second_v1', creditsPerSecond: 10, minDurationSeconds: 1, maxDurationSeconds: 30 })
   const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
   if (!veo || veo.modelKind !== 'video') throw new Error('veo preset missing')
   assert.equal(veo.vendorModelId, 'veo-3.1-generate-001')
@@ -664,19 +679,12 @@ test('video presets use manifest-supported vendor models, official hosts, and pr
     veo.parameters.find((parameter) => parameter.name === 'aspectRatio'),
     { type: 'enum', name: 'aspectRatio', label: '宽高比', options: ['16:9', '9:16'], defaultValue: '16:9', required: false },
   )
-  assert.deepEqual(veo.pricing, { scheme: 'per_second_v1', creditsPerSecond: 20, minDurationSeconds: 4, maxDurationSeconds: 8 })
 })
 
 test('video presets become complete immutable revision contracts', () => {
   const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
   const contract = videoPresetRevisionContract(veo)
   assert.ok(contract)
-  assert.deepEqual(contract.pricing, {
-    scheme: 'per_second_v1',
-    creditsPerSecond: 20,
-    minDurationSeconds: 4,
-    maxDurationSeconds: 8,
-  })
   assert.deepEqual(contract.defaults, {
     durationSeconds: 8,
     aspectRatio: '16:9',

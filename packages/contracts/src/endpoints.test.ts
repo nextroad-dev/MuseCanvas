@@ -7,10 +7,14 @@ test('static endpoints carry the /api prefix and match backend route strings', (
   assert.equal(API_ENDPOINTS.registration, '/api/registration')
   assert.equal(API_ENDPOINTS.library.list, '/api/library')
   assert.equal(API_ENDPOINTS.generations, '/api/generations')
+  assert.equal(API_ENDPOINTS.images.edit, '/api/images/edit')
   assert.equal(API_ENDPOINTS.setup.status, '/api/setup/status')
   assert.equal(API_ENDPOINTS.setup.smtpTest, '/api/setup/smtp/test')
   assert.equal(API_ENDPOINTS.admin.modelPresets, '/api/admin/model-presets')
   assert.equal(API_ENDPOINTS.admin.promptTemplatesExport, '/api/admin/prompt-templates/export')
+  assert.equal(API_ENDPOINTS.admin.plugins, '/api/admin/plugins')
+  assert.equal(API_ENDPOINTS.admin.pluginUpload, '/api/admin/plugins/upload')
+  assert.equal(API_ENDPOINTS.admin.pluginValidate, '/api/admin/plugins/validate')
 })
 
 test('dynamic helpers interpolate id and provider segments', () => {
@@ -28,6 +32,7 @@ test('dynamic helpers interpolate id and provider segments', () => {
   assert.equal(API_ENDPOINTS.admin.oauthProvider('github'), '/api/admin/oauth-providers/github')
   assert.equal(API_ENDPOINTS.admin.promptTemplateSetEntries('s1'), '/api/admin/prompt-templates/sets/s1/entries')
   assert.equal(API_ENDPOINTS.admin.promptTemplateEntry('e1'), '/api/admin/prompt-templates/entries/e1')
+  assert.equal(API_ENDPOINTS.admin.plugin('p1'), '/api/admin/plugins/p1')
 })
 
 test('oauth provider whitelist matches backend path.match constraint', () => {

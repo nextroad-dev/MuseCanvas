@@ -73,7 +73,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-canvas text-foreground antialiased">
       {/* Top navigation */}
-      <nav className="sticky top-0 z-50 border-b border-border bg-surface" aria-label="主导航">
+      <nav className="sticky top-0 z-50 bg-surface shadow-md" aria-label="主导航">
         <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between gap-4 px-4 sm:px-6">
           <Link href="/" className="rounded-[var(--radius-control)]" aria-label="MuseCanvas 首页">
             <img
@@ -114,7 +114,7 @@ export default function HomePage() {
 
       <main>
         {/* Hero */}
-        <section className="border-b border-border">
+        <section>
           <div className="mx-auto grid max-w-[1200px] items-start gap-12 px-4 py-20 sm:px-6 sm:py-24 lg:grid-cols-[minmax(0,1fr)_minmax(340px,26rem)] lg:py-28">
             <div className="max-w-2xl">
               <p className="mb-6 inline-flex items-center rounded-full bg-surface-subtle px-3 py-1 text-xs font-medium text-muted-foreground">
@@ -155,7 +155,7 @@ export default function HomePage() {
             {/* Console overview — 参数为创作台当前真实可选项 */}
             <aside
               aria-labelledby="console-overview-title"
-              className="rounded-[var(--radius-panel)] border border-border bg-surface"
+              className="rounded-[var(--radius-panel)] bg-surface shadow-md"
             >
               <div className="flex items-baseline justify-between gap-4 px-6 pb-4 pt-5">
                 <h2 id="console-overview-title" className="text-sm font-medium text-foreground">
@@ -164,9 +164,12 @@ export default function HomePage() {
                 <span className="font-mono text-xs text-muted-foreground">/generate</span>
               </div>
 
-              <dl className="mx-6 divide-y divide-border border-y border-border">
+              <dl className="mx-6">
                 {consoleSpecs.map((spec) => (
-                  <div key={spec.label} className="grid gap-1 py-4 sm:grid-cols-[5.5rem_1fr] sm:gap-4">
+                  <div
+                    key={spec.label}
+                    className="grid gap-1 py-4 first:pt-0 last:pb-0 sm:grid-cols-[5.5rem_1fr] sm:gap-4"
+                  >
                     <dt className="text-sm text-muted-foreground">{spec.label}</dt>
                     <dd
                       className={`text-sm text-foreground ${spec.mono ? 'font-mono tabular-nums' : 'leading-[1.5]'}`}
@@ -188,7 +191,7 @@ export default function HomePage() {
         <section
           id="capabilities"
           aria-labelledby="capabilities-title"
-          className="scroll-mt-24 border-b border-border bg-surface"
+          className="scroll-mt-24 bg-surface"
         >
           <div className="mx-auto max-w-[1200px] px-4 py-20 sm:px-6 sm:py-24">
             <header className="max-w-3xl">
@@ -201,11 +204,11 @@ export default function HomePage() {
               </h2>
             </header>
 
-            <ul className="mt-10 grid gap-x-8 md:grid-cols-2 lg:grid-cols-3">
+            <ul className="mt-10 grid gap-x-8 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
               {capabilities.map((capability) => {
                 const Icon = capability.icon
                 return (
-                  <li key={capability.title} className="border-t border-border py-6">
+                  <li key={capability.title}>
                     <Icon className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
                     <h3 className="mt-4 text-base font-medium leading-[1.5] text-foreground">{capability.title}</h3>
                     <p className="mt-2 text-sm leading-[1.59] text-muted-foreground">{capability.description}</p>
@@ -217,7 +220,7 @@ export default function HomePage() {
         </section>
 
         {/* Workflow */}
-        <section id="workflow" aria-labelledby="workflow-title" className="scroll-mt-24 border-b border-border">
+        <section id="workflow" aria-labelledby="workflow-title" className="scroll-mt-24">
           <div className="mx-auto grid max-w-[1200px] gap-12 px-4 py-20 sm:px-6 sm:py-24 lg:grid-cols-[0.75fr_1fr] lg:items-start">
             <div className="max-w-xl">
               <p className="text-sm font-medium text-muted-foreground">创作流程</p>
@@ -229,9 +232,12 @@ export default function HomePage() {
               </p>
             </div>
 
-            <ol className="border-t border-border">
+            <ol className="grid gap-4">
               {workflowSteps.map((step, index) => (
-                <li key={step.title} className="grid gap-x-6 gap-y-2 border-b border-border py-8 sm:grid-cols-[56px_1fr]">
+                <li
+                  key={step.title}
+                  className="grid gap-x-6 gap-y-2 rounded-[var(--radius-card)] bg-surface p-6 shadow-sm sm:grid-cols-[56px_1fr]"
+                >
                   <span className="font-mono text-sm tabular-nums text-muted-foreground">
                     {String(index + 1).padStart(2, '0')}
                   </span>
@@ -276,7 +282,7 @@ export default function HomePage() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-border bg-surface py-8">
+      <footer className="bg-surface py-8">
         <div className="mx-auto flex max-w-[1200px] flex-col items-start justify-between gap-4 px-4 sm:flex-row sm:items-center sm:px-6">
           <img
             src="/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/04_monochrome_logo_transparent_trimmed.png"

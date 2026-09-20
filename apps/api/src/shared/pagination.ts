@@ -36,6 +36,9 @@ export type JobInputRecord = {
   position: number
   role: string
   upload_id: string
+  /** 'gallery' when the input references an `assets` row instead of an upload. */
+  source: 'upload' | 'gallery'
+  asset_id?: string
 }
 
 export async function loadJobInputs(
@@ -46,24 +49,29 @@ export async function loadJobInputs(
   let res
   try {
     res = await dbClient.query(
-      `SELECT gji.job_id, COALESCE(mu.id, gi.id) AS id,
-              COALESCE(mu.object_key, gi.object_key) AS object_key,
-              COALESCE(mu.mime_type, gi.mime_type) AS mime_type,
-              COALESCE(mu.width, gi.width) AS width, COALESCE(mu.height, gi.height) AS height,
-              COALESCE(mu.size_bytes, gi.size_bytes) AS size_bytes,
+      `SELECT gji.job_id, COALESCE(mu.id, gi.id, at.id) AS id,
+              COALESCE(mu.object_key, gi.object_key, at.object_key) AS object_key,
+              COALESCE(mu.mime_type, gi.mime_type, at.mime_type) AS mime_type,
+              COALESCE(mu.width, gi.width, at.width) AS width, COALESCE(mu.height, gi.height, at.height) AS height,
+              COALESCE(mu.size_bytes, gi.size_bytes, at.size_bytes) AS size_bytes,
               gji.position, COALESCE(gji.role, 'reference_image') AS role,
-              COALESCE(gji.upload_id::text, gi.id::text) AS upload_id
+              COALESCE(gji.upload_id::text, gi.id::text) AS upload_id,
+              gji.asset_id::text AS asset_id,
+              CASE WHEN gji.asset_id IS NOT NULL THEN 'gallery' ELSE 'upload' END AS source
        FROM generation_job_inputs gji
        LEFT JOIN media_uploads mu ON mu.id = gji.upload_id
        LEFT JOIN generation_input_images gi ON gi.id = gji.input_image_id OR gi.id = gji.upload_id
+       LEFT JOIN assets at ON at.id = gji.asset_id AND at.deleted_at IS NULL
        WHERE gji.job_id = ANY($1)
        ORDER BY gji.job_id, gji.position ASC`,
       [jobIds]
     )
   } catch {
+    // Pre-asset databases have neither the column nor asset-sourced rows, so this
+    // legacy shape stays upload-only.
     res = await dbClient.query(
       `SELECT gji.job_id, gi.id, gi.object_key, gi.mime_type, gi.width, gi.height, gi.size_bytes, gji.position,
-              'reference_image' AS role, gi.id::text AS upload_id
+              'reference_image' AS role, gi.id::text AS upload_id, NULL::text AS asset_id, 'upload' AS source
        FROM generation_job_inputs gji
        JOIN generation_input_images gi ON gi.id=gji.input_image_id
        WHERE gji.job_id = ANY($1)
@@ -75,8 +83,11 @@ export async function loadJobInputs(
   for (const row of res.rows) {
     const jobId = row.job_id as string
     if (!map[jobId]) map[jobId] = []
+    const assetId = (row.asset_id as string) || undefined
     map[jobId].push({
-      id: row.id as string,
+      // An asset-sourced row has no upload, so `id` falls back to the asset: without
+      // it every gallery input would carry a NULL key and collide in the UI.
+      id: (row.id as string) || assetId || '',
       object_key: row.object_key as string,
       mime_type: row.mime_type as string,
       width: Number(row.width || 0),
@@ -84,7 +95,9 @@ export async function loadJobInputs(
       size_bytes: Number(row.size_bytes || 0),
       position: Number(row.position || 0),
       role: (row.role as string) || 'reference_image',
-      upload_id: (row.upload_id as string) || (row.id as string),
+      upload_id: (row.upload_id as string) || (row.id as string) || assetId || '',
+      source: row.source === 'gallery' ? 'gallery' : 'upload',
+      ...(assetId ? { asset_id: assetId } : {}),
     })
   }
   return map

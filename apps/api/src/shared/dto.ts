@@ -1,4 +1,17 @@
 import { signedAssetUrl } from './services'
+import { enumOptionValues, validateModelCapabilities } from '@musecanvas/contracts'
+import type {
+  GenerationMode,
+  InputSlotDescriptor,
+  JsonValue,
+  MediaKind,
+  MediaParameterProvenance,
+  ModelCapabilities,
+  ModelCapabilityFlags,
+  ParameterCrossFieldConstraint,
+  ParameterDescriptor,
+  PublicModelDto,
+} from '@musecanvas/contracts'
 
 export const userDto = (row: Record<string, unknown>) => ({
   id: row.id as string,
@@ -24,19 +37,6 @@ function parseJsonField(value: unknown): Record<string, unknown> | null {
   return null
 }
 
-function parseJsonArray(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String)
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value) as unknown
-      return Array.isArray(parsed) ? parsed.map(String) : []
-    } catch {
-      return []
-    }
-  }
-  return []
-}
-
 function parseDescriptorArray(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) return value as Record<string, unknown>[]
   if (typeof value === 'string') {
@@ -50,58 +50,111 @@ function parseDescriptorArray(value: unknown): Record<string, unknown>[] {
   return []
 }
 
-export function capabilitiesFromRow(row: Record<string, unknown>): {
-  modes: string[]
-  parameters: Record<string, unknown>[]
-  inputSlots: Record<string, unknown>[]
+/**
+ * The capability contract a model row carries, already rebuilt through
+ * `validateModelCapabilities` and therefore safe to hand to a browser.
+ *
+ * `declaredBy` is never inferred from convenience: the only three answers are
+ * what the pinned revision said, what the host wrote into a legacy revision, and
+ * `undeclared` for a row that says nothing.
+ */
+export type ModelCapabilitySnapshot = {
+  modes: GenerationMode[]
+  parameters: ParameterDescriptor[]
+  inputSlots: InputSlotDescriptor[]
   maxCount: number
-  supportedMediaKinds: string[]
-} {
-  const snapshot = parseJsonField(row.capabilities)
-  const mediaKind = (row.media_kind as string) || (row.model_kind as string) || 'image'
-  if (snapshot && (Array.isArray(snapshot.modes) || Array.isArray(snapshot.parameters) || Array.isArray(snapshot.inputSlots))) {
-    return {
-      modes: Array.isArray(snapshot.modes) ? (snapshot.modes as unknown[]).map(String) : [],
-      parameters: Array.isArray(snapshot.parameters) ? (snapshot.parameters as Record<string, unknown>[]) : [],
-      inputSlots: Array.isArray(snapshot.inputSlots) ? (snapshot.inputSlots as Record<string, unknown>[]) : [],
-      maxCount: typeof snapshot.maxCount === 'number' ? snapshot.maxCount : Number(row.max_count || 1),
-      supportedMediaKinds: Array.isArray(snapshot.supportedMediaKinds)
-        ? (snapshot.supportedMediaKinds as unknown[]).map(String)
-        : [mediaKind],
-    }
-  }
-  // Legacy image-shaped capability snapshot (backfill format) or raw columns.
-  const sizes = (row.sizes as string[] | string | null | undefined) !== undefined && row.sizes !== null
-    ? parseJsonArray(row.sizes)
-    : []
-  const qualityOptions = row.quality_options !== undefined && row.quality_options !== null
-    ? parseJsonArray(row.quality_options)
-    : []
-  const maxCount = Number(row.max_count || snapshot?.maxCount || 1)
-  const maxInputImages = row.max_input_images !== undefined && row.max_input_images !== null
-    ? Number(row.max_input_images)
-    : Number((snapshot as Record<string, unknown> | null)?.maxInputImages || 0)
-  const parameters: Record<string, unknown>[] = []
-  if (sizes.length > 0 || mediaKind === 'image') {
-    parameters.push({ type: 'enum', name: 'size', label: '尺寸', options: sizes })
-  }
-  if (qualityOptions.length > 0) {
-    parameters.push({ type: 'enum', name: 'quality', label: '质量', options: qualityOptions })
-  }
-  parameters.push({ type: 'integer', name: 'count', label: '数量', min: 1, max: maxCount || 10, defaultValue: 1 })
-  const inputSlots: Record<string, unknown>[] = maxInputImages > 0
-    ? [{ role: 'reference_image', required: false, minCount: 0, maxCount: maxInputImages, allowedMediaKinds: ['image'] }]
-    : []
+  supportedMediaKinds: MediaKind[]
+  flags?: ModelCapabilityFlags
+  crossFieldConstraints?: ParameterCrossFieldConstraint[]
+  declaredBy: MediaParameterProvenance
+  deprecated?: boolean
+  deprecationNote?: string
+}
+
+/** Fresh arrays every call: the empty contract is never a shared mutable object. */
+function undeclaredCapabilities(): ModelCapabilitySnapshot {
   return {
-    modes: mediaKind === 'video'
-      ? ['text_to_video', 'image_to_video']
-      : mediaKind === 'image'
-        ? ['text_to_image', 'image_to_image']
-        : [],
-    parameters,
-    inputSlots,
-    maxCount: maxCount || 1,
-    supportedMediaKinds: [mediaKind],
+    modes: [],
+    parameters: [],
+    inputSlots: [],
+    maxCount: 0,
+    supportedMediaKinds: [],
+    declaredBy: 'undeclared',
+  }
+}
+
+/**
+ * Reads the model's contract out of the pinned revision snapshot.
+ *
+ * There is no second source any more. The former legacy branch here rebuilt
+ * `size` / `quality` / `count` descriptors from the flat `sizes`,
+ * `quality_options`, `max_count` and `max_input_images` columns, so a row could
+ * advertise a parameter no plugin ever accepted — `quality: 'ultra'` on a model
+ * with no quality token, a `size` the vendor had dropped, an input slot the
+ * plugin's own endpoint has never supported — and nothing downstream could tell
+ * an advertised value from a guessed one. Those columns are now *derived* from
+ * this function's result, never the other way round.
+ *
+ * A snapshot that fails structural validation degrades to `undeclared` rather
+ * than being served: the alternative is shipping a descriptor the browser cannot
+ * validate against, which is how illegal values reached a provider and failed
+ * there with an opaque error.
+ */
+export function capabilitiesFromRow(row: Record<string, unknown>): ModelCapabilitySnapshot {
+  const snapshot = parseJsonField(row.capabilities)
+  if (!snapshot) return undeclaredCapabilities()
+  const validated = validateModelCapabilities(snapshot)
+  if (!validated.ok || !validated.capabilities) return undeclaredCapabilities()
+  const capabilities = validated.capabilities
+  return {
+    modes: capabilities.modes,
+    parameters: capabilities.parameters,
+    inputSlots: capabilities.inputSlots,
+    maxCount: typeof capabilities.maxCount === 'number' ? capabilities.maxCount : 0,
+    supportedMediaKinds: capabilities.supportedMediaKinds ?? [],
+    ...(capabilities.flags ? { flags: capabilities.flags } : {}),
+    ...(capabilities.crossFieldConstraints
+      ? { crossFieldConstraints: capabilities.crossFieldConstraints }
+      : {}),
+    // A revision written before provenance existed was assembled by the host from
+    // its own columns, so `host-synthesized` is the truthful label for it. It is
+    // still a declared contract, which is what the submit gate keys on.
+    declaredBy: capabilities.declaredBy ?? 'host-synthesized',
+    ...(typeof capabilities.deprecated === 'boolean' ? { deprecated: capabilities.deprecated } : {}),
+    ...(typeof capabilities.deprecationNote === 'string' ? { deprecationNote: capabilities.deprecationNote } : {}),
+  }
+}
+
+/**
+ * @deprecated These are the flat `model_configs` columns, kept only because the
+ * columns exist and `jobDto` still echoes the per-job copies. Every one of them is
+ * *derived* from the descriptors above rather than read from the row, so they can
+ * never disagree with what the model declares. No new reader may consume them:
+ * `sizes` is the preset/option list of the `size` descriptor, `qualityOptions` the
+ * `quality` descriptor's options, and `maxInputImages` the widest image-accepting
+ * input slot.
+ */
+export function legacyColumnsFromCapabilities(capabilities: Pick<ModelCapabilities, 'parameters' | 'inputSlots' | 'maxCount'>): {
+  sizes: string[]
+  qualityOptions: string[]
+  maxCount: number
+  maxInputImages: number
+} {
+  const valuesFor = (parameterName: string): string[] => {
+    const descriptor = capabilities.parameters.find((entry) => entry.name === parameterName)
+    if (!descriptor) return []
+    if (descriptor.type === 'image-size') return descriptor.presets.map((preset) => preset.value)
+    if (descriptor.type === 'enum') return enumOptionValues(descriptor.options)
+    return []
+  }
+  const maxInputImages = capabilities.inputSlots.reduce((widest, slot) => (
+    slot.allowedMediaKinds.includes('image') ? Math.max(widest, slot.maxCount) : widest
+  ), 0)
+  return {
+    sizes: valuesFor('size'),
+    qualityOptions: valuesFor('quality'),
+    maxCount: typeof capabilities.maxCount === 'number' ? capabilities.maxCount : 0,
+    maxInputImages,
   }
 }
 
@@ -109,10 +162,13 @@ export function defaultsFromRow(row: Record<string, unknown>): Record<string, un
   return parseJsonField(row.defaults) || {}
 }
 
-export const publicModelDto = (row: Record<string, unknown>) => {
-  const modelKind = (row.media_kind as string) || (row.model_kind as string) || 'image'
+export const publicModelDto = (row: Record<string, unknown>): PublicModelDto => {
+  // `model_configs.model_kind` also carries 'language'; this DTO is only ever
+  // served for the media kinds `GET /api/models` selects.
+  const modelKind = ((row.media_kind as string) || (row.model_kind as string) || 'image') as MediaKind
   const capabilities = capabilitiesFromRow(row)
-  const defaults = defaultsFromRow(row)
+  const defaults = defaultsFromRow(row) as Record<string, JsonValue>
+  const legacy = legacyColumnsFromCapabilities(capabilities)
   return {
     id: row.id as string,
     displayName: row.display_name as string,
@@ -124,12 +180,20 @@ export const publicModelDto = (row: Record<string, unknown>) => {
     parameters: capabilities.parameters,
     inputSlots: capabilities.inputSlots,
     defaults,
-    // Legacy image fields for compatibility.
-    adapter: row.adapter as string,
-    sizes: Array.isArray(row.sizes) ? (row.sizes as string[]).map(String) : parseJsonArray(row.sizes),
-    qualityOptions: Array.isArray(row.quality_options) ? (row.quality_options as string[]).map(String) : parseJsonArray(row.quality_options),
-    maxCount: Number(row.max_count || capabilities.maxCount || 0),
-    maxInputImages: row.max_input_images !== undefined && row.max_input_images !== null ? Number(row.max_input_images) : 0,
+    maxCount: capabilities.maxCount,
+    maxInputImages: legacy.maxInputImages,
+    supportedMediaKinds: capabilities.supportedMediaKinds,
+    ...(capabilities.flags ? { flags: capabilities.flags } : {}),
+    ...(capabilities.crossFieldConstraints ? { crossFieldConstraints: capabilities.crossFieldConstraints } : {}),
+    declaredBy: capabilities.declaredBy,
+    ...(capabilities.deprecated !== undefined ? { deprecated: capabilities.deprecated } : {}),
+    ...(capabilities.deprecationNote !== undefined ? { deprecationNote: capabilities.deprecationNote } : {}),
+    /** @deprecated Legacy `model_configs.adapter` routing column. */
+    adapter: (row.adapter as string) || '',
+    /** @deprecated Mirror of the `size` descriptor; read `parameters`. */
+    sizes: legacy.sizes,
+    /** @deprecated Mirror of the `quality` descriptor; read `parameters`. */
+    qualityOptions: legacy.qualityOptions,
     enabled: Boolean(row.enabled),
     sortOrder: Number(row.sort_order || 0),
   }
@@ -250,18 +314,27 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
     startedAt: row.started_at ? new Date(row.started_at as string | number | Date).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at as string | number | Date).toISOString() : undefined,
     inputs: await Promise.all(
-      rawInputs.map(async (input: Record<string, unknown>, index: number) => ({
-        id: input.id as string,
-        uploadId: (input.id as string) || (input.upload_id as string),
-        role: (input.role as string) || 'reference_image',
-        position: input.position !== undefined ? Number(input.position) : index,
-        imageUrl: (input.imageUrl as string) || (input.object_key ? await signedAssetUrl(input.object_key as string) : ''),
-        url: (input.imageUrl as string) || (input.object_key ? await signedAssetUrl(input.object_key as string) : ''),
-        mimeType: (input.mime_type as string) || (input.mimeType as string),
-        width: (input.width as number) || 0,
-        height: (input.height as number) || 0,
-        sizeBytes: Number(input.size_bytes ?? input.sizeBytes ?? 0),
-      }))
+      rawInputs.map(async (input: Record<string, unknown>, index: number) => {
+        // A gallery-sourced input owns no upload row: report it by `assetId` and
+        // leave `uploadId` undefined, so no reader can mistake the reference for a
+        // file this job uploaded (and try to delete or re-attach it).
+        const assetId = (input.assetId as string) || (input.asset_id as string) || undefined
+        const source = assetId ? 'gallery' : 'upload'
+        return {
+          id: input.id as string,
+          uploadId: assetId ? undefined : ((input.upload_id as string) || (input.id as string)),
+          assetId,
+          source,
+          role: (input.role as string) || 'reference_image',
+          position: input.position !== undefined ? Number(input.position) : index,
+          imageUrl: (input.imageUrl as string) || (input.object_key ? await signedAssetUrl(input.object_key as string) : ''),
+          url: (input.imageUrl as string) || (input.object_key ? await signedAssetUrl(input.object_key as string) : ''),
+          mimeType: (input.mime_type as string) || (input.mimeType as string),
+          width: (input.width as number) || 0,
+          height: (input.height as number) || 0,
+          sizeBytes: Number(input.size_bytes ?? input.sizeBytes ?? 0),
+        }
+      })
     ),
     // Legacy alias preserved for existing image clients.
     inputImages: await Promise.all(

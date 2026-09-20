@@ -7,7 +7,6 @@ import {
   serializeCanonicalGenerationRequest,
   serializeCanonicalJson,
   validateGenerationRequest,
-  validateModelInput,
 } from './index'
 import {
   type CreateGenerationRequest,
@@ -17,22 +16,10 @@ import {
   type VideoGenerationOutput,
 } from '@musecanvas/contracts'
 
-test('legacy validateModelInput behaves correctly for existing models', () => {
-  const model = {
-    adapter: 'openai',
-    vendorModelId: 'gpt-image-2',
-    sizes: ['1024x1024', '1280x720'],
-    qualityOptions: ['auto', 'low', 'medium', 'high'],
-    maxCount: 4,
-  }
-
-  assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'high', count: 1 }), null)
-  assert.equal(validateModelInput(model, { size: '2K', quality: 'medium', count: 2 }), null)
-  assert.equal(validateModelInput(model, { size: 'bad-size', quality: 'medium', count: 1 }), 'INVALID_SIZE')
-  assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'invalid-q', count: 1 }), 'INVALID_QUALITY')
-  assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'high', count: 0 }), 'INVALID_COUNT')
-  assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'high', count: 5 }), 'INVALID_COUNT')
-})
+// `validateModelInput` and the Seedream pixel-band table it depended on were
+// deleted: they had no production caller, and the same rules are now declared by
+// the seedream-image plugin's own `image-size` descriptor and enforced through
+// `validateGenerationRequest` (see `media-capabilities.test.ts`).
 
 test('contracts generation outputs form a typed discriminated union', () => {
   const imageOutput: GenerationOutput = {
@@ -274,7 +261,11 @@ test('descriptor-driven validation rejects unknown parameters and type/bounds vi
   })
   assert.equal(invalidEnumResult.valid, false)
   if (!invalidEnumResult.valid) {
-    assert.equal(invalidEnumResult.errorCode, 'INVALID_PARAMETER_VALUE')
+    // Renamed deliberately: a value the model simply does not offer is a
+    // capability statement, not a schema violation, and the user asked for an
+    // error that says so. `INVALID_PARAMETER_VALUE` remains in
+    // `GenerationErrorCode` because historical job rows still carry it.
+    assert.equal(invalidEnumResult.errorCode, 'UNSUPPORTED_MEDIA_PARAMETER')
   }
 
   // Integer out of bounds
@@ -456,7 +447,7 @@ test('cross-field constraints validate max_product, requires, and mutually_exclu
       { type: 'boolean', name: 'highQualityMode' },
     ],
     inputSlots: [],
-    constraints: [
+    crossFieldConstraints: [
       {
         type: 'max_product',
         parameters: ['width', 'height'],
@@ -564,4 +555,113 @@ test('canonical normalization and serialization is strictly deterministic', () =
   // Ensure JSON keys are sorted
   const canonicalJson = serializeCanonicalJson({ z: 1, b: 2, a: 3 })
   assert.equal(canonicalJson, '{"a":3,"b":2,"z":1}')
+})
+
+const assetRefCapabilities: ModelValidationConfig = {
+  modes: ['text_to_image', 'image_to_image'],
+  supportedMediaKinds: ['image'],
+  parameters: [],
+  inputSlots: [
+    { role: 'reference_image', required: false, minCount: 0, maxCount: 4, allowedMediaKinds: ['image'] },
+  ],
+  maxCount: 4,
+}
+
+function assetRefRequest(inputs: CreateGenerationRequest['inputs']): CreateGenerationRequest {
+  return { modelId: 'seedream-4-5', prompt: 'reuse my gallery image', parameters: {}, inputs }
+}
+
+test('a gallery assetId is accepted as the only reference on an input', () => {
+  const result = validateGenerationRequest(
+    assetRefCapabilities,
+    assetRefRequest([{ assetId: '2f1c9b7e-3a4d-4c8e-9b2a-1d0e7c5b8a44', role: 'reference_image', position: 0 }]),
+  )
+
+  assert.equal(result.valid, true)
+  if (result.valid) {
+    assert.equal(result.value.mode, 'image_to_image', 'an asset input is still an image-to-image request')
+    assert.equal(result.value.inputs[0].assetId, '2f1c9b7e-3a4d-4c8e-9b2a-1d0e7c5b8a44')
+    assert.equal(result.value.inputs[0].uploadId, undefined)
+  }
+})
+
+test('uploads and gallery assets mix freely inside one request', () => {
+  const result = validateGenerationRequest(
+    assetRefCapabilities,
+    assetRefRequest([
+      { uploadId: 'u-1', role: 'reference_image', position: 0 },
+      { assetId: 'a-1', role: 'reference_image', position: 1 },
+    ]),
+  )
+
+  assert.equal(result.valid, true)
+})
+
+test('an input must carry exactly one reference', () => {
+  const both = validateGenerationRequest(
+    assetRefCapabilities,
+    assetRefRequest([{ uploadId: 'u-1', assetId: 'a-1', role: 'reference_image', position: 0 }]),
+  )
+  assert.equal(both.valid, false)
+  if (!both.valid) {
+    assert.equal(both.errorCode, 'INVALID_INPUT_REF')
+  }
+
+  const neither = validateGenerationRequest(
+    assetRefCapabilities,
+    assetRefRequest([{ role: 'reference_image', position: 0 }]),
+  )
+  assert.equal(neither.valid, false)
+  if (!neither.valid) {
+    // Kept as the historical code so existing client-side error copy still matches.
+    assert.equal(neither.errorCode, 'INVALID_INPUT_UPLOAD_ID')
+  }
+})
+
+test('the same image cannot occupy two slots, but upload and asset ids never collide', () => {
+  const sameAssetTwice = validateGenerationRequest(
+    assetRefCapabilities,
+    assetRefRequest([
+      { assetId: 'a-1', role: 'reference_image', position: 0 },
+      { assetId: 'a-1', role: 'reference_image', position: 1 },
+    ]),
+  )
+  assert.equal(sameAssetTwice.valid, false)
+  if (!sameAssetTwice.valid) {
+    assert.equal(sameAssetTwice.errorCode, 'DUPLICATE_INPUT_REF')
+  }
+
+  // The dedupe key is prefixed per kind, so one string used as both an upload id
+  // and an asset id is still two distinct images.
+  const mixedNamespaces = validateGenerationRequest(
+    assetRefCapabilities,
+    assetRefRequest([
+      { uploadId: 'same-id', role: 'reference_image', position: 0 },
+      { assetId: 'same-id', role: 'reference_image', position: 1 },
+    ]),
+  )
+  assert.equal(mixedNamespaces.valid, true)
+})
+
+test('two different gallery picks hash to two different request digests', () => {
+  const first = prepareRequestDigestInput(
+    assetRefRequest([{ assetId: 'aaaaaaaa-1111-4111-8111-111111111111', role: 'reference_image', position: 0 }]),
+  )
+  const second = prepareRequestDigestInput(
+    assetRefRequest([{ assetId: 'bbbbbbbb-1111-4111-8111-111111111111', role: 'reference_image', position: 0 }]),
+  )
+
+  assert.notEqual(first, second, 'a digest that ignores assetId would let one idempotency key swallow both jobs')
+})
+
+test('upload-only request digests are byte-identical after assetId was introduced', () => {
+  const uploadOnly = prepareRequestDigestInput(
+    assetRefRequest([{ uploadId: 'u-1', role: 'reference_image', position: 0 }]),
+  )
+  const uploadWithUndefinedAsset = prepareRequestDigestInput(
+    assetRefRequest([{ uploadId: 'u-1', assetId: undefined, role: 'reference_image', position: 0 }]),
+  )
+
+  assert.equal(uploadOnly, uploadWithUndefinedAsset)
+  assert.ok(!uploadOnly.includes('assetId'), 'undefined refs must stay out of the canonical form')
 })

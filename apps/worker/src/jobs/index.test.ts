@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { inspectInputImage, validateInputImages } from '../../../../packages/providers/src/core/image-input'
-import { isSynchronousPlugin, validateStoredInputImage } from './index'
+import { NormalizedProviderError } from '../../../../packages/providers/src/index'
+import { resolveMediaPlugin } from '../plugins/availability'
+import { classifySubmitError, isSynchronousPlugin, validateStoredInputImage } from './index'
 
 // Create helper PNG buffer with valid IHDR
 function createValidPng(width = 100, height = 100): Buffer {
@@ -147,3 +149,53 @@ test('isSynchronousPlugin distinguishes image-style and video-style plugins', ()
   assert.equal(isSynchronousPlugin({ poll: undefined }), true)
   assert.equal(isSynchronousPlugin({ poll: async () => ({ status: 'waiting' as const }) }), false)
 })
+
+test('classifySubmitError keeps the diagnostic an uploaded bundle carries', () => {
+  const diagnostic = { status: 429, endpoint: '/v1/images/generations', detail: 'rate limited' }
+  // A bundle cannot import NormalizedProviderError, so it signals with a plain Error.
+  const temporary = classifySubmitError(Object.assign(new Error('PROVIDER_TEMPORARY_ERROR'), { diagnostic }), 'uploaded')
+  assert.equal(temporary.code, 'PROVIDER_TEMPORARY_ERROR')
+  assert.equal(temporary.retryable, true)
+  assert.deepEqual(temporary.diagnostic, diagnostic)
+
+  const rejected = classifySubmitError(Object.assign(new Error('PROVIDER_REJECTED'), { diagnostic }), 'uploaded')
+  assert.equal(rejected.retryable, false, 'a rejection must never map to a retry')
+  assert.deepEqual(rejected.diagnostic, diagnostic)
+
+  const unnamed = classifySubmitError(Object.assign(new Error('boom'), { diagnostic }), 'uploaded')
+  assert.equal(unnamed.code, 'GENERATION_FAILED')
+  assert.deepEqual(unnamed.diagnostic, diagnostic)
+
+  assert.equal(Array.isArray(classifySubmitError(Object.assign(new Error('PROVIDER_BUSY'), { diagnostic: [1, 2] }), 'uploaded').diagnostic), false)
+  assert.deepEqual(classifySubmitError(new Error('PROVIDER_BUSY'), 'uploaded'), { code: 'PROVIDER_BUSY', retryable: true, diagnostic: null })
+  assert.deepEqual(classifySubmitError(new Error('boom'), 'uploaded'), { code: 'GENERATION_FAILED', retryable: false, diagnostic: null })
+  assert.deepEqual(classifySubmitError('PROVIDER_TIMEOUT', 'uploaded'), { code: 'GENERATION_FAILED', retryable: false, diagnostic: null })
+
+  // The typed branches keep their own (narrower) retryable sets.
+  const normalized = classifySubmitError(NormalizedProviderError.create('p', '1.0.0', 'OUTPUT_READ_FAILED', 'read failed'), 'p')
+  assert.equal(normalized.code, 'OUTPUT_READ_FAILED')
+  assert.equal(normalized.retryable, true)
+  const notConfigured = classifySubmitError(NormalizedProviderError.create('p', '1.0.0', 'PROVIDER_NOT_CONFIGURED', 'disabled'), 'p')
+  assert.equal(notConfigured.retryable, false)
+  const providerDownload = classifySubmitError(NormalizedProviderError.create('p', '1.0.0', 'UNKNOWN_ERROR', 'flaked'), 'p')
+  assert.equal(providerDownload.retryable, false, 'the NormalizedProviderError branch keeps its own narrow retryable set')
+
+  // The availability gate throws this same error for a disabled plugin, so a disabled
+  // install is a terminal PROVIDER_NOT_CONFIGURED here rather than a retry loop.
+  let gated: unknown
+  try {
+    resolveMediaPlugin('jobs-test-unseen-plugin', '1.0.0')
+    throw new Error('expected the gate to throw')
+  } catch (error) {
+    gated = error
+  }
+  assert.deepEqual(classifySubmitError(gated, 'jobs-test-unseen-plugin'), {
+    code: 'PROVIDER_NOT_CONFIGURED',
+    retryable: false,
+    diagnostic: { ...normalizeDiagnostic(gated) },
+  })
+})
+
+function normalizeDiagnostic(error: unknown): Record<string, unknown> {
+  return (error as NormalizedProviderError).diagnostic as Record<string, unknown>
+}

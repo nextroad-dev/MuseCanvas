@@ -1,6 +1,11 @@
 import sharp from 'sharp'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { validateModelCapabilities, validateParameterValue } from '@musecanvas/contracts'
+import type {
+  ImageSizeParameterDescriptor,
+  ModelCapabilities,
+} from '@musecanvas/contracts'
 import {
   LEGACY_SEEDREAM_IMAGE_PLUGIN_VERSION,
   SEEDREAM_IMAGE_PLUGIN_ID,
@@ -13,6 +18,9 @@ import {
   seedreamImageManifest,
   seedreamImagePlugin,
   NormalizedProviderError,
+  validatePluginManifest,
+  type MediaModelDeclaration,
+  type MediaProviderManifest,
   type MediaRequest,
   type ProviderConfig,
 } from '../../index'
@@ -254,6 +262,160 @@ test('seedream size rules stay pixel-based per model', () => {
   assert.equal(normalizeSeedreamSize('5504x3040', 'doubao-seedream-4-5-251128'), '5504x3040')
   assert.throws(() => normalizeSeedreamSize('1024x1024', 'doubao-seedream-4-5-251128'), /INVALID_IMAGE_SIZE/)
   assert.throws(() => normalizeSeedreamSize('2K', 'doubao-seedream-4-5-251128'), /INVALID_IMAGE_SIZE/)
+})
+
+const capabilityCases: Array<{
+  id: string
+  minPixels: number
+  presetCount: number
+  /** In-band but on no preset grid: must stay accepted. */
+  unlistedLegalSize: string
+  belowBandSize: string
+}> = [
+  {
+    id: 'doubao-seedream-4-0-250828',
+    minPixels: 1280 * 720,
+    presetCount: 24,
+    unlistedLegalSize: '1500x1000',
+    belowBandSize: '800x800',
+  },
+  {
+    id: 'doubao-seedream-4-5-251128',
+    minPixels: 2560 * 1440,
+    presetCount: 16,
+    unlistedLegalSize: '2600x1500',
+    belowBandSize: '1024x1024',
+  },
+]
+
+function sizeDescriptorOf(model: MediaModelDeclaration): ImageSizeParameterDescriptor {
+  return (model.capabilities as ModelCapabilities).parameters.find(
+    parameter => parameter.type === 'image-size',
+  ) as ImageSizeParameterDescriptor
+}
+
+function parameterNames(model: MediaModelDeclaration): string[] {
+  return model.capabilities?.parameters.map(parameter => parameter.name) ?? []
+}
+
+test('active manifest declares one accepted contract per model, and no invented parameter', () => {
+  const declared = new Map((seedreamImageManifest.models ?? []).map(model => [model.id, model]))
+  assert.deepEqual([...declared.keys()], [...SEEDREAM_IMAGE_SUPPORTED_MODELS])
+
+  for (const testCase of capabilityCases) {
+    const model = declared.get(testCase.id) as MediaModelDeclaration
+    const capabilities = model.capabilities as ModelCapabilities
+    const probe = validateModelCapabilities({ ...capabilities, defaults: model.defaults })
+    assert.ok(probe.ok, `${testCase.id} declaration rejected: ${JSON.stringify(probe.findings)}`)
+
+    assert.equal(capabilities.declaredBy, 'plugin-manifest')
+    assert.deepEqual(capabilities.modes, ['text_to_image', 'image_to_image'])
+    // mask / inpainting / transparentBackground stay absent: unconfirmed, not false.
+    assert.deepEqual(capabilities.flags, { textToImage: true, imageToImage: true, imageEdit: true })
+    // `quality` is absent because this vendor accepts no quality token at all.
+    assert.deepEqual(parameterNames(model), ['size', 'count', 'watermark'])
+    assert.deepEqual(capabilities.inputSlots, [
+      { role: 'reference_image', required: false, minCount: 0, maxCount: 4, allowedMediaKinds: ['image'], label: '参考图' },
+    ])
+    assert.deepEqual(model.defaults, { size: '2048x2048', count: 1, watermark: false })
+
+    const size = sizeDescriptorOf(model)
+    assert.equal(size.allowCustom, true)
+    assert.deepEqual(size.constraints, {
+      maxPixels: 4096 * 4096,
+      maxAspectRatio: 16,
+      minPixels: testCase.minPixels,
+    })
+    assert.equal(size.presets.length, testCase.presetCount)
+    for (const preset of size.presets) {
+      // A preset is a promise of legality against its own band.
+      assert.deepEqual(validateParameterValue(size, preset.value), [], preset.value)
+      assert.equal(normalizeSeedreamSize(preset.value, testCase.id), preset.value)
+      assert.match(preset.label, /×/, preset.value)
+    }
+
+    assert.deepEqual(validateParameterValue(size, testCase.unlistedLegalSize), [])
+    assert.notEqual(validateParameterValue(size, testCase.belowBandSize).length, 0)
+  }
+})
+
+test('the shared descriptor set is composed once, not duplicated per model', () => {
+  const [first, second] = seedreamImageManifest.models ?? []
+  const [firstSize, firstCount, firstWatermark] = (first.capabilities as ModelCapabilities).parameters
+  const [secondSize, secondCount, secondWatermark] = (second.capabilities as ModelCapabilities).parameters
+  assert.equal(firstCount, secondCount, 'count is one declaration shared by both models')
+  assert.equal(firstWatermark, secondWatermark, 'watermark is one declaration shared by both models')
+  assert.notEqual(firstSize, secondSize, 'only the size band differs per model')
+  assert.equal(first.capabilities?.inputSlots, second.capabilities?.inputSlots)
+  // 4.5 offers the 2K and 4K grids; 4.0 is those same entries plus the 1K band.
+  assert.deepEqual((firstSize as ImageSizeParameterDescriptor).presets.slice(8), (secondSize as ImageSizeParameterDescriptor).presets)
+})
+
+test('legacy 1.0.0 manifest stays thin so pinned revisions keep their permissive rules', () => {
+  for (const model of legacySeedreamImageManifest.models ?? []) {
+    assert.equal(model.capabilities, undefined)
+    assert.equal(model.defaults, undefined)
+    assert.equal(model.maxInputImages, undefined)
+    assert.equal(model.maxBatchSize, 4)
+  }
+})
+
+test('plugin-scan carries the declaration through instead of stripping it', () => {
+  for (const manifest of [seedreamImageManifest, legacySeedreamImageManifest]) {
+    const validated = validatePluginManifest(JSON.parse(JSON.stringify(manifest)))
+    if (!validated.ok) {
+      assert.fail(`manifest ${manifest.version} rejected: ${JSON.stringify(validated.findings)}`)
+    }
+    const sanitized = validated.manifest as MediaProviderManifest
+    assert.deepEqual(
+      sanitized.models?.map(model => parameterNames(model)),
+      manifest === seedreamImageManifest
+        ? [['size', 'count', 'watermark'], ['size', 'count', 'watermark']]
+        : [[], []],
+    )
+    if (manifest === seedreamImageManifest) {
+      for (const index of [0, 1]) {
+        assert.deepEqual(
+          sanitized.models?.[index]?.capabilities,
+          (manifest.models?.[index] as MediaModelDeclaration).capabilities,
+        )
+        assert.deepEqual(sanitized.models?.[index]?.defaults, manifest.models?.[index]?.defaults)
+      }
+    }
+  }
+})
+
+test('validateRequest answers from the declaration rather than a private table', () => {
+  const invalidRequest = (err: unknown) => {
+    assert.ok(err instanceof NormalizedProviderError)
+    assert.equal(err.diagnostic.code, 'INVALID_REQUEST')
+    return true
+  }
+  const base: MediaRequest = {
+    modality: 'image',
+    vendorModelId: 'doubao-seedream-4-0-250828',
+    prompt: 'ok',
+    count: 1,
+    watermark: false,
+  }
+  // Preset, custom-in-band and legacy width/height fields all read the same band.
+  seedreamImagePlugin.validateRequest({ ...base, size: '1024x1024' })
+  seedreamImagePlugin.validateRequest({ ...base, size: '1500x1000' })
+  seedreamImagePlugin.validateRequest({ ...base, width: 1500, height: 1000 })
+  seedreamImagePlugin.validateRequest({ ...base, count: 4 })
+  assert.throws(() => seedreamImagePlugin.validateRequest({ ...base, size: '800x800' }), invalidRequest)
+  assert.throws(() => seedreamImagePlugin.validateRequest({ ...base, width: 800, height: 800 }), invalidRequest)
+  assert.throws(() => seedreamImagePlugin.validateRequest({ ...base, count: 5 }), invalidRequest)
+  assert.throws(
+    () => seedreamImagePlugin.validateRequest({ ...base, watermark: 'yes' as unknown as boolean }),
+    invalidRequest,
+  )
+  // The floor is per model: 4.5 declares 2560x1440, 4.0 declares 1280x720.
+  assert.throws(
+    () => seedreamImagePlugin.validateRequest({ ...base, vendorModelId: 'doubao-seedream-4-5-251128', size: '1280x720' }),
+    invalidRequest,
+  )
+  assert.throws(() => seedreamImagePlugin.validateRequest({ ...base, vendorModelId: 'doubao-seedream-9-9-999999' }), invalidRequest)
 })
 
 test('transient HTTP and transport errors throw normalized errors', async () => {

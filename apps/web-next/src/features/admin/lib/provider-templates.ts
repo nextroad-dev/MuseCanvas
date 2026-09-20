@@ -8,6 +8,25 @@ import type {
   ProviderCredentialInput,
 } from '@/shared/types'
 
+/**
+ * Legacy (plugin-less) adapter options, split by the page that creates them.
+ * The API only accepts these three adapter strings without a plugin identity
+ * (see `LEGACY_ADAPTERS` in `apps/api/src/modules/admin/provider-credentials.ts`).
+ */
+export const LEGACY_ADAPTER_OPTIONS: Record<
+  'media' | 'language',
+  readonly { value: string; label: string }[]
+> = {
+  media: [
+    { value: 'openai', label: 'OpenAI 兼容' },
+    { value: 'seedream', label: 'Seedream (火山引擎)' },
+  ],
+  language: [
+    { value: 'openai', label: 'OpenAI 兼容' },
+    { value: 'anthropic', label: 'Anthropic' },
+  ],
+}
+
 export function templateConfiguredCount(
   credentials: ProviderCredential[],
   template: BuiltinProviderTemplate,
@@ -48,7 +67,11 @@ export function credentialsForPreset(
     return []
   }
   if (preset.modelKind === 'language') {
-    return enabled.filter((c) => c.adapter === preset.adapter && c.hasApiKey)
+    // Language presets have no plugin identity, so plugin-bound media
+    // credentials (which merely share an adapter string) are never candidates.
+    return enabled.filter(
+      (c) => c.adapter === preset.adapter && c.hasApiKey && !isPluginBoundCredential(c),
+    )
   }
   return enabled.filter((c) => c.adapter === preset.adapter)
 }
@@ -59,6 +82,38 @@ export function presetPluginKey(
 ): string | null {
   if (!preset?.pluginId || !preset?.pluginVersion) return null
   return `${preset.pluginId}@${preset.pluginVersion}`
+}
+
+/** Exact plugin identity a credential is bound to, or null when plugin-less. */
+export function credentialPluginKey(
+  credential: Pick<ProviderCredential, 'configuredFields'>,
+): string | null {
+  const pluginId = credential.configuredFields?.pluginId
+  const pluginVersion = credential.configuredFields?.pluginVersion
+  if (typeof pluginId !== 'string' || !pluginId) return null
+  if (typeof pluginVersion !== 'string' || !pluginVersion) return null
+  return `${pluginId}@${pluginVersion}`
+}
+
+/**
+ * Media credentials are the plugin-bound ones: only they can pass the provider
+ * plugin probe in `testProviderCredential`.
+ */
+export function isPluginBoundCredential(
+  credential: Pick<ProviderCredential, 'configuredFields'>,
+): boolean {
+  return credentialPluginKey(credential) !== null
+}
+
+/**
+ * Language / custom credentials carry no plugin identity (`adapter` + API key +
+ * base URL). This is the only shape a language preset can bind, because
+ * `credentialsForPreset` matches language presets by adapter, never by plugin.
+ */
+export function isCustomCredential(
+  credential: Pick<ProviderCredential, 'configuredFields'>,
+): boolean {
+  return !isPluginBoundCredential(credential)
 }
 
 /** Exact identity/schema payload for creating a credential from a template. */

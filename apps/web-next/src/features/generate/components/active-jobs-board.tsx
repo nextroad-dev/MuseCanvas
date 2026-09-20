@@ -127,7 +127,7 @@ export function ActiveJobsBoard({
     <section
       aria-labelledby={headingId}
       className={`flex min-h-0 shrink-0 flex-col ${
-        isRail ? '' : 'rounded-[var(--radius-card)] border border-border bg-surface'
+        isRail ? '' : 'rounded-[var(--radius-card)] bg-surface shadow-md'
       }`}
     >
       {isRail ? (
@@ -200,7 +200,7 @@ export function ActiveJobsBoard({
         <ul
           id={listId}
           role="list"
-          className={`m-0 list-none divide-y divide-border overflow-y-auto p-0 ${
+          className={`m-0 list-none space-y-1 overflow-y-auto p-0 ${
             open ? '' : 'hidden'
           } ${isRail ? 'max-h-64' : ''}`}
         >
@@ -269,16 +269,29 @@ function ActiveJobRow({
       ? `${job.outputs?.length ?? 0} ${unit}产物`
       : ''
 
-  const meta = [job.modelName, job.size, Number.isFinite(job.count) ? `${job.count} ${unit}` : null]
+  // Historical parameters are rendered straight from the stored request, with no
+  // lookup against the model's *current* descriptors. A job created before a
+  // contract was tightened still has to show what it was actually generated
+  // with, even where no control on offer today could produce that value again.
+  const historicalParameters = Object.entries(job.parameters ?? {})
+    .filter(([name, value]) => value !== undefined && value !== null && name !== 'size' && name !== 'count')
+    .map(([name, value]) => `${name}=${String(value)}`)
+
+  const meta = [
+    job.modelName,
+    job.size,
+    Number.isFinite(job.count) ? `${job.count} ${unit}` : null,
+    ...historicalParameters,
+  ]
     .filter(Boolean)
     .join(' · ')
 
   return (
     <li
       data-job-row={job.id}
-      className={`relative flex gap-2 p-3 transition-opacity duration-[var(--motion-slow)] ease-[var(--ease-standard)] ${
+      className={`relative flex gap-2 rounded-[var(--radius-control)] p-3 transition-opacity duration-[var(--motion-slow)] ease-[var(--ease-standard)] ${
         expiringAt !== undefined && expiringAt - now <= FADE_MS ? 'opacity-0' : 'opacity-100'
-      }`}
+      } ${active ? 'bg-surface-subtle' : 'bg-surface-subtle/50'}`}
     >
       {active && (
         <span
@@ -288,7 +301,7 @@ function ActiveJobRow({
       )}
 
       {firstOutput && (
-        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface-subtle">
+        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
           <MediaFrame
             src={outputUrl(firstOutput)}
             kind={firstOutput.mediaKind}

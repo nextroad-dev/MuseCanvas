@@ -63,7 +63,11 @@ jobs:
         run: pnpm --filter @musecanvas/providers test
 
       - name: Test media provider contract integration (no external services)
-        run: pnpm --filter @musecanvas/providers exec tsx --test ../../tests/integration/media-provider-contract.test.ts
+        # Quoted glob, not a filename: this step used to name
+        # media-provider-contract.test.ts specifically, so any test added under
+        # tests/integration/ was silently never run in CI. The quotes are load
+        # bearing — the runner, not the shell, expands the pattern.
+        run: pnpm --filter @musecanvas/providers exec tsx --test "../../tests/integration/*.test.ts"
 
       - name: Test domain package (no external services)
         run: pnpm --filter @musecanvas/domain test

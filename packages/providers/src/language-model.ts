@@ -1,10 +1,24 @@
 import { DefaultSafeHttpClient } from './core/http'
 import { NormalizedProviderError } from './core/errors'
-import type { SafeHttpResponse } from './core/types'
+import { globalPluginRegistry } from './core/plugin-registry'
+import { isNormalizedProviderCode, normalizedCodeToLanguageError } from './core/language-errors'
+import { isPrivateProviderHost } from './core/url-guard'
+import type {
+  DecodedCredential,
+  LanguageCompletionResult,
+  LanguageProviderPlugin,
+  LanguageRequest,
+  NormalizedProviderErrorDiagnostic,
+  ProviderConfig,
+  SafeHttpResponse,
+} from './core/types'
+import type { LanguageProtocol, ReasoningEffort } from './core/types'
 
-export type LanguageProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
-export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
-export type LanguageModelInput = { protocol: LanguageProtocol; vendorModelId: string; baseUrl?: string; apiKey: string; system: string; user: string; schemaName?: string; schema?: Record<string, unknown>; maxOutputTokens: number; temperature?: number; reasoningEffort?: ReasoningEffort | null; timeoutMs: number }
+// LanguageProtocol / ReasoningEffort now live in core/types.ts as the single source
+// of truth; re-exported here under the same public names so existing importers are unchanged.
+export type { LanguageProtocol, ReasoningEffort }
+
+export type LanguageModelInput = { protocol: LanguageProtocol; vendorModelId: string; baseUrl?: string; apiKey: string; system: string; user: string; schemaName?: string; schema?: Record<string, unknown>; maxOutputTokens: number; temperature?: number; reasoningEffort?: ReasoningEffort | null; timeoutMs: number; pluginId?: string; pluginVersion?: string; credential?: DecodedCredential }
 export type LanguageModelResult = { text: string; providerReferenceId?: string; inputTokens?: number; outputTokens?: number }
 export type LanguageModelErrorDiagnostic = { adapter: 'openai' | 'anthropic'; status: number; statusText: string; endpoint: string; detail: string; occurredAt: string; providerReferenceId?: string }
 
@@ -96,11 +110,6 @@ const languageModelHttp = new DefaultSafeHttpClient({
   fetchImpl: ((input, init) => globalThis.fetch(input, init)) as typeof globalThis.fetch,
 })
 
-function isPrivateProviderHost(host: string): boolean {
-  const h = host.toLowerCase()
-  return h === 'localhost' || h === '0.0.0.0' || h === '::1' || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
-}
-
 function throwLanguageModelUnsafeUrl(input: LanguageModelInput, requestUrl: string, detail: string): never {
   let endpoint = requestUrl
   try { endpoint = new URL(requestUrl).pathname } catch { endpoint = requestUrl }
@@ -116,7 +125,72 @@ function throwLanguageModelUnsafeUrl(input: LanguageModelInput, requestUrl: stri
   throw new LanguageModelHttpError('PROMPT_OPTIMIZATION_REJECTED', diagnostic)
 }
 
+/**
+ * An artifact signals failure as `throw Object.assign(new Error('<CODE>'), { diagnostic })`
+ * (see core/plugin-scan.ts); in-band `LanguageCompletionResult.error` uses the same codes.
+ */
+function classifyPluginError(error: unknown): { code: NormalizedProviderErrorDiagnostic['code']; detail: string; providerReferenceId?: string } {
+  if (error instanceof NormalizedProviderError) {
+    return { code: error.diagnostic.code, detail: error.diagnostic.detail, providerReferenceId: error.diagnostic.providerReferenceId }
+  }
+  const raw = error && typeof error === 'object' ? (error as { diagnostic?: unknown }).diagnostic : undefined
+  const diagnostic = raw && typeof raw === 'object' ? raw as Partial<NormalizedProviderErrorDiagnostic> : null
+  const message = error instanceof Error ? error.message : String(error ?? 'UNKNOWN_ERROR')
+  if (diagnostic && typeof diagnostic.code === 'string' && isNormalizedProviderCode(diagnostic.code)) {
+    return {
+      code: diagnostic.code,
+      detail: typeof diagnostic.detail === 'string' ? diagnostic.detail : message,
+      providerReferenceId: typeof diagnostic.providerReferenceId === 'string' ? diagnostic.providerReferenceId : undefined,
+    }
+  }
+  return { code: isNormalizedProviderCode(message) ? message : 'UNKNOWN_ERROR', detail: message }
+}
+
+function languagePluginFailure(
+  input: LanguageModelInput,
+  pluginId: string,
+  pluginVersion: string,
+  code: NormalizedProviderErrorDiagnostic['code'],
+  detail: string,
+  providerReferenceId?: string,
+): LanguageModelHttpError {
+  const diagnostic: LanguageModelErrorDiagnostic = {
+    adapter: adapterForProtocol(input.protocol),
+    status: 0,
+    statusText: code,
+    endpoint: `plugin:${pluginId}@${pluginVersion}`,
+    detail: sanitizeProviderDetail(detail),
+    occurredAt: new Date().toISOString(),
+    providerReferenceId,
+  }
+  console.warn('language plugin failed', diagnostic)
+  return new LanguageModelHttpError(normalizedCodeToLanguageError(code), diagnostic)
+}
+
+async function callInstalledLanguageModel(input: LanguageModelInput, pluginId: string, pluginVersion: string): Promise<LanguageModelResult> {
+  const config: ProviderConfig = { baseUrl: input.baseUrl, credential: input.credential ?? { schema: 'legacy-api-key-v1', apiKey: input.apiKey }, timeoutMs: input.timeoutMs }
+  const request: LanguageRequest = { vendorModelId: input.vendorModelId, system: input.system, user: input.user, schemaName: input.schemaName, schema: input.schema, maxOutputTokens: input.maxOutputTokens, temperature: input.temperature, reasoningEffort: input.reasoningEffort, timeoutMs: input.timeoutMs }
+  let result: LanguageCompletionResult
+  try {
+    const plugin: LanguageProviderPlugin = globalPluginRegistry.getLanguage(pluginId, pluginVersion)
+    result = await plugin.complete(request, config, globalPluginRegistry.createLanguageExecutionContext(pluginId, pluginVersion, { config }))
+  } catch (error) {
+    if (error instanceof LanguageModelHttpError) throw error
+    const failure = classifyPluginError(error)
+    throw languagePluginFailure(input, pluginId, pluginVersion, failure.code, failure.detail, failure.providerReferenceId)
+  }
+  if (result.error) throw languagePluginFailure(input, pluginId, pluginVersion, result.error.code, result.error.detail, result.error.providerReferenceId)
+  if (typeof result.text !== 'string') throw languagePluginFailure(input, pluginId, pluginVersion, 'PROVIDER_EMPTY_RESULT', 'language plugin returned no text')
+  return { text: result.text, providerReferenceId: result.providerReferenceId, inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+}
+
 export async function callLanguageModel(input: LanguageModelInput): Promise<LanguageModelResult> {
+  // Additive dispatch for uploaded language plugins. Without both fields, or when the key
+  // resolves to anything other than a language plugin, control falls through to the
+  // built-in protocol path below unchanged.
+  if (input.pluginId && input.pluginVersion && globalPluginRegistry.kindOf(input.pluginId, input.pluginVersion) === 'language') {
+    return callInstalledLanguageModel(input, input.pluginId, input.pluginVersion)
+  }
   const request = buildLanguageModelRequest(input)
   // Independent private-address gate on the configured baseUrl host: the per-request
   // allowlist below would otherwise admit that host by construction.

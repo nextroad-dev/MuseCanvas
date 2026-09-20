@@ -22,26 +22,27 @@ import {
   formatSize,
   removeReferenceImage,
   reorderReferenceImages,
-  resolveMaxInputs,
   retryReferenceUpload,
 } from '@/shared/lib/reference-upload'
-import type { ModelConfig, StagedReferenceImage } from '@/shared/types'
+import { planRolePositions } from '@/shared/lib/generation-params'
+import type { ImageInputPlan, ImageInputPlanModel } from '@/shared/lib/generation-params'
+import type { StagedReferenceImage } from '@/shared/types'
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
 
-function statusLabel(image: StagedReferenceImage, index: number): string {
+function statusLabel(image: StagedReferenceImage, index: number, noun: string): string {
   switch (image.status) {
     case 'pending':
-      return `参考图 ${index + 1} 排队中`
+      return `${noun} ${index + 1} 排队中`
     case 'uploading':
-      return `参考图 ${index + 1} 上传中 ${image.progress}%`
+      return `${noun} ${index + 1} 上传中 ${image.progress}%`
     case 'processing':
-      return `参考图 ${index + 1} 服务端校验中`
+      return `${noun} ${index + 1} 服务端校验中`
     case 'error':
-      return `参考图 ${index + 1} 上传失败`
+      return `${noun} ${index + 1} 上传失败`
     default:
-      return `参考图 ${index + 1} 已就绪`
+      return `${noun} ${index + 1} 已就绪`
   }
 }
 
@@ -77,9 +78,16 @@ function ProgressRing({ value }: { value: number }) {
 
 export function ReferenceImagesDialog({
   model,
+  plan,
   onClose,
 }: {
-  model: Pick<ModelConfig, 'inputSlots' | 'maxInputImages'> | null | undefined
+  /** `ImageInputPlanModel`, not the legacy 2-key pick: `addReferenceFiles`
+   *  re-resolves the plan from this object, and a video model without its
+   *  `modelKind` would wrongly fall back to the image capacity of 4. */
+  model: ImageInputPlanModel | null | undefined
+  /** Resolved once by the console so the trigger, this panel and the submit
+   *  guard all read the same plan. */
+  plan: ImageInputPlan
   onClose: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -92,20 +100,27 @@ export function ReferenceImagesDialog({
   const inlineUploadError = useGenerateUiStore((s) => s.inlineUploadError)
   const setInlineUploadError = useGenerateUiStore((s) => s.setInlineUploadError)
 
-  const maxInputs = resolveMaxInputs(model)
+  const maxInputs = plan.capacity
   const supportsImages = maxInputs > 0
   const canAdd = supportsImages && stagedImages.length < maxInputs
   const totalBytes = stagedImages.reduce((sum, image) => sum + image.sizeBytes, 0)
+  // Roles are positional: order alone decides 首帧 / 尾帧, which is why the tile
+  // badges are derived from the plan instead of being picked per tile.
+  const rolePositions = planRolePositions(plan)
+  const frameMode = plan.slots.some(
+    (slot) => slot.role === 'first_frame' || slot.role === 'last_frame',
+  )
+  const noun = frameMode ? '输入画面' : '参考图'
 
   // Counts only, never progress, so the live region stays quiet during a transfer.
   const announcement = useMemo(() => {
-    if (stagedImages.length === 0) return '已清空所有参考图'
+    if (stagedImages.length === 0) return `已清空所有${noun}`
     const failed = stagedImages.filter((image) => image.status === 'error').length
     const ready = stagedImages.filter((image) => image.status === 'ready').length
-    if (failed > 0) return `${failed} 张参考图上传失败`
-    if (ready === stagedImages.length) return `参考图全部就绪，共 ${ready} 张`
-    return `正在上传参考图，已就绪 ${ready} 张`
-  }, [stagedImages])
+    if (failed > 0) return `${failed} 张${noun}上传失败`
+    if (ready === stagedImages.length) return `${noun}全部就绪，共 ${ready} 张`
+    return `正在上传${noun}，已就绪 ${ready} 张`
+  }, [stagedImages, noun])
 
   useEffect(() => {
     addButtonRef.current?.focus()
@@ -190,16 +205,18 @@ export function ReferenceImagesDialog({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 id="reference-images-title" className="text-[var(--text-subtitle)] leading-[1.4] text-foreground">
-              参考图
+              {noun}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              模型会参照这些画面生成，可调整顺序影响参考强度。
+              {frameMode
+                ? '顺序即角色：第一张作为首帧，最后一张作为尾帧，可用左右按钮调整。'
+                : '模型会参照这些画面生成，可调整顺序影响参考强度。'}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="关闭参考图面板"
+            aria-label={`关闭${noun}面板`}
             className="flex min-h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-foreground"
           >
             <X aria-hidden="true" className="h-4 w-4" />
@@ -214,13 +231,13 @@ export function ReferenceImagesDialog({
             <div className="flex items-start gap-2">
               <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
               <p className="text-foreground">
-                当前模型不支持参考图，请切换到支持图生图的模型，或移除已添加的参考图。
+                当前模型不支持{noun}，请切换到支持{frameMode ? '图生视频' : '图生图'}的模型，或移除已添加的{noun}。
               </p>
             </div>
             <button
               type="button"
               onClick={() => void clearReferenceImages()}
-              aria-label="清空所有参考图"
+              aria-label={`清空所有${noun}`}
               className="flex min-h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] border border-border-control bg-surface px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-surface-subtle"
             >
               <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
@@ -290,6 +307,9 @@ export function ReferenceImagesDialog({
               <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {stagedImages.map((image, index) => {
                   const isBusy = image.status === 'uploading' || image.status === 'processing'
+                  const role = rolePositions[index]
+                  const slot = role ? plan.slots.find((candidate) => candidate.role === role) : undefined
+                  const badge = role ? slot?.label ?? role : ''
                   return (
                     <li
                       key={image.localId}
@@ -298,7 +318,7 @@ export function ReferenceImagesDialog({
                       <div className="relative aspect-square overflow-hidden rounded-[var(--radius-control)] bg-surface-subtle">
                         <img
                           src={image.previewUrl}
-                          alt={statusLabel(image, index)}
+                          alt={statusLabel(image, index, noun)}
                           className="h-full w-full object-cover"
                         />
                         <span
@@ -315,7 +335,7 @@ export function ReferenceImagesDialog({
                             <button
                               type="button"
                               onClick={() => void retryReferenceUpload(image.localId)}
-                              aria-label={`重试上传参考图 ${index + 1}`}
+                              aria-label={`重试上传${noun} ${index + 1}`}
                               className="flex min-h-8 items-center rounded-[var(--radius-control)] border border-danger px-2 text-xs font-medium transition-colors duration-[var(--motion-fast)] hover:bg-danger hover:text-foreground-inverse"
                             >
                               重试
@@ -334,7 +354,7 @@ export function ReferenceImagesDialog({
                             aria-valuenow={image.status === 'uploading' ? image.progress : undefined}
                             aria-valuemin={image.status === 'uploading' ? 0 : undefined}
                             aria-valuemax={image.status === 'uploading' ? 100 : undefined}
-                            aria-label={`参考图 ${index + 1} 上传进度`}
+                            aria-label={`${noun} ${index + 1} 上传进度`}
                             className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-overlay/80 text-foreground-inverse"
                           >
                             {image.status === 'uploading' ? (
@@ -353,6 +373,20 @@ export function ReferenceImagesDialog({
                         )}
                       </div>
 
+                      {plan.multiRole && (
+                        <div className="flex items-center justify-between gap-1">
+                          {badge ? (
+                            <span className="rounded-[var(--radius-pill)] border border-border bg-surface-subtle px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                              {badge}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-medium text-danger">
+                              超出当前模型上限
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between gap-1">
                         <span className="font-mono text-xs tabular-nums text-muted-foreground">
                           {formatSize(image.sizeBytes)}
@@ -362,7 +396,7 @@ export function ReferenceImagesDialog({
                             type="button"
                             onClick={() => reorderReferenceImages(index, index - 1)}
                             disabled={index === 0}
-                            aria-label={`将参考图 ${index + 1} 前移`}
+                            aria-label={`将${noun} ${index + 1} 前移`}
                             className="flex min-h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors duration-[var(--motion-fast)] hover:bg-surface-subtle hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
                           >
                             <ChevronLeft aria-hidden="true" className="h-4 w-4" />
@@ -371,7 +405,7 @@ export function ReferenceImagesDialog({
                             type="button"
                             onClick={() => reorderReferenceImages(index, index + 1)}
                             disabled={index === stagedImages.length - 1}
-                            aria-label={`将参考图 ${index + 1} 后移`}
+                            aria-label={`将${noun} ${index + 1} 后移`}
                             className="flex min-h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors duration-[var(--motion-fast)] hover:bg-surface-subtle hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
                           >
                             <ChevronRight aria-hidden="true" className="h-4 w-4" />
@@ -379,7 +413,7 @@ export function ReferenceImagesDialog({
                           <button
                             type="button"
                             onClick={() => void removeReferenceImage(image.localId)}
-                            aria-label={`移除参考图 ${index + 1}`}
+                            aria-label={`移除${noun} ${index + 1}`}
                             className="flex min-h-8 w-8 items-center justify-center rounded-[var(--radius-control)] text-muted-foreground transition-colors duration-[var(--motion-fast)] hover:bg-danger-soft hover:text-danger"
                           >
                             <X aria-hidden="true" className="h-4 w-4" />
@@ -394,9 +428,7 @@ export function ReferenceImagesDialog({
 
             {stagedImages.length === 0 && !canAdd && (
               <p className="px-1 py-2 text-sm text-muted-foreground">
-                {supportsImages
-                  ? '尚未添加参考图。'
-                  : '当前模型不支持参考图，直接生成文字即可。'}
+                {supportsImages ? `尚未添加${noun}。` : `当前模型不支持${noun}，直接生成文字即可。`}
               </p>
             )}
             {!canAdd && stagedImages.length >= maxInputs && supportsImages && (
@@ -427,7 +459,7 @@ export function ReferenceImagesDialog({
         accept={ALLOWED_IMAGE_MIME_TYPES.join(',')}
         multiple
         tabIndex={-1}
-        aria-label="选择本地参考图文件"
+        aria-label={`选择本地${noun}文件`}
         className="sr-only"
         onChange={onInputChange}
       />

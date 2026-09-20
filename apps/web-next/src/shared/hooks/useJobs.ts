@@ -2,7 +2,8 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/shared/services/api'
-import type { GenerationJob } from '@/shared/types'
+import { isJobActive } from '@/shared/lib/job-status'
+import type { CreateGenerationRequest, GenerationJob } from '@/shared/types'
 import { LIBRARY_QUERY_KEY } from './useLibrary'
 
 export const JOBS_QUERY_KEY = ['jobs'] as const
@@ -25,10 +26,7 @@ export function useJobsQuery(limit?: number) {
       }
       const jobs = query.state.data
       if (!jobs || jobs.length === 0) return false
-      const hasActive = jobs.some(
-        (j) => j.status === 'queued' || j.status === 'running' || j.status === 'retry_wait',
-      )
-      return hasActive ? 2500 : false
+      return jobs.some(isJobActive) ? 2500 : false
     },
   })
 }
@@ -38,7 +36,7 @@ export function useCreateJobMutation() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (payload: Record<string, unknown>) => {
+    mutationFn: async (payload: CreateGenerationRequest) => {
       const res = await api.createGeneration(payload)
       if (!res.success || !res.data) {
         throw new Error(res.error?.message || '创建生成任务失败')
@@ -47,6 +45,7 @@ export function useCreateJobMutation() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
+      queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
     },
   })
 }

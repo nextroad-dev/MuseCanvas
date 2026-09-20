@@ -1,11 +1,14 @@
 import { create } from 'zustand'
-import type { Quality, StagedReferenceImage } from '@/shared/types'
+import type { GenerateModeTab, Quality, StagedReferenceImage } from '@/shared/types'
 
 export interface GenerateUiState {
   // Core text / model selections
   prompt: string
   negativePrompt: string
-  selectedModelId: string
+  /** 'image' | 'video' creation-console tab. */
+  activeTab: GenerateModeTab
+  /** Model choice is remembered per tab so switching tabs never loses a selection. */
+  selectedModelIdByKind: Record<GenerateModeTab, string>
 
   // Image controls
   selectedSize: string
@@ -14,11 +17,9 @@ export interface GenerateUiState {
   quality: Quality
   count: number
 
-  // Video controls
-  videoDuration: number
-  videoAspectRatio: string
-  videoResolution: string
-  videoAudio: boolean
+  // Video controls: keyed by canonical parameter name. `{}` means "use each
+  // descriptor's own default", so changing models needs no reset.
+  videoParams: Record<string, string | number | boolean>
 
   // Staged input images
   stagedImages: StagedReferenceImage[]
@@ -29,21 +30,24 @@ export interface GenerateUiState {
   activeOutputIndex: number
   isGenerating: boolean
   advancedOpen: boolean
+  /** Kept here instead of local state so collapsing survives a remount of the console. */
+  railOpen: boolean
+  activeBoardOpen: boolean
+  historyOpen: boolean
 
   // Actions
   setPrompt: (prompt: string) => void
   setNegativePrompt: (negativePrompt: string) => void
-  setSelectedModelId: (modelId: string) => void
+  setActiveTab: (tab: GenerateModeTab) => void
+  setSelectedModelId: (tab: GenerateModeTab, modelId: string) => void
   setSelectedSize: (size: string) => void
   setSelectedQuality: (quality: Quality) => void
   setSize: (size: string) => void
   setQuality: (quality: Quality) => void
   setCount: (count: number) => void
 
-  setVideoDuration: (duration: number) => void
-  setVideoAspectRatio: (aspectRatio: string) => void
-  setVideoResolution: (resolution: string) => void
-  setVideoAudio: (audio: boolean) => void
+  setVideoParam: (name: string, value: string | number | boolean) => void
+  clearVideoParams: () => void
   setStagedImages: (images: StagedReferenceImage[] | ((prev: StagedReferenceImage[]) => StagedReferenceImage[])) => void
   addStagedImage: (image: StagedReferenceImage) => void
   updateStagedImage: (localId: string, patch: Partial<StagedReferenceImage>) => void
@@ -54,28 +58,32 @@ export interface GenerateUiState {
   setIsGenerating: (generating: boolean) => void
   setInlineUploadError: (error: string | null) => void
   toggleAdvanced: () => void
+  setRailOpen: (open: boolean) => void
+  setActiveBoardOpen: (open: boolean) => void
+  setHistoryOpen: (open: boolean) => void
   resetForm: () => void
 }
 
 const initialState = {
   prompt: '',
   negativePrompt: '',
-  selectedModelId: '',
+  activeTab: 'image' as GenerateModeTab,
+  selectedModelIdByKind: { image: '', video: '' } as Record<GenerateModeTab, string>,
   selectedSize: '1024x1024',
   selectedQuality: 'auto' as Quality,
   size: '1024x1024',
   quality: 'auto' as Quality,
   count: 1,
-  videoDuration: 4,
-  videoAspectRatio: '16:9',
-  videoResolution: '720p',
-  videoAudio: true,
+  videoParams: {} as Record<string, string | number | boolean>,
   stagedImages: [] as StagedReferenceImage[],
   inlineUploadError: null as string | null,
   selectedJobId: null as string | null,
   activeOutputIndex: 0,
   isGenerating: false,
   advancedOpen: false,
+  railOpen: true,
+  activeBoardOpen: true,
+  historyOpen: true,
 }
 
 export const useGenerateUiStore = create<GenerateUiState>((set) => ({
@@ -83,17 +91,20 @@ export const useGenerateUiStore = create<GenerateUiState>((set) => ({
 
   setPrompt: (prompt) => set({ prompt }),
   setNegativePrompt: (negativePrompt) => set({ negativePrompt }),
-  setSelectedModelId: (selectedModelId) => set({ selectedModelId }),
+  setActiveTab: (activeTab) => set({ activeTab }),
+  setSelectedModelId: (tab, id) =>
+    set((state) => ({
+      selectedModelIdByKind: { ...state.selectedModelIdByKind, [tab]: id },
+    })),
   setSelectedSize: (selectedSize) => set({ selectedSize, size: selectedSize }),
   setSelectedQuality: (selectedQuality) => set({ selectedQuality, quality: selectedQuality }),
   setSize: (size) => set({ selectedSize: size, size }),
   setQuality: (quality) => set({ selectedQuality: quality, quality }),
   setCount: (count) => set({ count }),
 
-  setVideoDuration: (videoDuration) => set({ videoDuration }),
-  setVideoAspectRatio: (videoAspectRatio) => set({ videoAspectRatio }),
-  setVideoResolution: (videoResolution) => set({ videoResolution }),
-  setVideoAudio: (videoAudio) => set({ videoAudio }),
+  setVideoParam: (name, value) =>
+    set((state) => ({ videoParams: { ...state.videoParams, [name]: value } })),
+  clearVideoParams: () => set({ videoParams: {} }),
 
   setStagedImages: (images) =>
     set((state) => ({
@@ -123,10 +134,14 @@ export const useGenerateUiStore = create<GenerateUiState>((set) => ({
   setIsGenerating: (isGenerating) => set({ isGenerating }),
   setInlineUploadError: (inlineUploadError) => set({ inlineUploadError }),
   toggleAdvanced: () => set((state) => ({ advancedOpen: !state.advancedOpen })),
+  setRailOpen: (railOpen) => set({ railOpen }),
+  setActiveBoardOpen: (activeBoardOpen) => set({ activeBoardOpen }),
+  setHistoryOpen: (historyOpen) => set({ historyOpen }),
   resetForm: () =>
     set({
       prompt: '',
       negativePrompt: '',
+      videoParams: {},
       stagedImages: [],
       inlineUploadError: null,
       selectedJobId: null,

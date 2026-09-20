@@ -2,7 +2,8 @@
 
 import { api } from '@/shared/services/api'
 import { useGenerateUiStore } from '@/shared/stores/generate-ui-store'
-import { resolveInputSlots } from '@/shared/lib/generation-params'
+import { planRolePositions, resolveImageInputPlan } from '@/shared/lib/generation-params'
+import type { ImageInputPlanModel } from '@/shared/lib/generation-params'
 import { RUNTIME_SETTINGS_DEFAULTS } from '@/shared/types'
 import type { ModelConfig, StagedReferenceImage } from '@/shared/types'
 
@@ -30,14 +31,43 @@ export function formatSize(bytes: number): string {
 }
 
 export function resolveMaxInputs(model?: Pick<ModelConfig, 'inputSlots' | 'maxInputImages'> | null): number {
-  // Only image-accepting slots count: a video model's `source_video` slot must not
-  // inflate the reference-image budget.
-  const imageSlots = resolveInputSlots(model).filter(
-    (slot) => slot.allowedMediaKinds.length === 0 || slot.allowedMediaKinds.includes('image'),
-  )
-  const capacity = imageSlots.reduce((sum, slot) => sum + Math.max(0, slot.maxCount), 0)
-  if (capacity <= 0) return 0
-  return Math.min(capacity, RUNTIME_SETTINGS_DEFAULTS.maxInputs)
+  // The plan owns the rules: image-accepting slots only, `source_video` excluded,
+  // and video models lose `reference_image` (frames are positional there).
+  return resolveImageInputPlan(model).capacity
+}
+
+/** Re-derive staged input roles after a model or tab switch.
+ *
+ *  It lives here rather than in the store because dropping a staged item is only
+ *  safe through `removeReferenceImage` (abort the in-flight XHR, delete the remote
+ *  object, revoke the preview blob) — nothing outside this module owns those handles.
+ *
+ *  Rule: reconcile NEVER deletes an upload. Overflow past `plan.capacity` can only
+ *  appear when capacity shrank under already-staged files (image tab holds 4, video
+ *  tab holds 2), and silently destroying user uploads on a tab switch is worse than
+ *  an invalid selection. Overflow items keep their previous role and
+ *  `inputPlanViolations` blocks submission with an explicit message until the user
+ *  removes them; switching back restores their roles untouched. `addReferenceFiles`
+ *  already refuses to stage past capacity, so this is the only path that can reach it.
+ *
+ *  Roles for the first `plan.capacity` items are reassigned by position over the
+ *  flattened slot list, and the store is left untouched when nothing would change.
+ */
+export async function reconcileStagedRoles(model?: ImageInputPlanModel | null): Promise<void> {
+  const plan = resolveImageInputPlan(model)
+  const staged = store().stagedImages
+  if (staged.length === 0) return
+
+  const positions = planRolePositions(plan)
+  const assignable = Math.min(staged.length, positions.length)
+  const pending: Array<{ localId: string; role: StagedReferenceImage['role'] }> = []
+  for (let index = 0; index < assignable; index += 1) {
+    const role = positions[index] as StagedReferenceImage['role']
+    if (staged[index].role !== role) pending.push({ localId: staged[index].localId, role })
+  }
+  if (pending.length === 0) return
+
+  for (const change of pending) patch(change.localId, { role: change.role })
 }
 
 function referenceImagesTotalBytes(): number {

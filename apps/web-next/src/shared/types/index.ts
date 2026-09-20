@@ -13,6 +13,8 @@ export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancele
 export type RegistrationMode = 'open' | 'invite_only'
 export type ModelAdapter = 'openai' | 'seedream' | 'anthropic' | 'veo' | 'volcengine' | 'google' | string
 export type MediaKind = 'image' | 'video'
+/** Creation-console media tab; every per-kind preference is keyed by this. */
+export type GenerateModeTab = 'image' | 'video'
 export type ModelKind = 'image' | 'video' | 'language'
 export type GenerationMode =
   | 'text_to_image'
@@ -159,7 +161,9 @@ export interface GenerationInputItem {
 export interface CreateGenerationRequest {
   modelId: string
   prompt: string
-  parameters: Record<string, unknown>
+  /** Descriptor-driven payload: every key must be declared by the model and every
+   *  value must match the descriptor's own JSON type (see buildVideoParameters). */
+  parameters: Record<string, string | number | boolean>
   inputs?: GenerationInputItem[]
   idempotencyKey?: string
   inputLanguage?: string
@@ -214,8 +218,10 @@ export interface VideoGenerationOutput {
   url: string
   downloadUrl?: string | null
   metadata: VideoGenerationMetadata
-  /** Legacy alias for url (compat only; prefer url). */
-  imageUrl: string
+  /** Legacy alias for url (compat only; prefer url). The server omits this for
+   *  video outputs (`outputDto` in apps/api/src/shared/dto.ts sets imageUrl only
+   *  for image rows), so read it as optional. */
+  imageUrl?: string
 }
 
 export type GenerationOutput = ImageGenerationOutput | VideoGenerationOutput
@@ -233,6 +239,8 @@ export interface GenerationJob {
   templateName?: string | null
   phase?: string | null
   progress?: number | null
+  /** Set once a cancel has been requested but the worker has not settled the row. */
+  cancelRequested?: boolean
   mediaKind?: MediaKind | null
   modelKind?: ModelKind | null
   parameters?: Record<string, unknown>
@@ -317,6 +325,14 @@ export interface Asset {
   downloadUrl?: string | null
   posterUrl?: string | null
   durationSeconds?: number
+  /** Video columns the library route already selects (assets.fps / codec /
+   *  has_audio / poster_asset_id). `packages/contracts` declares them on
+   *  `VideoGenerationMetadata` but has no library-asset DTO, so this file is
+   *  their only frontend mirror. */
+  fps?: number
+  codec?: string
+  hasAudio?: boolean
+  posterAssetId?: string
   width?: number
   height?: number
   mimeType: string
@@ -412,6 +428,7 @@ export interface ProviderCredentialInput {
   enabled?: boolean
 }
 
+// ----- Built-in media provider templates -----
 export type BuiltinProviderTemplateCredentialKind = 'api_key' | 'google_service_account'
 
 export interface BuiltinProviderTemplateCredential {

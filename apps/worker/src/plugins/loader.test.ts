@@ -25,6 +25,22 @@ import {
 } from './loader'
 
 /*
+ * `importBundle` deliberately unrefs its timeout: a plugin bundle that spins at
+ * import time must never be able to hold the worker process open. That is right
+ * in production and wrong to assert against, because the "never settles" case
+ * then leaves this file with no pending handle at all -- the never-resolving
+ * import promise owns none, and the unref'd 25ms timer refuses to own one -- so
+ * the event loop drains, Node exits, and the awaited test is reported as
+ * "Promise resolution is still pending but the event loop has already resolved".
+ *
+ * Windows hid this because a leftover fs handle kept the loop alive; Linux does
+ * not. This ref'd heartbeat reproduces the invariant the real worker has (the
+ * server handle owns the loop) without touching the production unref.
+ */
+const keepEventLoopAlive = setInterval(() => {}, 1_000)
+after(() => clearInterval(keepEventLoopAlive))
+
+/*
  * Fixtures are real ESM bundles written to a real (temp) cache dir and loaded with a
  * real dynamic import(), because import() is the behaviour under test. The S3 read and
  * the provider_plugins writes are fakes: no bucket, no Postgres, no network.

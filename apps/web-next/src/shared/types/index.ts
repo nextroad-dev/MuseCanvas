@@ -23,7 +23,17 @@ export type GenerationMode =
   | 'image_to_video'
 export type LanguageProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
-export type Quality = 'low' | 'medium' | 'high' | 'auto'
+/**
+ * Quality ladder label.
+ *
+ * Deliberately open-ended. The closed four-value union could not express what
+ * plugins actually declare: the 2.5 models add `xhigh` and `max`, and dall-e-3
+ * uses `standard`/`hd`, a completely different vocabulary. Since the set of
+ * legal values now comes from the `quality` descriptor, a closed union here
+ * would only ever be wrong — and it is still echoed from a legacy job column,
+ * so historical rows must be representable too.
+ */
+export type Quality = 'low' | 'medium' | 'high' | 'auto' | (string & {})
 export type TLSMode = 'implicit_tls' | 'starttls' | 'none'
 
 export interface User {
@@ -46,82 +56,49 @@ export interface Session {
   user: User
 }
 
-// ----- Capability / parameter descriptors (mirror contracts) -----
+// ----- Capability / parameter descriptors (owned by contracts) -----
+//
+// These used to be hand-copied into this file. That is the reason the console
+// could keep offering a closed list of sizes long after the server started
+// describing them as an open custom-size band: the copy had no `image-size`, no
+// `dependsOn` and no option labels, and because every response is `as`-cast
+// nothing failed to compile about it. Importing the real types makes each new
+// descriptor variant a compile error in the renderer until it is actually
+// rendered, which is the gate the mirror was silently defeating.
+import type {
+  GenerationInputRole,
+  ImageSizeParameterDescriptor,
+  InputSlotDescriptor,
+  MediaParameterProvenance,
+  ModelCapabilities,
+  ModelCapabilityFlags,
+  ParameterCrossFieldConstraint,
+  ParameterDescriptor,
+  ParameterOption,
+} from '@musecanvas/contracts'
 
-export interface EnumParameterDescriptor {
-  type: 'enum'
-  name: string
-  label?: string
-  description?: string
-  required?: boolean
-  options: string[]
-  defaultValue?: string
-}
-
-export interface IntegerParameterDescriptor {
-  type: 'integer'
-  name: string
-  label?: string
-  description?: string
-  required?: boolean
-  min?: number
-  max?: number
-  step?: number
-  defaultValue?: number
-}
-
-export interface BooleanParameterDescriptor {
-  type: 'boolean'
-  name: string
-  label?: string
-  description?: string
-  required?: boolean
-  defaultValue?: boolean
-}
-
-export interface TextParameterDescriptor {
-  type: 'text'
-  name: string
-  label?: string
-  description?: string
-  required?: boolean
-  minLength?: number
-  maxLength?: number
-  pattern?: string
-  defaultValue?: string
-}
-
-export type ParameterDescriptor =
-  | EnumParameterDescriptor
-  | IntegerParameterDescriptor
-  | BooleanParameterDescriptor
-  | TextParameterDescriptor
-
-export type GenerationInputRole =
-  | 'prompt_image'
-  | 'reference_image'
-  | 'first_frame'
-  | 'last_frame'
-  | 'source_video'
-  | (string & {})
-
-export interface InputSlotDescriptor {
-  role: GenerationInputRole
-  required: boolean
-  minCount: number
-  maxCount: number
-  allowedMediaKinds: MediaKind[]
-  label?: string
-  description?: string
-}
-
-export interface ModelCapabilities {
-  modes: GenerationMode[]
-  parameters: ParameterDescriptor[]
-  inputSlots: InputSlotDescriptor[]
-  maxCount?: number
-  supportedMediaKinds?: MediaKind[]
-}
+export type {
+  EnumParameterDescriptor,
+  IntegerParameterDescriptor,
+  NumberParameterDescriptor,
+  BooleanParameterDescriptor,
+  TextParameterDescriptor,
+  ImageSizeParameterDescriptor,
+  ImageSizePreset,
+  ImageSizeConstraints,
+  ParameterDescriptor,
+  ParameterOption,
+  ParameterDependency,
+  ParameterUiHint,
+  ParameterControlKind,
+  InputSlotDescriptor,
+  GenerationInputRole,
+  ModelCapabilities,
+  ModelCapabilityFlags,
+  ParameterCrossFieldConstraint,
+  MediaParameterProvenance,
+  PublicModelDto,
+} from '@musecanvas/contracts'
 
 export interface ModelConfig {
   id: string
@@ -141,6 +118,13 @@ export interface ModelConfig {
   inputSlots?: InputSlotDescriptor[]
   defaults?: Record<string, unknown>
   capabilities?: ModelCapabilities
+  flags?: ModelCapabilityFlags
+  crossFieldConstraints?: ParameterCrossFieldConstraint[]
+  /** Who authored this model's parameter contract. */
+  declaredBy?: MediaParameterProvenance
+  /** Vendor-retired. Rendered with a caveat and never in the default position. */
+  deprecated?: boolean
+  deprecationNote?: string
   revision?: number
   // Legacy image compatibility fields
   sizes: string[]
@@ -152,8 +136,11 @@ export interface ModelConfig {
   maxInputImages?: number
 }
 
+/** Mirrors `GenerationInputItem` in `@musecanvas/contracts`: exactly one of
+ *  `uploadId` (a locally uploaded file) or `assetId` (an existing gallery image). */
 export interface GenerationInputItem {
-  uploadId: string
+  uploadId?: string
+  assetId?: string
   role: GenerationInputRole
   position: number
 }
@@ -275,17 +262,30 @@ export interface GenerationInputImage {
 
 export type StagedUploadStatus = 'pending' | 'uploading' | 'processing' | 'ready' | 'error'
 
-export type StagedInputRole = 'reference_image' | 'first_frame' | 'last_frame' | 'prompt_image'
+export type StagedInputRole = 'reference_image' | 'first_frame' | 'last_frame' | 'prompt_image' | 'mask'
 
-/** A locally picked file that is being uploaded. In-flight XHR handles stay in
- *  `shared/lib/reference-upload.ts`, never in React state or the store. */
+/** One staged input image, whatever its provenance.
+ *
+ *  `source` decides which handles exist: an `upload` owns a `File`, a blob preview and
+ *  an upload row (all three must be torn down when it is replaced), while a `gallery`
+ *  pick owns only `assetId` — its preview is a signed gallery URL and there is nothing
+ *  server-side to delete. Everything downstream (roles, ordering, submit payload) reads
+ *  the same fields.
+ *
+ *  In-flight XHR handles stay in `shared/lib/reference-upload.ts`, never in React state
+ *  or the store. */
 export interface StagedReferenceImage {
   localId: string
-  file: File
+  source: 'upload' | 'gallery'
+  /** Present only for `source: 'upload'`; the gallery pick is referenced, never re-sent. */
+  file?: File
+  /** Blob URL for an upload, signed gallery URL for a pick. */
   previewUrl: string
   status: StagedUploadStatus
   progress: number
   uploadId?: string
+  /** Set for `source: 'gallery'`: the referenced `assets` row. */
+  assetId?: string
   imageUrl?: string
   mimeType: string
   sizeBytes: number
@@ -333,6 +333,12 @@ export interface Asset {
   codec?: string
   hasAudio?: boolean
   posterAssetId?: string
+  /** Worker-derived preview: a ~512px WebP for images, a ~512px JPEG poster frame
+   *  for video. Absent for rows the thumbnail pass has not reached yet (and for
+   *  any asset whose source object is gone), so every consumer must treat it as
+   *  an optimization and fall back to the full-size media — see `assetPreviewUrl`.
+   *  Never a download target. */
+  thumbnailUrl?: string | null
   width?: number
   height?: number
   mimeType: string
@@ -458,6 +464,70 @@ export interface BuiltinProviderTemplate {
   credential: BuiltinProviderTemplateCredential
   presetIds: string[]
   models: BuiltinProviderTemplateModel[]
+  /** Resolution path: 'installed' rows come from an uploaded provider_plugins artifact. */
+  source?: 'builtin' | 'installed'
+}
+
+// ----- Installed provider plugins (canonical types live in `@musecanvas/contracts`) -----
+export type {
+  PluginKind,
+  InstalledPluginStatus,
+  AdminPluginScanFinding,
+  AdminPluginDto,
+  AdminPluginInstallResult,
+} from '@musecanvas/contracts'
+import type { AdminPluginDto, AdminPluginScanFinding, PluginKind } from '@musecanvas/contracts'
+
+/**
+ * Response bodies of the plugin upload endpoints that are produced inline by
+ * `apps/api/src/modules/admin/plugins.ts` and have no contracts declaration yet.
+ *
+ * IMPORTANT envelope detail: a scan rejection answers HTTP 422 but is built with
+ * the server's `ok()` helper (plugins.ts `rejected()`), i.e. the envelope stays
+ * `{ success: true, data: { installed: false, ok: false, code, findings } }`.
+ * `clientApi` parses whatever JSON arrives regardless of status, so findings must
+ * be read from `res.data`, never from `res.error`. Hard failures (`fail(...)`,
+ * e.g. PLUGIN_UPLOAD_DISABLED / INVALID_INPUT / PLUGIN_VERSION_IMMUTABLE) do use
+ * the `{ success: false, error }` envelope.
+ */
+export interface AdminPluginValidateSuccess {
+  ok: true
+  pluginId: string
+  pluginVersion: string
+  kind: PluginKind
+  displayName: string
+  modelIds: string[]
+  allowedHosts: string[]
+  artifactDigest: string
+  artifactSizeBytes: number
+  warnings: AdminPluginScanFinding[]
+}
+
+/** Shared rejection shape returned by both `POST admin/plugins/validate` and `POST admin/plugins/upload`. */
+export interface AdminPluginRejected {
+  ok: false
+  installed: false
+  code: string
+  findings: AdminPluginScanFinding[]
+}
+
+/**
+ * `POST admin/plugins/upload` success payload is the contracts `AdminPluginInstallResult`;
+ * the literal `installed: true` is what the server serializes (plugins.ts installs with
+ * `{ installed: true, ... }`), pinned here so the union discriminates cleanly.
+ */
+export interface AdminPluginInstalled {
+  installed: true
+  plugin: AdminPluginDto
+  warnings: AdminPluginScanFinding[]
+}
+export type AdminPluginUploadResponse = AdminPluginInstalled | AdminPluginRejected
+
+/** `DELETE admin/plugins/{id}` success payload (plugins.ts `deletePlugin` return). */
+export interface AdminPluginDeleteResult {
+  deleted: boolean
+  pinnedRevisionsRetainArtifact: boolean
+  note: string
 }
 
 export interface OAuthProviderInfo {
@@ -725,6 +795,15 @@ export function isVideoOutput(output: GenerationOutput): output is VideoGenerati
 
 export function assetPlaybackUrl(asset: Pick<Asset, 'url' | 'imageUrl'>): string {
   return asset.url || asset.imageUrl || ''
+}
+
+/** Grid/rail preview: the worker thumbnail when there is one, otherwise exactly
+ *  what `assetPlaybackUrl` returns today. Only for *display* — downloads and the
+ *  lightbox must keep using `assetPlaybackUrl` so they always reach the original. */
+export function assetPreviewUrl(
+  asset: Pick<Asset, 'thumbnailUrl' | 'url' | 'imageUrl'>,
+): string {
+  return asset.thumbnailUrl || asset.url || asset.imageUrl || ''
 }
 
 export function isVideoAsset(asset: Pick<Asset, 'mediaKind' | 'mimeType' | 'url' | 'imageUrl'>): boolean {

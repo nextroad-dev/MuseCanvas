@@ -1,6 +1,7 @@
 import type {
   BoundedOutput,
   ExecutionContext,
+  MediaInputImage,
   MediaProviderManifest,
   MediaProviderPlugin,
   MediaRequest,
@@ -9,6 +10,21 @@ import type {
   ProbeResult,
   ProviderConfig,
 } from '../../core/types'
+import { MASK_INPUT_ROLE, MAX_MASK_BYTES } from '@musecanvas/contracts'
+import type { JsonValue, MediaParameterIssue } from '@musecanvas/contracts'
+import {
+  GenerationErrorCode,
+  evaluateCrossFieldConstraints,
+  validateParameterValue,
+} from '@musecanvas/contracts'
+import type { MediaModelDeclaration } from '../../core/types'
+import {
+  OPENAI_IMAGE_LEGACY_ENDPOINT_MODELS,
+  OPENAI_IMAGE_MODELS,
+  OPENAI_IMAGE_SUPPORTED_MODELS as SUPPORTED_MODEL_IDS,
+  openAiImageMaxBatchSize,
+  openAiImageModelDeclaration,
+} from './models'
 import { NormalizedProviderError } from '../../core/errors'
 import { inspectDecodedImageOutput } from '../../core/output-image'
 import { validateInputImages } from '../../core/image-input'
@@ -27,23 +43,100 @@ const OPENAI_CREDENTIAL_SCHEMAS = ['legacy-api-key-v1', 'json-v1']
 
 const MAX_PROMPT_CHARS = 8_000
 
-const OPENAI_IMAGE_MODEL_RULES: Record<string, { sizes: string[]; maxBatchSize: number; qualities: string[] }> = {
-  'gpt-image-2': {
-    sizes: ['1024x1024', '1280x720', '720x1280', '1536x1024', '1024x1536'],
-    maxBatchSize: 4,
-    qualities: ['auto', 'low', 'medium', 'high'],
-  },
-  'dall-e-3': {
-    sizes: ['1024x1024', '1792x1024', '1024x1792'],
-    maxBatchSize: 1,
-    qualities: ['standard', 'hd'],
-  },
+// The per-model size/quality tables that used to live here are now the
+// `capabilities` blocks in `./models.ts`, where the browser, the API and this
+// adapter all read the same declaration.
+export const OPENAI_IMAGE_SUPPORTED_MODELS = SUPPORTED_MODEL_IDS
+
+/**
+ * Project a model declaration into the manifest shape the host reads.
+ *
+ * The flat `supportedAspectRatios` / `maxBatchSize` / `maxInputImages` /
+ * `supportsMask` fields are kept, but each is *derived* from the declaration
+ * rather than written out again: `plugin-catalog.ts` and the mask plumbing still
+ * read them, and a second hand-maintained copy is exactly the drift this change
+ * is meant to end. They are marked `@deprecated` on the type and will go once
+ * those readers move onto `capabilities`.
+ *
+ * `capabilities` is attached only on the active manifest. The legacy 1.0.0
+ * object stays byte-comparable because revisions already pinned to it resolve
+ * against its permissiveness, and tightening a published contract retroactively
+ * would fail jobs that were valid when they were created.
+ */
+function projectManifestModel(
+  model: MediaModelDeclaration,
+  active: boolean,
+): NonNullable<MediaProviderManifest['models']>[number] {
+  const sizeDescriptor = model.capabilities?.parameters.find(entry => entry.name === 'size')
+  const referenceSlot = model.capabilities?.inputSlots.find(slot => slot.role === 'reference_image')
+  return {
+    id: model.id,
+    ...(model.name ? { name: model.name } : {}),
+    modalities: model.modalities,
+    ...(sizeDescriptor && sizeDescriptor.type === 'image-size'
+      ? { supportedAspectRatios: sizeDescriptor.presets.map(preset => preset.value).filter(value => value !== 'auto') }
+      : {}),
+    maxBatchSize: openAiImageMaxBatchSize(model),
+    ...(active ? { maxInputImages: referenceSlot?.maxCount ?? 0 } : {}),
+    ...(active && model.capabilities?.flags?.mask === true ? { supportsMask: true } : {}),
+    ...(active && model.capabilities ? { capabilities: model.capabilities } : {}),
+    ...(active && model.defaults ? { defaults: model.defaults } : {}),
+    ...(model.deprecated ? { deprecated: true } : {}),
+    ...(model.deprecationNote ? { deprecationNote: model.deprecationNote } : {}),
+  }
 }
 
-export const OPENAI_IMAGE_SUPPORTED_MODELS = Object.keys(OPENAI_IMAGE_MODEL_RULES)
+/**
+ * Validate an incoming request against the model's declared contract, using the
+ * same validator the browser and the API already ran.
+ *
+ * Re-running it here is deliberate rather than redundant: this is the last gate
+ * before a vendor call, the plugin is the only component that knows the wire
+ * consequences of a value, and a queued job can reach here carrying parameters
+ * that bypassed the console entirely (a retry, a re-pinned revision, an import).
+ */
+function validateAgainstDeclaration(
+  model: MediaModelDeclaration,
+  request: MediaRequest,
+): MediaParameterIssue[] {
+  const capabilities = model.capabilities
+  if (!capabilities) return []
+
+  // The typed fields win over the parameter bag: they are what the queue has
+  // always carried, while `parameters` is the newer channel for the extras.
+  const sent: Record<string, JsonValue> = { ...(request.parameters ?? {}) }
+  if (request.size !== undefined) sent.size = request.size
+  if (request.quality !== undefined) sent.quality = request.quality
+  if (request.count !== undefined) sent.count = request.count
+
+  const issues: MediaParameterIssue[] = []
+  const sentOnly: Record<string, JsonValue> = {}
+  for (const descriptor of capabilities.parameters) {
+    const raw = sent[descriptor.name]
+    if (raw === undefined) {
+      if (descriptor.required && descriptor.defaultValue === undefined) {
+        issues.push({
+          code: GenerationErrorCode.MISSING_REQUIRED_PARAMETER,
+          message: `缺少必填参数 '${descriptor.name}'`,
+          parameter: descriptor.name,
+        })
+      }
+      continue
+    }
+    sentOnly[descriptor.name] = raw
+    issues.push(...validateParameterValue(descriptor, raw))
+  }
+
+  // Combination rules see only what was actually sent. Materialising defaults
+  // first would let a default collide with a user choice and report a violation
+  // the caller never made.
+  issues.push(...evaluateCrossFieldConstraints(capabilities.crossFieldConstraints, sentOnly))
+  return issues
+}
 
 function buildManifest(version: string, active: boolean): MediaProviderManifest {
   return {
+    kind: 'media',
     id: OPENAI_IMAGE_PLUGIN_ID,
     version,
     displayName: 'OpenAI Image Generation & Editing',
@@ -53,22 +146,7 @@ function buildManifest(version: string, active: boolean): MediaProviderManifest 
       : 'OpenAI DALL-E / GPT Image generations and edits via official or compatible APIs',
     allowedHosts: [...OPENAI_ALLOWED_HOSTS],
     credentialSchemas: [...OPENAI_CREDENTIAL_SCHEMAS],
-    models: [
-      {
-        id: 'gpt-image-2',
-        modalities: ['image'],
-        supportedAspectRatios: ['1024x1024', '1536x1024', '1024x1536'],
-        maxBatchSize: 4,
-        ...(active ? { maxInputImages: 4 } : {}),
-      },
-      {
-        id: 'dall-e-3',
-        modalities: ['image'],
-        supportedAspectRatios: ['1024x1024', '1792x1024', '1024x1792'],
-        maxBatchSize: 1,
-        ...(active ? { maxInputImages: 0 } : {}),
-      },
-    ],
+    models: OPENAI_IMAGE_MODELS.map(model => projectManifestModel(model, active)),
   }
 }
 
@@ -79,10 +157,25 @@ function invalidRequest(version: string, detail: string): NormalizedProviderErro
   return NormalizedProviderError.create(OPENAI_IMAGE_PLUGIN_ID, version, 'INVALID_REQUEST', detail)
 }
 
-function inputImageBytes(request: MediaRequest): Buffer[] {
-  return (request.inputImages ?? []).map(img =>
-    typeof img.data === 'string' ? Buffer.from(img.data, 'base64') : img.data,
-  )
+function decodeInputImageBytes(img: MediaInputImage): Buffer {
+  return typeof img.data === 'string' ? Buffer.from(img.data, 'base64') : img.data
+}
+
+function inputImageBytes(images: MediaInputImage[]): Buffer[] {
+  return images.map(decodeInputImageBytes)
+}
+
+/**
+ * Multipart part payload for one input image, in the byte view `Blob` wants.
+ * Shared by `image[]` and `mask` so both forward exactly the bytes the caller
+ * supplied, without a copy when the Buffer owns its whole `ArrayBuffer`.
+ */
+function inputImageBlob(img: MediaInputImage): Blob {
+  const rawData = decodeInputImageBytes(img)
+  const blobBytes = rawData.buffer instanceof ArrayBuffer
+    ? new Uint8Array(rawData.buffer, rawData.byteOffset, rawData.byteLength)
+    : Uint8Array.from(rawData)
+  return new Blob([blobBytes], { type: img.mimeType || 'image/png' })
 }
 
 function isHttpsUrl(value: string): boolean {
@@ -178,47 +271,104 @@ export class OpenAiImagePlugin implements MediaProviderPlugin {
       throw invalidRequest(version, `Prompt exceeds maximum length of ${MAX_PROMPT_CHARS} characters`)
     }
 
-    const rule = OPENAI_IMAGE_MODEL_RULES[request.vendorModelId]
-    if (!rule) {
+    const model = openAiImageModelDeclaration(request.vendorModelId)
+    if (!model?.capabilities) {
       throw invalidRequest(
         version,
         `Unsupported model '${request.vendorModelId}'; supported models: ${OPENAI_IMAGE_SUPPORTED_MODELS.join(', ')}`,
       )
     }
 
-    if (request.size !== undefined && !rule.sizes.includes(request.size)) {
-      throw invalidRequest(
-        version,
-        `Invalid size '${request.size}' for model ${request.vendorModelId}; supported: ${rule.sizes.join(', ')}`,
-      )
-    }
-
-    const count = request.count ?? 1
-    if (!Number.isInteger(count) || count < 1 || count > rule.maxBatchSize) {
-      throw invalidRequest(
-        version,
-        `count must be an integer between 1 and ${rule.maxBatchSize} for model ${request.vendorModelId}`,
-      )
-    }
-
-    if (request.quality !== undefined && !rule.qualities.includes(request.quality)) {
-      throw invalidRequest(
-        version,
-        `Invalid quality '${request.quality}' for model ${request.vendorModelId}; supported: ${rule.qualities.join(', ')}`,
-      )
+    // Size, quality, count and every declared extra are checked against the
+    // model's own descriptors, so `quality=max` on a model without that rung and
+    // a custom size outside the geometry band both fail here with a message
+    // naming the parameter — instead of as an opaque vendor 400.
+    const declarationIssues = validateAgainstDeclaration(model, request)
+    if (declarationIssues.length > 0) {
+      throw invalidRequest(version, declarationIssues[0].message)
     }
 
     const images = request.inputImages ?? []
-    if (images.length > 0 && request.vendorModelId === 'dall-e-3') {
-      throw invalidRequest(version, 'Model dall-e-3 does not support reference images or edits')
+    // Read from the contract rather than from a model-name comparison: this is
+    // what keeps dall-e-3 rejecting references without the plugin having to
+    // know which ids those are.
+    const maxReferenceImages
+      = model.capabilities.inputSlots.find(slot => slot.role === 'reference_image')?.maxCount ?? 0
+    if (images.filter(img => img.role !== MASK_INPUT_ROLE).length > maxReferenceImages) {
+      throw invalidRequest(
+        version,
+        maxReferenceImages === 0
+          ? `Model ${request.vendorModelId} does not support reference images or edits`
+          : `Model ${request.vendorModelId} accepts at most ${maxReferenceImages} reference images`,
+      )
     }
-    for (const img of images) {
+
+    // The edit mask rides the same `inputImages` array as the reference images
+    // (that is how the worker forwards `generation_job_inputs.role`), but it is a
+    // control channel rather than something the model looks at: it must be a PNG
+    // of exactly the base image's dimensions, and it must never be pushed through
+    // the generic input-image dimension/aspect rules below, which it does not
+    // belong to. Every mask failure carries its own message so a bad mask is
+    // never reported to the user as "Invalid input image".
+    const maskImages = images.filter(img => img.role === MASK_INPUT_ROLE)
+    const baseImages = images.filter(img => img.role !== MASK_INPUT_ROLE)
+
+    if (maskImages.length > 1) {
+      throw invalidRequest(
+        version,
+        `An edit request carries at most one mask, got ${maskImages.length} inputs with role '${MASK_INPUT_ROLE}'`,
+      )
+    }
+    if (maskImages.length === 1) {
+      const mask = maskImages[0]
+      if (mask.mimeType !== 'image/png') {
+        throw invalidRequest(
+          version,
+          `The edit mask must be a PNG with an alpha channel, got mimeType '${mask.mimeType}'`,
+        )
+      }
+      const base = baseImages[0]
+      if (!base) {
+        throw invalidRequest(
+          version,
+          `An edit mask needs the image it masks; got role '${MASK_INPUT_ROLE}' with no base image`,
+        )
+      }
+      // The mask is sent as-is: the vendor requires identical pixel dimensions, so
+      // a dimension the caller never declared can only be guessed at. Rejecting
+      // beats resizing on a guess and regenerating the wrong area.
+      if (
+        base.width === undefined ||
+        base.height === undefined ||
+        mask.width === undefined ||
+        mask.height === undefined
+      ) {
+        throw invalidRequest(
+          version,
+          `The edit mask and its base image must both declare width and height (base ${String(base.width)}x${String(base.height)}, mask ${String(mask.width)}x${String(mask.height)})`,
+        )
+      }
+      if (mask.width !== base.width || mask.height !== base.height) {
+        throw invalidRequest(
+          version,
+          `The edit mask must match the base image dimensions exactly, got ${mask.width}x${mask.height} for a ${base.width}x${base.height} image`,
+        )
+      }
+      if (mask.sizeBytes !== undefined && mask.sizeBytes > MAX_MASK_BYTES) {
+        throw invalidRequest(
+          version,
+          `The edit mask exceeds the vendor limit of ${MAX_MASK_BYTES} bytes (declared ${mask.sizeBytes} bytes)`,
+        )
+      }
+    }
+
+    for (const img of baseImages) {
       if (img.mimeType !== 'image/png' && img.mimeType !== 'image/jpeg') {
         throw invalidRequest(version, `Unsupported input image mimeType '${img.mimeType}'`)
       }
     }
     try {
-      validateInputImages(inputImageBytes(request).map(data => ({ data })))
+      validateInputImages(inputImageBytes(baseImages).map(data => ({ data })))
     } catch (err: unknown) {
       throw invalidRequest(
         version,
@@ -401,56 +551,117 @@ export class OpenAiImagePlugin implements MediaProviderPlugin {
     return raw.endsWith('/v1') ? raw : `${raw}/v1`
   }
 
-  private buildGenerationBody(request: MediaRequest): Record<string, unknown> {
-    if (request.vendorModelId === 'dall-e-3') {
-      return {
-        model: request.vendorModelId,
-        prompt: request.prompt,
-        size: request.size || '1024x1024',
-        ...(request.quality ? { quality: request.quality } : {}),
-        response_format: 'b64_json',
-        n: 1,
+  /**
+   * The non-image wire fields, derived from what the model declares.
+   *
+   * A parameter is forwarded only if this model's contract advertises it, which
+   * is what keeps the adapter honest in both directions: `input_fidelity` can
+   * never ride along to a model that applies high fidelity automatically, and a
+   * model that declares no `output_format` at all falls back to the legacy
+   * `response_format` shape without the caller naming it.
+   *
+   * Shared by the JSON generation body and the multipart edit form so a
+   * parameter appears on both endpoints or neither — one that renders in the
+   * console but is dropped on the edit path is indistinguishable from a model
+   * that never supported it.
+   */
+  private buildRequestFields(request: MediaRequest): Record<string, string | number> {
+    const model = openAiImageModelDeclaration(request.vendorModelId)
+    const descriptors = model?.capabilities?.parameters ?? []
+    const descriptorFor = (name: string) => descriptors.find(entry => entry.name === name)
+    /** Sent value, else the descriptor's own default, else nothing. */
+    const pick = (name: string): string | number | undefined => {
+      const descriptor = descriptorFor(name)
+      if (!descriptor) return undefined
+      const raw = request.parameters?.[name]
+      if (typeof raw === 'string' || typeof raw === 'number') return raw
+      if (typeof descriptor.defaultValue === 'string' || typeof descriptor.defaultValue === 'number') {
+        return descriptor.defaultValue
       }
+      return undefined
     }
-    return {
+
+    const fields: Record<string, string | number> = {
       model: request.vendorModelId,
       prompt: request.prompt,
       size: request.size || '1024x1024',
-      ...(request.quality ? { quality: request.quality } : {}),
-      output_format: 'png',
-      n: request.count || 1,
     }
+    if (request.quality) fields.quality = request.quality
+
+    if (OPENAI_IMAGE_LEGACY_ENDPOINT_MODELS.has(request.vendorModelId)) {
+      // Reached through the pre-`output_format` contract: it answers with
+      // `response_format` and takes exactly one image per call.
+      fields.response_format = 'b64_json'
+      fields.n = 1
+      return fields
+    }
+
+    fields.n = request.count || 1
+    // Forwarded only when this model actually declares the parameter, so a model
+    // whose format support is unconfirmed keeps whatever default the vendor
+    // applies instead of having one asserted on its behalf.
+    const outputFormat = pick('output_format')
+    if (outputFormat !== undefined) fields.output_format = outputFormat
+
+    // Everything below is forwarded only when the caller actually chose it. These
+    // are new parameters on a long-standing endpoint, so sending a declared
+    // default that nobody asked for would change the shape of requests that work
+    // today for no benefit — and a stale `background`/`input_fidelity` pair could
+    // contradict a format the caller did choose.
+    const background = request.parameters?.background
+    if (descriptorFor('background') && typeof background === 'string') fields.background = background
+
+    // Compression is only defined for lossy formats. The contract already hides
+    // the control elsewhere; suppressing it here means a stale or hand-crafted
+    // value cannot reach the vendor as a 400.
+    const compression = request.parameters?.output_compression
+    if ((fields.output_format === 'jpeg' || fields.output_format === 'webp')
+      && descriptorFor('output_compression') && typeof compression === 'number') {
+      fields.output_compression = compression
+    }
+
+    // Only the legacy model declares `input_fidelity`; the current ones apply
+    // high fidelity automatically, so the descriptor test above is what keeps
+    // this off a modern request rather than a list of model names.
+    const fidelity = request.parameters?.input_fidelity
+    if (descriptorFor('input_fidelity') && typeof fidelity === 'string') fields.input_fidelity = fidelity
+    return fields
+  }
+
+  private buildGenerationBody(request: MediaRequest): Record<string, unknown> {
+    return this.buildRequestFields(request)
   }
 
   private buildEditFormData(request: MediaRequest): FormData {
     const inputImages = request.inputImages || []
+    // `image[]` is what the model sees, `mask` is where it may draw: the mask must
+    // never land in `image[]`, and a request without one must produce the exact
+    // same multipart body as before masks existed.
+    const baseImages = inputImages.filter(img => img.role !== MASK_INPUT_ROLE)
+    const maskImage = inputImages.find(img => img.role === MASK_INPUT_ROLE)
     const form = new FormData()
-    form.append('model', request.vendorModelId)
-    form.append('prompt', request.prompt)
-    form.append('size', request.size || '1024x1024')
-    form.append('output_format', 'png')
-    form.append('n', String(request.count || 1))
-    if (request.quality) {
-      form.append('quality', request.quality)
+    const fields = this.buildRequestFields(request)
+    for (const [key, value] of Object.entries(fields)) {
+      // `response_format` is a generations-only legacy field; the edit endpoint
+      // has always taken `output_format` instead.
+      if (key === 'response_format') continue
+      form.append(key, String(value))
     }
 
-    for (let index = 0; index < inputImages.length; index++) {
-      const img = inputImages[index]
+    for (let index = 0; index < baseImages.length; index++) {
+      const img = baseImages[index]
       const mimeType = img.mimeType || 'image/png'
       const extension = mimeType === 'image/png' ? 'png' : 'jpg'
-      const rawData =
-        typeof img.data === 'string'
-          ? Buffer.from(img.data, 'base64')
-          : img.data
-      const blobBytes = rawData.buffer instanceof ArrayBuffer
-        ? new Uint8Array(rawData.buffer, rawData.byteOffset, rawData.byteLength)
-        : Uint8Array.from(rawData)
 
       form.append(
         'image[]',
-        new Blob([blobBytes], { type: mimeType }),
+        inputImageBlob(img),
         `reference-${index + 1}.${extension}`,
       )
+    }
+
+    if (maskImage) {
+      form.append('mask', inputImageBlob({ ...maskImage, mimeType: 'image/png' }), 'mask.png')
     }
 
     return form

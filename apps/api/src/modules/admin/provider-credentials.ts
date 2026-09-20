@@ -6,7 +6,8 @@ import { writeAudit } from '../../shared/audit'
 import { providerCredentialDto } from '../../shared/dto'
 import { normalizedProviderBaseUrl } from '../../shared/model-helpers'
 import { builtinProviderTemplateForPlugin } from '../../admin/provider-templates'
-import { callLanguageModel, decodeCredential, globalProviderRegistry } from '../../../../../packages/providers/src/index'
+import { manifestAllowsHost, resolveCatalogPlugin } from './plugin-catalog'
+import { callLanguageModel, decodeCredential, globalPluginRegistry, globalProviderRegistry, urlHostOf } from '../../../../../packages/providers/src/index'
 import { decryptProviderCredential, encryptProviderCredential, fingerprintApiKey } from '../../auth/security'
 
 const LEGACY_ADAPTERS = ['openai', 'seedream', 'anthropic'] as const
@@ -129,8 +130,47 @@ export async function validateExplicitPluginCredential(options: {
   secretPayload?: unknown
 }): Promise<ExplicitPluginCredentialResult> {
   const { pluginId, pluginVersion } = options
-  if (!globalProviderRegistry.has(pluginId, pluginVersion)) {
+  // Catalog membership, not the static registry: an uploaded plugin must be able to
+  // hold a credential once its row is active. Built-ins keep every rule below.
+  const catalog = await resolveCatalogPlugin(pluginId, pluginVersion)
+  if (!catalog) {
     return { ok: false, code: 'INVALID_PLUGIN', message: '供应商插件不存在或版本不受支持' }
+  }
+  const declaredSchemas = (catalog.manifest.credentialSchemas ?? []) as string[]
+  if (catalog.source === 'installed') {
+    const installedSchemaId =
+      typeof options.schemaId === 'string' && options.schemaId.trim() ? options.schemaId.trim() : (declaredSchemas[0] ?? 'legacy-api-key-v1')
+    if (!declaredSchemas.includes(installedSchemaId)) {
+      return { ok: false, code: 'INVALID_INPUT', message: '该插件不支持此凭据 schema' }
+    }
+    const installedVersion = normalizeCredentialSchemaVersion(options.schemaVersion, 1)
+    if (!installedVersion.ok || installedVersion.version === undefined) {
+      return { ok: false, code: 'INVALID_INPUT', message: '凭据 schema 版本无效' }
+    }
+    const installedBaseUrl = options.baseUrl ?? undefined
+    // The manifest allowlist is the plugin's egress policy, which the worker's
+    // SafeHttpClient enforces at call time; a base URL outside it could never work.
+    if (typeof installedBaseUrl === 'string' && installedBaseUrl) {
+      const host = urlHostOf(installedBaseUrl)
+      if (!host || !manifestAllowsHost(catalog.manifest, host)) {
+        return { ok: false, code: 'INVALID_BASE_URL', message: 'Base URL 不在插件清单允许的域名内' }
+      }
+    }
+    if (options.secretPayload !== undefined) {
+      const raw = options.secretPayload
+      if (typeof raw === 'string' && !raw.trim()) {
+        return { ok: false, code: 'INVALID_CREDENTIAL', message: '凭据内容不能为空' }
+      }
+      try {
+        // Only the pure decoder runs here: the API never imports plugin code, so the
+        // plugin's own validateConfig executes in the worker at load time instead.
+        decodeCredential(raw, installedSchemaId, pluginId, pluginVersion)
+      } catch (error) {
+        console.error('credential decode failed', error instanceof Error ? error.message : error)
+        return { ok: false, code: 'INVALID_CREDENTIAL', message: '凭据内容无法解析' }
+      }
+    }
+    return { ok: true, pluginId, pluginVersion, schemaId: installedSchemaId, schemaVersion: installedVersion.version, baseUrl: installedBaseUrl }
   }
   const plugin = globalProviderRegistry.get(pluginId, pluginVersion)
   const template = builtinProviderTemplateForPlugin(pluginId, pluginVersion)
@@ -205,7 +245,7 @@ export async function createProviderCredential(actor: Actor, input: Record<strin
   if ((explicitPluginId || explicitPluginVersion) && !(explicitPluginId && explicitPluginVersion)) {
     return fail('INVALID_INPUT', '插件身份需要同时提供 pluginId 与 pluginVersion')
   }
-  if (explicitPluginId && explicitPluginVersion && !globalProviderRegistry.has(explicitPluginId, explicitPluginVersion)) {
+  if (explicitPluginId && explicitPluginVersion && !(await resolveCatalogPlugin(explicitPluginId, explicitPluginVersion))) {
     return fail('INVALID_PLUGIN', '供应商插件不存在或版本不受支持')
   }
   const template = explicitPluginId && explicitPluginVersion
@@ -597,6 +637,16 @@ export async function testProviderCredential(actor: { id: string }, id: string) 
       return fail('PLUGIN_NOT_LINKED', '该凭据尚未关联供应商插件（缺少 pluginId/pluginVersion），请先关联模型或配置插件身份后再测试')
     }
     const { pluginId, pluginVersion } = resolved
+    // An installed plugin's probe lives in an artifact the API never imports, so a
+    // connect test here would be a guess. One real generation exercises it instead.
+    if ((await resolveCatalogPlugin(pluginId, pluginVersion))?.source === 'installed') {
+      await db().query(
+        'UPDATE provider_credentials SET last_test_status=$1,last_test_error_code=$2,last_tested_at=now() WHERE id=$3',
+        ['failed', 'PLUGIN_PROBE_UNSUPPORTED', id],
+      )
+      await auditCredentialTest(actor.id, id, 'failed', 'PLUGIN_PROBE_UNSUPPORTED')
+      return fail('PLUGIN_PROBE_UNSUPPORTED', '该插件暂不支持连接测试，请通过一次生成任务验证')
+    }
     if (!providers.globalProviderRegistry.has(pluginId, pluginVersion)) {
       await db().query(
         'UPDATE provider_credentials SET last_test_status=$1,last_test_error_code=$2,last_tested_at=now() WHERE id=$3',
@@ -657,20 +707,35 @@ export async function testProviderCredential(actor: { id: string }, id: string) 
 
 async function testLanguageModel(id: string) {
   const r = await db().query(
-    `SELECT m.*,COALESCE(NULLIF(pc.payload_encrypted,''),pc.api_key_encrypted) effective_encrypted,pc.encryption_key_id AS effective_key_id,COALESCE(pc.base_url,m.base_url) effective_base_url FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.deleted_at IS NULL AND pc.enabled=true`,
+    `SELECT m.*,COALESCE(NULLIF(pc.payload_encrypted,''),pc.api_key_encrypted) effective_encrypted,pc.encryption_key_id AS effective_key_id,pc.schema_id AS effective_schema_id,COALESCE(pc.base_url,m.base_url) effective_base_url FROM model_configs m JOIN provider_credentials pc ON pc.id=m.provider_credential_id AND pc.deleted_at IS NULL WHERE m.id=$1 AND m.model_kind='language' AND m.deleted_at IS NULL AND pc.enabled=true`,
     [id],
   )
   const model = r.rows[0]
   if (!model?.effective_encrypted)
     return fail('PROMPT_MODEL_NOT_CONFIGURED', '语言模型或凭据未正确配置')
   try {
+    const rawSecret = decryptProviderCredential(model.effective_encrypted, typeof model.effective_key_id === 'string' ? model.effective_key_id : null)
+    const pluginId = typeof model.plugin_id === 'string' && model.plugin_id.trim() ? model.plugin_id.trim() : ''
+    const pluginVersion = typeof model.plugin_version === 'string' && model.plugin_version.trim() ? model.plugin_version.trim() : '1.0.0'
+    // A dangling backfilled plugin_id (every migrated language row has one, and
+    // 'openai-language' is registered nowhere) must keep taking today's built-in
+    // protocol path, so the plugin identity is passed only for a key the language
+    // registry actually owns.
+    const installedLanguage = !!pluginId && globalPluginRegistry.kindOf(pluginId, pluginVersion) === 'language'
     const reasoningEffort =
       ['gpt-5.4', 'gpt-5.5'].includes(model.vendor_model_id) ? 'none' : model.reasoning_effort || undefined
     await callLanguageModel({
       protocol: model.language_protocol,
       vendorModelId: model.vendor_model_id,
       baseUrl: model.effective_base_url,
-      apiKey: decryptProviderCredential(model.effective_encrypted, typeof model.effective_key_id === 'string' ? model.effective_key_id : null),
+      apiKey: rawSecret,
+      ...(installedLanguage
+        ? {
+          pluginId,
+          pluginVersion,
+          credential: decodeCredential(rawSecret, (model.effective_schema_id as string) || 'legacy-api-key-v1', pluginId, pluginVersion),
+        }
+        : {}),
       system: 'Return only the requested JSON.',
       user: 'MuseCanvas language model connectivity test. Return {"ok":"yes"}.',
       schemaName: 'connectivity_test',

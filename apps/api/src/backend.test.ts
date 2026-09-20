@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { validateModelInput } from '../../../packages/domain/src/index'
 import { hashOtp, safeEqual } from './auth/security'
-import { adminJobDto, jobDto, modelDto, publicModelDto } from './shared/dto'
+import { adminJobDto, capabilitiesFromRow, jobDto, modelDto, publicModelDto } from './shared/dto'
 import {
   validateInputImageIdsSyntax,
   validateAndAttachGenerationInputs,
@@ -16,11 +15,12 @@ import {
 } from './modules/generation-uploads'
 import { retryPreparation } from './generation/job-retry'
 import { globalProviderRegistry } from '../../../packages/providers/src/index'
-import { modelPresets, type VideoModelPreset } from './admin/model-presets'
+import { modelPresets, resolvePresetCapabilities, type VideoModelPreset } from './admin/model-presets'
 import { buildBuiltinProviderTemplates } from './admin/provider-templates'
-import { ACTIVE_IMAGE_PLUGIN_VERSION, buildCanonicalImageCapabilities, imageBaseUrlAllowed, isEmptyInputOverride, manifestSupportsVendorModel, presetMatchesPersistedModel, providerCredentialMatchesPluginTarget, validateImageModelContract, validatePluginSelection, videoPresetRevisionContract } from './modules/models/handlers'
+import { ACTIVE_IMAGE_PLUGIN_VERSION, imageBaseUrlAllowed, isEmptyInputOverride, manifestSupportsVendorModel, presetMatchesPersistedModel, presetRevisionContract, providerCredentialMatchesPluginTarget, validateImageModelContract, validatePluginSelection } from './modules/models/handlers'
 import { credentialTargetChanged, normalizeCredentialSchemaVersion, resolveCredentialPlugin, validateExplicitPluginCredential } from './modules/admin/provider-credentials'
 import type pg from 'pg'
+import type { ModelCapabilities } from '@musecanvas/contracts'
 import {
   asValidationError,
   buildPromptTemplateExportPayload,
@@ -50,31 +50,41 @@ test('OTP hashes are scoped to the email and compare in constant time', () => {
   assert.equal(safeEqual(hash, hashOtp('two@example.com', '123456')), false)
 })
 
-test('generation input accepts safe custom sizes, fixed quality values, and model-limited image counts', () => {
-  const model = { adapter: 'openai', sizes: ['1024x1024'], qualityOptions: ['medium'], maxCount: 4 }
-  const twoImageModel = { ...model, maxCount: 2 }
-  const seedream45 = { ...model, adapter: 'seedream', vendorModelId: 'doubao-seedream-4-5-251128' }
-  assert.equal(validateModelInput(model, { size: '1280x720', quality: 'auto', count: 4 }), null)
-  assert.equal(validateModelInput(model, { size: '2K', quality: 'medium', count: 1 }), null)
-  assert.equal(validateModelInput(model, { size: '3K', quality: 'medium', count: 1 }), null)
-  assert.equal(validateModelInput({ ...model, adapter: 'seedream' }, { size: '1024x1024', quality: 'high', count: 2 }), null)
-  assert.equal(validateModelInput(seedream45, { size: '2048x2048', quality: 'high', count: 2 }), null)
-  assert.equal(validateModelInput(seedream45, { size: '5504x3040', quality: 'high', count: 1 }), null)
-  assert.equal(validateModelInput(seedream45, { size: '1024x1024', quality: 'high', count: 1 }), 'INVALID_SIZE')
-  assert.equal(validateModelInput(seedream45, { size: '2K', quality: 'high', count: 1 }), 'INVALID_SIZE')
-  assert.equal(validateModelInput(model, { size: 'abc', quality: 'medium', count: 1 }), 'INVALID_SIZE')
-  assert.equal(validateModelInput(model, { size: '99999x99999', quality: 'medium', count: 1 }), 'INVALID_SIZE')
-  assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'ultra', count: 1 }), 'INVALID_QUALITY')
-  assert.equal(validateModelInput(twoImageModel, { size: '1024x1024', quality: 'medium', count: 3 }), 'INVALID_COUNT')
-  assert.equal(validateModelInput(model, { size: '1024x1024', quality: 'medium', count: 5 }), 'INVALID_COUNT')
-})
+// The former `generation input accepts safe custom sizes...` case exercised
+// `validateModelInput`, which has been deleted from the domain package along with
+// the hardcoded Seedream pixel bands it carried. Those rules are now declared by
+// each plugin's `image-size` descriptor and enforced through
+// `validateGenerationRequest`; the equivalent coverage lives in
+// `packages/domain/src/media-capabilities.test.ts` and the per-plugin suites,
+// which is where it belongs now that the adapter, the API and the browser all
+// read one contract.
 
-test('provider presets use verified model identifiers and reasoning output budgets', () => {
+test('provider presets are identity-only and keep the pinned host slugs', async () => {
+  // `model_configs.preset_id` values are pinned by the migrate.ts eligibility
+  // checks and by presetMatchesPersistedModel, so the slugs are load-bearing.
+  assert.deepEqual(
+    modelPresets.map((preset) => preset.id),
+    ['openai-gpt-image-2', 'seedream-4-0', 'seedream-4-5', 'seedance-1-0', 'veo-3-1', 'openai-gpt-5-5', 'openai-gpt-5-4'],
+  )
+  // A media preset carries no parameter contract at all: no sizes, no quality
+  // options, no modes, no descriptors, no defaults. Those live in the manifest.
+  const identityKeys = ['baseUrl', 'concurrencyLimit', 'displayName', 'id', 'modelKind', 'pluginId', 'pluginVersion', 'providerId', 'vendorModelId']
+  for (const preset of modelPresets) {
+    if (preset.modelKind === 'language') continue
+    const expected = 'adapter' in preset ? [...identityKeys, 'adapter'] : identityKeys
+    assert.deepEqual(Object.keys(preset).sort(), [...expected].sort(), preset.id)
+  }
   const seedream = modelPresets.find(preset => preset.id === 'seedream-4-5')
   assert.equal(seedream?.vendorModelId, 'doubao-seedream-4-5-251128')
-  assert.deepEqual(seedream?.modelKind === 'image' ? seedream.sizes.slice(0, 7) : [], ['2048x2048', '2304x1728', '1728x2304', '2848x1600', '1600x2848', '2496x1664', '1664x2496'])
-  assert.equal(seedream?.modelKind === 'image' ? seedream.sizes.includes('1024x1024') : true, false)
-  assert.equal(seedream?.modelKind === 'image' ? seedream.sizes.includes('5504x3040') : false, true)
+  // The sizes the preset used to hardcode now come from the plugin it points at,
+  // and Seedream 4.5 still refuses the 1K grid its preset once offered.
+  const seedream45 = await resolvePresetCapabilities('seedream-image', '1.1.0', 'doubao-seedream-4-5-251128')
+  const sizeParameter = seedream45.capabilities.parameters.find(parameter => parameter.name === 'size')
+  assert.equal(sizeParameter?.type, 'image-size')
+  const offeredSizes = sizeParameter?.type === 'image-size' ? sizeParameter.presets.map(preset => preset.value) : []
+  assert.deepEqual(offeredSizes.slice(0, 7), ['2048x2048', '2304x1728', '1728x2304', '2848x1600', '1600x2848', '2496x1664', '1664x2496'])
+  assert.equal(offeredSizes.includes('1024x1024'), false)
+  assert.equal(offeredSizes.includes('5504x3040'), true)
   for (const id of ['openai-gpt-5-5', 'openai-gpt-5-4']) {
     const preset = modelPresets.find(candidate => candidate.id === id)
     assert.equal(preset?.modelKind === 'language' ? preset.maxOutputTokens : 0, 25000)
@@ -148,14 +158,45 @@ test('upload constants expose the setup-allowed absolute ceilings', () => {
   assert.equal(MAX_INPUT_IMAGES, 32)
 })
 
-test('publicModelDto and modelDto expose maxInputImages with 0 as default', () => {
+test('publicModelDto derives the deprecated flat fields from the declared contract', () => {
+  // A row with no pinned snapshot declares nothing, so it offers nothing — and the
+  // flat `sizes` / `quality_options` / `max_input_images` columns are never read
+  // to fill the gap. The old DTO invented a `size` enum here from `row.sizes`.
   const baseRow = { id: 'm1', display_name: 'Model 1', adapter: 'openai', sizes: ['1024x1024'], enabled: true, sort_order: 1 }
   assert.equal(publicModelDto(baseRow).maxInputImages, 0)
   assert.equal(modelDto(baseRow).maxInputImages, 0)
+  assert.deepEqual(publicModelDto(baseRow).sizes, [])
+  assert.deepEqual(publicModelDto(baseRow).qualityOptions, [])
+  assert.equal(publicModelDto(baseRow).declaredBy, 'undeclared')
+  // A `max_input_images` column of 4 no longer buys a reference slot.
+  assert.equal(publicModelDto({ ...baseRow, max_input_images: 4 }).maxInputImages, 0)
 
-  const rowWithMax = { ...baseRow, max_input_images: 4 }
-  assert.equal(publicModelDto(rowWithMax).maxInputImages, 4)
-  assert.equal(modelDto(rowWithMax).maxInputImages, 4)
+  const declared = {
+    ...baseRow,
+    capabilities: {
+      modes: ['text_to_image', 'image_to_image'],
+      parameters: [
+        { type: 'image-size', name: 'size', presets: [{ label: '1:1', value: '1024x1024', width: 1024, height: 1024 }] },
+        { type: 'enum', name: 'quality', options: ['auto', 'high'] },
+      ],
+      inputSlots: [
+        { role: 'reference_image', required: false, minCount: 0, maxCount: 3, allowedMediaKinds: ['image'] },
+        { role: 'mask', required: false, minCount: 0, maxCount: 1, allowedMediaKinds: ['image'] },
+      ],
+      maxCount: 2,
+      supportedMediaKinds: ['image'],
+      declaredBy: 'plugin-manifest',
+    },
+  }
+  const dto = publicModelDto(declared)
+  assert.deepEqual(dto.sizes, ['1024x1024'])
+  assert.deepEqual(dto.qualityOptions, ['auto', 'high'])
+  assert.equal(dto.maxCount, 2)
+  assert.equal(dto.maxInputImages, 3)
+  assert.equal(dto.declaredBy, 'plugin-manifest')
+  // A row whose columns disagree with its snapshot follows the snapshot.
+  assert.deepEqual(publicModelDto({ ...declared, sizes: ['9999x9999'], quality_options: ['ultra'], max_count: 9, max_input_images: 0 }).sizes, ['1024x1024'])
+  assert.equal(publicModelDto({ ...declared, max_input_images: 0 }).maxInputImages, 3)
 })
 
 test('jobDto exposes ordered inputImages and text-only jobs have empty inputImages', async () => {
@@ -386,14 +427,50 @@ test('historical 1.0.0 revision rows stay readable through the model DTOs', () =
   assert.equal(publicModelDto(legacyRow).pluginVersion, '1.0.0')
   assert.equal(modelDto(legacyRow).pluginVersion, '1.0.0')
   assert.equal(modelDto(legacyRow).adapter, 'seedream')
+  // An immutable revision written before the contract existed carries the flat
+  // backfill shape, where `size` is an `enum` over bare strings. It is still an
+  // enum descriptor the browser can render and validate, and its provenance says
+  // honestly that the host — not a plugin — wrote it.
+  const legacySnapshot = {
+    ...legacyRow,
+    capabilities: JSON.stringify({
+      modes: ['text_to_image', 'image_to_image'],
+      parameters: [
+        { type: 'enum', name: 'size', label: '尺寸', options: ['1024x1024'] },
+        { type: 'integer', name: 'count', label: '数量', min: 1, max: 4, defaultValue: 1 },
+      ],
+      inputSlots: [{ role: 'reference_image', required: false, minCount: 0, maxCount: 4, allowedMediaKinds: ['image'] }],
+      maxCount: 4,
+      supportedMediaKinds: ['image'],
+    }),
+    defaults: JSON.stringify({}),
+  }
+  const capabilities = capabilitiesFromRow(legacySnapshot)
+  const size = capabilities.parameters.find(parameter => parameter.name === 'size')
+  assert.equal(size?.type, 'enum')
+  assert.deepEqual(size?.type === 'enum' ? size.options : null, ['1024x1024'])
+  assert.equal(capabilities.declaredBy, 'host-synthesized')
+  assert.deepEqual(capabilities.modes, ['text_to_image', 'image_to_image'])
+  assert.equal(capabilities.maxCount, 4)
+  assert.deepEqual(publicModelDto(legacySnapshot).sizes, ['1024x1024'])
+  // A snapshot that cannot be read as a contract is not repaired: it degrades to
+  // undeclared with nothing offered, rather than being served to a browser.
+  const broken = capabilitiesFromRow({ ...legacyRow, capabilities: { modes: ['text_to_image'], parameters: [{ type: 'mystery', name: 'size' }], inputSlots: [] } })
+  assert.equal(broken.declaredBy, 'undeclared')
+  assert.deepEqual(broken.parameters, [])
 })
 
 test('image 1.1.0 cutover appends immutable revisions without rewriting history', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const source = readFileSync(join(here, '../../../packages/database/src/migrate.ts'), 'utf8')
   const cutoverStart = source.indexOf('10. Image plugin 1.1.0 cutover')
-  // Section 10 only: billing retirement lives in a dedicated later block.
-  const cutover = source.slice(cutoverStart, source.indexOf('-- 11. Resumable', cutoverStart))
+  // Section 10 only: billing retirement lives in a dedicated later block, and so
+  // does 10b's plugin-declared capability backfill — which legitimately names
+  // every model a plugin publishes, deprecated ones included.
+  const cutover = source.slice(
+    cutoverStart,
+    source.indexOf('-- 10b. Plugin-declared', cutoverStart),
+  )
   assert.ok(cutover.length > 0)
   assert.ok(cutover.includes("'1.1.0'"))
   assert.ok(cutover.includes('INSERT INTO model_config_revisions'))
@@ -485,49 +562,53 @@ test('image 1.1.0 cutover appends immutable revisions without rewriting history'
   }
 })
 
-test('active image upsert validates fields and endpoint hosts against the plugin contract', async () => {
+test('the image contract gate exercises the declared values, not the flat columns', async () => {
   const openai = globalProviderRegistry.get('openai-image', '1.1.0')
   const seedream = globalProviderRegistry.get('seedream-image', '1.1.0')
-  assert.deepEqual(await validateImageModelContract(openai, {
-    vendorModelId: 'gpt-image-2',
-    sizes: ['1024x1024', '1280x720', '720x1280', '1536x1024', '1024x1536'],
-    qualityOptions: ['auto', 'low', 'medium', 'high'],
-    maxCount: 4,
-    maxInputImages: 4,
-  }), { ok: true })
-  assert.equal((await validateImageModelContract(openai, {
-    vendorModelId: 'gpt-image-2', sizes: ['9999x9999'], qualityOptions: [], maxCount: 1, maxInputImages: 0,
+  // Every built-in image model passes its own plugin, because the gate feeds each
+  // declared preset, option and integer bound back through `validateRequest`.
+  for (const vendorModelId of ['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1.5', 'dall-e-3']) {
+    const declared = await resolvePresetCapabilities('openai-image', '1.1.0', vendorModelId)
+    assert.equal(declared.findings, undefined, vendorModelId)
+    assert.deepEqual(
+      await validateImageModelContract(openai, { vendorModelId, capabilities: declared.capabilities }),
+      { ok: true },
+      vendorModelId,
+    )
+  }
+  for (const vendorModelId of ['doubao-seedream-4-0-250828', 'doubao-seedream-4-5-251128']) {
+    const declared = await resolvePresetCapabilities('seedream-image', '1.1.0', vendorModelId)
+    assert.deepEqual(
+      await validateImageModelContract(seedream, { vendorModelId, capabilities: declared.capabilities }),
+      { ok: true },
+      vendorModelId,
+    )
+  }
+  // A declaration the plugin contradicts is refused. These are the same shapes
+  // the retired column-based gate checked, now stated as a contract: an illegal
+  // size, an unoffered quality, a count above the declared ceiling, and a
+  // reference slot wider than the host can stage inputs for.
+  const gate = (vendorModelId: string, overrides: Partial<ModelCapabilities>, plugin = openai) =>
+    validateImageModelContract(plugin, {
+      vendorModelId,
+      capabilities: {
+        modes: ['text_to_image'],
+        parameters: [],
+        inputSlots: [],
+        maxCount: 1,
+        supportedMediaKinds: ['image'],
+        ...overrides,
+      },
+    })
+  assert.equal((await gate('gpt-image-2', { parameters: [{ type: 'enum', name: 'size', options: ['9999x9999'] }] })).ok, false)
+  assert.equal((await gate('gpt-image-2', { parameters: [{ type: 'enum', name: 'quality', options: ['ultra'] }] })).ok, false)
+  assert.equal((await gate('gpt-image-2', { parameters: [{ type: 'integer', name: 'count', min: 1, max: 5 }] })).ok, false)
+  assert.equal((await gate('gpt-image-2', {
+    inputSlots: [{ role: 'reference_image', required: false, minCount: 0, maxCount: 99, allowedMediaKinds: ['image'] }],
   })).ok, false)
-  assert.equal((await validateImageModelContract(openai, {
-    vendorModelId: 'gpt-image-2', sizes: ['1024x1024'], qualityOptions: ['ultra'], maxCount: 1, maxInputImages: 0,
-  })).ok, false)
-  assert.equal((await validateImageModelContract(openai, {
-    vendorModelId: 'gpt-image-2', sizes: ['1024x1024'], qualityOptions: [], maxCount: 5, maxInputImages: 0,
-  })).ok, false)
-  assert.equal((await validateImageModelContract(openai, {
-    vendorModelId: 'gpt-image-2', sizes: ['1024x1024'], qualityOptions: [], maxCount: 1, maxInputImages: 5,
-  })).ok, false)
-  assert.equal((await validateImageModelContract(openai, {
-    vendorModelId: 'no-such-model', sizes: [], qualityOptions: [], maxCount: 1, maxInputImages: 0,
-  })).ok, false)
-  assert.deepEqual(await validateImageModelContract(seedream, {
-    vendorModelId: 'doubao-seedream-4-5-251128',
-    sizes: ['2048x2048'],
-    qualityOptions: [],
-    maxCount: 4,
-    maxInputImages: 4,
-  }), { ok: true })
-  assert.equal((await validateImageModelContract(seedream, {
-    vendorModelId: 'doubao-seedream-4-5-251128', sizes: ['1024x1024'], qualityOptions: [], maxCount: 1, maxInputImages: 0,
-  })).ok, false)
-  // DALL-E-3 declares maxInputImages 0: any reference image is rejected,
-  // while zero passes the per-model cap.
-  assert.deepEqual(await validateImageModelContract(openai, {
-    vendorModelId: 'dall-e-3', sizes: ['1024x1024'], qualityOptions: ['standard'], maxCount: 1, maxInputImages: 0,
-  }), { ok: true })
-  assert.equal((await validateImageModelContract(openai, {
-    vendorModelId: 'dall-e-3', sizes: ['1024x1024'], qualityOptions: ['standard'], maxCount: 1, maxInputImages: 1,
-  })).ok, false)
+  assert.equal((await gate('no-such-model', {})).ok, false)
+  // Seedream 4.5 has always refused the 1K grid 4.0 offered.
+  assert.equal((await gate('doubao-seedream-4-5-251128', { parameters: [{ type: 'enum', name: 'size', options: ['1024x1024'] }] }, seedream)).ok, false)
   // Official endpoint hosts only; empty means the plugin default applies.
   assert.equal(imageBaseUrlAllowed('openai-image', 'https://api.openai.com'), true)
   assert.equal(imageBaseUrlAllowed('openai-image', null), true)
@@ -536,32 +617,113 @@ test('active image upsert validates fields and endpoint hosts against the plugin
   assert.equal(imageBaseUrlAllowed('seedream-image', 'https://api.openai.com'), false)
   assert.equal(imageBaseUrlAllowed('openai-image', ''), true)
 })
-test('active image writes persist canonical capabilities and reject overrides', () => {
-  const canonical = buildCanonicalImageCapabilities({
-    sizes: ['1024x1024'],
-    qualityOptions: [],
-    maxCount: 2,
-    maxInputImages: 0,
+
+test('resolvePresetCapabilities reads the manifest and never fills in a contract', async () => {
+  const gptImage2 = await resolvePresetCapabilities('openai-image', '1.1.0', 'gpt-image-2')
+  assert.equal(gptImage2.capabilities.declaredBy, 'plugin-manifest')
+  assert.equal(gptImage2.deprecated, false)
+  assert.equal(gptImage2.findings, undefined)
+  const size = gptImage2.capabilities.parameters.find(parameter => parameter.name === 'size')
+  const offered = size?.type === 'image-size' ? size.presets.map(preset => preset.value) : []
+  // The retired `openai-gpt-image-2` preset hardcoded this exact list. Both 720p
+  // sizes are still in the plugin's own preset list, so the model keeps offering
+  // everything it offered before — from one source instead of two.
+  for (const value of ['1024x1024', '1280x720', '720x1280', '1536x1024', '1024x1536']) {
+    assert.ok(offered.includes(value), value)
+  }
+  assert.equal(gptImage2.defaults.size, 'auto')
+  assert.deepEqual(gptImage2.capabilities.supportedMediaKinds, ['image'])
+  // A vendor model the manifest does not list declares nothing: no modes, no
+  // parameters, no guess at a permissive shape.
+  const unknownModel = await resolvePresetCapabilities('openai-image', '1.1.0', 'my-custom-model')
+  assert.equal(unknownModel.capabilities.declaredBy, 'undeclared')
+  assert.deepEqual(unknownModel.capabilities.parameters, [])
+  assert.deepEqual(unknownModel.capabilities.modes, [])
+  assert.deepEqual(unknownModel.defaults, {})
+  assert.equal(unknownModel.deprecated, false)
+  // An unknown plugin key resolves through the catalog, which degrades to
+  // built-in-only membership without a database — and still declares nothing.
+  assert.equal((await resolvePresetCapabilities('acme-image', '1.0.0', 'acme-1')).capabilities.declaredBy, 'undeclared')
+  // The historical 1.0.0 manifests stayed deliberately thin; a model pinned there
+  // reports undeclared rather than inheriting the 1.1.0 contract.
+  const legacyKey = await resolvePresetCapabilities('openai-image', '1.0.0', 'gpt-image-2')
+  assert.equal(legacyKey.capabilities.declaredBy, 'undeclared')
+  // A deprecated model keeps the vendor's own note rather than being hidden.
+  const dalle3 = await resolvePresetCapabilities('openai-image', '1.1.0', 'dall-e-3')
+  assert.equal(dalle3.deprecated, true)
+  assert.equal(typeof dalle3.deprecationNote, 'string')
+  assert.ok((dalle3.deprecationNote ?? '').length > 0)
+  assert.equal(dalle3.capabilities.deprecated, true)
+  assert.deepEqual(dalle3.capabilities.inputSlots, [])
+  // Video resolves through the same lookup the image path uses.
+  const veo = await resolvePresetCapabilities('veo-video', '1.0.0', 'veo-3.1-generate-001')
+  assert.equal(veo.capabilities.declaredBy, 'plugin-manifest')
+  assert.deepEqual(
+    veo.capabilities.parameters.map(parameter => parameter.name),
+    ['durationSeconds', 'aspectRatio', 'resolution', 'audio', 'count'],
+  )
+  const seedance = await resolvePresetCapabilities('seedance-video', '1.0.0', 'doubao-seedance-2-0-fast-260128')
+  const duration = seedance.capabilities.parameters.find(parameter => parameter.name === 'durationSeconds')
+  // The generic 1-60s fallback is gone: the plugin's own 1-30 ceiling is what the
+  // model offers now, together with the slider hint only the plugin can state.
+  assert.equal(duration?.type, 'integer')
+  assert.equal(duration?.type === 'integer' ? duration.min : null, 1)
+  assert.equal(duration?.type === 'integer' ? duration.max : null, 30)
+  assert.equal(duration?.type === 'integer' ? duration.defaultValue : null, 5)
+  assert.deepEqual(duration?.ui, { control: 'slider', unit: '秒', order: 1 })
+})
+
+test('video presets resolve a manifest contract instead of carrying one', async () => {
+  const seedance = modelPresets.find((preset) => preset.id === 'seedance-1-0')
+  if (!seedance || seedance.modelKind !== 'video') throw new Error('seedance preset missing')
+  assert.equal(seedance.vendorModelId, 'doubao-seedance-2-0-fast-260128')
+  assert.equal(seedance.baseUrl, 'https://ark.cn-beijing.volces.com/api/v3')
+  const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
+  if (!veo || veo.modelKind !== 'video') throw new Error('veo preset missing')
+  assert.equal(veo.vendorModelId, 'veo-3.1-generate-001')
+  assert.equal(veo.baseUrl, 'https://us-central1-aiplatform.googleapis.com')
+  // Enum strings for the durations, straight from the plugin that Number-converts
+  // them again when the request is normalized.
+  const veoParameters = (await resolvePresetCapabilities('veo-video', '1.0.0', veo.vendorModelId)).capabilities.parameters
+  const veoDuration = veoParameters.find(parameter => parameter.name === 'durationSeconds')
+  assert.equal(veoDuration?.type, 'enum')
+  assert.deepEqual(veoDuration?.type === 'enum' ? veoDuration.options : null, ['4', '6', '8'])
+  // Veo only accepts 16:9 and 9:16; the generic six-ratio fallback is gone.
+  const veoAspect = veoParameters.find(parameter => parameter.name === 'aspectRatio')
+  assert.deepEqual(
+    veoAspect?.type === 'enum' ? { type: veoAspect.type, options: veoAspect.options, defaultValue: veoAspect.defaultValue } : null,
+    { type: 'enum', options: ['16:9', '9:16'], defaultValue: '16:9' },
+  )
+})
+
+test('media presets become complete immutable revision contracts', async () => {
+  const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
+  const contract = await presetRevisionContract(veo)
+  assert.ok(contract)
+  assert.deepEqual(contract.defaults, {
+    durationSeconds: '8',
+    aspectRatio: '16:9',
+    resolution: '1080p',
+    audio: true,
+    count: 1,
   })
-  assert.deepEqual(canonical.modes, ['text_to_image'])
-  assert.deepEqual(canonical.supportedMediaKinds, ['image'])
-  assert.equal(canonical.mediaKind, 'image')
-  assert.equal(canonical.maxCount, 2)
-  const parameters = canonical.parameters as Record<string, unknown>[]
-  assert.deepEqual(parameters.map((parameter) => parameter.name), ['size', 'count'])
-  assert.deepEqual((parameters[0] as Record<string, unknown>).options, ['1024x1024'])
-  assert.deepEqual(canonical.inputSlots, [])
-  const withQuality = buildCanonicalImageCapabilities({
-    sizes: ['1024x1024'],
-    qualityOptions: ['auto'],
-    maxCount: 4,
-    maxInputImages: 3,
-  })
-  assert.deepEqual(withQuality.modes, ['text_to_image', 'image_to_image'])
-  assert.deepEqual(withQuality.inputSlots, [
-    { role: 'reference_image', required: false, minCount: 0, maxCount: 3, allowedMediaKinds: ['image'] },
-  ])
-  // Omitted fields are fine; any content is a rejectable override.
+  assert.deepEqual(
+    contract.capabilities.parameters.map((parameter) => parameter.name),
+    ['durationSeconds', 'aspectRatio', 'resolution', 'audio', 'count'],
+  )
+  assert.deepEqual(contract.capabilities.supportedMediaKinds, ['video'])
+  assert.equal(contract.capabilities.declaredBy, 'plugin-manifest')
+  // An image preset is the same code path now, and a language preset has no
+  // media contract at all.
+  const image = await presetRevisionContract(modelPresets.find((preset) => preset.id === 'openai-gpt-image-2'))
+  assert.deepEqual(image?.capabilities.parameters.map((parameter) => parameter.name).slice(0, 2), ['size', 'quality'])
+  assert.equal((await presetRevisionContract(modelPresets.find((preset) => preset.id === 'openai-gpt-5-5'))), null)
+})
+
+test('caller-supplied contracts are refused for every media kind', () => {
+  // Omitted fields are fine; any content is a rejectable override. The image
+  // write has rejected these since the hardening; the video write used to slip
+  // past, which is how a body could author a contract no plugin declared.
   for (const empty of [undefined, null, {}, [], '']) {
     assert.equal(isEmptyInputOverride(empty), true)
   }
@@ -667,9 +829,7 @@ test('builtin provider templates expose exactly the four current plugins', () =>
   const stalePreset: VideoModelPreset = {
     id: 'stale-probe', modelKind: 'video', displayName: 'Stale', providerId: 'google',
     pluginId: 'veo-video', pluginVersion: '1.0.0', vendorModelId: 'veo-retired-preview',
-    baseUrl: 'https://us-central1-aiplatform.googleapis.com', modes: ['text_to_video'],
-    parameters: [], inputSlots: [],
-    defaults: {}, maxCount: 1, concurrencyLimit: 1,
+    baseUrl: 'https://us-central1-aiplatform.googleapis.com', concurrencyLimit: 1,
   }
   modelPresets.push(stalePreset)
   try {
@@ -677,46 +837,6 @@ test('builtin provider templates expose exactly the four current plugins', () =>
   } finally {
     modelPresets.pop()
   }
-})
-
-test('video presets use manifest-supported vendor models, official hosts, and provider-accurate parameters', () => {
-  const seedance = modelPresets.find((preset) => preset.id === 'seedance-1-0')
-  if (!seedance || seedance.modelKind !== 'video') throw new Error('seedance preset missing')
-  assert.equal(seedance.vendorModelId, 'doubao-seedance-2-0-fast-260128')
-  assert.equal(seedance.baseUrl, 'https://ark.cn-beijing.volces.com/api/v3')
-  const seedanceDuration = seedance.parameters.find((parameter) => parameter.name === 'durationSeconds')
-  assert.deepEqual(seedanceDuration, { type: 'integer', name: 'durationSeconds', label: '时长（秒）', min: 1, max: 30, defaultValue: 5, required: false })
-  const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
-  if (!veo || veo.modelKind !== 'video') throw new Error('veo preset missing')
-  assert.equal(veo.vendorModelId, 'veo-3.1-generate-001')
-  assert.equal(veo.baseUrl, 'https://us-central1-aiplatform.googleapis.com')
-  // Enum strings so normalization can Number-convert them later.
-  assert.deepEqual(
-    veo.parameters.find((parameter) => parameter.name === 'durationSeconds'),
-    { type: 'enum', name: 'durationSeconds', label: '时长（秒）', options: ['4', '6', '8'], defaultValue: '8', required: false },
-  )
-  assert.deepEqual(
-    veo.parameters.find((parameter) => parameter.name === 'aspectRatio'),
-    { type: 'enum', name: 'aspectRatio', label: '宽高比', options: ['16:9', '9:16'], defaultValue: '16:9', required: false },
-  )
-})
-
-test('video presets become complete immutable revision contracts', () => {
-  const veo = modelPresets.find((preset) => preset.id === 'veo-3-1')
-  const contract = videoPresetRevisionContract(veo)
-  assert.ok(contract)
-  assert.deepEqual(contract.defaults, {
-    durationSeconds: 8,
-    aspectRatio: '16:9',
-    resolution: '1080p',
-    audio: true,
-    count: 1,
-  })
-  assert.deepEqual(
-    (contract.capabilities.parameters as Array<{ name: string }>).map((parameter) => parameter.name),
-    ['durationSeconds', 'aspectRatio', 'resolution', 'audio', 'count'],
-  )
-  assert.deepEqual(contract.capabilities.supportedMediaKinds, ['video'])
 })
 
 test('model credentials require exact plugin identity with legacy provider fallback only', () => {
@@ -765,7 +885,10 @@ test('stored preset lookup never upgrades an explicitly pinned plugin version', 
 
 test('admin provider templates route serves the registry-backed catalog', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const source = readFileSync(join(here, '../app/api/[...path]/route.ts'), 'utf8')
+  // The wiring used to live in the catch-all handler; it is now a route table, so
+  // that is what this reads. The behaviour under test is unchanged: the path is
+  // served by the catalog builder rather than a hardcoded list.
+  const source = readFileSync(join(here, './router/routes.ts'), 'utf8')
   assert.ok(source.includes("admin/provider-templates"))
   assert.ok(source.includes('buildBuiltinProviderTemplates'))
 })
@@ -1082,9 +1205,27 @@ test('prompt template validators reject null, array, and non-object inputs', () 
     assert.equal(asValidationError(validatePromptTemplatePreview(bad))?.code, 'INVALID_INPUT')
   }
 })
+/**
+ * Every non-test .ts file under a directory. Test files are excluded because this
+ * very test spells the forbidden names out in order to forbid them.
+ */
+function walkTypeScript(directory: string): string[] {
+  const found: string[] = []
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name === '.next') continue
+    const full = join(directory, entry.name)
+    if (entry.isDirectory()) found.push(...walkTypeScript(full))
+    else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) found.push(full)
+  }
+  return found
+}
+
 test('prompt template canonical routes replace the legacy file-index surface', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const source = readFileSync(join(here, '../app/api/[...path]/route.ts'), 'utf8')
+  // Wiring moved from the catch-all handler into the route table; the legacy
+  // handler names are now banned across the whole source tree rather than in one
+  // file, which is strictly wider than what this used to check.
+  const source = readFileSync(join(here, './router/routes.ts'), 'utf8')
   for (const route of [
     'admin/prompt-templates',
     'admin/prompt-templates/sets',
@@ -1106,6 +1247,12 @@ test('prompt template canonical routes replace the legacy file-index surface', (
   ]) {
     assert.ok(source.includes(route), 'missing route wiring: ' + route)
   }
+  // The routing layer is what used to hold the wiring. Banning the legacy handler
+  // names across every route table file is wider than the old single-file check
+  // while covering exactly the same concern. Note `modules/setup/handlers.ts`
+  // still calls `loadPromptTemplateIndex`; that predates this test and is outside
+  // the surface this assertion is about.
+  const wholeApi = walkTypeScript(join(here, 'router')).map(file => readFileSync(file, 'utf8')).join('\n')
   for (const legacy of [
     'createPromptTemplateEntryForSet',
     'updatePromptTemplateEntryById',
@@ -1116,12 +1263,12 @@ test('prompt template canonical routes replace the legacy file-index surface', (
     'importPromptTemplateSet(',
     'exportPromptTemplateSet(',
   ]) {
-    assert.equal(source.includes(legacy), false, 'stale handler wiring: ' + legacy)
+    assert.equal(wholeApi.includes(legacy), false, 'stale handler wiring: ' + legacy)
   }
 
-  assert.equal(source.includes('prompt-templates/reload'), false)
-  assert.equal(source.includes('loadPromptTemplateIndex'), false)
-  assert.equal(source.includes('promptTemplateIndexDto'), false)
+  assert.equal(wholeApi.includes('prompt-templates/reload'), false)
+  assert.equal(wholeApi.includes('loadPromptTemplateIndex'), false)
+  assert.equal(wholeApi.includes('promptTemplateIndexDto'), false)
   const adminSource = readFileSync(join(here, './modules/admin/prompt-templates.ts'), 'utf8')
   assert.ok(adminSource.includes('Content-Disposition'))
   assert.ok(adminSource.includes('prompt_templates.import'))

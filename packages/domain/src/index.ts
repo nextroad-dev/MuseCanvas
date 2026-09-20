@@ -16,10 +16,17 @@ import type {
   MediaKind,
   ModelCapabilities,
   ModelKind,
+  ParameterCrossFieldConstraint,
   ParameterDescriptor,
+  ParameterErrorDetails,
   TextParameterDescriptor,
   VideoGenerationMetadata,
   VideoGenerationOutput,
+} from '@musecanvas/contracts'
+import {
+  evaluateCrossFieldConstraints,
+  isParameterVisible,
+  validateParameterValue,
 } from '@musecanvas/contracts'
 
 export type {
@@ -53,66 +60,6 @@ export type {
 export type JobStatus = 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'failed' | 'canceled'
 export const terminalStatuses = new Set<JobStatus>(['succeeded', 'failed', 'canceled'])
 
-const qualityOptions = new Set(['auto', 'low', 'medium', 'high'])
-const sizeBands = new Set(['2K', '3K', '4K'])
-const SEEDREAM_MAX_ASPECT_RATIO = 16
-const seedreamRules = {
-  '4.0': { minPixels: 1280 * 720, maxPixels: 4096 * 4096 },
-  '4.5': { minPixels: 2560 * 1440, maxPixels: 4096 * 4096 },
-  '5.0-lite': { minPixels: 2560 * 1440, maxPixels: 10_404_496 },
-}
-
-function seedreamRule(vendorModelId?: string) {
-  const id = (vendorModelId || '').toLowerCase()
-  if ((id.includes('5-0') || id.includes('5.0')) && id.includes('lite')) return seedreamRules['5.0-lite']
-  if (id.includes('4-5') || id.includes('4.5')) return seedreamRules['4.5']
-  return seedreamRules['4.0']
-}
-
-function exactDimensions(size: string): { width: number; height: number } | null {
-  const match = size.match(/^([1-9]\d*)x([1-9]\d*)$/)
-  if (!match) return null
-  const width = Number(match[1])
-  const height = Number(match[2])
-  return Number.isSafeInteger(width) && Number.isSafeInteger(height) ? { width, height } : null
-}
-
-function seedreamSizeValid(size: string, vendorModelId?: string): boolean {
-  const dimensions = exactDimensions(size)
-  if (!dimensions) return false
-  const { width, height } = dimensions
-  const pixels = width * height
-  const aspectRatio = Math.max(width / height, height / width)
-  const rule = seedreamRule(vendorModelId)
-  return pixels >= rule.minPixels && pixels <= rule.maxPixels && aspectRatio <= SEEDREAM_MAX_ASPECT_RATIO
-}
-
-function sizeValid(model: { adapter: string; vendorModelId?: string }, size: string): boolean {
-  if (model.adapter === 'seedream') return seedreamSizeValid(size, model.vendorModelId)
-  if (sizeBands.has(size)) return true
-  const dimensions = exactDimensions(size)
-  if (!dimensions) return false
-  const { width, height } = dimensions
-  return width >= 256 && width <= 4096 && height >= 256 && height <= 4096 && width * height <= 4096 * 4096
-}
-
-export function validateModelInput(
-  model: {
-    adapter: string
-    vendorModelId?: string
-    sizes: string[]
-    qualityOptions: string[]
-    maxCount: number
-  },
-  input: { size: string; quality?: string; count: number },
-): string | null {
-  if (!sizeValid(model, input.size)) return 'INVALID_SIZE'
-  const maxCount = Math.min(4, Math.max(1, model.maxCount || 1))
-  if (!Number.isInteger(input.count) || input.count < 1 || input.count > maxCount) return 'INVALID_COUNT'
-  if (input.quality && !qualityOptions.has(input.quality)) return 'INVALID_QUALITY'
-  return null
-}
-
 // ---------------------------------------------------------------------------
 // Error Handling & Validation Types
 // ---------------------------------------------------------------------------
@@ -135,6 +82,12 @@ export interface ValidationErrorItem {
   code: string
   message: string
   field?: string
+  /**
+   * Which parameter, with what value, broke which rule. The response envelope
+   * forwards this so the console can mark the offending control red instead of
+   * showing the user a sentence about a form they have already filled in.
+   */
+  details?: ParameterErrorDetails
 }
 
 export interface ValidationSuccess<T> {
@@ -153,19 +106,25 @@ export interface ValidationFailure {
 
 export type ValidationOutcome<T> = ValidationSuccess<T> | ValidationFailure
 
-export interface ParameterCrossFieldConstraint {
-  type: 'requires' | 'forbidden' | 'mutually_exclusive' | 'max_product'
-  parameter: string
-  targetParameter?: string
-  parameters?: [string, string]
-  whenValueEquals?: JsonValue
-  maxProduct?: number
-  message?: string
-}
+// `ParameterCrossFieldConstraint` is declared in `@musecanvas/contracts` and
+// re-exported here rather than restated: the browser has to evaluate the exact
+// same combination rules to disable the submit button, and two definitions of
+// "is this pair legal" is the drift this move removes. Re-exporting keeps every
+// existing `import { ParameterCrossFieldConstraint } from '@musecanvas/domain'`
+// call site compiling unchanged.
+export type { ParameterCrossFieldConstraint }
 
-export interface ModelValidationConfig extends ModelCapabilities {
-  constraints?: ParameterCrossFieldConstraint[]
-}
+/**
+ * The validator's view of a model.
+ *
+ * This used to be `ModelCapabilities` plus a domain-only `constraints` field.
+ * Cross-field rules now live in the shared contract as `crossFieldConstraints`,
+ * so there is exactly one field name that the browser, this validator and the
+ * plugin adapters read — and one place a rule can be declared. The alias is kept
+ * because it names a role (`ModelValidationConfig` describes the argument) that
+ * the more general type does not.
+ */
+export type ModelValidationConfig = ModelCapabilities
 
 export interface NormalizedGenerationRequest {
   modelId: string
@@ -235,10 +194,21 @@ export function validateGenerationRequest(
 
   const normalizedParameters: Record<string, JsonValue> = {}
 
-  // Validate each parameter against descriptor
+  // Validate each parameter against its descriptor, then the combination rules
+  // over what survived. Both calls are the shared contract validators, so the
+  // browser's "may I submit this", this authoritative gate, and the plugin
+  // adapter's pre-flight check are one implementation rather than three that can
+  // disagree about what a size means.
   for (const descriptor of capabilities.parameters) {
     const rawVal = rawParameters[descriptor.name]
     const defaultVal = options?.defaults?.[descriptor.name] ?? descriptor.defaultValue
+
+    // `dependsOn` gates the whole parameter, including its default: a control
+    // the model only offers under another value must stay out of the request
+    // entirely. Checking after the absent-value branch would still materialise
+    // `output_compression: 100` behind a hidden control, and a parameter nobody
+    // can see or unset has no business reaching a vendor.
+    if (descriptor.dependsOn && !isParameterVisible(descriptor, rawParameters)) continue
 
     if (rawVal === undefined || rawVal === null) {
       if (defaultVal !== undefined) {
@@ -253,170 +223,41 @@ export function validateGenerationRequest(
       continue
     }
 
-    // Validate type and bounds
-    switch (descriptor.type) {
-      case 'enum': {
-        if (typeof rawVal !== 'string') {
-          errors.push({
-            code: 'INVALID_PARAMETER_TYPE',
-            message: `Parameter '${descriptor.name}' must be a string`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (!descriptor.options.includes(rawVal)) {
-          errors.push({
-            code: 'INVALID_PARAMETER_VALUE',
-            message: `Parameter '${descriptor.name}' value '${rawVal}' is not in allowed options: [${descriptor.options.join(', ')}]`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else {
-          normalizedParameters[descriptor.name] = rawVal
-        }
-        break
-      }
-
-      case 'integer': {
-        if (typeof rawVal !== 'number' || !Number.isFinite(rawVal) || !Number.isInteger(rawVal)) {
-          errors.push({
-            code: 'INVALID_PARAMETER_TYPE',
-            message: `Parameter '${descriptor.name}' must be a safe integer`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (rawVal < Number.MIN_SAFE_INTEGER || rawVal > Number.MAX_SAFE_INTEGER) {
-          errors.push({
-            code: 'PARAMETER_OUT_OF_RANGE',
-            message: `Parameter '${descriptor.name}' must be within safe integer bounds`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (descriptor.min !== undefined && rawVal < descriptor.min) {
-          errors.push({
-            code: 'PARAMETER_OUT_OF_RANGE',
-            message: `Parameter '${descriptor.name}' must be >= ${descriptor.min}`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (descriptor.max !== undefined && rawVal > descriptor.max) {
-          errors.push({
-            code: 'PARAMETER_OUT_OF_RANGE',
-            message: `Parameter '${descriptor.name}' must be <= ${descriptor.max}`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (descriptor.step !== undefined && descriptor.step > 0) {
-          const base = descriptor.min ?? 0
-          if ((rawVal - base) % descriptor.step !== 0) {
-            errors.push({
-              code: 'PARAMETER_STEP_MISMATCH',
-              message: `Parameter '${descriptor.name}' must align with step ${descriptor.step}`,
-              field: `parameters.${descriptor.name}`,
-            })
-          } else {
-            normalizedParameters[descriptor.name] = rawVal
-          }
-        } else {
-          normalizedParameters[descriptor.name] = rawVal
-        }
-        break
-      }
-
-      case 'boolean': {
-        if (typeof rawVal !== 'boolean') {
-          errors.push({
-            code: 'INVALID_PARAMETER_TYPE',
-            message: `Parameter '${descriptor.name}' must be a boolean`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else {
-          normalizedParameters[descriptor.name] = rawVal
-        }
-        break
-      }
-
-      case 'text': {
-        if (typeof rawVal !== 'string') {
-          errors.push({
-            code: 'INVALID_PARAMETER_TYPE',
-            message: `Parameter '${descriptor.name}' must be a string`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (descriptor.minLength !== undefined && rawVal.length < descriptor.minLength) {
-          errors.push({
-            code: 'TEXT_TOO_SHORT',
-            message: `Parameter '${descriptor.name}' length must be >= ${descriptor.minLength}`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (descriptor.maxLength !== undefined && rawVal.length > descriptor.maxLength) {
-          errors.push({
-            code: 'TEXT_TOO_LONG',
-            message: `Parameter '${descriptor.name}' length must be <= ${descriptor.maxLength}`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else if (descriptor.pattern !== undefined && !new RegExp(descriptor.pattern).test(rawVal)) {
-          errors.push({
-            code: 'TEXT_PATTERN_MISMATCH',
-            message: `Parameter '${descriptor.name}' does not match required pattern ${descriptor.pattern}`,
-            field: `parameters.${descriptor.name}`,
-          })
-        } else {
-          normalizedParameters[descriptor.name] = rawVal
-        }
-        break
-      }
+    const issues = validateParameterValue(descriptor, rawVal)
+    if (issues.length === 0) {
+      normalizedParameters[descriptor.name] = rawVal
+      continue
+    }
+    for (const issue of issues) {
+      errors.push({
+        code: issue.code,
+        message: issue.message,
+        field: `parameters.${issue.parameter}`,
+        details: {
+          parameter: issue.parameter,
+          value: issue.value as JsonValue | undefined,
+          constraint: issue.constraint,
+        },
+      })
     }
   }
 
-  // 3. Cross-field constraints validation
-  if (capabilities.constraints && capabilities.constraints.length > 0) {
-    for (const constraint of capabilities.constraints) {
-      if (constraint.type === 'max_product' && constraint.parameters) {
-        const [paramA, paramB] = constraint.parameters
-        const valA = normalizedParameters[paramA]
-        const valB = normalizedParameters[paramB]
-        if (typeof valA === 'number' && typeof valB === 'number' && constraint.maxProduct !== undefined) {
-          if (valA * valB > constraint.maxProduct) {
-            errors.push({
-              code: 'MAX_PRODUCT_EXCEEDED',
-              message:
-                constraint.message ||
-                `Product of '${paramA}' and '${paramB}' (${valA * valB}) exceeds maximum allowed (${constraint.maxProduct})`,
-              field: `parameters.${paramA}`,
-            })
-          }
-        }
-      } else if (constraint.type === 'requires') {
-        const paramVal = normalizedParameters[constraint.parameter]
-        const conditionMet =
-          constraint.whenValueEquals === undefined ? paramVal !== undefined : paramVal === constraint.whenValueEquals
-        if (conditionMet && constraint.targetParameter && normalizedParameters[constraint.targetParameter] === undefined) {
-          errors.push({
-            code: 'REQUIRED_FIELD_MISSING',
-            message:
-              constraint.message ||
-              `Parameter '${constraint.targetParameter}' is required when '${constraint.parameter}' is specified`,
-            field: `parameters.${constraint.targetParameter}`,
-          })
-        }
-      } else if (constraint.type === 'forbidden') {
-        const paramVal = normalizedParameters[constraint.parameter]
-        const conditionMet =
-          constraint.whenValueEquals === undefined ? paramVal !== undefined : paramVal === constraint.whenValueEquals
-        if (conditionMet && constraint.targetParameter && normalizedParameters[constraint.targetParameter] !== undefined) {
-          errors.push({
-            code: 'FORBIDDEN_FIELD_PRESENT',
-            message:
-              constraint.message ||
-              `Parameter '${constraint.targetParameter}' is not allowed when '${constraint.parameter}' is specified`,
-            field: `parameters.${constraint.targetParameter}`,
-          })
-        }
-      } else if (constraint.type === 'mutually_exclusive' && constraint.parameters) {
-        const [paramA, paramB] = constraint.parameters
-        if (normalizedParameters[paramA] !== undefined && normalizedParameters[paramB] !== undefined) {
-          errors.push({
-            code: 'MUTUALLY_EXCLUSIVE_PARAMETERS',
-            message: constraint.message || `Parameters '${paramA}' and '${paramB}' cannot be used together`,
-            field: `parameters.${paramB}`,
-          })
-        }
-      }
-    }
+  // 3. Cross-field constraints validation. Evaluated over the normalized set, so
+  // a defaulted value participates in a rule the same way an explicit one does.
+  for (const issue of evaluateCrossFieldConstraints(
+    capabilities.crossFieldConstraints,
+    normalizedParameters,
+  )) {
+    errors.push({
+      code: issue.code,
+      message: issue.message,
+      field: `parameters.${issue.parameter}`,
+      details: {
+        parameter: issue.parameter,
+        value: issue.value as JsonValue | undefined,
+        constraint: issue.constraint,
+      },
+    })
   }
 
   // 4. Ordered Input Slots validation
@@ -435,6 +276,10 @@ export function validateGenerationRequest(
   }
 
   const seenPositions = new Set<number>()
+  /** Dedupe key per input reference: `u:<uploadId>` or `a:<assetId>`. Two refs of
+   *  different kinds never collide, and the same asset may still feed *other* jobs
+   *  — this set is scoped to one request only. */
+  const seenRefs = new Set<string>()
   const inputsByRole = new Map<string, GenerationInputItem[]>()
 
   for (let i = 0; i < rawInputs.length; i++) {
@@ -448,12 +293,35 @@ export function validateGenerationRequest(
       continue
     }
 
-    if (!item.uploadId || typeof item.uploadId !== 'string' || item.uploadId.trim() === '') {
+    // An input carries exactly one reference: an upload (bytes the browser streamed
+    // in, owned by this job) or a gallery asset (referenced, never copied). Both on
+    // one item has no coherent lifecycle, and neither leaves the slot unfillable.
+    const uploadId = typeof item.uploadId === 'string' ? item.uploadId.trim() : ''
+    const assetId = typeof item.assetId === 'string' ? item.assetId.trim() : ''
+    if (uploadId && assetId) {
+      errors.push({
+        code: 'INVALID_INPUT_REF',
+        message: `Input at index ${i} cannot carry both uploadId and assetId`,
+        field: `inputs[${i}].assetId`,
+      })
+    } else if (!uploadId && !assetId) {
       errors.push({
         code: 'INVALID_INPUT_UPLOAD_ID',
-        message: `Input at index ${i} must have a non-empty uploadId`,
+        message: `Input at index ${i} must have exactly one of uploadId or assetId`,
         field: `inputs[${i}].uploadId`,
       })
+    } else {
+      // `u:`/`a:` prefixes keep the two id spaces apart; the set is per request, so
+      // reusing one asset across different jobs stays allowed.
+      const refKey = uploadId ? `u:${uploadId}` : `a:${assetId}`
+      if (seenRefs.has(refKey)) {
+        errors.push({
+          code: 'DUPLICATE_INPUT_REF',
+          message: `Input at index ${i} repeats an image already present in inputs`,
+          field: `inputs[${i}]`,
+        })
+      }
+      seenRefs.add(refKey)
     }
 
     if (!item.role || typeof item.role !== 'string') {
@@ -650,6 +518,10 @@ export function serializeCanonicalGenerationRequest(
       position: i.position,
       role: i.role,
       uploadId: i.uploadId,
+      // `serializeCanonicalJson` skips undefined keys, so upload-only requests keep
+      // hashing to exactly the pre-assetId bytes. Omitting this field instead makes
+      // two different gallery picks share one digest — and one idempotency key.
+      assetId: i.assetId,
     })),
     modelId: request.modelId,
     parameters: request.parameters || {},

@@ -28,6 +28,7 @@ import {
   type SafeHttpClient,
   type SafeHttpResponse,
 } from '../../packages/providers/src/index.ts'
+import { validateModelCapabilities } from '../../packages/contracts/src/index.ts'
 
 // ---------------------------------------------------------------------------
 // Mock HTTP helpers (injected, deterministic, no network)
@@ -183,6 +184,139 @@ test('video manifests declare video modality, 1.0.0, and Ark/Vertex host allowli
   assert.ok(veoVideoManifest.credentialSchemas.includes('json-v1'))
   const veoModels = (veoVideoManifest.models ?? []).map(m => m.id)
   assert.ok(veoModels.includes(VEO_STANDARD_MODEL))
+})
+
+// ---------------------------------------------------------------------------
+// 2b. Per-model capability contracts: declared, well-formed, and actually read
+// ---------------------------------------------------------------------------
+
+test('every active media model declares its own well-formed parameter contract', () => {
+  // The manifest is the single source: if a model has no contract the console
+  // offers it no controls and the API refuses the request, so the declaration
+  // being well-formed is a shipping requirement, not a nicety.
+  for (const manifest of globalProviderRegistry.listManifests()) {
+    const isActive = manifest.id === 'openai-image' || manifest.id === 'seedream-image'
+      ? manifest.version === '1.1.0'
+      : true
+    if (!isActive) continue
+    for (const model of manifest.models ?? []) {
+      assert.ok(model.capabilities, `${manifest.id}@${manifest.version}:${model.id} declares no capabilities`)
+      const result = validateModelCapabilities({
+        ...model.capabilities,
+        ...(model.defaults ? { defaults: model.defaults } : {}),
+        declaredBy: 'plugin-manifest',
+      })
+      assert.ok(
+        result.ok,
+        `${model.id}: ${result.findings.map(f => `${f.rule}: ${f.message}`).join('; ')}`,
+      )
+      assert.ok(
+        (model.capabilities.parameters?.length ?? 0) > 0,
+        `${model.id} declares no parameters`,
+      )
+      // Image models must keep flags and modes in step; video models declare no
+      // image-editing flags at all, because those describe a different modality.
+      const flags = model.capabilities.flags
+      if (manifest.modalities.includes('image') && flags) {
+        assert.equal(
+          flags.imageToImage === true,
+          model.capabilities.modes.includes('image_to_image'),
+          `${model.id}: flags.imageToImage disagrees with modes`,
+        )
+      } else if (flags) {
+        assert.equal(flags.inpainting, undefined, `${model.id}: video plugins must not claim inpainting`)
+        assert.equal(flags.mask, undefined, `${model.id}: video plugins must not claim a mask capability`)
+      }
+    }
+  }
+})
+
+test('an image roster never carries a mainline chat model id', () => {
+  // The direct image endpoint and the Responses API's image tool are different
+  // kernels. Chat models reach this repo through admin presets rather than a
+  // registered language plugin, so the check has to be on the ids themselves:
+  // anything shaped like `gpt-5.5` / `gpt-6` in an image roster would advertise
+  // a model that cannot actually serve /v1/images/generations.
+  const CHAT_MODEL_SHAPE = /^gpt-(?!image-)[0-9]/
+  for (const manifest of globalProviderRegistry.listManifests()) {
+    if (!manifest.modalities.includes('image')) continue
+    for (const model of manifest.models ?? []) {
+      assert.equal(
+        CHAT_MODEL_SHAPE.test(model.id),
+        false,
+        `'${model.id}' looks like a chat model but is offered by image plugin '${manifest.id}@${manifest.version}'`,
+      )
+    }
+  }
+
+  // And the plugin must refuse one rather than pass it through to the vendor.
+  // The thrown error's `message` is the bare code, so the roster text is read
+  // from the diagnostic the worker persists.
+  assert.throws(
+    () => openAiImagePlugin.validateRequest({
+      modality: 'image', vendorModelId: 'gpt-5.5', prompt: 'a chat model must not reach the image endpoint',
+    }),
+    (error: unknown) => {
+      const diagnostic = (error as { diagnostic?: { code?: string; detail?: string } }).diagnostic
+      assert.equal(diagnostic?.code, 'INVALID_REQUEST')
+      assert.match(diagnostic?.detail ?? '', /Unsupported model 'gpt-5\.5'/)
+      return true
+    },
+  )
+})
+
+test('the image adapter forwards declared parameters and suppresses undeclared ones', async () => {
+  // Proves the metadata is *consumed*, not merely exposed: a parameter a model
+  // does not declare must never reach the vendor, and one whose dependency is
+  // unsatisfied must be dropped at the adapter too.
+  const generationBody = async (request: MediaRequest) => {
+    const { context, calls } = stubContext(openAiImageManifest.id, openAiImageManifest.version, () =>
+      jsonResponse(200, { data: [{ b64_json: Buffer.from('image-bytes').toString('base64') }] }),
+    )
+    await openAiImagePlugin.submit(request, OPENAI_IMAGE_CONFIG, context)
+    return JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>
+  }
+
+  const jpeg = await generationBody({
+    ...OPENAI_IMAGE_REQUEST,
+    parameters: { output_format: 'jpeg', output_compression: 80, background: 'opaque' },
+  })
+  assert.equal(jpeg.output_format, 'jpeg')
+  assert.equal(jpeg.output_compression, 80)
+  assert.equal(jpeg.background, 'opaque')
+
+  const png = await generationBody({
+    ...OPENAI_IMAGE_REQUEST,
+    parameters: { output_format: 'png', output_compression: 80 },
+  })
+  assert.equal(png.output_format, 'png')
+  assert.equal('output_compression' in png, false, 'compression must not be sent for a lossless format')
+
+  // gpt-image-2 documents no input_fidelity, so a client asserting it must not
+  // get it forwarded on its behalf.
+  const noFidelity = await generationBody({
+    ...OPENAI_IMAGE_REQUEST,
+    parameters: { input_fidelity: 'low' },
+  })
+  assert.equal('input_fidelity' in noFidelity, false)
+})
+
+test('an illegal parameter value is refused at the plugin, naming the parameter', async () => {
+  for (const [label, request] of [
+    ['size outside the band', { ...OPENAI_IMAGE_REQUEST, size: '9999x9999' }],
+    ['size off the pixel grid', { ...OPENAI_IMAGE_REQUEST, size: '1537x864' }],
+    ['quality the model lacks', { ...OPENAI_IMAGE_REQUEST, quality: 'max' }],
+  ] as Array<[string, MediaRequest]>) {
+    const { context, calls } = stubContext(openAiImageManifest.id, openAiImageManifest.version, () =>
+      jsonResponse(200, { data: [] }),
+    )
+    await assert.rejects(
+      () => openAiImagePlugin.submit(request, OPENAI_IMAGE_CONFIG, context),
+      (error: unknown) => (error as { diagnostic?: { code?: string } }).diagnostic?.code === 'INVALID_REQUEST',
+      label,
+    )
+    assert.equal(calls.length, 0, `${label}: must be rejected before any network call`)
+  }
 })
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,14 @@
 import type {
+  BooleanParameterDescriptor,
+  EnumParameterDescriptor,
+  InputSlotDescriptor,
+  IntegerParameterDescriptor,
+  JsonValue,
+  ModelCapabilities,
+  ParameterDescriptor,
+} from '@musecanvas/contracts'
+import { validateParameterValue } from '@musecanvas/contracts'
+import type {
   BoundedOutput,
   ExecutionContext,
   MediaProviderManifest,
@@ -31,7 +41,151 @@ const MAX_VIDEO_URL_CHARS = 4_096
 export const SEEDANCE_IMAGE_ROLES = ['first_frame', 'last_frame', 'reference_image', 'mask'] as const
 export type SeedanceImageRole = (typeof SEEDANCE_IMAGE_ROLES)[number]
 
+const SEEDANCE_MAX_SEED = 2_147_483_647
+const SEEDANCE_MAX_FRAMES = 10_000
+
+// ---------------------------------------------------------------------------
+// Capability declaration
+//
+// One contract per forwarded video control, referenced by every model below and
+// enforced by `extractVideoControls` — the descriptor list *is* the whitelist
+// that used to be a chain of per-key `if`s with hand-written ranges.
+//
+// `fps` is deliberately absent: the plugin forwards no frame-rate control to Ark
+// at all, so advertising one would be the invented-capability bug this contract
+// exists to remove.
+// ---------------------------------------------------------------------------
+
+const seedanceDurationParameter: IntegerParameterDescriptor = {
+  type: 'integer',
+  name: 'durationSeconds',
+  label: '时长（秒）',
+  min: 1,
+  max: 30,
+  defaultValue: 5,
+  ui: { control: 'slider', unit: '秒', order: 1 },
+}
+
+const seedanceAspectRatioParameter: EnumParameterDescriptor = {
+  type: 'enum',
+  name: 'aspectRatio',
+  label: '宽高比',
+  options: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+  defaultValue: '16:9',
+  ui: { control: 'select', order: 2 },
+}
+
+const seedanceResolutionParameter: EnumParameterDescriptor = {
+  type: 'enum',
+  name: 'resolution',
+  label: '分辨率',
+  options: ['720p', '1080p'],
+  defaultValue: '720p',
+  ui: { control: 'segmented', order: 3 },
+}
+
+const seedanceAudioParameter: BooleanParameterDescriptor = {
+  type: 'boolean',
+  name: 'audio',
+  label: '生成音频',
+  defaultValue: true,
+  ui: { control: 'switch', order: 4 },
+}
+
+const seedanceCountParameter: IntegerParameterDescriptor = {
+  type: 'integer',
+  name: 'count',
+  label: '生成数量',
+  min: 1,
+  max: 4,
+  defaultValue: 1,
+  ui: { control: 'number', order: 5 },
+}
+
+const seedanceSeedParameter: IntegerParameterDescriptor = {
+  type: 'integer',
+  name: 'seed',
+  label: '随机种子',
+  min: 0,
+  max: SEEDANCE_MAX_SEED,
+  ui: { control: 'number', advanced: true, order: 6 },
+}
+
+const seedanceWatermarkParameter: BooleanParameterDescriptor = {
+  type: 'boolean',
+  name: 'watermark',
+  label: '水印',
+  defaultValue: false,
+  ui: { control: 'switch', advanced: true, order: 7 },
+}
+
+const seedanceCameraFixedParameter: BooleanParameterDescriptor = {
+  type: 'boolean',
+  name: 'camera_fixed',
+  label: '镜头固定',
+  ui: { control: 'switch', advanced: true, order: 8 },
+}
+
+const seedanceFramesParameter: IntegerParameterDescriptor = {
+  type: 'integer',
+  name: 'frames',
+  label: '总帧数',
+  min: 1,
+  max: SEEDANCE_MAX_FRAMES,
+  ui: { control: 'number', advanced: true, order: 9 },
+}
+
+/** Every control the adapter reads, in the order it has always validated them. */
+const seedanceVideoParameters: ParameterDescriptor[] = [
+  seedanceDurationParameter,
+  seedanceAspectRatioParameter,
+  seedanceResolutionParameter,
+  seedanceAudioParameter,
+  seedanceCountParameter,
+  seedanceSeedParameter,
+  seedanceWatermarkParameter,
+  seedanceCameraFixedParameter,
+  seedanceFramesParameter,
+]
+
+/**
+ * Roles `resolveImageRoles` really forwards. `count` lives in `parameters`, not
+ * here: Ark takes one clip per task, so the plugin validates the requested count
+ * and never puts it on the wire.
+ */
+const seedanceInputSlots: InputSlotDescriptor[] = [
+  { role: 'first_frame', required: false, minCount: 0, maxCount: 1, allowedMediaKinds: ['image'], label: '首帧' },
+  { role: 'last_frame', required: false, minCount: 0, maxCount: 1, allowedMediaKinds: ['image'], label: '尾帧' },
+  { role: 'reference_image', required: false, minCount: 0, maxCount: 4, allowedMediaKinds: ['image'], label: '参考图' },
+  // `mask` has been accepted verbatim by `resolveImageRoles` (and listed in
+  // `SEEDANCE_IMAGE_ROLES`) all along; declaring the slot is what makes the role
+  // discoverable to the console instead of existing only in this file.
+  { role: 'mask', required: false, minCount: 0, maxCount: 1, allowedMediaKinds: ['image'], label: '蒙版' },
+]
+
+const seedanceCapabilities: ModelCapabilities = {
+  modes: ['text_to_video', 'image_to_video'],
+  parameters: seedanceVideoParameters,
+  inputSlots: seedanceInputSlots,
+  maxCount: 4,
+  supportedMediaKinds: ['video'],
+  // No `flags`: they describe image models (mask / inpainting / transparent
+  // background), and `validateFlagModeAgreement` does not run for video modes,
+  // so a wrong claim here would go uncaught. A `mask` *input* is not the same
+  // statement as an inpainting-capable image model.
+  declaredBy: 'plugin-manifest',
+}
+
+const seedanceDefaults: Record<string, JsonValue> = {
+  durationSeconds: 5,
+  aspectRatio: '16:9',
+  resolution: '720p',
+  audio: true,
+  count: 1,
+}
+
 export const seedanceVideoManifest: MediaProviderManifest = {
+  kind: 'media',
   id: SEEDANCE_VIDEO_PLUGIN_ID,
   version: SEEDANCE_VIDEO_PLUGIN_VERSION,
   displayName: 'Seedance 2.x Video Generation (Volcengine Ark / BytePlus)',
@@ -40,8 +194,18 @@ export const seedanceVideoManifest: MediaProviderManifest = {
   allowedHosts: ['ark.cn-beijing.volces.com', 'ark.ap-southeast.bytepluses.com'],
   credentialSchemas: ['legacy-api-key-v1', 'json-v1'],
   models: [
-    { id: 'doubao-seedance-2-0-fast-260128', modalities: ['video'] },
-    { id: 'dreamina-seedance-2-0-fast-260128', modalities: ['video'] },
+    {
+      id: 'doubao-seedance-2-0-fast-260128',
+      modalities: ['video'],
+      capabilities: seedanceCapabilities,
+      defaults: seedanceDefaults,
+    },
+    {
+      id: 'dreamina-seedance-2-0-fast-260128',
+      modalities: ['video'],
+      capabilities: seedanceCapabilities,
+      defaults: seedanceDefaults,
+    },
   ],
 }
 
@@ -78,6 +242,120 @@ function readExtra(config: ProviderConfig, key: string): unknown {
   const extra = config.credential?.extra
   if (isRecord(extra) && extra[key] !== undefined) return extra[key]
   return undefined
+}
+
+function invalidControlRequest(detail: string): NormalizedProviderError {
+  return NormalizedProviderError.create(SEEDANCE_VIDEO_PLUGIN_ID, SEEDANCE_VIDEO_PLUGIN_VERSION, 'INVALID_REQUEST', detail)
+}
+
+/**
+ * How a declared control reaches the wire.
+ *
+ * `sources` is the whole of what the adapter reads out of `request.extra`, which
+ * is what keeps the whitelist a whitelist: a key nobody listed is never looked
+ * at, so an undocumented provider combination cannot be sent implicitly.
+ */
+type SeedanceVideoControl = {
+  /** Parameter name as declared in the model's `capabilities`. */
+  parameter: string
+  /** Key this control is written to in the Ark request body. */
+  wire: string
+  /** `extra` keys that may carry it, provider-native spelling first. */
+  sources: string[]
+  /** Fallback read off the normalized request itself. */
+  fromRequest?: (request: MediaRequest) => unknown
+  /**
+   * Provider grammar, checked instead of the descriptor's `options`.
+   *
+   * The declared enums are what the console offers, not the whole set Ark takes:
+   * `resolution` has always accepted any `NNNp` or `WxH` token and `ratio` any
+   * `N:N`. Narrowing those to the enum would reject a value that worked before,
+   * so the grammar stays here and the enum stays a presentation contract.
+   */
+  grammar?: { pattern: RegExp; detail: string }
+  /**
+   * `true` when only the descriptor's declared min/max are enforced. Duration is
+   * a `number` on the wire today — the integer descriptor spells out the ladder
+   * the console renders — and a fractional value must keep flowing through.
+   */
+  rangeOnly?: boolean
+}
+
+/** The forwarded controls, in the order they have always been validated. */
+const SEEDANCE_VIDEO_CONTROLS: readonly SeedanceVideoControl[] = [
+  { parameter: 'audio', wire: 'generate_audio', sources: ['generate_audio', 'audio'] },
+  { parameter: 'camera_fixed', wire: 'camera_fixed', sources: ['camera_fixed'] },
+  { parameter: 'watermark', wire: 'watermark', sources: ['watermark'], fromRequest: request => request.watermark },
+  { parameter: 'seed', wire: 'seed', sources: ['seed'] },
+  {
+    parameter: 'resolution',
+    wire: 'resolution',
+    sources: ['resolution'],
+    grammar: {
+      pattern: /^([0-9]{3,4}p|\d+x\d+)$/i,
+      detail: "Video control 'resolution' must look like '720p', '1080p', or '1280x720'",
+    },
+  },
+  {
+    parameter: 'aspectRatio',
+    wire: 'ratio',
+    sources: ['ratio', 'aspectRatio'],
+    grammar: { pattern: /^\d{1,2}:\d{1,2}$/, detail: "Video control 'ratio' must look like '16:9'" },
+  },
+  {
+    parameter: 'durationSeconds',
+    wire: 'duration',
+    sources: ['duration'],
+    fromRequest: request => request.durationSeconds,
+    rangeOnly: true,
+  },
+  { parameter: 'frames', wire: 'frames', sources: ['frames'] },
+]
+
+function seedanceControlValue(
+  rule: SeedanceVideoControl,
+  request: MediaRequest,
+  extra: Record<string, unknown>,
+): unknown {
+  for (const key of rule.sources) {
+    if (extra[key] !== undefined) return extra[key]
+  }
+  return rule.fromRequest ? rule.fromRequest(request) : undefined
+}
+
+function seedanceCapabilitiesFor(modelId: string): ModelCapabilities {
+  // An Ark model string an admin pinned that this manifest does not list is not a
+  // reason to refuse the job: the plugin has always submitted whatever id it was
+  // handed. It gets the same shared contract the declared models use, which
+  // describes this provider family rather than guessing at an unknown one.
+  return seedanceVideoManifest.models?.find(model => model.id === modelId)?.capabilities ?? seedanceCapabilities
+}
+
+function seedanceDescriptorFor(modelId: string, parameter: string): ParameterDescriptor {
+  const descriptor = seedanceCapabilitiesFor(modelId).parameters.find(candidate => candidate.name === parameter)
+  if (!descriptor) {
+    throw invalidControlRequest(`Seedance declares no parameter '${parameter}'`)
+  }
+  return descriptor
+}
+
+function seedanceIntegerRange(
+  descriptor: ParameterDescriptor,
+  parameter: string,
+): { min: number; max: number } {
+  if (descriptor.type !== 'integer' || descriptor.min === undefined || descriptor.max === undefined) {
+    throw invalidControlRequest(`Parameter '${parameter}' declares no integer range`)
+  }
+  return { min: descriptor.min, max: descriptor.max }
+}
+
+/** Today's wording for a refused control, rebuilt from what the descriptor declares. */
+function seedanceControlShape(descriptor: ParameterDescriptor): string {
+  if (descriptor.type === 'boolean') return 'a boolean'
+  if (descriptor.type === 'integer') {
+    return `an integer between ${descriptor.min ?? 0} and ${descriptor.max ?? Number.MAX_SAFE_INTEGER}`
+  }
+  return `a value of type ${descriptor.type}`
 }
 
 export class SeedanceVideoPlugin implements MediaProviderPlugin {
@@ -178,27 +456,35 @@ export class SeedanceVideoPlugin implements MediaProviderPlugin {
         'vendorModelId is required',
       )
     }
-    if (request.count !== undefined && (!Number.isInteger(request.count) || request.count < 1 || request.count > 4)) {
-      throw NormalizedProviderError.create(
-        this.manifest.id,
-        this.manifest.version,
-        'INVALID_REQUEST',
-        'count must be an integer between 1 and 4',
-      )
+    if (request.count !== undefined) {
+      const range = seedanceIntegerRange(seedanceDescriptorFor(request.vendorModelId, 'count'), 'count')
+      if (!Number.isInteger(request.count) || request.count < range.min || request.count > range.max) {
+        throw NormalizedProviderError.create(
+          this.manifest.id,
+          this.manifest.version,
+          'INVALID_REQUEST',
+          `count must be an integer between ${range.min} and ${range.max}`,
+        )
+      }
     }
-    if (
-      request.durationSeconds !== undefined &&
-      (typeof request.durationSeconds !== 'number' ||
+    if (request.durationSeconds !== undefined) {
+      const declared = seedanceDescriptorFor(request.vendorModelId, 'durationSeconds')
+      // The declared band, not a second copy of it: the generic 1-60 fallback that
+      // used to live upstream contradicted this plugin, so 1-30 is stated once.
+      const range = seedanceIntegerRange(declared, 'durationSeconds')
+      if (
+        typeof request.durationSeconds !== 'number' ||
         !Number.isFinite(request.durationSeconds) ||
-        request.durationSeconds < 1 ||
-        request.durationSeconds > 30)
-    ) {
-      throw NormalizedProviderError.create(
-        this.manifest.id,
-        this.manifest.version,
-        'INVALID_REQUEST',
-        'durationSeconds must be a number between 1 and 30',
-      )
+        request.durationSeconds < range.min ||
+        request.durationSeconds > range.max
+      ) {
+        throw NormalizedProviderError.create(
+          this.manifest.id,
+          this.manifest.version,
+          'INVALID_REQUEST',
+          `durationSeconds must be a number between ${range.min} and ${range.max}`,
+        )
+      }
     }
     const images = request.inputImages ?? []
     if (images.length > MAX_INPUT_IMAGES) {
@@ -624,102 +910,41 @@ export class SeedanceVideoPlugin implements MediaProviderPlugin {
     const controls: Record<string, unknown> = {}
     const extra = request.extra ?? {}
 
-    const takeBoolean = (key: string, fallback?: boolean) => {
-      const value = extra[key] ?? fallback
-      if (value === undefined) return
-      if (typeof value !== 'boolean') {
-        throw NormalizedProviderError.create(
-          this.manifest.id,
-          this.manifest.version,
-          'INVALID_REQUEST',
-          `Video control '${key}' must be a boolean`,
-        )
-      }
-      controls[key] = value
-    }
-
-    const generateAudioRaw = extra['generate_audio'] ?? extra['audio']
-    if (generateAudioRaw !== undefined) {
-      if (typeof generateAudioRaw !== 'boolean') {
-        throw NormalizedProviderError.create(
-          this.manifest.id,
-          this.manifest.version,
-          'INVALID_REQUEST',
-          "Video control 'generate_audio' must be a boolean",
-        )
-      }
-      controls['generate_audio'] = generateAudioRaw
-    }
-    takeBoolean('camera_fixed')
-    takeBoolean('watermark', request.watermark)
-
-    if (extra['seed'] !== undefined) {
-      const seed = extra['seed']
-      if (!Number.isInteger(seed) || (seed as number) < 0 || (seed as number) > 2_147_483_647) {
-        throw NormalizedProviderError.create(
-          this.manifest.id,
-          this.manifest.version,
-          'INVALID_REQUEST',
-          "Video control 'seed' must be an integer between 0 and 2147483647",
-        )
-      }
-      controls['seed'] = seed
-    }
-
-    if (extra['resolution'] !== undefined) {
-      const resolution = extra['resolution']
-      if (typeof resolution !== 'string' || (!/^[0-9]{3,4}p$/i.test(resolution) && !/^\d+x\d+$/.test(resolution))) {
-        throw NormalizedProviderError.create(
-          this.manifest.id,
-          this.manifest.version,
-          'INVALID_REQUEST',
-          "Video control 'resolution' must look like '720p', '1080p', or '1280x720'",
-        )
-      }
-      controls['resolution'] = resolution
-    }
-
-    const ratioRaw = extra['ratio'] ?? extra['aspectRatio']
-    if (ratioRaw !== undefined) {
-      const ratio = ratioRaw
-      if (typeof ratio !== 'string' || !/^\d{1,2}:\d{1,2}$/.test(ratio)) {
-        throw NormalizedProviderError.create(
-          this.manifest.id,
-          this.manifest.version,
-          'INVALID_REQUEST',
-          "Video control 'ratio' must look like '16:9'",
-        )
-      }
-      controls['ratio'] = ratio
-    }
-
-    const duration = extra['duration'] ?? request.durationSeconds
-    if (duration !== undefined) {
-      if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 1 || duration > 30) {
-        throw NormalizedProviderError.create(
-          this.manifest.id,
-          this.manifest.version,
-          'INVALID_REQUEST',
-          "Video control 'duration' must be a number between 1 and 30",
-        )
-      }
-      controls['duration'] = duration
-    }
-
-    if (extra['frames'] !== undefined) {
-      const frames = extra['frames']
-      if (!Number.isInteger(frames) || (frames as number) < 1 || (frames as number) > 10_000) {
-        throw NormalizedProviderError.create(
-          this.manifest.id,
-          this.manifest.version,
-          'INVALID_REQUEST',
-          "Video control 'frames' must be an integer between 1 and 10000",
-        )
-      }
-      controls['frames'] = frames
+    for (const rule of SEEDANCE_VIDEO_CONTROLS) {
+      const value = seedanceControlValue(rule, request, extra)
+      if (value === undefined) continue
+      this.assertDeclaredControl(request.vendorModelId, rule, value)
+      controls[rule.wire] = value
     }
 
     return controls
+  }
+
+  /**
+   * Refuse a control the model's own declaration does not accept, so `submit`
+   * can never put an unvalidated value on the wire. Every bound is read from the
+   * descriptor the console renders, which is what keeps the two in agreement.
+   */
+  private assertDeclaredControl(modelId: string, rule: SeedanceVideoControl, value: unknown): void {
+    if (rule.grammar) {
+      if (typeof value !== 'string' || !rule.grammar.pattern.test(value)) {
+        throw invalidControlRequest(rule.grammar.detail)
+      }
+      return
+    }
+
+    const descriptor = seedanceDescriptorFor(modelId, rule.parameter)
+    if (rule.rangeOnly) {
+      const range = seedanceIntegerRange(descriptor, rule.parameter)
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < range.min || value > range.max) {
+        throw invalidControlRequest(`Video control '${rule.wire}' must be a number between ${range.min} and ${range.max}`)
+      }
+      return
+    }
+
+    if (validateParameterValue(descriptor, value as JsonValue).length > 0) {
+      throw invalidControlRequest(`Video control '${rule.wire}' must be ${seedanceControlShape(descriptor)}`)
+    }
   }
 
   private resolveApiKey(config: ProviderConfig): string {

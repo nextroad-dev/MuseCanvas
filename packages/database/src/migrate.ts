@@ -479,6 +479,13 @@ ALTER TABLE generation_job_inputs ADD COLUMN IF NOT EXISTS role text NOT NULL DE
 DO $$ BEGIN ALTER TABLE generation_job_inputs ADD CONSTRAINT generation_job_inputs_role_check CHECK(role IN ('prompt_image','reference_image','first_frame','last_frame','source_video')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE generation_job_inputs ALTER COLUMN input_image_id DROP NOT NULL;
 
+-- Widen the role list for 局部框选修改: 'mask' carries the alpha PNG that marks
+-- the region an edit may regenerate. ADD CONSTRAINT alone can never change an
+-- already-installed check, so drop first — same pattern as the position
+-- constraint relaxation below.
+ALTER TABLE generation_job_inputs DROP CONSTRAINT IF EXISTS generation_job_inputs_role_check;
+DO $$ BEGIN ALTER TABLE generation_job_inputs ADD CONSTRAINT generation_job_inputs_role_check CHECK(role IN ('prompt_image','reference_image','first_frame','last_frame','source_video','mask')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- Relax position constraint from < 4 to >= 0 for extensible multi-slot inputs (e.g. video / multi-frame)
 ALTER TABLE generation_job_inputs DROP CONSTRAINT IF EXISTS generation_job_inputs_position_check;
 DO $$ BEGIN ALTER TABLE generation_job_inputs ADD CONSTRAINT generation_job_inputs_position_check CHECK(position >= 0 AND position < 32); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -496,6 +503,17 @@ WHERE upload_id IS NULL AND input_image_id IS NOT NULL;
 
 -- Enforce uniqueness on generation_job_inputs(upload_id) where upload_id is present
 CREATE UNIQUE INDEX IF NOT EXISTS generation_job_inputs_upload_id_unique ON generation_job_inputs(upload_id) WHERE upload_id IS NOT NULL;
+
+-- An input can also *reference* an existing gallery image instead of an upload, so
+-- reusing one's own earlier output never copies bytes. No upload row is created for
+-- these, which is what keeps the upload TTL sweep and DELETE /generation-uploads
+-- from ever reaching a gallery object.
+ALTER TABLE generation_job_inputs ADD COLUMN IF NOT EXISTS asset_id uuid REFERENCES assets(id);
+-- One-sided exclusion, not XOR: rows written before the upload_id backfill above have
+-- both columns NULL, and ADD CONSTRAINT validates the whole table right now.
+DO $$ BEGIN ALTER TABLE generation_job_inputs ADD CONSTRAINT generation_job_inputs_upload_or_asset_check CHECK(NOT (upload_id IS NOT NULL AND asset_id IS NOT NULL)); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- Deliberately non-unique: the same gallery image may feed any number of later jobs.
+CREATE INDEX IF NOT EXISTS generation_job_inputs_asset_idx ON generation_job_inputs(asset_id) WHERE asset_id IS NOT NULL;
 
 -- 6. provider_runs table:
 -- operation_state includes: 'submitting','submission_unknown','waiting','importing','canceling','succeeded','failed','canceled'
@@ -754,6 +772,126 @@ WHERE r.model_id = m.id
       AND (m.base_url IS NULL OR m.base_url IN ('https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/')))
   );
 
+
+-- 10b. Plugin-declared media capabilities: new immutable revisions carrying the
+-- parameter contract the provider plugin itself authored, instead of the
+-- size/quality lists the host used to derive from flat model_configs columns.
+--
+-- Purely additive and idempotent. Prior revision rows are never updated and
+-- generation_jobs / generation_outputs / assets are not touched at all, so a job
+-- keeps rendering the parameters it was actually created with even where those
+-- values are no longer offered. Only new revisions are inserted and
+-- model_configs.latest_revision_id advances to them.
+--
+-- Re-running converges: a model is skipped once its newest revision already
+-- carries the same declared descriptor set, compared on descriptor content
+-- rather than on a digest string (which also moves when unrelated inputs move).
+--
+-- The descriptor JSON below is embedded because SQL cannot read a TypeScript
+-- manifest — the same unavoidable copy section 10 already makes for sizes. It is
+-- generated from the live plugin registry, and
+-- tests/integration/capabilities-backfill.test.ts asserts it still equals what the
+-- plugins publish, so a drifted copy fails CI instead of quietly serving a stale
+-- contract.
+WITH declared(plugin_id, plugin_version, vendor_model_id, capabilities, defaults) AS (
+  VALUES
+    ('openai-image', '1.1.0', 'gpt-image-2.5-sunburst',
+     '{"modes":["text_to_image","image_to_image"],"parameters":[{"type":"image-size","name":"size","label":"尺寸","description":"可选择预设尺寸，或按下方限制自定义宽高","presets":[{"value":"auto","label":"自动"},{"value":"1024x1024","width":1024,"height":1024,"label":"1:1 · 1024 × 1024"},{"value":"1536x1024","width":1536,"height":1024,"label":"3:2 · 1536 × 1024"},{"value":"1024x1536","width":1024,"height":1536,"label":"2:3 · 1024 × 1536"},{"value":"2048x2048","width":2048,"height":2048,"label":"1:1 · 2048 × 2048","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"},{"value":"2048x1152","width":2048,"height":1152,"label":"16:9 · 2048 × 1152"},{"value":"3840x2160","width":3840,"height":2160,"label":"16:9 · 3840 × 2160","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"},{"value":"2160x3840","width":2160,"height":3840,"label":"9:16 · 2160 × 3840","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"}],"allowCustom":true,"constraints":{"maxWidth":3840,"maxHeight":3840,"widthMultipleOf":16,"heightMultipleOf":16,"minPixels":655360,"maxPixels":8294400,"maxAspectRatio":3},"defaultValue":"auto","ui":{"control":"size-picker"}},{"type":"enum","name":"quality","label":"质量","options":[{"value":"auto","label":"自动","description":"由模型结合尺寸与提示词自行选择档位"},{"value":"low","label":"Low","description":"最快，细节较少"},{"value":"medium","label":"Medium"},{"value":"high","label":"High","description":"细节更完整，耗时更长"},{"value":"xhigh","label":"XHigh","description":"高于 High 的档位"},{"value":"max","label":"Max","description":"最高质量档位，延迟与消耗最大"}],"defaultValue":"auto"},{"type":"enum","name":"background","label":"背景","options":[{"value":"auto","label":"自动"},{"value":"opaque","label":"不透明"},{"value":"transparent","label":"透明","description":"输出带 alpha 通道，只能配合 png 或 webp"}],"defaultValue":"auto"},{"type":"enum","name":"output_format","label":"输出格式","options":[{"value":"png","label":"PNG","description":"支持 alpha 通道"},{"value":"jpeg","label":"JPEG"},{"value":"webp","label":"WebP","description":"支持 alpha 通道"}],"defaultValue":"png"},{"type":"integer","name":"output_compression","label":"输出压缩","description":"lossy 格式的压缩质量（0 最压缩，100 最保真）","min":0,"max":100,"defaultValue":100,"dependsOn":{"parameter":"output_format","values":["jpeg","webp"]},"ui":{"control":"slider","advanced":true}},{"type":"integer","name":"count","label":"数量","description":"一次请求生成的图片张数","min":1,"max":4,"defaultValue":1}],"inputSlots":[{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图","description":"作为编辑基础或风格参考的图片"},{"role":"mask","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"选区遮罩","description":"带 alpha 通道的 PNG，限定可重绘的区域"}],"maxCount":4,"supportedMediaKinds":["image"],"flags":{"textToImage":true,"imageToImage":true,"imageEdit":true,"mask":true,"inpainting":true,"transparentBackground":true},"crossFieldConstraints":[{"type":"forbidden","parameter":"background","whenValueEquals":"transparent","targetParameter":"output_format","targetValues":["jpeg"],"message":"background=transparent 需要 alpha 通道，output_format 只能是 png 或 webp"}],"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"size":"auto","quality":"auto","background":"auto","output_format":"png","count":1}'::jsonb),
+    ('openai-image', '1.1.0', 'gpt-image-2.5-flare',
+     '{"modes":["text_to_image","image_to_image"],"parameters":[{"type":"image-size","name":"size","label":"尺寸","description":"可选择预设尺寸，或按下方限制自定义宽高","presets":[{"value":"auto","label":"自动"},{"value":"1024x1024","width":1024,"height":1024,"label":"1:1 · 1024 × 1024"},{"value":"1536x1024","width":1536,"height":1024,"label":"3:2 · 1536 × 1024"},{"value":"1024x1536","width":1024,"height":1536,"label":"2:3 · 1024 × 1536"},{"value":"2048x2048","width":2048,"height":2048,"label":"1:1 · 2048 × 2048","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"},{"value":"2048x1152","width":2048,"height":1152,"label":"16:9 · 2048 × 1152"},{"value":"3840x2160","width":3840,"height":2160,"label":"16:9 · 3840 × 2160","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"},{"value":"2160x3840","width":2160,"height":3840,"label":"9:16 · 2160 × 3840","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"}],"allowCustom":true,"constraints":{"maxWidth":3840,"maxHeight":3840,"widthMultipleOf":16,"heightMultipleOf":16,"minPixels":655360,"maxPixels":8294400,"maxAspectRatio":3},"defaultValue":"auto","ui":{"control":"size-picker"}},{"type":"enum","name":"quality","label":"质量","options":[{"value":"auto","label":"自动","description":"由模型结合尺寸与提示词自行选择档位"},{"value":"low","label":"Low","description":"最快，细节较少"},{"value":"medium","label":"Medium"},{"value":"high","label":"High","description":"细节更完整，耗时更长"},{"value":"xhigh","label":"XHigh","description":"高于 High 的档位"},{"value":"max","label":"Max","description":"最高质量档位，延迟与消耗最大"}],"defaultValue":"auto"},{"type":"enum","name":"background","label":"背景","options":[{"value":"auto","label":"自动"},{"value":"opaque","label":"不透明"},{"value":"transparent","label":"透明","description":"输出带 alpha 通道，只能配合 png 或 webp"}],"defaultValue":"auto"},{"type":"enum","name":"output_format","label":"输出格式","options":[{"value":"png","label":"PNG","description":"支持 alpha 通道"},{"value":"jpeg","label":"JPEG"},{"value":"webp","label":"WebP","description":"支持 alpha 通道"}],"defaultValue":"png"},{"type":"integer","name":"output_compression","label":"输出压缩","description":"lossy 格式的压缩质量（0 最压缩，100 最保真）","min":0,"max":100,"defaultValue":100,"dependsOn":{"parameter":"output_format","values":["jpeg","webp"]},"ui":{"control":"slider","advanced":true}},{"type":"integer","name":"count","label":"数量","description":"一次请求生成的图片张数","min":1,"max":4,"defaultValue":1}],"inputSlots":[{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图","description":"作为编辑基础或风格参考的图片"},{"role":"mask","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"选区遮罩","description":"带 alpha 通道的 PNG，限定可重绘的区域"}],"maxCount":4,"supportedMediaKinds":["image"],"flags":{"textToImage":true,"imageToImage":true,"imageEdit":true,"mask":true,"inpainting":true,"transparentBackground":true},"crossFieldConstraints":[{"type":"forbidden","parameter":"background","whenValueEquals":"transparent","targetParameter":"output_format","targetValues":["jpeg"],"message":"background=transparent 需要 alpha 通道，output_format 只能是 png 或 webp"}],"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"size":"auto","quality":"auto","background":"auto","output_format":"png","count":1}'::jsonb),
+    ('openai-image', '1.1.0', 'gpt-image-2',
+     '{"modes":["text_to_image","image_to_image"],"parameters":[{"type":"image-size","name":"size","label":"尺寸","description":"可选择预设尺寸，或按下方限制自定义宽高","presets":[{"value":"auto","label":"自动"},{"value":"1024x1024","width":1024,"height":1024,"label":"1:1 · 1024 × 1024"},{"value":"1280x720","width":1280,"height":720,"label":"16:9 · 1280 × 720"},{"value":"720x1280","width":720,"height":1280,"label":"9:16 · 720 × 1280"},{"value":"1536x1024","width":1536,"height":1024,"label":"3:2 · 1536 × 1024"},{"value":"1024x1536","width":1024,"height":1536,"label":"2:3 · 1024 × 1536"},{"value":"2048x2048","width":2048,"height":2048,"label":"1:1 · 2048 × 2048","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"},{"value":"2048x1152","width":2048,"height":1152,"label":"16:9 · 2048 × 1152"},{"value":"3840x2160","width":3840,"height":2160,"label":"16:9 · 3840 × 2160","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"},{"value":"2160x3840","width":2160,"height":3840,"label":"9:16 · 2160 × 3840","experimental":true,"description":"高分辨率输出可能具有更高延迟，且部分超高分辨率能力仍属于实验性支持。"}],"allowCustom":true,"constraints":{"maxWidth":3840,"maxHeight":3840,"widthMultipleOf":16,"heightMultipleOf":16,"minPixels":655360,"maxPixels":8294400,"maxAspectRatio":3},"defaultValue":"auto","ui":{"control":"size-picker"}},{"type":"enum","name":"quality","label":"质量","options":[{"value":"auto","label":"自动","description":"由模型结合尺寸与提示词自行选择档位"},{"value":"low","label":"Low","description":"最快，细节较少"},{"value":"medium","label":"Medium"},{"value":"high","label":"High","description":"细节更完整，耗时更长"}],"defaultValue":"auto"},{"type":"enum","name":"background","label":"背景","options":[{"value":"auto","label":"自动"},{"value":"opaque","label":"不透明"},{"value":"transparent","label":"透明","description":"输出带 alpha 通道，只能配合 png 或 webp"}],"defaultValue":"auto"},{"type":"enum","name":"output_format","label":"输出格式","options":[{"value":"png","label":"PNG","description":"支持 alpha 通道"},{"value":"jpeg","label":"JPEG"},{"value":"webp","label":"WebP","description":"支持 alpha 通道"}],"defaultValue":"png"},{"type":"integer","name":"output_compression","label":"输出压缩","description":"lossy 格式的压缩质量（0 最压缩，100 最保真）","min":0,"max":100,"defaultValue":100,"dependsOn":{"parameter":"output_format","values":["jpeg","webp"]},"ui":{"control":"slider","advanced":true}},{"type":"integer","name":"count","label":"数量","description":"一次请求生成的图片张数","min":1,"max":4,"defaultValue":1}],"inputSlots":[{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图","description":"作为编辑基础或风格参考的图片"},{"role":"mask","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"选区遮罩","description":"带 alpha 通道的 PNG，限定可重绘的区域"}],"maxCount":4,"supportedMediaKinds":["image"],"flags":{"textToImage":true,"imageToImage":true,"imageEdit":true,"mask":true,"inpainting":true,"transparentBackground":true},"crossFieldConstraints":[{"type":"forbidden","parameter":"background","whenValueEquals":"transparent","targetParameter":"output_format","targetValues":["jpeg"],"message":"background=transparent 需要 alpha 通道，output_format 只能是 png 或 webp"}],"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"size":"auto","quality":"auto","background":"auto","output_format":"png","count":1}'::jsonb),
+    ('openai-image', '1.1.0', 'gpt-image-1.5',
+     '{"modes":["text_to_image","image_to_image"],"parameters":[{"type":"image-size","name":"size","label":"尺寸","description":"该模型仅支持以下固定尺寸","presets":[{"value":"auto","label":"自动"},{"value":"1024x1024","width":1024,"height":1024,"label":"1:1 · 1024 × 1024"},{"value":"1024x1536","width":1024,"height":1536,"label":"2:3 · 1024 × 1536"},{"value":"1536x1024","width":1536,"height":1024,"label":"3:2 · 1536 × 1024"}],"defaultValue":"auto","ui":{"control":"size-picker"}},{"type":"enum","name":"quality","label":"质量","options":[{"value":"auto","label":"自动","description":"由模型结合尺寸与提示词自行选择档位"},{"value":"low","label":"Low","description":"最快，细节较少"},{"value":"medium","label":"Medium"},{"value":"high","label":"High","description":"细节更完整，耗时更长"}],"defaultValue":"auto"},{"type":"enum","name":"input_fidelity","label":"输入保真度","description":"编辑时保留输入图片细节的程度","options":[{"value":"low","label":"较低"},{"value":"high","label":"较高"}],"defaultValue":"high"},{"type":"integer","name":"count","label":"数量","description":"一次请求生成的图片张数","min":1,"max":4,"defaultValue":1}],"inputSlots":[{"role":"reference_image","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"参考图","description":"作为编辑基础或风格参考的图片"}],"maxCount":4,"supportedMediaKinds":["image"],"flags":{"textToImage":true,"imageToImage":true,"imageEdit":true},"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"size":"auto","quality":"auto","input_fidelity":"high","count":1}'::jsonb),
+    ('openai-image', '1.1.0', 'dall-e-3',
+     '{"modes":["text_to_image"],"parameters":[{"type":"image-size","name":"size","label":"尺寸","description":"该模型仅支持以下固定尺寸","presets":[{"value":"1024x1024","width":1024,"height":1024,"label":"1:1 · 1024 × 1024"},{"value":"1792x1024","width":1792,"height":1024,"label":"7:4 · 1792 × 1024"},{"value":"1024x1792","width":1024,"height":1792,"label":"4:7 · 1024 × 1792"}],"defaultValue":"1024x1024","ui":{"control":"size-picker"}},{"type":"enum","name":"quality","label":"质量","options":[{"value":"standard","label":"Standard"},{"value":"hd","label":"HD"}],"defaultValue":"standard"},{"type":"integer","name":"count","label":"数量","description":"一次请求生成的图片张数","min":1,"max":1,"defaultValue":1}],"inputSlots":[],"maxCount":1,"supportedMediaKinds":["image"],"flags":{"textToImage":true,"imageToImage":false,"imageEdit":false},"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"size":"1024x1024","quality":"standard","count":1}'::jsonb),
+    ('seedream-image', '1.1.0', 'doubao-seedream-4-0-250828',
+     '{"modes":["text_to_image","image_to_image"],"parameters":[{"type":"image-size","name":"size","label":"尺寸","presets":[{"value":"1024x1024","width":1024,"height":1024,"label":"1:1 · 1024 × 1024"},{"value":"1152x864","width":1152,"height":864,"label":"4:3 · 1152 × 864"},{"value":"864x1152","width":864,"height":1152,"label":"3:4 · 864 × 1152"},{"value":"1280x720","width":1280,"height":720,"label":"16:9 · 1280 × 720"},{"value":"720x1280","width":720,"height":1280,"label":"9:16 · 720 × 1280"},{"value":"1248x832","width":1248,"height":832,"label":"3:2 · 1248 × 832"},{"value":"832x1248","width":832,"height":1248,"label":"2:3 · 832 × 1248"},{"value":"1512x648","width":1512,"height":648,"label":"7:3 · 1512 × 648"},{"value":"2048x2048","width":2048,"height":2048,"label":"1:1 · 2048 × 2048"},{"value":"2304x1728","width":2304,"height":1728,"label":"4:3 · 2304 × 1728"},{"value":"1728x2304","width":1728,"height":2304,"label":"3:4 · 1728 × 2304"},{"value":"2848x1600","width":2848,"height":1600,"label":"89:50 · 2848 × 1600"},{"value":"1600x2848","width":1600,"height":2848,"label":"50:89 · 1600 × 2848"},{"value":"2496x1664","width":2496,"height":1664,"label":"3:2 · 2496 × 1664"},{"value":"1664x2496","width":1664,"height":2496,"label":"2:3 · 1664 × 2496"},{"value":"3136x1344","width":3136,"height":1344,"label":"7:3 · 3136 × 1344"},{"value":"4096x4096","width":4096,"height":4096,"label":"1:1 · 4096 × 4096"},{"value":"4704x3520","width":4704,"height":3520,"label":"147:110 · 4704 × 3520"},{"value":"3520x4704","width":3520,"height":4704,"label":"110:147 · 3520 × 4704"},{"value":"5504x3040","width":5504,"height":3040,"label":"172:95 · 5504 × 3040"},{"value":"3040x5504","width":3040,"height":5504,"label":"95:172 · 3040 × 5504"},{"value":"4992x3328","width":4992,"height":3328,"label":"3:2 · 4992 × 3328"},{"value":"3328x4992","width":3328,"height":4992,"label":"2:3 · 3328 × 4992"},{"value":"6240x2656","width":6240,"height":2656,"label":"195:83 · 6240 × 2656"}],"allowCustom":true,"constraints":{"maxPixels":16777216,"maxAspectRatio":16,"minPixels":921600},"defaultValue":"2048x2048","ui":{"control":"size-picker"}},{"type":"integer","name":"count","label":"数量","min":1,"max":4,"defaultValue":1},{"type":"boolean","name":"watermark","label":"水印","defaultValue":false}],"inputSlots":[{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图"}],"maxCount":4,"supportedMediaKinds":["image"],"flags":{"textToImage":true,"imageToImage":true,"imageEdit":true},"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"size":"2048x2048","count":1,"watermark":false}'::jsonb),
+    ('seedream-image', '1.1.0', 'doubao-seedream-4-5-251128',
+     '{"modes":["text_to_image","image_to_image"],"parameters":[{"type":"image-size","name":"size","label":"尺寸","presets":[{"value":"2048x2048","width":2048,"height":2048,"label":"1:1 · 2048 × 2048"},{"value":"2304x1728","width":2304,"height":1728,"label":"4:3 · 2304 × 1728"},{"value":"1728x2304","width":1728,"height":2304,"label":"3:4 · 1728 × 2304"},{"value":"2848x1600","width":2848,"height":1600,"label":"89:50 · 2848 × 1600"},{"value":"1600x2848","width":1600,"height":2848,"label":"50:89 · 1600 × 2848"},{"value":"2496x1664","width":2496,"height":1664,"label":"3:2 · 2496 × 1664"},{"value":"1664x2496","width":1664,"height":2496,"label":"2:3 · 1664 × 2496"},{"value":"3136x1344","width":3136,"height":1344,"label":"7:3 · 3136 × 1344"},{"value":"4096x4096","width":4096,"height":4096,"label":"1:1 · 4096 × 4096"},{"value":"4704x3520","width":4704,"height":3520,"label":"147:110 · 4704 × 3520"},{"value":"3520x4704","width":3520,"height":4704,"label":"110:147 · 3520 × 4704"},{"value":"5504x3040","width":5504,"height":3040,"label":"172:95 · 5504 × 3040"},{"value":"3040x5504","width":3040,"height":5504,"label":"95:172 · 3040 × 5504"},{"value":"4992x3328","width":4992,"height":3328,"label":"3:2 · 4992 × 3328"},{"value":"3328x4992","width":3328,"height":4992,"label":"2:3 · 3328 × 4992"},{"value":"6240x2656","width":6240,"height":2656,"label":"195:83 · 6240 × 2656"}],"allowCustom":true,"constraints":{"maxPixels":16777216,"maxAspectRatio":16,"minPixels":3686400},"defaultValue":"2048x2048","ui":{"control":"size-picker"}},{"type":"integer","name":"count","label":"数量","min":1,"max":4,"defaultValue":1},{"type":"boolean","name":"watermark","label":"水印","defaultValue":false}],"inputSlots":[{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图"}],"maxCount":4,"supportedMediaKinds":["image"],"flags":{"textToImage":true,"imageToImage":true,"imageEdit":true},"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"size":"2048x2048","count":1,"watermark":false}'::jsonb),
+    ('seedance-video', '1.0.0', 'doubao-seedance-2-0-fast-260128',
+     '{"modes":["text_to_video","image_to_video"],"parameters":[{"type":"integer","name":"durationSeconds","label":"时长（秒）","min":1,"max":30,"defaultValue":5,"ui":{"control":"slider","unit":"秒","order":1}},{"type":"enum","name":"aspectRatio","label":"宽高比","options":["16:9","9:16","1:1","4:3","3:4","21:9"],"defaultValue":"16:9","ui":{"control":"select","order":2}},{"type":"enum","name":"resolution","label":"分辨率","options":["720p","1080p"],"defaultValue":"720p","ui":{"control":"segmented","order":3}},{"type":"boolean","name":"audio","label":"生成音频","defaultValue":true,"ui":{"control":"switch","order":4}},{"type":"integer","name":"count","label":"生成数量","min":1,"max":4,"defaultValue":1,"ui":{"control":"number","order":5}},{"type":"integer","name":"seed","label":"随机种子","min":0,"max":2147483647,"ui":{"control":"number","advanced":true,"order":6}},{"type":"boolean","name":"watermark","label":"水印","defaultValue":false,"ui":{"control":"switch","advanced":true,"order":7}},{"type":"boolean","name":"camera_fixed","label":"镜头固定","ui":{"control":"switch","advanced":true,"order":8}},{"type":"integer","name":"frames","label":"总帧数","min":1,"max":10000,"ui":{"control":"number","advanced":true,"order":9}}],"inputSlots":[{"role":"first_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"首帧"},{"role":"last_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"尾帧"},{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图"},{"role":"mask","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"蒙版"}],"maxCount":4,"supportedMediaKinds":["video"],"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"durationSeconds":5,"aspectRatio":"16:9","resolution":"720p","audio":true,"count":1}'::jsonb),
+    ('seedance-video', '1.0.0', 'dreamina-seedance-2-0-fast-260128',
+     '{"modes":["text_to_video","image_to_video"],"parameters":[{"type":"integer","name":"durationSeconds","label":"时长（秒）","min":1,"max":30,"defaultValue":5,"ui":{"control":"slider","unit":"秒","order":1}},{"type":"enum","name":"aspectRatio","label":"宽高比","options":["16:9","9:16","1:1","4:3","3:4","21:9"],"defaultValue":"16:9","ui":{"control":"select","order":2}},{"type":"enum","name":"resolution","label":"分辨率","options":["720p","1080p"],"defaultValue":"720p","ui":{"control":"segmented","order":3}},{"type":"boolean","name":"audio","label":"生成音频","defaultValue":true,"ui":{"control":"switch","order":4}},{"type":"integer","name":"count","label":"生成数量","min":1,"max":4,"defaultValue":1,"ui":{"control":"number","order":5}},{"type":"integer","name":"seed","label":"随机种子","min":0,"max":2147483647,"ui":{"control":"number","advanced":true,"order":6}},{"type":"boolean","name":"watermark","label":"水印","defaultValue":false,"ui":{"control":"switch","advanced":true,"order":7}},{"type":"boolean","name":"camera_fixed","label":"镜头固定","ui":{"control":"switch","advanced":true,"order":8}},{"type":"integer","name":"frames","label":"总帧数","min":1,"max":10000,"ui":{"control":"number","advanced":true,"order":9}}],"inputSlots":[{"role":"first_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"首帧"},{"role":"last_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"尾帧"},{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图"},{"role":"mask","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"蒙版"}],"maxCount":4,"supportedMediaKinds":["video"],"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"durationSeconds":5,"aspectRatio":"16:9","resolution":"720p","audio":true,"count":1}'::jsonb),
+    ('veo-video', '1.0.0', 'veo-3.1-generate-001',
+     '{"modes":["text_to_video","image_to_video"],"parameters":[{"type":"enum","name":"durationSeconds","label":"时长（秒）","options":["4","6","8"],"defaultValue":"8","ui":{"control":"segmented","unit":"秒","order":1}},{"type":"enum","name":"aspectRatio","label":"宽高比","options":["16:9","9:16"],"defaultValue":"16:9","ui":{"control":"segmented","order":2}},{"type":"enum","name":"resolution","label":"分辨率","options":["720p","1080p","4k"],"defaultValue":"1080p","ui":{"control":"segmented","order":3}},{"type":"boolean","name":"audio","label":"生成音频","defaultValue":true,"ui":{"control":"switch","order":4}},{"type":"integer","name":"count","label":"生成数量","min":1,"max":4,"defaultValue":1,"ui":{"control":"number","order":5}}],"inputSlots":[{"role":"first_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"首帧"},{"role":"last_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"尾帧"},{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图"}],"maxCount":4,"supportedMediaKinds":["video"],"crossFieldConstraints":[{"type":"forbidden","parameter":"resolution","whenValueEquals":"1080p","targetParameter":"durationSeconds","targetValues":["4","6"],"message":"分辨率 1080p 需要时长 8 秒"},{"type":"forbidden","parameter":"resolution","whenValueEquals":"4k","targetParameter":"durationSeconds","targetValues":["4","6"],"message":"分辨率 4k 需要时长 8 秒"}],"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"durationSeconds":"8","aspectRatio":"16:9","resolution":"1080p","audio":true,"count":1}'::jsonb),
+    ('veo-video', '1.0.0', 'veo-3.1-fast-generate-001',
+     '{"modes":["text_to_video","image_to_video"],"parameters":[{"type":"enum","name":"durationSeconds","label":"时长（秒）","options":["4","6","8"],"defaultValue":"8","ui":{"control":"segmented","unit":"秒","order":1}},{"type":"enum","name":"aspectRatio","label":"宽高比","options":["16:9","9:16"],"defaultValue":"16:9","ui":{"control":"segmented","order":2}},{"type":"enum","name":"resolution","label":"分辨率","options":["720p"],"defaultValue":"720p","ui":{"control":"segmented","order":3}},{"type":"boolean","name":"audio","label":"生成音频","defaultValue":true,"ui":{"control":"switch","order":4}},{"type":"integer","name":"count","label":"生成数量","min":1,"max":4,"defaultValue":1,"ui":{"control":"number","order":5}}],"inputSlots":[{"role":"first_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"首帧"},{"role":"last_frame","required":false,"minCount":0,"maxCount":1,"allowedMediaKinds":["image"],"label":"尾帧"},{"role":"reference_image","required":false,"minCount":0,"maxCount":4,"allowedMediaKinds":["image"],"label":"参考图"}],"maxCount":4,"supportedMediaKinds":["video"],"crossFieldConstraints":[{"type":"forbidden","parameter":"resolution","whenValueEquals":"1080p","targetParameter":"durationSeconds","targetValues":["4","6"],"message":"分辨率 1080p 需要时长 8 秒"},{"type":"forbidden","parameter":"resolution","whenValueEquals":"4k","targetParameter":"durationSeconds","targetValues":["4","6"],"message":"分辨率 4k 需要时长 8 秒"}],"declaredBy":"plugin-manifest"}'::jsonb,
+     '{"durationSeconds":"8","aspectRatio":"16:9","resolution":"720p","audio":true,"count":1}'::jsonb)
+),
+candidate AS (
+  SELECT m.id AS model_id,
+         d.capabilities,
+         d.defaults,
+         COALESCE(latest.provider_id, m.provider_id) AS provider_id,
+         COALESCE(latest.plugin_id, m.plugin_id) AS plugin_id,
+         COALESCE(latest.plugin_version, m.plugin_version, '1.0.0') AS plugin_version,
+         COALESCE(latest.vendor_model_id, m.vendor_model_id) AS vendor_model_id,
+         COALESCE(latest.base_url, m.base_url) AS base_url,
+         latest.credential_id,
+         latest.credential_schema_version,
+         COALESCE(latest.normalized_config, '{}'::jsonb) AS normalized_config,
+         m.created_by
+  -- The current revision is resolved before the declared join, because the
+  -- a model's plugin identity lives on that snapshot, not on the
+  -- mutable model_configs row.
+  FROM model_configs m
+  LEFT JOIN model_config_revisions latest ON latest.id = m.latest_revision_id
+  JOIN declared d
+    ON d.vendor_model_id = COALESCE(latest.vendor_model_id, m.vendor_model_id)
+   AND d.plugin_id = COALESCE(latest.plugin_id, m.plugin_id)
+   -- The version has to match too. Legacy 1.0.0 image manifests deliberately
+   -- publish no contract so already-pinned revisions stay permissive, so applying
+   -- a 1.1.0 declaration to a 1.0.0 model would tighten a rule underneath a
+   -- configuration that was valid when it was saved.
+   AND d.plugin_version = COALESCE(latest.plugin_version, m.plugin_version, '1.0.0')
+  WHERE m.deleted_at IS NULL
+),
+to_insert AS (
+  SELECT c.*,
+         (SELECT COALESCE(MAX(r0.revision), 0) + 1
+            FROM model_config_revisions r0 WHERE r0.model_id = c.model_id) AS revision
+  FROM candidate c
+  WHERE NOT EXISTS (
+    SELECT 1 FROM model_config_revisions r
+    WHERE r.model_id = c.model_id
+      AND r.capabilities->>'declaredBy' = 'plugin-manifest'
+      AND r.capabilities->'parameters'::text = c.capabilities->'parameters'::text
+  )
+)
+INSERT INTO model_config_revisions(
+  model_id, revision, provider_id, plugin_id, plugin_version, vendor_model_id,
+  base_url, credential_id, credential_schema_version, capabilities, normalized_config,
+  defaults, snapshot_digest, created_by, created_at)
+SELECT model_id, revision, provider_id, plugin_id, plugin_version, vendor_model_id,
+       base_url, credential_id, credential_schema_version, capabilities, normalized_config,
+       defaults,
+       encode(digest(concat(model_id::text, ':', revision::text, ':plugin-manifest:', capabilities::text), 'sha256'), 'hex'),
+       created_by, now()
+FROM to_insert
+WHERE plugin_id IS NOT NULL AND provider_id IS NOT NULL;
+
+-- Advance the pointer, and only onto a manifest-declared revision that really is
+-- the newest one for that model.
+UPDATE model_configs m
+SET latest_revision_id = adv.id, updated_at = now()
+FROM model_config_revisions adv
+WHERE adv.model_id = m.id
+  AND adv.capabilities->>'declaredBy' = 'plugin-manifest'
+  AND adv.revision = (SELECT MAX(r2.revision) FROM model_config_revisions r2 WHERE r2.model_id = m.id)
+  AND m.latest_revision_id IS DISTINCT FROM adv.id
+  AND m.deleted_at IS NULL;
+
 -- 11. Resumable, secure onboarding foundation.
 -- Explicit completion state replaces admin-count completion checks: status only
 -- ever transitions pending -> complete, so completed deployments stay complete
@@ -911,6 +1049,94 @@ ALTER TABLE prompt_optimization_settings DROP COLUMN IF EXISTS credits_per_job;
 DO $$ BEGIN ALTER TABLE model_configs DROP CONSTRAINT IF EXISTS model_configs_credits_per_image_check; EXCEPTION WHEN undefined_table THEN NULL; END $$;
 ALTER TABLE model_configs DROP COLUMN IF EXISTS credits_per_image;
 ALTER TABLE model_config_revisions DROP COLUMN IF EXISTS pricing;
+
+-- ============================================================================
+-- INSTALLED PROVIDER PLUGIN PACKAGES (plugin upload)
+-- Admins upload self-contained provider plugin code packages (plugin_id@
+-- plugin_version plus one .mjs artifact). The API validates the artifact and
+-- stores it in object storage; apps/worker pulls it back out and dynamically
+-- import()s it. api and worker are separate containers from separate images
+-- that share no volume, so the code itself travels through S3 and this table
+-- only carries its durable metadata plus the worker's local cache hints.
+-- object_key is the private bucket key and MUST NEVER be returned to any
+-- client: it is resolved server-side by the worker, clients only ever see
+-- plugin_id / plugin_version / display_name.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS provider_plugins (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  plugin_id text NOT NULL,
+  plugin_version text NOT NULL DEFAULT '1.0.0',
+  kind text NOT NULL CHECK(kind IN ('media','language')),
+  display_name text NOT NULL,
+  description text,
+  source text NOT NULL DEFAULT 'uploaded' CHECK(source IN ('builtin','uploaded')),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','active','disabled','failed')),
+  object_key text NOT NULL,
+  artifact_sha256 text NOT NULL,
+  artifact_size_bytes integer NOT NULL CHECK(artifact_size_bytes > 0),
+  manifest jsonb NOT NULL,
+  allowed_hosts jsonb NOT NULL DEFAULT '[]',
+  credential_schemas jsonb NOT NULL DEFAULT '[]',
+  scan_report jsonb NOT NULL DEFAULT '[]',
+  error_code text,
+  error_message text,
+  installed_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  UNIQUE(plugin_id, plugin_version)
+);
+-- Worker refresh query: usable packages for one kind (kind, status='active').
+CREATE INDEX IF NOT EXISTS provider_plugins_kind_status_idx ON provider_plugins(kind, status) WHERE deleted_at IS NULL;
+-- Artifact dedupe / integrity lookups by checksum.
+CREATE INDEX IF NOT EXISTS provider_plugins_sha256_idx ON provider_plugins(artifact_sha256);
+-- Incremental watermark refresh: "anything with updated_at after the last seen
+-- high-water mark", so the worker never rescans the whole table.
+CREATE INDEX IF NOT EXISTS provider_plugins_updated_at_idx ON provider_plugins(updated_at);
+
+-- Which resolution path a model's plugin takes: 'builtin' ships in
+-- packages/providers, 'installed' is served from a provider_plugins artifact.
+ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS plugin_source text NOT NULL DEFAULT 'builtin';
+DO $$ BEGIN ALTER TABLE model_configs ADD CONSTRAINT model_configs_plugin_source_check CHECK(plugin_source IN ('builtin','installed')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Do NOT add another model_configs.plugin_id backfill here. The pre-existing
+-- UPDATE above already stamps plugin_id onto EVERY row (language rows get
+-- 'openai-language'/'anthropic-language', video '-video', image '-image'), and
+-- none of those ids is registered anywhere. A non-null plugin_id therefore does
+-- NOT mean "this model is bound to an installed plugin": consumers must gate on
+-- actual registry/catalog membership (globalPluginRegistry.kindOf(...) or a
+-- provider_plugins lookup), never on the column merely being non-null.
+
+-- 12. Derived preview objects (worker-generated gallery thumbnails).
+-- The library grid used to point every tile at the ORIGINAL object_key, so one
+-- screen of 50 tiles downloaded 50 full-resolution images, and video tiles had
+-- no poster at all (poster_object_key had readers but no writer) and each one
+-- made the browser fetch video header bytes just to paint frame zero.
+--
+-- thumbnail_state is what makes backfill convergent: 'none' means "never
+-- attempted", 'failed' means "attempted and could not be derived", so a
+-- re-runnable sweep can select ('none','failed') and still terminate instead of
+-- retrying a permanently unusable object forever.
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS thumbnail_object_key text;
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS thumbnail_mime_type text;
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS thumbnail_width integer;
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS thumbnail_height integer;
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS thumbnail_state text NOT NULL DEFAULT 'none';
+DO $$ BEGIN ALTER TABLE assets ADD CONSTRAINT assets_thumbnail_state_check CHECK(thumbnail_state IN ('none','ready','failed')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- Backfill / maintenance scan: rows still missing a derived object.
+CREATE INDEX IF NOT EXISTS assets_thumbnail_missing_idx ON assets(created_at) WHERE deleted_at IS NULL AND thumbnail_object_key IS NULL;
+
+-- One asset can now own more than one object (original + derived preview; video
+-- points poster_object_key and thumbnail_object_key at the SAME derived object).
+-- asset_deletion_active_key was UNIQUE(asset_id) WHERE completed_at IS NULL, and
+-- deletion enqueues one row per object_key with ON CONFLICT DO NOTHING, so every
+-- second object of an asset was silently swallowed and leaked in the bucket
+-- (pre-existing bug: it already applied to poster_object_key). Widening the key
+-- to (asset_id, object_key) keeps the per-object dedupe while letting the
+-- pending rows drain. Rebuilt in this same section so a partially migrated
+-- database never has neither index.
+DROP INDEX IF EXISTS asset_deletion_active_key;
+CREATE UNIQUE INDEX IF NOT EXISTS asset_deletion_active_key ON asset_deletion_jobs(asset_id, object_key) WHERE completed_at IS NULL;
 `
 await db().query(sql)
 console.log('database migration complete')

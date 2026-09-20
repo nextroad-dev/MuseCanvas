@@ -9,7 +9,6 @@ import {
   Users,
   Blocks,
   Cpu,
-  Key,
   FileText,
   ShieldCheck,
   Settings,
@@ -44,9 +43,8 @@ const navGroups: NavGroup[] = [
   {
     title: '生成资源',
     items: [
-      { path: '/admin/plugins', label: '媒体插件', icon: Blocks },
-      { path: '/admin/models', label: '模型管理', icon: Cpu },
-      { path: '/admin/providers', label: '供应商凭据', icon: Key },
+      { path: '/admin/media-models', label: '媒体模型', icon: Blocks },
+      { path: '/admin/language-models', label: '语言模型', icon: Cpu },
       { path: '/admin/prompt-templates', label: '提示词模板', icon: FileText },
     ],
   },

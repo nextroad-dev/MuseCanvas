@@ -1,72 +1,27 @@
-// Browser-safe generation parameter normalization (no DOM, no Vue).
-// Precedence: explicit user control > model parameter descriptor default >
-// model legacy field/defaults > hardcoded fallback.
+// Staged input images: which roles a model accepts, in what positional order,
+// and how the browser turns that plan into a request.
 //
-// The server-side domain validator rejects (1) any parameter key the model does
-// not declare and (2) any value whose JSON type does not match its descriptor,
-// so every payload built here is descriptor-driven: keys come from
-// `wireType(descriptor)` and values from `marshalDescriptorValue`.
+// The parameter-descriptor engine that used to live above this comment now sits
+// in `media-parameters.ts`, and the value legality rules themselves live in
+// `@musecanvas/contracts`. That is the point of the move: the browser no longer
+// keeps a second, browser-only opinion about which sizes or qualities exist, so a
+// rule can no longer be enforced by the API and contradicted here.
 
 import type {
-  InputSlotDescriptor,
-  IntegerParameterDescriptor,
-  ModelConfig,
-  ParameterDescriptor,
-  StagedReferenceImage,
   GenerationInputItem,
+  InputSlotDescriptor,
+  ModelConfig,
+  StagedReferenceImage,
 } from '@/shared/types'
 import { RUNTIME_SETTINGS_DEFAULTS, isVideoModel } from '@/shared/types'
-
-export interface ImageControlState {
-  size: string
-  quality: string
-  count: number
-}
-
-/**
- * Canonical parameter name -> accepted descriptor names (canonical first).
- * Real presets use camelCase (`durationSeconds`), older helpers looked up
- * `duration` / `aspect_ratio`; the alias table keeps both spellings readable
- * while `wireType()` guarantees only the declared name ever reaches the API.
- */
-export const PARAM_ALIASES: Record<string, string[]> = {
-  durationSeconds: ['durationSeconds', 'duration', 'duration_s'],
-  aspectRatio: ['aspectRatio', 'aspect_ratio', 'ratio'],
-  resolution: ['resolution', 'resolution_type'],
-  audio: ['audio', 'generateAudio', 'generate_audio'],
-}
-
-const ALIAS_TO_CANONICAL: Record<string, string> = {}
-for (const [canonical, aliases] of Object.entries(PARAM_ALIASES)) {
-  for (const alias of [canonical, ...aliases]) {
-    if (!(alias in ALIAS_TO_CANONICAL)) ALIAS_TO_CANONICAL[alias] = canonical
-  }
-}
-
-/** Duration ladder for integer descriptors whose range is too wide to enumerate. */
-const DURATION_LADDER = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 60]
-/** Below this many integers in range, enumerate exhaustively instead of using the ladder. */
-const INTEGER_EXHAUSTIVE_MAX = 12
-
-const CANONICAL_LABELS: Record<string, string> = {
-  durationSeconds: '时长（秒）',
-  aspectRatio: '宽高比',
-  resolution: '分辨率',
-  audio: '生成音频',
-  count: '生成数量',
-}
-
-const CONTROL_ORDER: Record<string, number> = {
-  durationSeconds: 0,
-  aspectRatio: 1,
-  resolution: 2,
-  audio: 3,
-}
 
 const SLOT_ORDER: Record<string, number> = {
   first_frame: 0,
   last_frame: 1,
   reference_image: 2,
+  // Masks sort last on purpose: they are a control channel attached to a base
+  // image, not another picture the model looks at.
+  mask: 3,
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -75,191 +30,12 @@ const ROLE_LABELS: Record<string, string> = {
   reference_image: '参考图',
   prompt_image: '提示图',
   source_video: '源视频',
+  mask: '选区遮罩',
 }
 
-/** Roles never renderable as staged images: the upload endpoint accepts
- *  image/png and image/jpeg only. */
+/** Roles never renderable as staged images: the upload endpoint accepts only
+ *  image/png and image/jpeg. */
 const UNSUPPORTED_PLAN_ROLES = new Set<string>(['source_video'])
-
-export function findDescriptor(
-  model: Pick<ModelConfig, 'parameters'> | null | undefined,
-  name: string,
-): ParameterDescriptor | undefined {
-  return model?.parameters?.find((d) => d.name === name)
-}
-
-/** Look a descriptor up by canonical name, tolerating legacy alias spellings. */
-export function resolveDescriptor(
-  model: Pick<ModelConfig, 'parameters'> | null | undefined,
-  canonicalName: string,
-): ParameterDescriptor | undefined {
-  const names = new Set<string>([canonicalName, ...(PARAM_ALIASES[canonicalName] ?? [])])
-  for (const name of names) {
-    const descriptor = findDescriptor(model, name)
-    if (descriptor) return descriptor
-  }
-  return undefined
-}
-
-/** Declared descriptor name -> canonical name (identity for unknown names). */
-export function canonicalNameOf(descriptor: ParameterDescriptor): string {
-  return ALIAS_TO_CANONICAL[descriptor.name] ?? descriptor.name
-}
-
-/** The single key we ever put on the wire: whatever the model declared. */
-export function wireType(descriptor: Pick<ParameterDescriptor, 'name'>): string {
-  return descriptor.name
-}
-
-export interface DescriptorOption {
-  /** Stays in the descriptor's own value type: enum options are verbatim strings
-   *  (`'8'` for Veo durations), integer options are numbers, boolean are booleans.
-   *  Feed it straight back into `marshalDescriptorValue` / the state map. */
-  value: string | number | boolean
-  label: string
-  isDefault: boolean
-}
-
-/** Every value a descriptor accepts, in the descriptor's own value type.
- *  Enum options stay verbatim strings (Veo's duration is `'8'`, not `8`). */
-export function descriptorOptions(d: ParameterDescriptor | undefined): DescriptorOption[] {
-  if (!d) return []
-  if (d.type === 'enum') {
-    return d.options.map((value) => ({
-      value,
-      label: value,
-      isDefault: value === d.defaultValue,
-    }))
-  }
-  if (d.type === 'integer') {
-    return integerOptions(d)
-  }
-  if (d.type === 'boolean') {
-    const active = d.defaultValue ?? true
-    return [
-      { value: true, label: '开', isDefault: active === true },
-      { value: false, label: '关', isDefault: active === false },
-    ]
-  }
-  return []
-}
-
-function integerOptions(d: IntegerParameterDescriptor): DescriptorOption[] {
-  const step = d.step !== undefined && d.step > 0 ? Math.trunc(d.step) : 1
-  const hasMin = d.min !== undefined
-  const hasMax = d.max !== undefined
-  const span = hasMin && hasMax ? (d.max as number) - (d.min as number) + 1 : Number.POSITIVE_INFINITY
-  const values: number[] = []
-  if (span <= INTEGER_EXHAUSTIVE_MAX) {
-    for (let value = d.min as number; value <= (d.max as number); value += step) values.push(value)
-  } else {
-    const base = hasMin ? (d.min as number) : 0
-    for (const candidate of DURATION_LADDER) {
-      if (hasMin && candidate < (d.min as number)) continue
-      if (hasMax && candidate > (d.max as number)) continue
-      if ((candidate - base) % step !== 0) continue
-      values.push(candidate)
-    }
-  }
-  const defaultValue = d.defaultValue
-  // The descriptor's own default must always be selectable even when it sits
-  // off-ladder (Seedance defaults to 5s, which no curated ladder contained).
-  if (typeof defaultValue === 'number' && Number.isInteger(defaultValue)) values.push(defaultValue)
-  return [...new Set(values)]
-    .sort((a, b) => a - b)
-    .map((value) => ({ value, label: String(value), isDefault: value === defaultValue }))
-}
-
-/** Coerce a picked value into the JSON type the descriptor declares.
- *  This is what lets Veo (string enum) and Seedance (integer) share one control. */
-export function marshalDescriptorValue(
-  d: ParameterDescriptor,
-  raw: string | number | boolean,
-): string | number | boolean {
-  if (d.type === 'integer') return Number(raw)
-  if (d.type === 'boolean') return raw === true || raw === 'true'
-  return String(raw)
-}
-
-export function descriptorDefault(
-  model: Pick<ModelConfig, 'parameters' | 'defaults'> | null | undefined,
-  name: string,
-  fallback: unknown,
-): unknown {
-  const descriptor = resolveDescriptor(model, name)
-  const names = new Set<string>([
-    ...(descriptor ? [descriptor.name, name, canonicalNameOf(descriptor)] : [name]),
-  ])
-  const defaults = model?.defaults as Record<string, unknown> | undefined
-  if (descriptor && 'defaultValue' in descriptor && descriptor.defaultValue !== undefined) {
-    return marshalDescriptorValue(descriptor, descriptor.defaultValue as string | number | boolean)
-  }
-  for (const alias of names) {
-    const fromDefaults = defaults?.[alias]
-    if (fromDefaults !== undefined) {
-      return descriptor
-        ? marshalDescriptorValue(descriptor, fromDefaults as string | number | boolean)
-        : fromDefaults
-    }
-  }
-  return fallback
-}
-
-/** Video controls: declared descriptors minus `count` (rendered separately)
- *  minus free text, ordered duration -> aspect ratio -> resolution -> audio. */
-export function videoControlDescriptors(
-  model: Pick<ModelConfig, 'parameters'> | null | undefined,
-): ParameterDescriptor[] {
-  const controls = (model?.parameters ?? []).filter((d) => {
-    if (d.type === 'text') return false
-    const canonical = canonicalNameOf(d)
-    return canonical !== 'count' && d.name !== 'count'
-  })
-  const rank = (d: ParameterDescriptor) => CONTROL_ORDER[canonicalNameOf(d)] ?? Number.MAX_SAFE_INTEGER
-  return controls.sort((a, b) => rank(a) - rank(b))
-}
-
-/** Human label for a descriptor: its own label, else the canonical Chinese name. */
-export function descriptorLabel(
-  d: ParameterDescriptor,
-  model?: Pick<ModelConfig, 'parameters'> | null,
-): string {
-  if (d.label) return d.label
-  const canonical = canonicalNameOf(d)
-  const sibling = model?.parameters?.find(
-    (other) => other.name !== d.name && canonicalNameOf(other) === canonical && !!other.label,
-  )
-  if (sibling?.label) return sibling.label
-  return CANONICAL_LABELS[canonical] ?? d.name
-}
-
-/** Build the unified `parameters` payload for a video model.
- *  Iterates the model's descriptors, never the user's state keys: only declared
- *  names go on the wire and every value matches its descriptor's type. A control
- *  with neither a user value nor a default is omitted so the server applies its own. */
-export function buildVideoParameters(
-  model: Pick<ModelConfig, 'parameters' | 'defaults' | 'maxCount'> | null | undefined,
-  state: Record<string, string | number | boolean>,
-): Record<string, string | number | boolean> {
-  const parameters: Record<string, string | number | boolean> = {}
-  for (const d of model?.parameters ?? []) {
-    const canonical = canonicalNameOf(d)
-    const picked = state[canonical] ?? state[d.name]
-    if (picked !== undefined) {
-      parameters[wireType(d)] = marshalDescriptorValue(d, picked)
-      continue
-    }
-    const fallback = descriptorDefault(model, d.name, undefined)
-    if (fallback === undefined) continue
-    parameters[wireType(d)] = marshalDescriptorValue(d, fallback as string | number | boolean)
-  }
-  return parameters
-}
-
-/** Build the unified `parameters` payload for a legacy image model. */
-export function buildImageParameters(state: ImageControlState): Record<string, unknown> {
-  return { size: state.size, quality: state.quality, count: state.count }
-}
 
 /** Effective input slots: descriptor slots win; otherwise derive from maxInputImages. */
 export function resolveInputSlots(
@@ -326,14 +102,16 @@ export function planRolePositions(plan: ImageInputPlan): string[] {
   return positions.slice(0, plan.capacity)
 }
 
-/** Staged uploads -> unified inputs[] with stable positions. */
+/** Staged images -> unified inputs[] with stable positions. A local upload and a
+ *  gallery pick differ only in which reference they carry; nothing downstream needs to
+ *  know where the image came from. */
 export function buildGenerationInputs(
-  staged: Pick<StagedReferenceImage, 'uploadId' | 'status' | 'role'>[],
+  staged: Pick<StagedReferenceImage, 'uploadId' | 'assetId' | 'status' | 'role'>[],
 ): GenerationInputItem[] {
   return staged
-    .filter((img) => img.status === 'ready' && img.uploadId)
+    .filter((img) => img.status === 'ready' && Boolean(img.uploadId || img.assetId))
     .map((img, index) => ({
-      uploadId: img.uploadId as string,
+      ...(img.uploadId ? { uploadId: img.uploadId } : { assetId: img.assetId as string }),
       role: (img.role || 'reference_image') as GenerationInputItem['role'],
       position: index,
     }))

@@ -195,6 +195,29 @@ export async function createUploadPresignedPost(
   }
 }
 
+/**
+ * Writes server-held bytes into the private bucket: an administrator-uploaded
+ * plugin artifact, and the two inputs of a masked edit (`POST /api/images/edit`)
+ * that arrive in its own request body — the source image the browser posted and
+ * the alpha mask rasterised from the selection.
+ *
+ * Never presigned, and a plugin artifact is never read back through this helper:
+ * clients must not be able to pull executable plugin code from storage, so only
+ * the worker fetches those bytes. A staged input is an ordinary image, visible to
+ * its owner through the same short-lived signed URL every other generation input
+ * uses, and to nobody else.
+ */
+export async function putPrivateS3ObjectBytes(
+  objectKey: string,
+  bytes: Buffer,
+  contentType = 'application/octet-stream',
+  explicit?: StorageExplicitConfig,
+): Promise<void> {
+  const cfg = await effectiveStorage(explicit)
+  const client = storageClient(cfg.endpoint || cfg.publicEndpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
+  await client.send(new PutObjectCommand({ Bucket: cfg.bucket, Key: objectKey, Body: bytes, ContentType: contentType }))
+}
+
 export async function getPrivateS3ObjectBytes(
   objectKey: string,
   explicit?: StorageExplicitConfig,

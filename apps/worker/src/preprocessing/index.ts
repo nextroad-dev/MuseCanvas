@@ -1,6 +1,7 @@
 import { db, transaction } from '../../../../packages/database/src/index'
 import { callLanguageModel, decryptApiKey, loadPromptTemplateIndex, renderPromptTemplate, type LanguageModelResult, type LanguageProtocol, type ReasoningEffort } from '../../../../packages/providers/src/index'
 import { resolvePromptTemplates } from '../shared/runtime'
+import { installedLanguagePluginBinding } from '../plugins/availability'
 
 const OPTIMIZER_PROMPT_VERSION = 'prompt-optimizer-json-v2'
 const OPTIMIZER_SCHEMA_NAME = 'prompt_optimization_result'
@@ -125,11 +126,11 @@ ${input.previousPrompt}`
 
 export async function preprocessPrompt(job: any): Promise<string> {
   if (job.optimization_mode !== 'enabled') return job.prompt
-  const result = await db().query('SELECT po.*,s.timeout_ms FROM prompt_optimizations po CROSS JOIN prompt_optimization_settings s WHERE po.id=$1 AND po.job_id=$2 AND po.deleted_at IS NULL', [job.prompt_optimization_id, job.id])
+  const result = await db().query('SELECT po.*,s.timeout_ms,mc.plugin_id AS language_model_plugin_id,mc.plugin_version AS language_model_plugin_version FROM prompt_optimizations po CROSS JOIN prompt_optimization_settings s LEFT JOIN model_configs mc ON mc.id=po.language_model_config_id WHERE po.id=$1 AND po.job_id=$2 AND po.deleted_at IS NULL', [job.prompt_optimization_id, job.id])
   const optimization = result.rows[0]
   if (!optimization) throw new Error('PROMPT_MODEL_NOT_CONFIGURED')
   if (optimization.final_prompt) { await db().query("UPDATE generation_jobs SET phase='prompt_ready',updated_at=now() WHERE id=$1", [job.id]); return optimization.final_prompt }
-  const credential = await db().query('SELECT api_key_encrypted, payload_encrypted, encryption_key_id, enabled FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL', [optimization.provider_credential_id])
+  const credential = await db().query('SELECT api_key_encrypted, payload_encrypted, encryption_key_id, schema_id, enabled FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL', [optimization.provider_credential_id])
   const credentialRow = credential.rows[0] as Record<string, unknown> | undefined
   const credentialEnvelope = (credentialRow?.payload_encrypted as string | null) || (credentialRow?.api_key_encrypted as string | null) || null
   if (!credentialRow?.enabled || !credentialEnvelope) throw new Error('PROMPT_MODEL_NOT_CONFIGURED')
@@ -143,7 +144,17 @@ export async function preprocessPrompt(job: any): Promise<string> {
   const protocol = optimization.language_model_protocol_snapshot as LanguageProtocol
   if (!['openai_chat', 'openai_responses', 'anthropic_messages'].includes(protocol)) throw new Error('LANGUAGE_MODEL_PROTOCOL_UNSUPPORTED')
   const reasoningEffort = optimization.language_model_reasoning_effort_snapshot as ReasoningEffort | null
-  const baseInvoke = { protocol, vendorModelId: optimization.language_model_vendor_id_snapshot, baseUrl: optimization.language_model_base_url_snapshot, apiKey: credentialApiKey, maxOutputTokens: optimization.language_model_max_output_tokens_snapshot, temperature: optimization.language_model_temperature_snapshot === null ? undefined : Number(optimization.language_model_temperature_snapshot), timeoutMs: optimization.timeout_ms }
+  // Installed-language dispatch is opt-in per call: the binding stays undefined (and the
+  // built-in protocol payload byte-identical) unless the model's key is actually a
+  // registered language plugin. model_configs.plugin_id is backfilled onto every row by
+  // migrate.ts, so the column itself proves nothing.
+  const installed = installedLanguagePluginBinding({
+    pluginId: (optimization.language_model_plugin_id as string | null) || null,
+    pluginVersion: (optimization.language_model_plugin_version as string | null) || null,
+    credentialSchema: (credentialRow.schema_id as string | null) || null,
+    apiKey: credentialApiKey,
+  })
+  const baseInvoke = { protocol, vendorModelId: optimization.language_model_vendor_id_snapshot, baseUrl: optimization.language_model_base_url_snapshot, apiKey: credentialApiKey, maxOutputTokens: optimization.language_model_max_output_tokens_snapshot, temperature: optimization.language_model_temperature_snapshot === null ? undefined : Number(optimization.language_model_temperature_snapshot), timeoutMs: optimization.timeout_ms, ...installed }
   const invokeTemplateSelector = (system: string, user: string) => callLanguageModel({ ...baseInvoke, ...buildTemplateSelectorModelOptions({ protocol, vendorModelId: optimization.language_model_vendor_id_snapshot, maxOutputTokens: optimization.language_model_max_output_tokens_snapshot }), system, user })
   const invokePromptOptimizer = (system: string, user: string) => callLanguageModel({ ...baseInvoke, system, user, schemaName: OPTIMIZER_SCHEMA_NAME, schema: buildPromptOptimizationSchema(), reasoningEffort })
   await db().query("UPDATE prompt_optimizations SET status='running',attempt=attempt+1,started_at=COALESCE(started_at,now()),error_code=NULL,optimizer_prompt_version=$2,updated_at=now() WHERE id=$1", [optimization.id, OPTIMIZER_PROMPT_VERSION])

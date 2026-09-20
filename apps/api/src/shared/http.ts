@@ -1,7 +1,23 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import type { ParameterErrorDetails } from '@musecanvas/contracts'
 
 export const ok = <T>(data: T, init?: ResponseInit) => NextResponse.json({ success: true, data }, init)
-export const fail = (code: string, message: string, status = 400) => NextResponse.json({ success: false, error: { code, message } }, { status })
+/**
+ * `details` carries the machine-readable part of a validation failure — which
+ * parameter, with what value, broke which rule — so the console can mark the
+ * offending control instead of making the user parse a sentence. Additive: every
+ * existing caller passes three arguments and every existing client reads only
+ * `code` and `message`.
+ */
+export const fail = (
+  code: string,
+  message: string,
+  status = 400,
+  details?: ParameterErrorDetails,
+) => NextResponse.json(
+  { success: false, error: details ? { code, message, details } : { code, message } },
+  { status },
+)
 export async function body(request: NextRequest): Promise<Record<string, unknown>> { try { return await request.json() } catch { return {} } }
 export const emailValid = (value: unknown): value is string => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 export function clientIpFromRequest(request: NextRequest): string {

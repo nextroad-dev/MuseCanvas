@@ -1,6 +1,18 @@
 import type {
+  BooleanParameterDescriptor,
+  ImageSizeConstraints,
+  ImageSizeParameterDescriptor,
+  ImageSizePreset,
+  InputSlotDescriptor,
+  IntegerParameterDescriptor,
+  JsonValue,
+  ModelCapabilities,
+} from '@musecanvas/contracts'
+import { describeImageSize, validateImageSizeValue, validateParameterValue } from '@musecanvas/contracts'
+import type {
   BoundedOutput,
   ExecutionContext,
+  MediaModelDeclaration,
   MediaProviderManifest,
   MediaProviderPlugin,
   MediaRequest,
@@ -19,6 +31,7 @@ export const LEGACY_SEEDREAM_IMAGE_PLUGIN_VERSION = '1.0.0'
 
 const SEEDREAM_MAX_ASPECT_RATIO = 16
 const SEEDREAM_MAX_BATCH_SIZE = 4
+const SEEDREAM_MAX_INPUT_IMAGES = 4
 const MAX_PROMPT_CHARS = 8_000
 
 export const SEEDREAM_IMAGE_SUPPORTED_MODELS = [
@@ -26,37 +39,170 @@ export const SEEDREAM_IMAGE_SUPPORTED_MODELS = [
   'doubao-seedream-4-5-251128',
 ] as const
 
-const seedreamRules: Record<string, { minPixels: number; maxPixels: number }> = {
-  '4.0': { minPixels: 1280 * 720, maxPixels: 4096 * 4096 },
-  '4.5': { minPixels: 2560 * 1440, maxPixels: 4096 * 4096 },
-  '5.0-lite': { minPixels: 2560 * 1440, maxPixels: 10_404_496 },
+// ---------------------------------------------------------------------------
+// Capability declaration
+//
+// This block *is* Seedream's parameter contract: it is what `GET /api/models`
+// serves, what the browser renders and what `validateRequest` below enforces.
+// There is deliberately no second table of pixel bands in this file, because the
+// previous one (`seedreamRules`) and the declaration disagreed the moment one of
+// them was edited.
+//
+// The size grids are the values the admin presets already offered, so widening
+// the declaration to presets changes nothing that worked before; `allowCustom`
+// plus `constraints` is what keeps an unlisted in-band size legal.
+// ---------------------------------------------------------------------------
+
+const seedream1kSizes = [
+  '1024x1024', '1152x864', '864x1152', '1280x720', '720x1280', '1248x832', '832x1248', '1512x648',
+]
+const seedream2kSizes = [
+  '2048x2048', '2304x1728', '1728x2304', '2848x1600', '1600x2848', '2496x1664', '1664x2496', '3136x1344',
+]
+const seedream4kSizes = [
+  '4096x4096', '4704x3520', '3520x4704', '5504x3040', '3040x5504', '4992x3328', '3328x4992', '6240x2656',
+]
+
+/** Bands shared by every Seedream model; only the pixel floor differs per model. */
+const seedreamBaseSizeConstraints: ImageSizeConstraints = {
+  maxPixels: 4096 * 4096,
+  maxAspectRatio: SEEDREAM_MAX_ASPECT_RATIO,
 }
 
-export function seedreamRule(vendorModelId?: string) {
-  const id = (vendorModelId || '').toLowerCase()
-  if ((id.includes('5-0') || id.includes('5.0')) && id.includes('lite')) return seedreamRules['5.0-lite']
-  if (id.includes('4-5') || id.includes('4.5')) return seedreamRules['4.5']
-  return seedreamRules['4.0']
+function seedreamSizePresets(values: readonly string[]): ImageSizePreset[] {
+  return values.map(value => {
+    const [width, height] = value.split('x').map(Number)
+    const preset: ImageSizePreset = { value, width, height, label: value }
+    return { ...preset, label: describeImageSize(preset) }
+  })
 }
+
+function seedreamSizeParameter(presets: readonly string[], minPixels: number): ImageSizeParameterDescriptor {
+  return {
+    type: 'image-size',
+    name: 'size',
+    label: '尺寸',
+    presets: seedreamSizePresets(presets),
+    allowCustom: true,
+    constraints: { ...seedreamBaseSizeConstraints, minPixels },
+    // The body builder's fallback when the caller sent no size at all.
+    defaultValue: '2048x2048',
+    ui: { control: 'size-picker' },
+  }
+}
+
+const seedream40SizeParameter = seedreamSizeParameter(
+  [...seedream1kSizes, ...seedream2kSizes, ...seedream4kSizes],
+  1280 * 720,
+)
+const seedream45SizeParameter = seedreamSizeParameter(
+  [...seedream2kSizes, ...seedream4kSizes],
+  2560 * 1440,
+)
+// 5.0 lite is not served by this plugin version — it is absent from
+// `SEEDREAM_IMAGE_SUPPORTED_MODELS` and declares no manifest entry — but
+// `normalizeSeedreamSize` has always answered for it, so its band stays here as
+// a declaration too rather than as a second arithmetic table.
+const seedream50LiteSizeParameter: ImageSizeParameterDescriptor = {
+  ...seedream45SizeParameter,
+  presets: seedreamSizePresets(seedream2kSizes),
+  constraints: {
+    minPixels: 2560 * 1440,
+    maxPixels: 10_404_496,
+    maxAspectRatio: SEEDREAM_MAX_ASPECT_RATIO,
+  },
+}
+
+const seedreamCountParameter: IntegerParameterDescriptor = {
+  type: 'integer',
+  name: 'count',
+  label: '数量',
+  min: 1,
+  max: SEEDREAM_MAX_BATCH_SIZE,
+  defaultValue: 1,
+}
+
+// Declared because the body builder really does put `watermark` on the wire
+// (`watermark: request.watermark ?? false`). `quality` is *not* declared: the
+// vendor accepts no quality token for these models, so advertising one would be
+// the invented-parameter bug this contract exists to remove.
+const seedreamWatermarkParameter: BooleanParameterDescriptor = {
+  type: 'boolean',
+  name: 'watermark',
+  label: '水印',
+  defaultValue: false,
+}
+
+const seedreamSharedParameters: Array<IntegerParameterDescriptor | BooleanParameterDescriptor> = [
+  seedreamCountParameter,
+  seedreamWatermarkParameter,
+]
+
+const seedreamInputSlots: InputSlotDescriptor[] = [
+  {
+    role: 'reference_image',
+    required: false,
+    minCount: 0,
+    maxCount: SEEDREAM_MAX_INPUT_IMAGES,
+    allowedMediaKinds: ['image'],
+    label: '参考图',
+  },
+]
+
+function seedreamCapabilities(size: ImageSizeParameterDescriptor): ModelCapabilities {
+  return {
+    modes: ['text_to_image', 'image_to_image'],
+    parameters: [size, ...seedreamSharedParameters],
+    inputSlots: seedreamInputSlots,
+    maxCount: SEEDREAM_MAX_BATCH_SIZE,
+    supportedMediaKinds: ['image'],
+    // mask / inpainting / transparentBackground stay absent: nothing in this
+    // plugin sends them and the vendor docs at hand do not confirm them.
+    flags: { textToImage: true, imageToImage: true, imageEdit: true },
+    declaredBy: 'plugin-manifest',
+  }
+}
+
+const seedream40Capabilities = seedreamCapabilities(seedream40SizeParameter)
+const seedream45Capabilities = seedreamCapabilities(seedream45SizeParameter)
+
+const seedreamDefaults: Record<string, JsonValue> = {
+  size: '2048x2048',
+  count: 1,
+  watermark: false,
+}
+
+function seedreamSizeParameterFor(vendorModelId?: string): ImageSizeParameterDescriptor {
+  const id = (vendorModelId || '').toLowerCase()
+  if ((id.includes('5-0') || id.includes('5.0')) && id.includes('lite')) return seedream50LiteSizeParameter
+  if (id.includes('4-5') || id.includes('4.5')) return seedream45SizeParameter
+  return seedream40SizeParameter
+}
+
+/**
+ * Wire-format guard for a Seedream `size`.
+ *
+ * Kept stricter than the contract's `WIDTHxHEIGHT` pattern on purpose: leading
+ * zeros and a zero edge have never been sendable, and a size accepted here goes
+ * straight into the request body. Geometry is not decided here — each model's
+ * own `image-size` declaration above answers that.
+ */
+const SEEDREAM_WIRE_SIZE_PATTERN = /^([1-9]\d*)x([1-9]\d*)$/
 
 export function normalizeSeedreamSize(size: string, vendorModelId?: string): string {
-  const match = size.match(/^([1-9]\d*)x([1-9]\d*)$/)
-  if (!match) throw new Error('INVALID_IMAGE_SIZE')
-  const width = Number(match[1])
-  const height = Number(match[2])
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) throw new Error('INVALID_IMAGE_SIZE')
-
-  const pixels = width * height
-  const aspectRatio = Math.max(width / height, height / width)
-  const rule = seedreamRule(vendorModelId)
-  if (pixels < rule.minPixels || pixels > rule.maxPixels || aspectRatio > SEEDREAM_MAX_ASPECT_RATIO) {
+  if (!SEEDREAM_WIRE_SIZE_PATTERN.test(size)) throw new Error('INVALID_IMAGE_SIZE')
+  if (validateImageSizeValue(seedreamSizeParameterFor(vendorModelId), size).length > 0) {
     throw new Error('INVALID_IMAGE_SIZE')
   }
   return size
 }
 
 function buildManifest(version: string, active: boolean): MediaProviderManifest {
+  // The contract rides only on the active version: already-pinned 1.0.0
+  // revisions resolve against a manifest that stayed deliberately thin, and
+  // tightening it there would retroactively make a working revision illegal.
   return {
+    kind: 'media',
     id: SEEDREAM_IMAGE_PLUGIN_ID,
     version,
     displayName: 'Seedream (Volcengine Ark) Image Generation',
@@ -72,14 +218,18 @@ function buildManifest(version: string, active: boolean): MediaProviderManifest 
         modalities: ['image'],
         supportedAspectRatios: ['1024x1024', '2048x2048'],
         maxBatchSize: 4,
-        ...(active ? { maxInputImages: 4 } : {}),
+        ...(active
+          ? { maxInputImages: 4, capabilities: seedream40Capabilities, defaults: seedreamDefaults }
+          : {}),
       },
       {
         id: 'doubao-seedream-4-5-251128',
         modalities: ['image'],
         supportedAspectRatios: ['2048x2048'],
         maxBatchSize: 4,
-        ...(active ? { maxInputImages: 4 } : {}),
+        ...(active
+          ? { maxInputImages: 4, capabilities: seedream45Capabilities, defaults: seedreamDefaults }
+          : {}),
       },
     ],
   }
@@ -114,7 +264,22 @@ function endpointAuthHosts(endpoint: string): string[] {
   }
 }
 
-function validateSharedRequest(request: MediaRequest, version: string): void {
+function declaredParameter<T extends { name: string }>(
+  parameters: readonly unknown[],
+  name: string,
+): T | undefined {
+  return parameters.find(
+    candidate => typeof candidate === 'object' && candidate !== null && (candidate as { name?: unknown }).name === name,
+  ) as T | undefined
+}
+
+/**
+ * Request validation reads the manifest declaration above rather than a private
+ * rules table, so the browser's controls, the API's authoritative check and the
+ * adapter that ships the bytes all answer from one statement.
+ */
+function validateSharedRequest(request: MediaRequest, manifest: MediaProviderManifest): void {
+  const version = manifest.version
   if (request.modality !== 'image') {
     throw invalidRequest(version, `Only image modality is supported, got '${request.modality}'`)
   }
@@ -130,23 +295,57 @@ function validateSharedRequest(request: MediaRequest, version: string): void {
       `Unsupported model '${request.vendorModelId}'; supported models: ${SEEDREAM_IMAGE_SUPPORTED_MODELS.join(', ')}`,
     )
   }
-  if (request.size !== undefined) {
-    try {
-      normalizeSeedreamSize(request.size, request.vendorModelId)
-    } catch {
-      throw invalidRequest(
-        version,
-        `Invalid size for model ${request.vendorModelId}: ${request.size}`,
-      )
-    }
+  const model: MediaModelDeclaration | undefined = manifest.models?.find(candidate => candidate.id === request.vendorModelId)
+  const capabilities = model?.capabilities
+  if (!capabilities) {
+    // Unreachable for this manifest — both supported models declare a contract,
+    // and an id outside them was just rejected. Refusing rather than falling back
+    // to a hardcoded band is the point: no declaration means no guess.
+    throw invalidRequest(version, `Model '${request.vendorModelId}' declares no parameter contract`)
   }
-  const count = request.count ?? 1
-  if (!Number.isInteger(count) || count < 1 || count > SEEDREAM_MAX_BATCH_SIZE) {
+
+  const sizeParameter = declaredParameter<ImageSizeParameterDescriptor>(capabilities.parameters, 'size')
+  const countParameter = declaredParameter<IntegerParameterDescriptor>(capabilities.parameters, 'count')
+  const watermarkParameter = declaredParameter<BooleanParameterDescriptor>(capabilities.parameters, 'watermark')
+  if (!sizeParameter || !countParameter) {
     throw invalidRequest(
       version,
-      `count must be an integer between 1 and ${SEEDREAM_MAX_BATCH_SIZE} for model ${request.vendorModelId}`,
+      `Model '${request.vendorModelId}' declares no ${sizeParameter ? 'count' : 'size'} parameter`,
     )
   }
+
+  // `width`/`height` are the pre-descriptor typed fields: nothing builds them
+  // today, but when a caller does send them they mean the same size and are
+  // checked as one, so the declaration cannot be sidestepped by field choice.
+  const rawSize = request.size ?? (request.width !== undefined && request.height !== undefined
+    ? `${request.width}x${request.height}`
+    : undefined)
+  if (rawSize !== undefined) {
+    // Two predicates, both read from the same place the adapter reads: the wire
+    // pattern is what `normalizeSeedreamSize` can actually put in the body (so
+    // validation never passes a size the body builder then throws on), and the
+    // descriptor decides geometry.
+    if (!SEEDREAM_WIRE_SIZE_PATTERN.test(rawSize)
+      || validateParameterValue(sizeParameter, rawSize).length > 0) {
+      throw invalidRequest(version, `Invalid size for model ${request.vendorModelId}: ${rawSize}`)
+    }
+  }
+
+  const count = request.count ?? countParameter.defaultValue ?? 1
+  const countIssues = validateParameterValue(countParameter, count)
+  if (countIssues.length > 0) {
+    throw invalidRequest(
+      version,
+      `count must be an integer between ${countParameter.min ?? 1} and ${countParameter.max ?? SEEDREAM_MAX_BATCH_SIZE} for model ${request.vendorModelId}`,
+    )
+  }
+
+  if (watermarkParameter && request.watermark !== undefined) {
+    if (validateParameterValue(watermarkParameter, request.watermark).length > 0) {
+      throw invalidRequest(version, `watermark must be a boolean for model ${request.vendorModelId}`)
+    }
+  }
+
   const images = request.inputImages ?? []
   for (const img of images) {
     if (img.mimeType !== 'image/png' && img.mimeType !== 'image/jpeg') {
@@ -231,7 +430,7 @@ export class SeedreamImagePlugin implements MediaProviderPlugin {
   }
 
   validateRequest(request: MediaRequest): void {
-    validateSharedRequest(request, this.manifest.version)
+    validateSharedRequest(request, this.manifest)
   }
 
   async submit(

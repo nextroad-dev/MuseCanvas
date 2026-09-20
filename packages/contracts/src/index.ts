@@ -1,10 +1,34 @@
+// Type-only: `media-parameters.ts` imports these same primitives back from this
+// module, and the cycle is erased at compile time because neither direction ever
+// needs the other as a value. See the note by the re-exports at the end of file.
+import type {
+  ImageSizeParameterDescriptor,
+  MediaParameterProvenance,
+  ModelCapabilityFlags,
+  NumberParameterDescriptor,
+  ParameterCrossFieldConstraint,
+  ParameterDependency,
+  ParameterErrorDetails,
+  ParameterOption,
+  ParameterUiHint,
+} from './media-parameters'
+
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray
 export type JsonObject = { [key: string]: JsonValue }
 export type JsonArray = JsonValue[]
 
 export type ApiSuccess<T> = { success: true; data: T }
-export type ApiFailure = { success: false; error: { code: string; message: string } }
+/**
+ * `details` lets a validation failure name the offending parameter and value
+ * instead of burying them in a sentence, so the client can mark the exact
+ * control red rather than show a paragraph. Additive: existing consumers read
+ * only `code` and `message`.
+ */
+export type ApiFailure = {
+  success: false
+  error: { code: string; message: string; details?: ParameterErrorDetails }
+}
 export type ApiResponse<T> = ApiSuccess<T> | ApiFailure
 
 // Shared public vocabulary
@@ -13,6 +37,8 @@ export type ModelKind = MediaKind | 'language'
 export type GenerationMode =
   | 'text_to_image'
   | 'image_to_image'
+  /** Image model that also accepts a `mask` input: edit only what it selects. */
+  | 'inpaint'
   | 'text_to_video'
   | 'image_to_video'
 
@@ -48,10 +74,26 @@ export type GenerationInputRole =
   | 'first_frame'
   | 'last_frame'
   | 'source_video'
+  /** Alpha PNG marking the region a masked edit may regenerate. */
+  | 'mask'
   | (string & {})
 
+/**
+ * One input reference. Exactly one of `uploadId` / `assetId` must be present:
+ *
+ * - `uploadId` — a row in `media_uploads` / `generation_input_images`, i.e. a
+ *   locally picked file the browser streamed into object storage. Owned by the
+ *   generation: it is marked `attached` and its object is deleted with it.
+ * - `assetId` — a row in `assets`, i.e. an image already in the user's gallery.
+ *   Referenced, never copied: no upload row and no second object is created, and
+ *   the same asset may feed any number of later jobs.
+ *
+ * Both are uuid-shaped, so one pattern (`GENERATION_UPLOAD_ID_PATTERN`) validates
+ * either.
+ */
 export interface GenerationInputItem {
-  uploadId: string
+  uploadId?: string
+  assetId?: string
   role: GenerationInputRole
   position: number
 }
@@ -111,14 +153,31 @@ export interface VideoGenerationOutput {
 export type GenerationOutput = ImageGenerationOutput | VideoGenerationOutput
 
 // Capabilities & Field Descriptors
+//
+// These descriptors are the single source of truth for what a media model
+// accepts. They are declared by the provider plugin that talks to the vendor and
+// consumed unchanged by the browser's parameter UI, the browser's pre-submit
+// validation, the API's authoritative validation and the plugin's own request
+// adapter — see `media-parameters.ts`. Every field below except `type`/`name` is
+// optional so a plugin can state only what it actually knows: an absent
+// `defaultValue` is not the same claim as a `defaultValue`.
 export interface EnumParameterDescriptor {
   type: 'enum'
   name: string
   label?: string
   description?: string
   required?: boolean
-  options: string[]
+  /**
+   * Accepts bare strings and/or rich options. Bare strings are what every
+   * persisted `model_config_revisions.capabilities` row stores today, so
+   * widening rather than replacing is what keeps old snapshots validating
+   * without a rewrite. Read through `normalizeParameterOptions`, never by
+   * indexing this array directly.
+   */
+  options: Array<string | ParameterOption>
   defaultValue?: string
+  dependsOn?: ParameterDependency
+  ui?: ParameterUiHint
 }
 
 export interface IntegerParameterDescriptor {
@@ -131,7 +190,16 @@ export interface IntegerParameterDescriptor {
   max?: number
   step?: number
   defaultValue?: number
+  dependsOn?: ParameterDependency
+  ui?: ParameterUiHint
 }
+
+/**
+ * `number` and `image-size` are declared in `media-parameters.ts` alongside
+ * their validation, and re-exported from there by the barrel at the end of this
+ * file. They are members of `ParameterDescriptor` below, so the union and its
+ * exhaustive validator stay in lockstep.
+ */
 
 export interface BooleanParameterDescriptor {
   type: 'boolean'
@@ -140,6 +208,8 @@ export interface BooleanParameterDescriptor {
   description?: string
   required?: boolean
   defaultValue?: boolean
+  dependsOn?: ParameterDependency
+  ui?: ParameterUiHint
 }
 
 export interface TextParameterDescriptor {
@@ -152,13 +222,17 @@ export interface TextParameterDescriptor {
   maxLength?: number
   pattern?: string
   defaultValue?: string
+  dependsOn?: ParameterDependency
+  ui?: ParameterUiHint
 }
 
 export type ParameterDescriptor =
   | EnumParameterDescriptor
   | IntegerParameterDescriptor
+  | NumberParameterDescriptor
   | BooleanParameterDescriptor
   | TextParameterDescriptor
+  | ImageSizeParameterDescriptor
 
 export interface InputSlotDescriptor {
   role: GenerationInputRole
@@ -176,6 +250,22 @@ export interface ModelCapabilities {
   inputSlots: InputSlotDescriptor[]
   maxCount?: number
   supportedMediaKinds?: MediaKind[]
+  /**
+   * What the model can be asked to do, as distinct from which knobs it exposes.
+   * Consumers gate on `=== true`: an absent flag means unconfirmed, and guessing
+   * a capability is exactly the failure this contract exists to prevent.
+   */
+  flags?: ModelCapabilityFlags
+  /** Relational rules evaluated after every single-value check passes. */
+  crossFieldConstraints?: ParameterCrossFieldConstraint[]
+  /**
+   * Who authored this contract. `undeclared` is a hard stop at the API boundary
+   * rather than a permissive fallback, so an unknown model surfaces as an admin
+   * problem instead of silently accepting arbitrary parameters.
+   */
+  declaredBy?: MediaParameterProvenance
+  deprecated?: boolean
+  deprecationNote?: string
 }
 
 // Model Configuration Revision & Provider Contracts
@@ -256,6 +346,71 @@ export interface BuiltinProviderTemplate {
   credential: BuiltinProviderTemplateCredential
   presetIds: string[]
   models: BuiltinProviderTemplateModel[]
+  /**
+   * Resolution path for this template, mirroring `model_configs.plugin_source`:
+   * 'builtin' ships inside packages/providers, 'installed' is served from an uploaded
+   * `provider_plugins` artifact. Omitted on built-in templates for backwards compatibility.
+   */
+  source?: 'builtin' | 'installed'
+}
+
+// ---------------------------------------------------------------------------
+// Installed provider plugins (plugin-upload flow)
+//
+// Admin-facing projection of the `provider_plugins` table. The S3 `object_key` is
+// deliberately NOT part of any DTO: the artifact is fetched by the worker only.
+// `manifest` is the authoritative listing copy for the API/UI; the worker cross-checks
+// the loaded module's own manifest id@version and kind against the row.
+// ---------------------------------------------------------------------------
+
+/** Which kernel an uploaded package targets. */
+export type PluginKind = 'media' | 'language'
+
+/** Row lifecycle: pending -> active|failed, plus operator-driven disabled. */
+export type InstalledPluginStatus = 'pending' | 'active' | 'disabled' | 'failed'
+
+/** One scanner/manifest finding; identical to `PluginScanFinding` in @musecanvas/providers. */
+export interface AdminPluginScanFinding {
+  rule: string
+  severity: 'error' | 'warn'
+  line?: number
+  column?: number
+  message: string
+}
+
+export interface AdminPluginDto {
+  /** Row uuid, used as the `/admin/plugins/{id}` path segment. */
+  id: string
+  pluginId: string
+  pluginVersion: string
+  kind: PluginKind
+  displayName: string
+  description: string | null
+  status: InstalledPluginStatus
+  /** Package origin, mirroring `provider_plugins.source` (not the same vocabulary as `BuiltinProviderTemplate.source`). */
+  source: 'builtin' | 'uploaded'
+  allowedHosts: string[]
+  credentialSchemas: string[]
+  /** `manifest.modalities` for kind='media'; empty for language rows. */
+  modalities: MediaKind[]
+  /** `manifest.languageProtocols` for kind='language'; empty for media rows. */
+  languageProtocols: string[]
+  manifest: JsonObject
+  /** sha256 hex of the artifact; the storage object key is never exposed. */
+  artifactDigest: string
+  artifactSizeBytes: number
+  scanReport: AdminPluginScanFinding[]
+  errorCode: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** Result of a validate/upload call: the stored row plus the non-blocking warnings. */
+export interface AdminPluginInstallResult {
+  installed: boolean
+  plugin: AdminPluginDto
+  warnings: AdminPluginScanFinding[]
 }
 
 // ---------------------------------------------------------------------------
@@ -581,3 +736,8 @@ export const PromptTemplateErrorCode = {
 export type PromptTemplateErrorCode = (typeof PromptTemplateErrorCode)[keyof typeof PromptTemplateErrorCode]
 
 export * from './endpoints'
+export * from './image-edit'
+// Media capability metadata and its validator. Loaded last so the type-only
+// cycle back into this module never becomes a runtime one.
+export * from './media-parameters'
+export * from './media-parameter-validation'

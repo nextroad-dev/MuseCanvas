@@ -30,6 +30,11 @@ export const API_ENDPOINTS = {
   models: `${P}/models`,
   generations: `${P}/generations`,
 
+  // 局部修改：multipart 图片编辑，成功时返回与 POST /generations 相同的 job DTO
+  images: {
+    edit: `${P}/images/edit`,
+  },
+
   jobs: {
     list: `${P}/jobs`,
     detail: (id: string) => `${P}/jobs/${id}`,
@@ -82,6 +87,11 @@ export const API_ENDPOINTS = {
     providerCredential: (id: string) => `${P}/admin/provider-credentials/${id}`,
     providerCredentialTest: (id: string) => `${P}/admin/provider-credentials/${id}/test`,
     providerTemplates: `${P}/admin/provider-templates`,
+    // 上传插件：GET 列表，POST upload 为 multipart(manifest + file)，validate 只扫描不落库
+    plugins: `${P}/admin/plugins`,
+    plugin: (id: string) => `${P}/admin/plugins/${id}`,
+    pluginUpload: `${P}/admin/plugins/upload`,
+    pluginValidate: `${P}/admin/plugins/validate`,
     oauthProviders: `${P}/admin/oauth-providers`,
     oauthProvider: (provider: OAuthProviderName) => `${P}/admin/oauth-providers/${provider}`,
     // GET 返回当前激活集详情（PromptTemplateSetDetailDto | null）

@@ -63,9 +63,16 @@ export const api = Object.assign(
 
     // Library (assets)
     getAssets: (params?: Record<string, string | number | boolean | undefined>) =>
-      clientApi<{ items: Asset[]; total: number; hasMore: boolean }>(API_ENDPOINTS.library.list, {
+      clientApi<{ items: Asset[]; total: number; hasMore: boolean; nextCursor?: string }>(API_ENDPOINTS.library.list, {
         params,
       }),
+    /** Freshly signed URL for one owned asset. Gallery URLs expire, so this is the
+     *  recovery path when a thumbnail request fails — previously this endpoint had no
+     *  caller at all. */
+    getAssetDownloadUrl: (id: string) =>
+      clientApi<{ url: string; downloadUrl: string; mediaKind: string; mimeType: string }>(
+        API_ENDPOINTS.library.download(id),
+      ),
     deleteAsset: (id: string) => clientApi(API_ENDPOINTS.library.detail(id), { method: 'DELETE' }),
   },
 )

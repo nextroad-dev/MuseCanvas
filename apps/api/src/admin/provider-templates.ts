@@ -1,10 +1,18 @@
 import type { BuiltinProviderTemplate } from '@musecanvas/contracts'
 import { globalProviderRegistry } from '@musecanvas/providers'
+import {
+  installedPluginBaseUrl,
+  presetsForCatalogPlugins,
+  type CatalogPlugin,
+} from '../modules/admin/plugin-catalog'
 import { modelPresets, type ImageModelPreset, type ModelPreset, type VideoModelPreset } from './model-presets'
 
 type PluginPreset = ImageModelPreset | VideoModelPreset
 
-// Narrows a preset to one carrying an exact plugin identity.
+// Narrows a preset to one carrying an exact built-in plugin identity. Presets
+// synthesized from an uploaded manifest can never collide here: uploading a key the
+// static registry already owns is rejected (PLUGIN_ID_RESERVED), so an exact built-in
+// spec key always belongs to a shipped preset.
 function isPluginPreset(preset: ModelPreset, pluginId: string, pluginVersion: string): preset is PluginPreset {
   return 'pluginId' in preset && preset.pluginId === pluginId && 'pluginVersion' in preset && preset.pluginVersion === pluginVersion
 }
@@ -104,41 +112,92 @@ const BUILTIN_CATALOG_SPECS: BuiltinCatalogSpec[] = [
 // exact plugin identity. Throws loudly when a listed preset references a
 // vendor model absent from its manifest so stale presets fail fast instead
 // of serving unresolvable templates.
-export function buildBuiltinProviderTemplates(): BuiltinProviderTemplate[] {
-  return BUILTIN_CATALOG_SPECS.map((spec) => {
-    const plugin = globalProviderRegistry.get(spec.pluginId, spec.pluginVersion)
-    const models = (plugin.manifest.models ?? []).map((model) => ({
-      id: model.id,
-      ...(model.name ? { name: model.name } : {}),
-    }))
-    const modelIds = new Set(models.map((model) => model.id))
-    const presetIds = modelPresets
-      .filter((preset) => isPluginPreset(preset, spec.pluginId, spec.pluginVersion))
-      .map((preset) => {
-        if (!modelIds.has(preset.vendorModelId)) {
-          throw new Error(
-            `Builtin provider template '${spec.key}' preset '${preset.id}' ` +
-              `vendorModelId '${preset.vendorModelId}' is absent from plugin ` +
-              `${spec.pluginId}@${spec.pluginVersion} manifest`,
-          )
-        }
-        return preset.id
-      })
-    return {
-      key: spec.key,
-      pluginId: spec.pluginId,
-      pluginVersion: spec.pluginVersion,
-      providerId: spec.providerId,
-      adapter: spec.adapter,
-      displayName: spec.displayName,
-      ...(plugin.manifest.description ? { description: plugin.manifest.description } : {}),
-      modality: spec.modality,
-      baseUrl: spec.baseUrl,
-      credential: spec.credential,
-      presetIds,
-      models,
-    }
-  })
+//
+// `installed` (active provider_plugins media manifests, resolved by the caller) is
+// appended as extra templates; omitting it keeps the built-in listing unchanged.
+export function buildBuiltinProviderTemplates(installed: CatalogPlugin[] = []): BuiltinProviderTemplate[] {
+  return [...BUILTIN_CATALOG_SPECS.map(builtinTemplateForSpec), ...installedProviderTemplates(installed)]
+}
+
+function builtinTemplateForSpec(spec: BuiltinCatalogSpec): BuiltinProviderTemplate {
+  const plugin = globalProviderRegistry.get(spec.pluginId, spec.pluginVersion)
+  const models = (plugin.manifest.models ?? []).map((model) => ({
+    id: model.id,
+    ...(model.name ? { name: model.name } : {}),
+  }))
+  const modelIds = new Set(models.map((model) => model.id))
+  const presetIds = modelPresets
+    .filter((preset) => isPluginPreset(preset, spec.pluginId, spec.pluginVersion))
+    .map((preset) => {
+      if (!modelIds.has(preset.vendorModelId)) {
+        throw new Error(
+          `Builtin provider template '${spec.key}' preset '${preset.id}' ` +
+            `vendorModelId '${preset.vendorModelId}' is absent from plugin ` +
+            `${spec.pluginId}@${spec.pluginVersion} manifest`,
+        )
+      }
+      return preset.id
+    })
+  return {
+    key: spec.key,
+    pluginId: spec.pluginId,
+    pluginVersion: spec.pluginVersion,
+    providerId: spec.providerId,
+    adapter: spec.adapter,
+    displayName: spec.displayName,
+    ...(plugin.manifest.description ? { description: plugin.manifest.description } : {}),
+    modality: spec.modality,
+    baseUrl: spec.baseUrl,
+    credential: spec.credential,
+    presetIds,
+    models,
+  }
+}
+
+// One credential template per active installed media plugin, so an admin can create a
+// credential bound to pluginId@pluginVersion. The API never loads the artifact, so
+// everything here comes from the row's whitelisted manifest: the first exact
+// allowedHost is the default endpoint, and the declared credential schema only selects
+// which input the admin renders — reusing the two kinds the built-in catalog has.
+function installedProviderTemplates(installed: CatalogPlugin[]): BuiltinProviderTemplate[] {
+  const presets = presetsForCatalogPlugins(installed)
+  const templates: BuiltinProviderTemplate[] = []
+  for (const entry of installed) {
+    const manifest = entry.manifest
+    if (manifest.kind !== 'media') continue
+    const schemaId = (manifest.credentialSchemas || [])[0] || 'legacy-api-key-v1'
+    const kind: BuiltinProviderTemplate['credential']['kind'] = schemaId === 'legacy-api-key-v1' ? 'api_key' : 'google_service_account'
+    templates.push({
+      key: `installed:${manifest.id}@${manifest.version}`,
+      pluginId: manifest.id,
+      pluginVersion: manifest.version,
+      providerId: manifest.id,
+      // No legacy adapter exists for an uploaded plugin; the plugin id keeps the field
+      // populated while never colliding with openai/seedream/anthropic.
+      adapter: manifest.id,
+      displayName: manifest.displayName,
+      ...(manifest.description ? { description: manifest.description } : {}),
+      modality: manifest.modalities[0],
+      baseUrl: installedPluginBaseUrl(manifest.allowedHosts || []),
+      credential: {
+        schemaId,
+        schemaVersion: 1,
+        kind,
+        label: kind === 'api_key' ? `${manifest.displayName} API Key` : `${manifest.displayName} 凭据 JSON`,
+        placeholder: kind === 'api_key' ? 'API key' : '{"...":"..."}',
+        helpText: `${manifest.id}@${manifest.version} 声明的凭据格式（${schemaId}）。`,
+      },
+      presetIds: presets
+        .filter(preset => 'pluginId' in preset && preset.pluginId === manifest.id && preset.pluginVersion === manifest.version)
+        .map(preset => preset.id),
+      models: (manifest.models ?? []).map(model => ({
+        id: model.id,
+        ...(model.name ? { name: model.name } : {}),
+      })),
+      source: 'installed',
+    })
+  }
+  return templates
 }
 
 // Catalog lookup for credential enforcement: returns the built-in template

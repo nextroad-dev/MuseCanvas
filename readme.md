@@ -114,6 +114,11 @@ APP_MASTER_KEY=   # 32 字节，64 位 hex 或 base64/base64url
 ALLOW_INSECURE_SMTP=false
 ALLOW_INSECURE_PROVIDER_BASE_URL=false
 ALLOW_PRIVATE_PROVIDER_BASE_URL=false
+# 管理员上传 provider 插件代码包；开启后上传的 .mjs 将以 worker 进程权限执行
+# （可读 APP_MASTER_KEY 派生的全部供应商凭据），仅面向互相信任的管理员。
+ALLOW_PLUGIN_UPLOAD=false
+# Worker 物化插件制品的本地缓存目录，必须是可写临时目录，不要放在 /app（镜像层是临时的）。
+PLUGIN_CACHE_DIR=/tmp/musecanvas-plugin-cache
 
 # 过渡期只读兼容（可选，仅一个版本）：仍可传入旧密钥，已有加密数据继续可读，
 # 所有新写入都只用 APP_MASTER_KEY 派生的密钥。新安装留空即可。

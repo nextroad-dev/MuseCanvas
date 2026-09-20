@@ -16,7 +16,7 @@ MuseCanvas 是一个面向多图像生成模型的创作平台。它把用户创
 
 ## 技术栈
 
-- 前端：Vue 3、TypeScript、Vite、Pinia、Vue Router、Tailwind CSS。
+- 前端：Next.js 15（App Router、React 19）、Zustand、TanStack Query、Tailwind CSS，SSR 守卫 + Client Islands 混合渲染。
 - API：Next.js API Routes、TypeScript、PostgreSQL、Redis。
 - Worker：独立 TypeScript 进程，消费生成队列和后台任务。
 - 基础设施：Docker Compose、Nginx、GitHub Actions、GitHub Container Registry、S3 兼容对象存储。
@@ -25,7 +25,7 @@ MuseCanvas 是一个面向多图像生成模型的创作平台。它把用户创
 
 ```text
 apps/
-  web/       Vue 3 前端应用
+  web-next/  Next.js 15 (React 19) 前端应用
   api/       Next.js API 应用
   worker/    后台任务 Worker
 packages/
@@ -53,11 +53,11 @@ scripts/     本地和部署辅助脚本
 
 | 文件 | 用途 |
 | --- | --- |
-| `deploy/compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit；首次启动会自动把 Mailpit / 内嵌 MinIO 的开发默认值写入数据库（已配置未验证），引导页直接预填。|
+| `deploy/compose.yaml` | 默认本地全栈环境，从源码构建 `api`、`worker`、`web-next`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit；首次启动会自动把 Mailpit / 内嵌 MinIO 的开发默认值写入数据库（已配置未验证），引导页直接预填。|
 | `deploy/compose.dev.yaml` | 开发环境兼容入口，保留给显式 `docker compose --project-directory . --env-file .env -f deploy/compose.dev.yaml` 使用，同样面向本地开发。|
 | `deploy/compose.prod.yaml` | 从源码构建的部署模板，不包含 MinIO / Mailpit，不预置任何 SMTP / S3 默认值，应用配置全部走 `/setup` 引导页写入数据库。|
 | `deploy/compose.images.yaml` | 使用 GHCR 已构建镜像部署，不包含 MinIO / Mailpit，默认通过 `18080:80` 暴露 Nginx，同样不预置应用配置。|
-| `deploy/docker/*.Dockerfile` | `api`、`worker`、`web`、`nginx` 四个镜像定义。|
+| `deploy/docker/*.Dockerfile` | `api`、`worker`、`web-next`、`nginx` 四个镜像定义。|
 
 > MinIO 和 Mailpit 只用于本地开发，方便模拟对象存储和邮件投递。公开部署或生产环境不要使用内嵌 MinIO / Mailpit，请在 `/setup` 引导页接入真实的 S3 兼容对象存储与 SMTP 服务。
 
@@ -176,7 +176,7 @@ MinIO / S3 XML 配置示例：
 ```text
 ghcr.io/nextroad-dev/musecanvas-api:latest
 ghcr.io/nextroad-dev/musecanvas-worker:latest
-ghcr.io/nextroad-dev/musecanvas-web:latest
+ghcr.io/nextroad-dev/musecanvas-web-next:latest
 ghcr.io/nextroad-dev/musecanvas-nginx:latest
 ```
 
@@ -226,7 +226,7 @@ pnpm compose:down
 也可以只运行单个应用：
 
 ```bash
-pnpm --filter @musecanvas/web dev
+pnpm --filter @musecanvas/web-next dev
 pnpm --filter @musecanvas/api dev
 pnpm --filter @musecanvas/worker dev
 ```

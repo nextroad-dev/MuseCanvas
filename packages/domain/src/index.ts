@@ -7,25 +7,19 @@ import type {
   GenerationOutput,
   ImageGenerationMetadata,
   ImageGenerationOutput,
-  ImagePricingV1,
   InputSlotDescriptor,
   IntegerParameterDescriptor,
   JsonArray,
   JsonObject,
   JsonPrimitive,
   JsonValue,
-  MediaCreditsQuote,
   MediaKind,
   ModelCapabilities,
   ModelKind,
-  ModelPricing,
   ParameterDescriptor,
-  PricingScheme,
-  QuoteMediaGenerationCreditsInput,
   TextParameterDescriptor,
   VideoGenerationMetadata,
   VideoGenerationOutput,
-  VideoPricingV1,
 } from '@musecanvas/contracts'
 
 export type {
@@ -37,25 +31,19 @@ export type {
   GenerationOutput,
   ImageGenerationMetadata,
   ImageGenerationOutput,
-  ImagePricingV1,
   InputSlotDescriptor,
   IntegerParameterDescriptor,
   JsonArray,
   JsonObject,
   JsonPrimitive,
   JsonValue,
-  MediaCreditsQuote,
   MediaKind,
   ModelCapabilities,
   ModelKind,
-  ModelPricing,
   ParameterDescriptor,
-  PricingScheme,
-  QuoteMediaGenerationCreditsInput,
   TextParameterDescriptor,
   VideoGenerationMetadata,
   VideoGenerationOutput,
-  VideoPricingV1,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,195 +111,6 @@ export function validateModelInput(
   if (!Number.isInteger(input.count) || input.count < 1 || input.count > maxCount) return 'INVALID_COUNT'
   if (input.quality && !qualityOptions.has(input.quality)) return 'INVALID_QUALITY'
   return null
-}
-
-// ---------------------------------------------------------------------------
-// Safe Credits Validation & Legacy Quoting (Preserved)
-// ---------------------------------------------------------------------------
-
-export const MAX_SAFE_CREDITS = Number.MAX_SAFE_INTEGER
-
-export function validateSafeCredits(amount: unknown): amount is number {
-  return (
-    typeof amount === 'number' &&
-    Number.isFinite(amount) &&
-    Number.isInteger(amount) &&
-    amount >= 0 &&
-    amount <= Number.MAX_SAFE_INTEGER
-  )
-}
-
-export const isSafeCreditAmount = validateSafeCredits
-
-export function assertSafeCredits(amount: unknown, label = 'credit amount'): asserts amount is number {
-  if (typeof amount !== 'number' || !Number.isFinite(amount)) {
-    throw new TypeError(`${label} must be a finite number`)
-  }
-  if (!Number.isInteger(amount)) {
-    throw new RangeError(`${label} must be an integer`)
-  }
-  if (amount < 0) {
-    throw new RangeError(`${label} must be non-negative`)
-  }
-  if (amount > Number.MAX_SAFE_INTEGER) {
-    throw new RangeError(`${label} exceeds maximum safe integer`)
-  }
-}
-
-export interface QuoteGenerationCreditsInput {
-  creditsPerImage: number
-  count: number
-  optimizationCredits?: number
-}
-
-export interface GenerationCreditsQuote {
-  creditsPerImage: number
-  count: number
-  optimizationCredits: number
-  imageCredits: number
-  totalCredits: number
-  quotedCredits: number
-}
-
-export function quoteGenerationCredits(
-  inputOrCreditsPerImage: QuoteGenerationCreditsInput | number,
-  maybeCount?: number,
-  maybeOptimizationCredits?: number,
-): GenerationCreditsQuote {
-  let creditsPerImage: number
-  let count: number
-  let optimizationCredits: number
-
-  if (typeof inputOrCreditsPerImage === 'object' && inputOrCreditsPerImage !== null) {
-    creditsPerImage = inputOrCreditsPerImage.creditsPerImage
-    count = inputOrCreditsPerImage.count
-    optimizationCredits = inputOrCreditsPerImage.optimizationCredits ?? 0
-  } else {
-    creditsPerImage = inputOrCreditsPerImage
-    count = maybeCount!
-    optimizationCredits = maybeOptimizationCredits ?? 0
-  }
-
-  assertSafeCredits(creditsPerImage, 'creditsPerImage')
-
-  if (typeof count !== 'number' || !Number.isFinite(count)) {
-    throw new TypeError('count must be a finite number')
-  }
-  if (!Number.isInteger(count)) {
-    throw new RangeError('count must be an integer')
-  }
-  if (count < 1) {
-    throw new RangeError('count must be at least 1')
-  }
-  if (count > Number.MAX_SAFE_INTEGER) {
-    throw new RangeError('count exceeds maximum safe integer')
-  }
-
-  assertSafeCredits(optimizationCredits, 'optimizationCredits')
-
-  if (creditsPerImage > 0 && count > Math.floor(Number.MAX_SAFE_INTEGER / creditsPerImage)) {
-    throw new RangeError('image credits calculation exceeds safe integer limit')
-  }
-
-  const imageCredits = creditsPerImage * count
-
-  if (Number.MAX_SAFE_INTEGER - imageCredits < optimizationCredits) {
-    throw new RangeError('total credits calculation exceeds safe integer limit')
-  }
-
-  const totalCredits = imageCredits + optimizationCredits
-
-  return {
-    creditsPerImage,
-    count,
-    optimizationCredits,
-    imageCredits,
-    totalCredits,
-    quotedCredits: totalCredits,
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Media Pricing Quoting (Unified Image & Video with Safe-Integer Checks)
-// ---------------------------------------------------------------------------
-
-export function quoteMediaGenerationCredits(
-  input: QuoteMediaGenerationCreditsInput,
-): MediaCreditsQuote {
-  const { pricing, count: rawCount, durationSeconds: rawDuration, optimizationCredits: rawOpt } = input
-
-  const count = rawCount ?? 1
-  if (typeof count !== 'number' || !Number.isFinite(count)) {
-    throw new TypeError('count must be a finite number')
-  }
-  if (!Number.isInteger(count)) {
-    throw new RangeError('count must be an integer')
-  }
-  if (count < 1) {
-    throw new RangeError('count must be at least 1')
-  }
-  if (count > Number.MAX_SAFE_INTEGER) {
-    throw new RangeError('count exceeds maximum safe integer')
-  }
-
-  const optimizationCredits = rawOpt ?? 0
-  assertSafeCredits(optimizationCredits, 'optimizationCredits')
-
-  let baseCredits = 0
-  let durationSeconds: number | undefined
-
-  if (pricing.scheme === 'per_image_v1') {
-    assertSafeCredits(pricing.creditsPerImage, 'creditsPerImage')
-    if (pricing.creditsPerImage > 0 && count > Math.floor(Number.MAX_SAFE_INTEGER / pricing.creditsPerImage)) {
-      throw new RangeError('image credits calculation exceeds safe integer limit')
-    }
-    baseCredits = pricing.creditsPerImage * count
-  } else if (pricing.scheme === 'per_second_v1') {
-    assertSafeCredits(pricing.creditsPerSecond, 'creditsPerSecond')
-    durationSeconds = rawDuration ?? (pricing.minDurationSeconds ?? 1)
-    if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds)) {
-      throw new TypeError('durationSeconds must be a finite number')
-    }
-    if (!Number.isInteger(durationSeconds)) {
-      throw new RangeError('durationSeconds must be an integer')
-    }
-    if (durationSeconds < 1) {
-      throw new RangeError('durationSeconds must be at least 1')
-    }
-    if (pricing.minDurationSeconds !== undefined && durationSeconds < pricing.minDurationSeconds) {
-      throw new RangeError(`durationSeconds must be at least ${pricing.minDurationSeconds}`)
-    }
-    if (pricing.maxDurationSeconds !== undefined && durationSeconds > pricing.maxDurationSeconds) {
-      throw new RangeError(`durationSeconds must be at most ${pricing.maxDurationSeconds}`)
-    }
-
-    if (pricing.creditsPerSecond > 0 && durationSeconds > Math.floor(Number.MAX_SAFE_INTEGER / pricing.creditsPerSecond)) {
-      throw new RangeError('video credits calculation exceeds safe integer limit')
-    }
-    const perOutputCredits = pricing.creditsPerSecond * durationSeconds
-    if (perOutputCredits > 0 && count > Math.floor(Number.MAX_SAFE_INTEGER / perOutputCredits)) {
-      throw new RangeError('video credits calculation exceeds safe integer limit')
-    }
-    baseCredits = perOutputCredits * count
-  } else {
-    throw new Error('Unsupported pricing scheme')
-  }
-
-  if (Number.MAX_SAFE_INTEGER - baseCredits < optimizationCredits) {
-    throw new RangeError('total credits calculation exceeds safe integer limit')
-  }
-
-  const totalCredits = baseCredits + optimizationCredits
-
-  return {
-    pricing,
-    count,
-    durationSeconds,
-    baseCredits,
-    optimizationCredits,
-    totalCredits,
-    quotedCredits: totalCredits,
-  }
 }
 
 // ---------------------------------------------------------------------------

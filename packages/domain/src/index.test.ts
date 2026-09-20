@@ -1,155 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  assertSafeCredits,
-  isSafeCreditAmount,
-  MAX_SAFE_CREDITS,
   type ModelValidationConfig,
   normalizeGenerationRequest,
   prepareRequestDigestInput,
-  quoteGenerationCredits,
-  quoteMediaGenerationCredits,
   serializeCanonicalGenerationRequest,
   serializeCanonicalJson,
   validateGenerationRequest,
   validateModelInput,
-  validateSafeCredits,
 } from './index'
 import {
-  BILLING_STATE_CONFLICT,
-  BillingErrorCode,
   type CreateGenerationRequest,
-  GENERATION_PRICE_CHANGED,
   type GenerationOutput,
   type ImageGenerationOutput,
-  type ImagePricingV1,
-  INSUFFICIENT_CREDITS,
-  INVALID_CREDIT_AMOUNT,
   type ModelCapabilities,
   type VideoGenerationOutput,
-  type VideoPricingV1,
 } from '@musecanvas/contracts'
-
-test('contracts export all expected billing error codes', () => {
-  assert.equal(INSUFFICIENT_CREDITS, 'INSUFFICIENT_CREDITS')
-  assert.equal(GENERATION_PRICE_CHANGED, 'GENERATION_PRICE_CHANGED')
-  assert.equal(BILLING_STATE_CONFLICT, 'BILLING_STATE_CONFLICT')
-  assert.equal(INVALID_CREDIT_AMOUNT, 'INVALID_CREDIT_AMOUNT')
-
-  assert.equal(BillingErrorCode.INSUFFICIENT_CREDITS, 'INSUFFICIENT_CREDITS')
-  assert.equal(BillingErrorCode.GENERATION_PRICE_CHANGED, 'GENERATION_PRICE_CHANGED')
-  assert.equal(BillingErrorCode.BILLING_STATE_CONFLICT, 'BILLING_STATE_CONFLICT')
-  assert.equal(BillingErrorCode.INVALID_CREDIT_AMOUNT, 'INVALID_CREDIT_AMOUNT')
-})
-
-test('validateSafeCredits / isSafeCreditAmount validates credit amounts correctly', () => {
-  assert.equal(validateSafeCredits(0), true)
-  assert.equal(validateSafeCredits(1), true)
-  assert.equal(validateSafeCredits(100), true)
-  assert.equal(validateSafeCredits(MAX_SAFE_CREDITS), true)
-
-  // invalid amounts
-  assert.equal(validateSafeCredits(-1), false)
-  assert.equal(validateSafeCredits(1.5), false)
-  assert.equal(validateSafeCredits(0.1), false)
-  assert.equal(validateSafeCredits(NaN), false)
-  assert.equal(validateSafeCredits(Infinity), false)
-  assert.equal(validateSafeCredits(-Infinity), false)
-  assert.equal(validateSafeCredits(MAX_SAFE_CREDITS + 1), false)
-  assert.equal(validateSafeCredits('100'), false)
-  assert.equal(validateSafeCredits(null), false)
-  assert.equal(validateSafeCredits(undefined), false)
-  assert.equal(validateSafeCredits({}), false)
-
-  assert.equal(isSafeCreditAmount(50), true)
-  assert.equal(isSafeCreditAmount(-5), false)
-})
-
-test('assertSafeCredits throws on invalid values', () => {
-  assert.doesNotThrow(() => assertSafeCredits(0))
-  assert.doesNotThrow(() => assertSafeCredits(10))
-  assert.doesNotThrow(() => assertSafeCredits(MAX_SAFE_CREDITS))
-
-  assert.throws(() => assertSafeCredits(-1), RangeError)
-  assert.throws(() => assertSafeCredits(2.5), RangeError)
-  assert.throws(() => assertSafeCredits(MAX_SAFE_CREDITS + 1), RangeError)
-  assert.throws(() => assertSafeCredits(NaN), TypeError)
-  assert.throws(() => assertSafeCredits(Infinity), TypeError)
-  assert.throws(() => assertSafeCredits('100'), TypeError)
-})
-
-test('quoteGenerationCredits calculates fixed quote correctly', () => {
-  // Object input
-  const quote1 = quoteGenerationCredits({
-    creditsPerImage: 2,
-    count: 4,
-    optimizationCredits: 1,
-  })
-  assert.deepEqual(quote1, {
-    creditsPerImage: 2,
-    count: 4,
-    optimizationCredits: 1,
-    imageCredits: 8,
-    totalCredits: 9,
-    quotedCredits: 9,
-  })
-
-  // Positional input without optimizationCredits
-  const quote2 = quoteGenerationCredits(3, 2)
-  assert.deepEqual(quote2, {
-    creditsPerImage: 3,
-    count: 2,
-    optimizationCredits: 0,
-    imageCredits: 6,
-    totalCredits: 6,
-    quotedCredits: 6,
-  })
-
-  // Zero creditsPerImage
-  const quote3 = quoteGenerationCredits({
-    creditsPerImage: 0,
-    count: 2,
-    optimizationCredits: 5,
-  })
-  assert.deepEqual(quote3, {
-    creditsPerImage: 0,
-    count: 2,
-    optimizationCredits: 5,
-    imageCredits: 0,
-    totalCredits: 5,
-    quotedCredits: 5,
-  })
-})
-
-test('quoteGenerationCredits rejects invalid counts', () => {
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1, count: 0 }), RangeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1, count: -1 }), RangeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1, count: 1.5 }), RangeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1, count: NaN }), TypeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1, count: Infinity }), TypeError)
-})
-
-test('quoteGenerationCredits rejects invalid creditsPerImage and optimizationCredits', () => {
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: -1, count: 1 }), RangeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1.5, count: 1 }), RangeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1, count: 1, optimizationCredits: -1 }), RangeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: 1, count: 1, optimizationCredits: 0.5 }), RangeError)
-  assert.throws(() => quoteGenerationCredits({ creditsPerImage: NaN, count: 1 }), TypeError)
-})
-
-test('quoteGenerationCredits rejects overflow beyond safe integer', () => {
-  // Multiplication overflow
-  assert.throws(
-    () => quoteGenerationCredits({ creditsPerImage: Math.floor(MAX_SAFE_CREDITS / 2) + 1, count: 3 }),
-    RangeError
-  )
-
-  // Addition overflow
-  assert.throws(
-    () => quoteGenerationCredits({ creditsPerImage: MAX_SAFE_CREDITS, count: 1, optimizationCredits: 1 }),
-    RangeError
-  )
-})
 
 test('legacy validateModelInput behaves correctly for existing models', () => {
   const model = {
@@ -698,92 +564,4 @@ test('canonical normalization and serialization is strictly deterministic', () =
   // Ensure JSON keys are sorted
   const canonicalJson = serializeCanonicalJson({ z: 1, b: 2, a: 3 })
   assert.equal(canonicalJson, '{"a":3,"b":2,"z":1}')
-})
-
-test('quoteMediaGenerationCredits calculates image quotes with safe-integer checks', () => {
-  const imagePricing: ImagePricingV1 = {
-    scheme: 'per_image_v1',
-    creditsPerImage: 5,
-  }
-
-  const quote = quoteMediaGenerationCredits({
-    pricing: imagePricing,
-    count: 3,
-    optimizationCredits: 2,
-  })
-
-  assert.deepEqual(quote, {
-    pricing: imagePricing,
-    count: 3,
-    durationSeconds: undefined,
-    baseCredits: 15,
-    optimizationCredits: 2,
-    totalCredits: 17,
-    quotedCredits: 17,
-  })
-
-  // Rejects invalid counts
-  assert.throws(() => quoteMediaGenerationCredits({ pricing: imagePricing, count: 0 }), RangeError)
-  assert.throws(() => quoteMediaGenerationCredits({ pricing: imagePricing, count: -2 }), RangeError)
-  assert.throws(() => quoteMediaGenerationCredits({ pricing: imagePricing, count: 1.5 }), RangeError)
-})
-
-test('quoteMediaGenerationCredits calculates video quotes with safe-integer checks', () => {
-  const videoPricing: VideoPricingV1 = {
-    scheme: 'per_second_v1',
-    creditsPerSecond: 10,
-    minDurationSeconds: 2,
-    maxDurationSeconds: 15,
-  }
-
-  const quote = quoteMediaGenerationCredits({
-    pricing: videoPricing,
-    durationSeconds: 5,
-    count: 1,
-    optimizationCredits: 1,
-  })
-
-  assert.deepEqual(quote, {
-    pricing: videoPricing,
-    count: 1,
-    durationSeconds: 5,
-    baseCredits: 50,
-    optimizationCredits: 1,
-    totalCredits: 51,
-    quotedCredits: 51,
-  })
-
-  // Multiple outputs for video
-  const multiQuote = quoteMediaGenerationCredits({
-    pricing: videoPricing,
-    durationSeconds: 4,
-    count: 2,
-    optimizationCredits: 0,
-  })
-  assert.equal(multiQuote.baseCredits, 80)
-  assert.equal(multiQuote.totalCredits, 80)
-
-  // Duration boundary violations
-  assert.throws(
-    () => quoteMediaGenerationCredits({ pricing: videoPricing, durationSeconds: 1 }),
-    RangeError
-  )
-  assert.throws(
-    () => quoteMediaGenerationCredits({ pricing: videoPricing, durationSeconds: 20 }),
-    RangeError
-  )
-  assert.throws(
-    () => quoteMediaGenerationCredits({ pricing: videoPricing, durationSeconds: 3.5 }),
-    RangeError
-  )
-
-  // Overflow safety
-  assert.throws(
-    () =>
-      quoteMediaGenerationCredits({
-        pricing: { scheme: 'per_second_v1', creditsPerSecond: Math.floor(MAX_SAFE_CREDITS / 2) + 1 },
-        durationSeconds: 3,
-      }),
-    RangeError
-  )
 })

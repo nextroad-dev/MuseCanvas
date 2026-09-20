@@ -98,10 +98,9 @@ jobs:
             dockerfile: deploy/docker/worker.Dockerfile
             build_args: ""
 
-          - image: musecanvas-web
-            dockerfile: deploy/docker/web.Dockerfile
-            build_args: |
-              VITE_API_BASE_URL=
+          - image: musecanvas-web-next
+            dockerfile: deploy/docker/web-next.Dockerfile
+            build_args: ""
 
           - image: musecanvas-nginx
             dockerfile: deploy/docker/nginx.Dockerfile

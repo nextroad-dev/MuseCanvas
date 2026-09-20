@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { AdminModel, ModelPreset, ProviderCredential } from '@/shared/types'
+import { credentialsForPreset, presetPluginKey } from '../lib/provider-templates'
 import { Cpu, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 
 export function AdminModelsView() {
@@ -42,6 +44,12 @@ export function AdminModelsView() {
       return res.data || []
     },
   })
+
+  // Only credentials whose plugin identity matches the selected preset may be
+  // attached; the API rejects a mismatched pairing with 供应商凭据与模型插件不匹配.
+  const selectedPreset = presets.find((p) => p.id === selectedPresetId) || null
+  const selectedPresetPluginKey = presetPluginKey(selectedPreset)
+  const matchingCredentials = credentialsForPreset(credentials, selectedPreset)
 
   // Toggle model enabled mutation
   const toggleMutation = useMutation({
@@ -217,10 +225,14 @@ export function AdminModelsView() {
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">选择预设</label>
+                <label htmlFor="model-preset" className="block text-xs font-medium text-foreground mb-1">选择预设</label>
                 <select
+                  id="model-preset"
                   value={selectedPresetId}
-                  onChange={(e) => setSelectedPresetId(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedPresetId(e.target.value)
+                    setSelectedCredentialId('')
+                  }}
                   className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
                 >
                   <option value="">请选择预设</option>
@@ -233,19 +245,38 @@ export function AdminModelsView() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">关联供应商凭据</label>
+                <label htmlFor="model-credential" className="block text-xs font-medium text-foreground mb-1">关联供应商凭据</label>
                 <select
+                  id="model-credential"
                   value={selectedCredentialId}
                   onChange={(e) => setSelectedCredentialId(e.target.value)}
                   className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
                 >
                   <option value="">未关联（任务将因缺少凭据失败）</option>
-                  {credentials.map((c) => (
+                  {matchingCredentials.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.displayName} ({c.provider})
+                      {c.displayName} ({c.providerId || c.adapter})
                     </option>
                   ))}
                 </select>
+                {selectedPreset && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {selectedPresetPluginKey ? (
+                      <>需要插件 <span className="font-mono text-foreground">{selectedPresetPluginKey}</span> 的凭据</>
+                    ) : (
+                      <>按适配协议 <span className="font-mono text-foreground">{selectedPreset.adapter || '-'}</span> 匹配凭据</>
+                    )}
+                    {matchingCredentials.length === 0 && (
+                      <>
+                        ，当前无可用凭据，请先到
+                        <Link href="/admin/plugins" className="mx-1 underline underline-offset-4 hover:text-foreground">
+                          媒体插件
+                        </Link>
+                        创建
+                      </>
+                    )}
+                  </p>
+                )}
               </div>
 
               <div>

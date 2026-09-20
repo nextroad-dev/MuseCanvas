@@ -7,6 +7,7 @@ import type { User } from '@/shared/types'
 import {
   LayoutDashboard,
   Users,
+  Blocks,
   Cpu,
   Key,
   FileText,
@@ -43,6 +44,7 @@ const navGroups: NavGroup[] = [
   {
     title: '生成资源',
     items: [
+      { path: '/admin/plugins', label: '媒体插件', icon: Blocks },
       { path: '/admin/models', label: '模型管理', icon: Cpu },
       { path: '/admin/providers', label: '供应商凭据', icon: Key },
       { path: '/admin/prompt-templates', label: '提示词模板', icon: FileText },
@@ -52,7 +54,7 @@ const navGroups: NavGroup[] = [
     title: '系统设置',
     items: [
       { path: '/admin/oauth', label: 'OAuth', icon: ShieldCheck },
-      { path: '/setup?step=site', label: '系统配置', icon: Settings },
+      { path: '/admin/settings', label: '系统配置', icon: Settings },
     ],
   },
   { items: [{ path: '/admin/jobs', label: '任务监控', icon: ListTodo }] },
@@ -77,7 +79,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
       {navGroups.map((group, idx) => (
         <div key={group.title || idx} className="flex flex-col gap-0.5">
           {group.title && (
-            <h2 className="px-3 py-1 text-xs font-medium text-muted-foreground">
+            <h2 className="px-3 py-1 text-sm font-medium text-muted-foreground">
               {group.title}
             </h2>
           )}

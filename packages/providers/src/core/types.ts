@@ -93,6 +93,7 @@ export type MediaInputImage = {
   width?: number
   height?: number
   sizeBytes?: number
+  role?: string
 }
 
 /**

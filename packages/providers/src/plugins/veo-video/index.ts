@@ -52,6 +52,8 @@ type VeoImagePayload = {
   mimeType: string
 }
 
+type VeoImageRole = 'first_frame' | 'last_frame' | 'reference_image'
+
 type VeoInstance = {
   prompt: string
   image?: VeoImagePayload
@@ -568,6 +570,17 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
   buildInstance(request: MediaRequest): VeoInstance {
     const images = (request.inputImages ?? []).map(img => this.toImagePayload(img))
     const instance: VeoInstance = { prompt: request.prompt }
+    const roles = this.resolveExplicitImageRoles(request, images.length)
+    if (roles) {
+      const referenceImages: Array<{ image: VeoImagePayload }> = []
+      roles.forEach((role, index) => {
+        if (role === 'first_frame') instance.image = images[index]
+        else if (role === 'last_frame') instance.lastFrame = images[index]
+        else referenceImages.push({ image: images[index] })
+      })
+      if (referenceImages.length > 0) instance.referenceImages = referenceImages
+      return instance
+    }
     if (images.length >= 1) {
       instance.image = images[0]
     }
@@ -578,6 +591,26 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
       instance.referenceImages = images.slice(2).map(image => ({ image }))
     }
     return instance
+  }
+
+  /**
+   * Stored roles win only when the list is complete, aligned with the image
+   * count, and describes a request Veo accepts: an unknown or duplicated role,
+   * or a last frame without its first frame, is treated as invalid so the
+   * caller falls back to the positional contract instead of losing bytes.
+   */
+  private resolveExplicitImageRoles(request: MediaRequest, count: number): VeoImageRole[] | null {
+    const explicit = request.extra?.['imageRoles']
+    if (!Array.isArray(explicit) || explicit.length === 0 || explicit.length !== count) return null
+    const values = explicit as unknown[]
+    for (const value of values) {
+      if (value !== 'first_frame' && value !== 'last_frame' && value !== 'reference_image') return null
+    }
+    const roles = values as VeoImageRole[]
+    if (roles.filter(role => role === 'first_frame').length !== 1) return null
+    const lastFrames = roles.filter(role => role === 'last_frame').length
+    if (lastFrames > 1) return null
+    return roles
   }
 
   resolveVideoParameters(request: MediaRequest, config?: ProviderConfig): VeoParameters {

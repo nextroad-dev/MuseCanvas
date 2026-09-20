@@ -133,6 +133,67 @@ test('Veo submit maps input images to image/lastFrame/referenceImages roles', as
   assert.ok(instance.image.bytesBase64Encoded.length > 0)
 })
 
+const imageBytes = (byte: number) => Buffer.from([byte, 0x21, 0x42])
+const inputImage = (byte: number) => {
+  const data = imageBytes(byte)
+  return { data, mimeType: 'image/png' as const, sizeBytes: data.length }
+}
+const encoded = (byte: number) => imageBytes(byte).toString('base64')
+
+test('Veo buildInstance places input images by explicit imageRoles', () => {
+  const framed = veoVideoPlugin.buildInstance(
+    mockRequest({ inputImages: [inputImage(1), inputImage(2)], extra: { imageRoles: ['first_frame', 'last_frame'] } }),
+  )
+  assert.equal(framed.image?.bytesBase64Encoded, encoded(1))
+  assert.equal(framed.lastFrame?.bytesBase64Encoded, encoded(2))
+  assert.equal(framed.referenceImages, undefined)
+
+  const mixed = veoVideoPlugin.buildInstance(
+    mockRequest({
+      inputImages: [inputImage(1), inputImage(2), inputImage(3)],
+      extra: { imageRoles: ['first_frame', 'reference_image', 'last_frame'] },
+    }),
+  )
+  assert.equal(mixed.image?.bytesBase64Encoded, encoded(1))
+  assert.equal(mixed.lastFrame?.bytesBase64Encoded, encoded(3))
+  assert.deepEqual(mixed.referenceImages?.map(entry => entry.image.bytesBase64Encoded), [encoded(2)])
+
+  // Roles, never array order, decide the slot each image lands in.
+  const swapped = veoVideoPlugin.buildInstance(
+    mockRequest({ inputImages: [inputImage(1), inputImage(2)], extra: { imageRoles: ['last_frame', 'first_frame'] } }),
+  )
+  assert.equal(swapped.image?.bytesBase64Encoded, encoded(2))
+  assert.equal(swapped.lastFrame?.bytesBase64Encoded, encoded(1))
+})
+
+test('Veo buildInstance keeps positional placement for a missing or unusable imageRoles list', () => {
+  const images = [inputImage(1), inputImage(2), inputImage(3), inputImage(4)]
+  const positional = veoVideoPlugin.buildInstance(mockRequest({ inputImages: images }))
+  assert.equal(positional.image?.bytesBase64Encoded, encoded(1))
+  assert.equal(positional.lastFrame?.bytesBase64Encoded, encoded(2))
+  assert.deepEqual(
+    positional.referenceImages?.map(entry => entry.image.bytesBase64Encoded),
+    [encoded(3), encoded(4)],
+  )
+
+  const unusable: Array<Record<string, unknown> | undefined> = [
+    undefined,
+    {},
+    { imageRoles: 'first_frame' },
+    { imageRoles: ['first_frame'] },
+    { imageRoles: ['first_frame', 'last_frame', 'reference_image', 'prompt_image'] },
+    { imageRoles: ['reference_image', 'reference_image', 'reference_image', 'reference_image'] },
+    { imageRoles: ['last_frame', 'last_frame', 'reference_image', 'reference_image'] },
+  ]
+  for (const extra of unusable) {
+    assert.deepEqual(
+      veoVideoPlugin.buildInstance(mockRequest({ inputImages: images, extra })),
+      positional,
+      'position must win for ' + JSON.stringify(extra),
+    )
+  }
+})
+
 test('Veo validateRequest enforces Veo 3.1 bounds', async () => {
   const config = makeConfig()
   const context = makeContext(globalThis.fetch)

@@ -232,7 +232,7 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
         throw new Error('INVALID_INPUT_IMAGE')
       }
       const inspected = inspectInputImage(data, limits)
-      images.push({ data, mimeType: inspected.mimeType, width: inspected.width, height: inspected.height, sizeBytes: data.length })
+      images.push({ data, mimeType: inspected.mimeType, width: inspected.width, height: inspected.height, sizeBytes: data.length, role: (row.role as string) || undefined })
     }
     return images.length > 0 ? images : undefined
   }
@@ -425,6 +425,9 @@ async function resolveSnapshot(job: Record<string, unknown>): Promise<ResolvedSn
   return { revision, config }
 }
 
+/** Placement roles both video plugins understand; coarser stored roles stay positional. */
+const FORWARDABLE_INPUT_ROLES = ['first_frame', 'last_frame', 'reference_image']
+
 function buildMediaRequest(job: Record<string, unknown>, prompt: string, inputImages: MediaInputImage[] | undefined, revision: ModelConfigRevisionEntity): MediaRequest {
   const mediaKind = job.media_kind === 'video' ? 'video' : 'image'
   const normalized = (job.normalized_request as Record<string, unknown> | null) || null
@@ -442,6 +445,14 @@ function buildMediaRequest(job: Record<string, unknown>, prompt: string, inputIm
     if (params[key] !== undefined) extra[key] = params[key]
   }
   if (size && mediaKind === 'video' && !extra.aspectRatio) extra.aspectRatio = size
+  const storedRoles = inputImages?.map(image => image.role)
+  // Only a complete list of placement roles is trustworthy: a partial list, an
+  // untagged legacy row, or a role a plugin cannot place (prompt_image,
+  // source_video) must keep today's positional behaviour instead of being
+  // rejected upstream or misplacing frames.
+  if (storedRoles && storedRoles.length > 0 && storedRoles.every(role => !!role && FORWARDABLE_INPUT_ROLES.includes(role))) {
+    extra.imageRoles = storedRoles
+  }
   return {
     modality: mediaKind,
     vendorModelId,

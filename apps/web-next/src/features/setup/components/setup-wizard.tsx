@@ -77,7 +77,7 @@ export function SetupWizard() {
       <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface px-6">
         <div className="flex items-center gap-3">
           <span className="text-xl font-bold tracking-tight text-foreground">MuseCanvas</span>
-          <span className="rounded bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent">
+          <span className="rounded bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent-strong">
             系统安装向导
           </span>
         </div>

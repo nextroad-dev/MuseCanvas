@@ -3,6 +3,9 @@ import type { EditSelection } from '@musecanvas/contracts'
 import type { GenerateModeTab, StagedReferenceImage } from '@/shared/types'
 import type { ParameterState, ParameterValue } from '@/shared/lib/media-parameters'
 
+// A file decode can outlive/unmount its dialog; keep the submit gate accurate across remounts.
+let referencePreparationCount = 0
+
 /**
  * The image 局部修改 is editing.
  *
@@ -52,6 +55,8 @@ export interface GenerateUiState {
 
   // Staged input images
   stagedImages: StagedReferenceImage[]
+  /** True while selected local files are being decoded and validated before staging. */
+  isPreparingReferences: boolean
   inlineUploadError: string | null
 
   // Inspector / UI state
@@ -80,6 +85,8 @@ export interface GenerateUiState {
    */
   replaceParams: (tab: GenerateModeTab, values: ParameterState) => void
   setStagedImages: (images: StagedReferenceImage[] | ((prev: StagedReferenceImage[]) => StagedReferenceImage[])) => void
+  beginReferencePreparation: () => void
+  finishReferencePreparation: () => void
   addStagedImage: (image: StagedReferenceImage) => void
   updateStagedImage: (localId: string, patch: Partial<StagedReferenceImage>) => void
   removeStagedImage: (localId: string) => void
@@ -109,6 +116,7 @@ const initialState = {
   selectedModelIdByKind: { image: '', video: '' } as Record<GenerateModeTab, string>,
   paramsByKind: { image: {}, video: {} } as Record<GenerateModeTab, ParameterState>,
   stagedImages: [] as StagedReferenceImage[],
+  isPreparingReferences: false,
   inlineUploadError: null as string | null,
   selectedJobId: null as string | null,
   activeOutputIndex: 0,
@@ -143,6 +151,15 @@ export const useGenerateUiStore = create<GenerateUiState>((set) => ({
     set((state) => ({
       stagedImages: typeof images === 'function' ? images(state.stagedImages) : images,
     })),
+
+  beginReferencePreparation: () => {
+    referencePreparationCount += 1
+    set({ isPreparingReferences: true })
+  },
+  finishReferencePreparation: () => {
+    referencePreparationCount = Math.max(0, referencePreparationCount - 1)
+    set({ isPreparingReferences: referencePreparationCount > 0 })
+  },
 
   addStagedImage: (image) =>
     set((state) => ({

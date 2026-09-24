@@ -10,7 +10,8 @@ import {
   buildTemplateCredentialInput,
   parseServiceAccountJson,
 } from '../lib/provider-templates'
-import { Loader2, X } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { Dialog } from '@/shared/components/ui/dialog'
 
 interface AdminProviderCredentialDialogProps {
   open: boolean
@@ -92,37 +93,22 @@ export function AdminProviderCredentialDialog({
     },
   })
 
-  if (!open) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="provider-credential-dialog-title"
-        className="relative z-10 w-full max-w-md rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-xl space-y-4"
-      >
-        <div className="flex items-center justify-between">
-          <h3 id="provider-credential-dialog-title" className="font-semibold text-foreground">
-            {effectiveMode === 'template'
-              ? '从媒体插件创建凭据'
-              : scope === 'language'
-                ? '创建语言模型凭据'
-                : '创建自定义凭据'}
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭"
-            className="rounded p-1 text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={
+        effectiveMode === 'template'
+          ? '从媒体插件创建凭据'
+          : scope === 'language'
+            ? '创建语言模型凭据'
+            : '创建自定义凭据'
+      }
+      panelClassName="max-w-md"
+    >
+      <div className="mt-4 space-y-4">
         {actionError && (
-          <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger">
+          <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger" role="alert">
             {actionError}
           </div>
         )}
@@ -323,6 +309,6 @@ export function AdminProviderCredentialDialog({
           </button>
         </div>
       </div>
-    </div>
+    </Dialog>
   )
 }

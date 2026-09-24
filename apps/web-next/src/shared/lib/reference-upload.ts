@@ -152,6 +152,7 @@ export async function addReferenceFiles(
     return
   }
 
+  const pending: Array<{ localId: string; file: File }> = []
   for (const file of files) {
     const current = store().stagedImages
     if (current.length >= maxInputs) {
@@ -173,27 +174,9 @@ export async function addReferenceFiles(
       break
     }
 
-    const dimensions = await checkImageDimensions(file)
-    if (dimensions.error) {
-      setInlineError(`「${file.name}」${dimensions.error}`)
-      continue
-    }
-
-    // Decoding is async, so re-check the counters a concurrent pick may have moved.
-    const afterDecode = store().stagedImages
-    if (
-      afterDecode.length >= maxInputs ||
-      afterDecode.reduce((sum, image) => sum + image.sizeBytes, 0) + file.size >
-        UPLOAD_LIMITS.maxTotalBytes
-    ) {
-      setInlineError(
-        afterDecode.length >= maxInputs
-          ? `最多支持添加 ${maxInputs} 张参考图`
-          : `参考图总大小不能超过 ${formatSize(UPLOAD_LIMITS.maxTotalBytes)}`,
-      )
-      break
-    }
-
+    // Reserve every accepted file's slot synchronously before decoding. A gallery
+    // pick made while an image is being inspected then appends after these uploads,
+    // preserving the user's source-selection order in the shared staged list.
     const localId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     store().addStagedImage({
       localId,
@@ -204,12 +187,23 @@ export async function addReferenceFiles(
       progress: 0,
       mimeType: file.type,
       sizeBytes: file.size,
-      width: dimensions.width,
-      height: dimensions.height,
     })
+    pending.push({ localId, file })
+  }
+
+  await Promise.all(pending.map(async ({ localId, file }) => {
+    const dimensions = await checkImageDimensions(file)
+    if (dimensions.error) {
+      await removeReferenceImage(localId)
+      setInlineError(`「${file.name}」${dimensions.error}`)
+      return
+    }
+    if (!isStaged(localId)) return
+
+    patch(localId, { width: dimensions.width, height: dimensions.height })
     // Deliberately not awaited: each file uploads independently and keeps its own progress.
     void startUpload(localId, file, file.type, file.size)
-  }
+  }))
 }
 
 /**
@@ -251,7 +245,7 @@ function galleryGeometryError(asset: Pick<Asset, 'width' | 'height'>): string | 
  * straight to `ready` and the request carries `assetId`. No upload row, no second
  * object, no progress to report — and removing it later must never delete the asset.
  *
- * @returns whether the image was added, so the picker can close only on success.
+ * @returns whether the image was added, so the caller can handle picker state explicitly.
  */
 export async function addGalleryImage(
   asset: Asset,
@@ -324,13 +318,24 @@ export async function addGalleryImage(
 export async function refreshGalleryPreview(localId: string): Promise<void> {
   const staged = store().stagedImages.find((image) => image.localId === localId)
   if (!staged || staged.source !== 'gallery' || !staged.assetId) return
-  if (previewRefreshed.has(localId)) return
+  if (previewRefreshed.has(localId)) {
+    setInlineError('图库图片预览仍无法加载，请移除后重新选择该图片')
+    return
+  }
   previewRefreshed.add(localId)
 
-  const res = await api.getAssetDownloadUrl(staged.assetId)
-  const url = res.success ? res.data?.url : undefined
-  if (!url || !isStaged(localId)) return
-  patch(localId, { previewUrl: url, imageUrl: url })
+  try {
+    const res = await api.getAssetDownloadUrl(staged.assetId)
+    const url = res.success ? res.data?.url : undefined
+    if (!isStaged(localId)) return
+    if (!url) {
+      setInlineError('图库图片预览链接已失效，请移除后重新选择该图片')
+      return
+    }
+    patch(localId, { previewUrl: url, imageUrl: url })
+  } catch {
+    if (isStaged(localId)) setInlineError('无法刷新图库图片预览，请检查网络后重试')
+  }
 }
 
 async function startUpload(

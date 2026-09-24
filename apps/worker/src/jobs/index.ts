@@ -42,6 +42,7 @@ import {
   type DerivedPreview,
 } from '../../../../packages/providers/src/index'
 import { createMediaExecutionContext, resolveMediaPlugin } from '../plugins/availability'
+import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
 import {
   inspectInputImage,
   MAX_INPUT_IMAGES,
@@ -1015,8 +1016,10 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
   const claimed = await transaction(async client => {
     const r = await client.query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL FOR UPDATE', [jobId])
     const job = r.rows[0] as Record<string, unknown> | undefined
-    if (!job || !['queued', 'retry_wait'].includes(String(job.status))) return null
-    if (isCancelRequested(job)) {
+    if (!job) return null
+    const claimDecision = decideJobClaim(job)
+    if (claimDecision === 'ignore') return null
+    if (claimDecision === 'cancel') {
       await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [job.id])
       return { ...(job as object), status: 'canceled', canceledAtClaim: true } as unknown as Record<string, unknown>
     }
@@ -1036,7 +1039,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
     const prompt = await preprocessPrompt(claimed)
     const currentRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [claimed.id])
     const current = currentRes.rows[0] as Record<string, unknown> | undefined
-    if (!current || current.status === 'canceled' || isCancelRequested(current)) {
+    if (decideClaimedJob(current) === 'cancel') {
       const latest = await getLatestProviderRunForJob(db(), String(claimed.id)).catch(() => null)
       if (latest && isNonTerminalRunState(latest.operationState)) {
         await requestRemoteCancel(latest, current || claimed)
@@ -1065,8 +1068,8 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       })
     })
     if (!idempotent.acquired) {
-      const reason = idempotent.reason || 'CONCURRENCY_LIMIT_EXCEEDED'
-      if (reason === 'MODEL_NOT_FOUND') {
+      const capacityDecision = decideCapacityDenial(idempotent.reason)
+      if (capacityDecision === 'terminal_invalid_config') {
         await transaction(async client => {
           await persistJobFailure(client, { jobId: String(jobRow.id), promptOptimizationId: (jobRow.prompt_optimization_id as string) || null, phase: 'generation_failed', code: 'INVALID_CONFIG', retryable: false, providerError: null })
         })
@@ -1122,12 +1125,13 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         return true
       }
     }
-    if (result.status === 'waiting' || result.status === 'submission_unknown') {
-      if (!result.remoteId && isSynchronousPlugin(plugin)) {
+    const resultDisposition = decideSubmitResult(result, isSynchronousPlugin(plugin))
+    if (resultDisposition === 'waiting' || resultDisposition === 'submission_unknown' || resultDisposition === 'empty_sync_remote') {
+      if (resultDisposition === 'empty_sync_remote') {
         await failRunTerminal(run, jobRow, 'PROVIDER_EMPTY_RESULT', { detail: 'SYNC_PLUGIN_MISSING_REMOTE_ID' }, 'generation_failed')
         return true
       }
-      if (result.status === 'waiting') {
+      if (resultDisposition === 'waiting') {
         await storeRunWaiting(run, result)
         await db().query("UPDATE generation_jobs SET phase='provider_waiting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
         return true
@@ -1136,7 +1140,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       await db().query("UPDATE generation_jobs SET phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
       return true
     }
-    if (result.status === 'submitting') {
+    if (resultDisposition === 'submitting') {
       await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'waiting', remoteId: result.remoteId ?? null, nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs), encryptedStatePayload: encryptOpaqueState(result.opaqueState), encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : null, providerAccepted: Boolean(result.remoteId) }).catch(() => null)
       return true
     }

@@ -5,6 +5,8 @@ import { inspectInputImage, validateInputImages } from '../../../../packages/pro
 import { NormalizedProviderError } from '../../../../packages/providers/src/index'
 import { resolveMediaPlugin } from '../plugins/availability'
 import { classifySubmitError, isSynchronousPlugin, validateStoredInputImage } from './index'
+import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
+import { isNonTerminalRunState, shouldCreateNewRun } from '../provider-state'
 
 // Create helper PNG buffer with valid IHDR
 function createValidPng(width = 100, height = 100): Buffer {
@@ -142,6 +144,44 @@ test('validateStoredInputImage rejects post-completion object changes', () => {
     }, { maxImageBytes: data.length - 1 }),
     /INVALID_INPUT_IMAGE_SIZE/,
   )
+})
+
+test('processJob claim decisions preserve canceled-at-claim and current cancellation gates', () => {
+  assert.equal(decideJobClaim(undefined), 'ignore')
+  assert.equal(decideJobClaim({ status: 'running' }), 'ignore')
+  assert.equal(decideJobClaim({ status: 'queued', cancel_requested_at: 'now' }), 'cancel')
+  assert.equal(decideJobClaim({ status: 'retry_wait' }), 'claim')
+  assert.equal(decideClaimedJob(undefined), 'cancel')
+  assert.equal(decideClaimedJob({ status: 'canceled' }), 'cancel')
+  assert.equal(decideClaimedJob({ status: 'running', cancel_requested_at: 'now' }), 'cancel')
+  assert.equal(decideClaimedJob({ status: 'running' }), 'continue')
+})
+
+test('processJob duplicate delivery polls nonterminal run instead of creating a run', () => {
+  for (const state of ['submitting', 'submission_unknown', 'waiting', 'importing', 'canceling']) {
+    assert.equal(isNonTerminalRunState(state), true)
+    assert.equal(shouldCreateNewRun(state), false)
+  }
+  assert.equal(shouldCreateNewRun('failed'), true)
+})
+
+test('processJob distinguishes missing model terminal failure from capacity denial requeue', () => {
+  assert.equal(decideCapacityDenial('MODEL_NOT_FOUND'), 'terminal_invalid_config')
+  assert.equal(decideCapacityDenial('CONCURRENCY_LIMIT_EXCEEDED'), 'requeue')
+  assert.equal(decideCapacityDenial(undefined), 'requeue')
+})
+
+test('processJob submit result decisions preserve sync and async state transitions', () => {
+  const waiting = { status: 'waiting' as const, remoteId: 'remote-1' }
+  const unknown = { status: 'submission_unknown' as const }
+  const submitting = { status: 'submitting' as const, remoteId: 'remote-1' }
+  assert.equal(decideSubmitResult(waiting, false), 'waiting')
+  assert.equal(decideSubmitResult(unknown, false), 'submission_unknown')
+  assert.equal(decideSubmitResult(submitting, false), 'submitting')
+  assert.equal(decideSubmitResult(waiting, true), 'waiting')
+  assert.equal(decideSubmitResult(unknown, true), 'empty_sync_remote')
+  assert.equal(decideSubmitResult({ ...unknown, remoteId: 'remote-2' }, true), 'submission_unknown')
+  assert.equal(decideSubmitResult({ status: 'succeeded' }, true), 'terminal')
 })
 
 test('isSynchronousPlugin distinguishes image-style and video-style plugins', () => {

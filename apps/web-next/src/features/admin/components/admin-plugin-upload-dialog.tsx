@@ -10,7 +10,8 @@ import type {
   PluginKind,
 } from '@/shared/types'
 import { PLUGIN_ARTIFACT_MAX_BYTES, humanFileSize, postPluginPackage, shortDigest } from '../lib/plugin-upload'
-import { Loader2, ShieldAlert, Upload, X } from 'lucide-react'
+import { Loader2, ShieldAlert, Upload } from 'lucide-react'
+import { Dialog } from '@/shared/components/ui/dialog'
 
 /**
  * Manifest prefills. Field names follow `validatePluginManifest` in
@@ -197,8 +198,6 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
     },
   })
 
-  if (!open) return null
-
   const blockingFindings = validate.findings.some((f) => f.severity === 'error')
   const canSubmit =
     !!file &&
@@ -208,23 +207,8 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
     !installMutation.isPending
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/40" onClick={close} aria-hidden="true" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="plugin-upload-dialog-title"
-        className="relative z-10 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-xl space-y-4"
-      >
-        <div className="flex items-center justify-between">
-          <h3 id="plugin-upload-dialog-title" className="font-semibold text-foreground">
-            上传{kind === 'media' ? '媒体' : '语言'}插件
-          </h3>
-          <button type="button" onClick={close} aria-label="关闭" className="rounded p-1 text-muted-foreground hover:text-foreground">
-            <X className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
-
+    <Dialog open={open} onClose={close} title={`上传${kind === 'media' ? '媒体' : '语言'}插件`} panelClassName="max-w-lg">
+      <div className="mt-4 space-y-4">
         {/* Risk disclosure — deliberately first-class content, not fine print. */}
         <div className="rounded-[var(--radius-control)] border border-danger-soft bg-danger-soft/20 p-3 text-xs text-foreground space-y-2">
           <div className="flex items-center gap-1.5 font-semibold text-danger">
@@ -367,6 +351,6 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
           提交成功后插件状态为「待加载」：需等待 Worker 拉取制品、核验 sha256 并重新扫描通过后才会启用，安装完成不代表即时生效。
         </p>
       </div>
-    </div>
+    </Dialog>
   )
 }

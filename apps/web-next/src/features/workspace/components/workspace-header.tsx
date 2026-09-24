@@ -8,6 +8,7 @@ import { useLogout } from '@/shared/hooks/useAuth'
 import { useGenerationMode } from '@/shared/hooks/useGenerationMode'
 import { GENERATE_ROUTE } from '@/shared/lib/app-routes'
 import { navLabelFor, resolveActiveNavKey, workspaceNavItems } from '../lib/workspace-nav'
+import { ThemeToggle } from '@/shared/components/ui/theme-toggle'
 import { LogOut, Menu, Settings, X } from 'lucide-react'
 
 interface WorkspaceHeaderProps {
@@ -99,6 +100,8 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
         <span className="text-sm font-medium text-foreground md:hidden">{currentPageName}</span>
 
         <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
+
           {/* Admin link if admin */}
           {isAdmin && (
             <Link
@@ -174,11 +177,11 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
       {drawerOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div
-            className="fixed inset-0 bg-black/40 transition-opacity"
+            className="fixed inset-0 bg-overlay/40 transition-opacity"
             onClick={() => setDrawerOpen(false)}
             aria-hidden="true"
           />
-          <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xs flex-col bg-surface p-6 shadow-xl">
+          <div className="motion-drawer-in fixed inset-y-0 right-0 z-50 flex w-full max-w-xs flex-col bg-surface p-6 shadow-xl">
             <div className="flex items-center justify-between pb-4">
               <span className="font-medium text-foreground">导航菜单</span>
               <button

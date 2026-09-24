@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Class/attribute-driven dark mode: `dark:` utilities key off data-theme. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 /*
  * Design tokens — single source of truth for the whole web app.
  *
@@ -81,9 +84,11 @@
   --z-index-sticky: 40;
   --z-index-nav: 40;
   --z-index-overlay: 50;
-  --z-index-toast: 100;
+  --z-index-toast: 50;
+  --z-index-tooltip: 60;
 
   /* Radius */
+  --radius-checkbox: 5px;
   --radius-control: 10px;
   --radius-popover: 12px;
   --radius-card: 14px;
@@ -103,10 +108,16 @@
   /* Overlay-scale entrances (scrim + dialog panel) sit between `base` and `slow`:
      long enough to read as deliberate, short enough to never block interaction. */
   --motion-overlay: 200ms;
+  /* Press feedback is the fastest interaction beat. */
+  --motion-press: 80ms;
+  /* Skeleton sweep: one pass every 1.5s, linear (Jude-Frontweb loading spec). */
+  --motion-shimmer: 1.5s;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  /* Per-item offset for `.motion-stagger` lists. Clamped to 12 steps in the
-     utility so a 50-row page never ends up waiting on the last cell. */
-  --stagger-step: 40ms;
+  /* Exits run ~1/3 faster than their entrance and ease in. */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  /* Per-item offset for `.motion-stagger` lists. Clamped to 8 steps in the
+     utility so a long page never ends up waiting on the last cell. */
+  --stagger-step: 50ms;
 }
 
 html,
@@ -119,6 +130,65 @@ body {
   line-height: 1.59;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Dark theme — Jude-Frontweb rule: every light token has a dark variant,
+ * status colors flip to a brighter foreground on a deeper background, and
+ * shadow alphas deepen so elevation stays visible on dark surfaces.
+ * Declared after @theme so these overrides win the cascade.
+ */
+@layer base {
+  :root[data-theme='dark'] {
+    /* Surfaces */
+    --color-canvas: #181816;
+    --color-surface: #21211f;
+    --color-surface-subtle: #2b2b28;
+    --color-surface-subtle-strong: #363632;
+    --color-foreground: #f1f1ec;
+    --color-foreground-inverse: #1a1a18;
+    --color-muted-foreground: #ababa3;
+    --color-border: #34342f;
+    --color-border-strong: #4b4b45;
+    --color-border-control: #96968d;
+
+    /* Primary action flips to a light solid on dark surfaces */
+    --color-primary: #f1f1ec;
+    --color-primary-hover: #ffffff;
+    --color-primary-active: #d9d9d3;
+
+    /* Brand accent: brighter green on deeper background */
+    --color-accent: #3ecf7a;
+    --color-accent-strong: #6fe3a0;
+    --color-accent-soft: #0e2e1d;
+    --color-accent-hover: #6fe3a0;
+    --color-accent-contrast: #062012;
+
+    /* Status — bright foreground + deep background */
+    --color-success: #4ade80;
+    --color-success-soft: #052e16;
+    --color-warning: #fbbf24;
+    --color-warning-soft: #422006;
+    --color-danger: #f87171;
+    --color-danger-hover: #fca5a5;
+    --color-danger-active: #fecaca;
+    --color-danger-soft: #450a0a;
+    --color-danger-border: #7f1d1d;
+    --color-info: #93c5fd;
+    --color-info-soft: #172554;
+    --color-neutral-status: #d6d6cf;
+    --color-neutral-soft: #2b2b28;
+
+    --color-positive: #4ade80;
+    --color-negative: #f87171;
+
+    --color-overlay: #0c0c0b;
+
+    /* Shadows deepen their alpha to stay legible on dark surfaces */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-md: 0 10px 24px -16px rgb(0 0 0 / 0.55);
+    --shadow-lg: 0 18px 44px -24px rgb(0 0 0 / 0.65);
+  }
 }
 
 /* One focus ring for every focusable element. Components must not redefine it. */
@@ -210,6 +280,28 @@ body {
   }
 }
 
+/* Toast entrance: drops 16px into place over the scrim-level duration. */
+@keyframes mc-slide-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Drawer entrance: slides in from the right edge. */
+@keyframes mc-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
 @keyframes mc-fade-out {
   from {
     opacity: 1;
@@ -264,6 +356,41 @@ body {
     animation-fill-mode: backwards;
   }
 
+  /* Page-level entrance: the slowest fade-in-up in the system. */
+  .motion-page {
+    animation-name: mc-reveal-up;
+    animation-duration: 400ms;
+    animation-timing-function: ease-out;
+    animation-fill-mode: backwards;
+  }
+
+  /* Press feedback: quick 0.98 dip, nothing more. */
+  .motion-press {
+    transition-property: transform;
+    transition-duration: var(--motion-press);
+    transition-timing-function: ease-in;
+  }
+
+  .motion-press:active {
+    transform: scale(0.98);
+  }
+
+  /* Toast entrance (paired with `.motion-fade-out` on dismiss). */
+  .motion-toast-in {
+    animation-name: mc-slide-in-down;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: ease-out;
+    animation-fill-mode: backwards;
+  }
+
+  /* Drawer entrance. */
+  .motion-drawer-in {
+    animation-name: mc-slide-in-right;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: ease-out;
+    animation-fill-mode: backwards;
+  }
+
   /* Transition-only hover lift for cards and tiles. It rides `transform` on the
      container, so a child image keeping `group-hover:scale-105` never fights
      it — the two transforms live on different elements. */
@@ -299,14 +426,13 @@ body {
     background-repeat: no-repeat;
     background-size: 200% 100%;
     animation-name: mc-shimmer;
-    /* One sweep scaled off the slowest token instead of a fresh magic number. */
-    animation-duration: calc(var(--motion-slow) * 3);
+    animation-duration: var(--motion-shimmer);
     animation-timing-function: linear;
     animation-iteration-count: infinite;
   }
 
   /* Dialog lifecycle: `.motion-fade-in` / `.motion-fade-out` go on the scrim,
-     the pair below on the panel. */
+     the pair below on the panel. Exits run ~1/3 faster than entrances, ease-in. */
   .motion-dialog-in {
     animation-name: mc-pop-in;
     animation-duration: var(--motion-overlay);
@@ -316,21 +442,21 @@ body {
 
   .motion-fade-out {
     animation-name: mc-fade-out;
-    animation-duration: var(--motion-overlay);
-    animation-timing-function: var(--ease-standard);
+    animation-duration: var(--motion-fast);
+    animation-timing-function: var(--ease-exit);
     animation-fill-mode: forwards;
   }
 
   .motion-dialog-out {
     animation-name: mc-scale-out;
     animation-duration: var(--motion-fast);
-    animation-timing-function: var(--ease-standard);
+    animation-timing-function: var(--ease-exit);
     animation-fill-mode: forwards;
   }
 
-  /* Entrance offset: callers set `--stagger-index` (unitless, 0-based) inline. */
+  /* Entrance offset: callers set `--stagger-index` (unitless, 0-based). */
   .motion-stagger {
-    animation-delay: calc(min(var(--stagger-index, 0), 12) * var(--stagger-step));
+    animation-delay: calc(min(var(--stagger-index, 0), 8) * var(--stagger-step));
   }
 }
 

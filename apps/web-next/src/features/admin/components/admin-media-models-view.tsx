@@ -20,7 +20,8 @@ import {
 import { AdminCredentialTable } from './admin-credential-table'
 import { AdminProviderCredentialDialog } from './admin-provider-credential-dialog'
 import { AdminInstalledPlugins } from './admin-installed-plugins'
-import { Blocks, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Dialog } from '@/shared/components/ui/dialog'
+import { Blocks, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 
 const MEDIA_KIND_LABEL: Record<'image' | 'video', string> = {
   image: '图像',
@@ -437,34 +438,15 @@ export function AdminMediaModelsView() {
         )}
       </section>
 
-      {createModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/40" onClick={() => setCreateModalOpen(false)} aria-hidden="true" />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-media-model-title"
-            className="relative z-10 w-full max-w-md rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-xl space-y-4"
-          >
-            <div className="flex items-center justify-between">
-              <h3 id="create-media-model-title" className="font-semibold text-foreground">添加新媒体模型</h3>
-              <button
-                type="button"
-                onClick={() => setCreateModalOpen(false)}
-                aria-label="关闭"
-                className="rounded p-1 text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
+      <Dialog open={createModalOpen} onClose={() => setCreateModalOpen(false)} title="添加新媒体模型" panelClassName="max-w-md">
+        <div className="mt-4 space-y-4">
+          {actionError && (
+            <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger" role="alert">
+              {actionError}
             </div>
+          )}
 
-            {actionError && (
-              <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger" role="alert">
-                {actionError}
-              </div>
-            )}
-
-            <div className="space-y-3">
+          <div className="space-y-3">
               <div>
                 <label htmlFor="media-model-preset" className="mb-1 block text-xs font-medium text-foreground">
                   选择预设
@@ -555,8 +537,7 @@ export function AdminMediaModelsView() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </Dialog>
 
       <AdminProviderCredentialDialog
         open={credentialDialogOpen}

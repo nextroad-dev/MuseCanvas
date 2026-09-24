@@ -12,13 +12,13 @@ import { MediaFrame } from '@/shared/components/media-frame'
 import { useLibraryUiStore } from '@/shared/stores/library-ui-store'
 import { assetPlaybackUrl, assetPreviewUrl, isVideoAsset } from '@/shared/types'
 import { AssetLightbox } from './asset-lightbox'
+import { Checkbox } from '@/shared/components/ui/checkbox'
+import { useToast } from '@/shared/components/ui/toast'
 import {
-  CheckSquare,
   Download,
   Image as ImageIcon,
   Loader2,
   RefreshCw,
-  Square,
   Trash2,
   ZoomIn,
 } from 'lucide-react'
@@ -32,7 +32,7 @@ const FILTER_KINDS = [
 
 /** Cells past this index share one delay: `.motion-stagger` clamps at 12 steps,
  *  so the tail of a 50-row page must not advertise a wait it will never pay. */
-const STAGGER_CLAMP = 12
+const STAGGER_CLAMP = 8
 
 export function LibraryView() {
   // Per-field selectors: a bare store destructure re-renders on any field change.
@@ -73,10 +73,18 @@ export function LibraryView() {
     visibleAssets.length > 0 && visibleAssets.every((asset) => selectedAssetIds.includes(asset.id))
   const isAnySelected = selectedAssetIds.length > 0
 
+  const toast = useToast()
+
   async function handleBatchDelete() {
     if (!isAnySelected) return
-    if (confirm(`确认删除选中的 ${selectedAssetIds.length} 个作品？此操作不可恢复。`)) {
-      await batchDeleteMutation.mutateAsync(selectedAssetIds)
+    const count = selectedAssetIds.length
+    if (confirm(`确认删除选中的 ${count} 个作品？此操作不可恢复。`)) {
+      try {
+        await batchDeleteMutation.mutateAsync(selectedAssetIds)
+        toast.push({ title: `已删除 ${count} 个作品`, variant: 'success' })
+      } catch {
+        toast.push({ title: '删除失败', description: '网络或服务端错误，请稍后重试。', variant: 'error' })
+      }
       clearSelectedAssets()
     }
   }
@@ -113,11 +121,13 @@ export function LibraryView() {
                 }
                 className="flex min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 text-xs font-medium text-foreground hover:bg-surface-subtle"
               >
-                {isAllSelected ? (
-                  <CheckSquare className="h-3.5 w-3.5 text-accent" />
-                ) : (
-                  <Square className="h-3.5 w-3.5 text-muted-foreground" />
-                )}
+                <Checkbox
+                  checked={isAllSelected}
+                  onCheckedChange={(checked) =>
+                    checked ? selectAllAssets(visibleAssets.map((a) => a.id)) : clearSelectedAssets()
+                  }
+                  aria-label={isAllSelected ? '取消全选' : '全选当前列表'}
+                />
                 {isAllSelected ? '取消全选' : '全选'}
               </button>
             )}
@@ -216,20 +226,18 @@ export function LibraryView() {
                   />
 
                   {/* Top-right selection checkbox */}
-                  <div
-                    onClick={() => toggleSelectAsset(asset.id)}
-                    className="motion-hover-fade absolute right-2 top-2 z-10 cursor-pointer rounded-[var(--radius-control)] bg-surface/80 p-1 text-foreground shadow sm:opacity-0 sm:group-hover:opacity-100"
-                  >
-                    {selected ? (
-                      <CheckSquare className="h-4 w-4 text-accent" />
-                    ) : (
-                      <Square className="h-4 w-4 text-muted-foreground" />
-                    )}
+                  <div className="motion-hover-fade absolute right-2 top-2 z-10 rounded-[var(--radius-control)] bg-surface/80 p-1 shadow sm:opacity-0 sm:group-hover:opacity-100">
+                    <Checkbox
+                      checked={selected}
+                      onCheckedChange={() => toggleSelectAsset(asset.id)}
+                      aria-label={selected ? '取消选择该作品' : '选择该作品'}
+                    />
                   </div>
 
-                  {/* Hover Overlay info and actions */}
+                  {/* Hover Overlay info and actions. The scrim sits over photos,
+                      so its text stays light in both themes. */}
                   <div className="media-scrim motion-hover-fade absolute inset-0 flex flex-col justify-end p-3 opacity-0 group-hover:opacity-100">
-                    <p className="line-clamp-2 text-xs text-foreground-inverse">{asset.prompt || '无提示词'}</p>
+                    <p className="line-clamp-2 text-xs text-white">{asset.prompt || '无提示词'}</p>
                     <div className="mt-2 flex items-center justify-between pt-1 border-t border-white/20">
                       <span className="font-mono text-[10px] text-white/70">
                         {new Date(asset.createdAt).toLocaleDateString()}
@@ -238,20 +246,21 @@ export function LibraryView() {
                         <button
                           type="button"
                           onClick={() => openPreview(asset.id)}
-                          className="rounded bg-overlay/40 p-1 text-foreground-inverse hover:bg-overlay/60"
-                          title="放大查看"
+                          className="rounded bg-overlay/40 p-1 text-white hover:bg-overlay/60"
+                          aria-label="放大查看"
                         >
-                          <ZoomIn className="h-3.5 w-3.5" />
+                          <ZoomIn className="h-3.5 w-3.5" aria-hidden="true" />
                         </button>
                         <a
                           href={assetPlaybackUrl(asset)}
                           download
                           target="_blank"
                           rel="noreferrer"
-                          className="rounded bg-overlay/40 p-1 text-foreground-inverse hover:bg-overlay/60"
+                          className="rounded bg-overlay/40 p-1 text-white hover:bg-overlay/60"
+                          aria-label="下载作品"
                           title="下载"
                         >
-                          <Download className="h-3.5 w-3.5" />
+                          <Download className="h-3.5 w-3.5" aria-hidden="true" />
                         </a>
                         <button
                           type="button"
@@ -261,9 +270,9 @@ export function LibraryView() {
                             }
                           }}
                           className="rounded bg-danger-soft p-1 text-danger hover:bg-danger-soft/80"
-                          title="删除"
+                          aria-label="删除该作品"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                         </button>
                       </div>
                     </div>

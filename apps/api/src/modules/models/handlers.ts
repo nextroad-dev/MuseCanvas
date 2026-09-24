@@ -12,6 +12,7 @@ import { globalProviderRegistry, MAX_INPUT_IMAGES } from '../../../../../package
 import type { AnyProviderManifest } from '../../../../../packages/providers/src/index'
 import type { MediaProviderPlugin } from '../../../../../packages/providers/src/index'
 import { resolvePresetCapabilities, type ModelPreset } from '../../admin/model-presets'
+import { hasForbiddenManualModelFields, modelOverrideError, modelSavePath, presetRevisionOrRow } from './upsert-internal'
 
 // Plugin-first validation. New image configuration targets the hardened active
 // keys (openai-image@1.1.0, seedream-image@1.1.0); exact registered 1.0.0 keys
@@ -365,13 +366,25 @@ export async function upsertModel(
   // defaults is refused instead of persisted. Previously only the hardened image
   // write rejected them, so a video write could author a contract the plugin had
   // never declared. An omitted or empty override stays accepted.
-  if (!isEmptyInputOverride(input.capabilities)) {
+  const overrideError = modelOverrideError(input)
+  if (overrideError === 'capabilities') {
     return fail('INVALID_INPUT', 'capabilities 由插件 manifest 声明，不接受自定义覆盖')
   }
-  if (!isEmptyInputOverride(input.defaults)) {
+  if (overrideError === 'defaults') {
     return fail('INVALID_INPUT', 'defaults 由插件 manifest 声明，不接受自定义覆盖')
   }
 
+  return modelSavePath(input) === 'plugin'
+    ? savePluginModel(actor, input, id, existing)
+    : savePresetModel(actor, input, id, existing)
+}
+
+async function savePluginModel(
+  actor: Actor,
+  input: Record<string, unknown>,
+  id: string | undefined,
+  existing: Record<string, any> | null | undefined,
+) {
   // Plugin-driven path: explicit provider/plugin identity (image or video).
   // The static registry plus the manifest modality is the only authority:
   // no adapter/provider-string mapping. New image configuration targets the
@@ -380,8 +393,7 @@ export async function upsertModel(
   // bounds, reference slot ceiling, endpoint host).
   // Exact 1.0.0 image keys are accepted only when updating an existing row
   // already pinned to that exact key; all other image writes use 1.1.0.
-  if (typeof input.pluginId === 'string' && input.pluginId.trim()) {
-    const pluginId = input.pluginId.trim()
+    const pluginId = (input.pluginId as string).trim()
     const pluginVersion = typeof input.pluginVersion === 'string' && input.pluginVersion.trim()
       ? input.pluginVersion.trim()
       : (IMAGE_PLUGIN_IDS[pluginId] ? ACTIVE_IMAGE_PLUGIN_VERSION : '1.0.0')
@@ -541,21 +553,22 @@ export async function upsertModel(
       return { ...record, capabilities, defaults, revision: created.revision, latest_revision_id: created.id }
     })
     return ok(modelDto(row))
-  }
+}
 
-  const forbiddenManualFields = [
-    'displayName', 'adapter', 'vendorModelId', 'baseUrl', 'sizes', 'qualityOptions', 'maxCount',
-    'modelKind', 'languageProtocol', 'maxOutputTokens', 'temperature', 'maxInputImages',
-    'providerId', 'pluginId', 'pluginVersion', 'capabilities', 'defaults',
-  ]
-  if (forbiddenManualFields.some((field) => input[field] !== undefined))
+async function savePresetModel(
+  actor: Actor,
+  input: Record<string, unknown>,
+  id: string | undefined,
+  existing: Record<string, any> | null | undefined,
+) {
+  if (hasForbiddenManualModelFields(input))
     return fail('INVALID_INPUT', '模型参数只能通过预设选择')
   // Preset resolution is catalog-aware so a model can be re-saved from a preset
   // synthesized from an active installed manifest.
   const storedPreset = existing?.preset_id ? await resolvePresetById(existing.preset_id) : null
   const preset =
     input.presetId === undefined
-      ? storedPreset && presetMatchesPersistedModel(storedPreset, existing)
+      ? storedPreset && presetMatchesPersistedModel(storedPreset, existing!)
         ? storedPreset
         : null
       : await resolvePresetById(input.presetId)
@@ -712,17 +725,13 @@ export async function upsertModel(
   }
   if (!result.rows[0]) return fail('NOT_FOUND', '模型不存在', 404)
   await db().query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5)', [actor.id, id ? 'model.update' : 'model.create', 'model', result.rows[0].id, {}])
-  try {
-    const withRevision = await snapshotRevisionForRow(
-      db(),
-      result.rows[0],
-      actor.id,
-      revisionContract,
-    )
-    return ok(modelDto(withRevision))
-  } catch {
-    return ok(modelDto(result.rows[0]))
-  }
+  const withRevision = await presetRevisionOrRow(result.rows[0], () => snapshotRevisionForRow(
+    db(),
+    result.rows[0],
+    actor.id,
+    revisionContract,
+  ))
+  return ok(modelDto(withRevision))
 }
 
 export async function deleteModel(actor: Actor, id: string) {

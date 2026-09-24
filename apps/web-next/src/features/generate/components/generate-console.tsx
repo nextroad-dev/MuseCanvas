@@ -108,6 +108,7 @@ export function GenerateConsole() {
   const setEditTarget = useGenerateUiStore((s) => s.setEditTarget)
   const setEditSelection = useGenerateUiStore((s) => s.setEditSelection)
   // Derived primitives, so upload progress ticks never re-render this console.
+  const isPreparingReferences = useGenerateUiStore((s) => s.isPreparingReferences)
   const isReferenceUploadBusy = useGenerateUiStore((s) =>
     s.stagedImages.some((image) => image.status === 'pending' || image.status === 'uploading' || image.status === 'processing'),
   )
@@ -408,7 +409,12 @@ export function GenerateConsole() {
 
     // Read the snapshot imperatively so the gate can never be evaluated from a
     // stale render of an upload that finished between render and click.
-    const stagedImages = useGenerateUiStore.getState().stagedImages
+    const inputState = useGenerateUiStore.getState()
+    const stagedImages = inputState.stagedImages
+    if (inputState.isPreparingReferences) {
+      setErrorMessage(`正在校验${inputNoun}，请完成后再生成`)
+      return
+    }
     if (stagedImages.some((image) => image.status !== 'ready' && image.status !== 'error')) {
       setErrorMessage(`${inputNoun}正在上传，请等待完成后再生成`)
       return
@@ -422,9 +428,11 @@ export function GenerateConsole() {
       setErrorMessage(`没有可用的${inputNoun}，请重新上传`)
       return
     }
-    if (video) {
-      // A lone 尾帧 (or an overflow past the frame capacity) is not representable
-      // in either provider request, so it must never leave the browser.
+    // Only validate the input capability when images are actually staged: a model
+    // without image inputs must still support its ordinary text-to-image flow.
+    // This also catches stale references after switching to a model with a smaller
+    // or incompatible input contract, for both image and video generation.
+    if (stagedImages.length > 0) {
       const violations = inputPlanViolations(stagedImages, inputPlan)
       if (violations.length > 0) {
         setErrorMessage(violations[0])
@@ -575,9 +583,11 @@ export function GenerateConsole() {
                       <span className="text-xs font-medium text-muted-foreground">{editBlockedReason}</span>
                     )
                   ) : (
-                    isReferenceUploadBusy && (
+                    isPreparingReferences ? (
+                      <span className="text-xs font-medium text-muted-foreground">正在校验{inputNoun}…</span>
+                    ) : isReferenceUploadBusy ? (
                       <span className="text-xs font-medium text-muted-foreground">{inputNoun}上传中…</span>
-                    )
+                    ) : null
                   )}
 
                   <button
@@ -586,7 +596,7 @@ export function GenerateConsole() {
                     disabled={
                       editing
                         ? editMutation.isPending || Boolean(editBlockedReason)
-                        : createJobMutation.isPending || selectedJobActive || isReferenceUploadBusy
+                        : createJobMutation.isPending || selectedJobActive || isPreparingReferences || isReferenceUploadBusy
                     }
                     title={editing ? (editBlockedReason ?? '提交局部修改') : undefined}
                     className="flex min-h-10 items-center gap-2 rounded-[var(--radius-control)] bg-primary px-5 text-sm font-medium text-canvas transition-colors duration-[var(--motion-fast)] hover:bg-primary-hover disabled:opacity-50"

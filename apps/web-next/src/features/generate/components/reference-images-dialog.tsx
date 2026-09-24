@@ -17,16 +17,19 @@ import { useGenerateUiStore } from '@/shared/stores/generate-ui-store'
 import {
   ALLOWED_IMAGE_MIME_TYPES,
   UPLOAD_LIMITS,
+  addGalleryImage,
   addReferenceFiles,
   clearReferenceImages,
   formatSize,
+  refreshGalleryPreview,
   removeReferenceImage,
   reorderReferenceImages,
   retryReferenceUpload,
 } from '@/shared/lib/reference-upload'
 import { planRolePositions } from '@/shared/lib/generation-params'
 import type { ImageInputPlan, ImageInputPlanModel } from '@/shared/lib/generation-params'
-import type { StagedReferenceImage } from '@/shared/types'
+import type { Asset, StagedReferenceImage } from '@/shared/types'
+import { GalleryImagePicker } from './gallery-image-picker'
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
@@ -95,15 +98,23 @@ export function ReferenceImagesDialog({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [isReadingFiles, setIsReadingFiles] = useState(false)
+  const [isGalleryPickerOpen, setIsGalleryPickerOpen] = useState(false)
+  const fileReadCountRef = useRef(0)
 
   const stagedImages = useGenerateUiStore((s) => s.stagedImages)
   const inlineUploadError = useGenerateUiStore((s) => s.inlineUploadError)
   const setInlineUploadError = useGenerateUiStore((s) => s.setInlineUploadError)
+  const beginReferencePreparation = useGenerateUiStore((s) => s.beginReferencePreparation)
+  const finishReferencePreparation = useGenerateUiStore((s) => s.finishReferencePreparation)
 
   const maxInputs = plan.capacity
   const supportsImages = maxInputs > 0
   const canAdd = supportsImages && stagedImages.length < maxInputs
   const totalBytes = stagedImages.reduce((sum, image) => sum + image.sizeBytes, 0)
+  const excludedGalleryAssetIds = useMemo(
+    () => stagedImages.flatMap((image) => (image.assetId ? [image.assetId] : [])),
+    [stagedImages],
+  )
   // Roles are positional: order alone decides 首帧 / 尾帧, which is why the tile
   // badges are derived from the plan instead of being picked per tile.
   const rolePositions = planRolePositions(plan)
@@ -127,12 +138,27 @@ export function ReferenceImagesDialog({
   }, [])
 
   async function handleFiles(fileList: File[] | FileList) {
-    setIsReadingFiles(true)
+    fileReadCountRef.current += 1
+    if (fileReadCountRef.current === 1) {
+      setIsReadingFiles(true)
+      beginReferencePreparation()
+    }
     try {
       await addReferenceFiles(fileList, model)
     } finally {
-      setIsReadingFiles(false)
+      fileReadCountRef.current -= 1
+      if (fileReadCountRef.current === 0) {
+        setIsReadingFiles(false)
+        finishReferencePreparation()
+      }
     }
+  }
+
+  async function handleGallerySelect(asset: Asset) {
+    // The helper reports capacity/size/geometry failures in the reference panel.
+    // Close either way so that message remains visible instead of hiding behind the picker.
+    await addGalleryImage(asset, model)
+    setIsGalleryPickerOpen(false)
   }
 
   function onInputChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -183,7 +209,7 @@ export function ReferenceImagesDialog({
 
   return (
     <div
-      onKeyDown={onKeyDown}
+      onKeyDown={isGalleryPickerOpen ? undefined : onKeyDown}
       className="fixed inset-0 z-[var(--z-index-overlay)] flex items-end justify-center p-4 sm:items-center"
     >
       <div
@@ -199,6 +225,8 @@ export function ReferenceImagesDialog({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
+        aria-hidden={isGalleryPickerOpen || undefined}
+        inert={isGalleryPickerOpen}
         aria-labelledby="reference-images-title"
         className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col gap-4 rounded-[var(--radius-panel)] border border-border bg-surface p-5 shadow-lg"
       >
@@ -283,16 +311,26 @@ export function ReferenceImagesDialog({
               <div className="flex flex-col items-center gap-2 px-4 py-5 text-center">
                 <UploadCloud aria-hidden="true" className="h-5 w-5 text-muted-foreground" />
                 <p className="text-sm text-foreground">拖拽图片到此处</p>
-                <button
-                  ref={addButtonRef}
-                  type="button"
-                  disabled={!supportsImages}
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex min-h-8 items-center gap-1.5 rounded-[var(--radius-control)] bg-primary px-3 text-sm font-medium text-canvas transition-colors duration-[var(--motion-fast)] hover:bg-primary-hover disabled:opacity-50"
-                >
-                  <ImagePlus aria-hidden="true" className="h-4 w-4" />
-                  添加图片
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    ref={addButtonRef}
+                    type="button"
+                    disabled={!supportsImages}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex min-h-8 items-center gap-1.5 rounded-[var(--radius-control)] bg-primary px-3 text-sm font-medium text-canvas transition-colors duration-[var(--motion-fast)] hover:bg-primary-hover disabled:opacity-50"
+                  >
+                    <ImagePlus aria-hidden="true" className="h-4 w-4" />
+                    上传本地图片
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsGalleryPickerOpen(true)}
+                    className="flex min-h-8 items-center gap-1.5 rounded-[var(--radius-control)] border border-border-control bg-surface px-3 text-sm font-medium text-foreground transition-colors duration-[var(--motion-fast)] hover:bg-surface-subtle"
+                  >
+                    <ImagePlus aria-hidden="true" className="h-4 w-4 text-accent-strong" />
+                    从图库选择
+                  </button>
+                </div>
                 <p className="text-xs text-muted-foreground">
                   PNG 或 JPEG，单张不超过 {formatSize(UPLOAD_LIMITS.maxImageBytes)}，总计不超过{' '}
                   {formatSize(UPLOAD_LIMITS.maxTotalBytes)}，最多 {maxInputs} 张
@@ -319,6 +357,9 @@ export function ReferenceImagesDialog({
                         <img
                           src={image.previewUrl}
                           alt={statusLabel(image, index, noun)}
+                          onError={() => {
+                            if (image.source === 'gallery') void refreshGalleryPreview(image.localId)
+                          }}
                           className="h-full w-full object-cover"
                         />
                         <span
@@ -462,6 +503,13 @@ export function ReferenceImagesDialog({
         aria-label={`选择本地${noun}文件`}
         className="sr-only"
         onChange={onInputChange}
+      />
+      <GalleryImagePicker
+        open={isGalleryPickerOpen}
+        onClose={() => setIsGalleryPickerOpen(false)}
+        onSelect={(asset) => void handleGallerySelect(asset)}
+        excludedAssetIds={excludedGalleryAssetIds}
+        noun={noun}
       />
     </div>
   )

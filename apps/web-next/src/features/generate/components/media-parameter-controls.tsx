@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, ChevronDown, Minus } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
+import { Switch } from '@/shared/components/ui/switch'
 import {
   descriptorLabel,
   descriptorOptions,
@@ -98,20 +99,11 @@ export function MediaParameterControls({ model, values, onChange, countUnit }: M
     if (descriptor.type === 'boolean') {
       const on = effectiveValue(model, descriptor, values) !== false
       return (
-        <button
-          type="button"
-          aria-pressed={on}
-          aria-label={descriptorLabel(descriptor, model)}
-          onClick={() => pick(descriptor, !on)}
-          className={`${PILL_CLASS} ${on ? PILL_SELECTED_CLASS : PILL_IDLE_CLASS}`}
-        >
-          {on ? (
-            <Check aria-hidden="true" className="h-3.5 w-3.5 text-accent-strong" />
-          ) : (
-            <Minus aria-hidden="true" className="h-3.5 w-3.5" />
-          )}
-          <span>{on ? '开' : '关'}</span>
-        </button>
+        <Switch
+          checked={on}
+          onCheckedChange={(next) => pick(descriptor, next)}
+          aria-labelledby={labelId(descriptor)}
+        />
       )
     }
 

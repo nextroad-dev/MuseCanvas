@@ -125,7 +125,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
                             : job.status === 'failed'
                               ? 'bg-danger-soft text-danger'
                               : job.status === 'running'
-                                ? 'bg-accent-soft text-accent'
+                                ? 'bg-accent-soft text-accent-strong'
                                 : 'bg-surface-subtle text-muted-foreground'
                         }`}
                       >

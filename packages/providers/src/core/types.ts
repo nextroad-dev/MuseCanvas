@@ -5,10 +5,17 @@
  * boundaries must be strictly JSON-serializable.
  */
 
+// Type-only, so an uploaded plugin bundle still ships zero runtime imports even
+// though its declarations reference the shared capability contract.
+import type { JsonValue, ModelCapabilities } from '@musecanvas/contracts'
+
 export type MediaProviderPluginId = string
 export type MediaProviderPluginVersion = string
 
 export type MediaPluginKey = `${string}@${string}`
+
+/** Discriminates which kernel a registered plugin belongs to. */
+export type ProviderPluginKind = 'media' | 'language'
 
 export function formatPluginKey(id: string, version: string): MediaPluginKey {
   return `${id}@${version}`
@@ -29,6 +36,7 @@ export function parsePluginKey(key: string): { id: string; version: string } {
  * Manifest describing plugin capabilities, supported modalities, models, host allowlists, etc.
  */
 export type MediaProviderManifest = {
+  kind: 'media'
   id: MediaProviderPluginId
   version: MediaProviderPluginVersion
   displayName: string
@@ -46,16 +54,54 @@ export type MediaProviderManifest = {
    */
   credentialSchemas: string[]
   /**
-   * Models supported or default configuration parameters.
+   * Models this plugin can serve, each with the full parameter contract the
+   * vendor actually accepts for it.
+   *
+   * The per-model `capabilities` block is the authoritative statement of that
+   * model's parameters, geometry limits and edit abilities. The host does not
+   * invent any of it: what a model does not declare it does not offer, and a
+   * model that declares nothing surfaces as undeclared rather than as a guess.
    */
-  models?: {
-    id: string
-    name?: string
-    modalities: ('image' | 'video')[]
-    supportedAspectRatios?: string[]
-    maxBatchSize?: number
-    maxInputImages?: number
-  }[]
+  models?: MediaModelDeclaration[]
+}
+
+/**
+ * One vendor model, with everything the system needs to render, validate and
+ * dispatch a request for it.
+ *
+ * Exported so a plugin can build a shared parameter set once and reference it
+ * from several models that behave identically, instead of copy-pasting a
+ * descriptor list per model id.
+ */
+export interface MediaModelDeclaration {
+  id: string
+  name?: string
+  modalities: ('image' | 'video')[]
+  /**
+   * @deprecated Superseded by the `image-size` descriptor's `presets`, which
+   * carry labels and geometry and can also express custom-size limits. Retained
+   * because persisted manifest copies still contain it.
+   */
+  supportedAspectRatios?: string[]
+  /**
+   * @deprecated Superseded by the `count` parameter descriptor's `max`.
+   */
+  maxBatchSize?: number
+  /**
+   * @deprecated Superseded by `inputSlots` / `flags.imageToImage`.
+   */
+  maxInputImages?: number
+  /**
+   * this vendor model accepts a separate alpha mask part on its edit endpoint
+   */
+  supportsMask?: boolean
+  /** The authoritative parameter contract for this model. */
+  capabilities?: ModelCapabilities
+  /** Starting values, each of which must be legal for its own descriptor. */
+  defaults?: Record<string, JsonValue>
+  /** Vendor-retired but still servable. Never the default recommendation. */
+  deprecated?: boolean
+  deprecationNote?: string
 }
 
 /**
@@ -112,6 +158,20 @@ export type MediaRequest = {
   durationSeconds?: number
   fps?: number
   inputImages?: MediaInputImage[]
+  /**
+   * Parameters declared by the model's manifest contract that have no typed
+   * field of their own — `background`, `output_format`, `output_compression`,
+   * `input_fidelity`, `seed`, and so on.
+   *
+   * This is deliberately a *separate* field from `extra`. `extra` means
+   * "untyped leftovers" and is read with alias-tolerant lookups by the video
+   * adapters; treating it as the contract channel would make the documented
+   * escape hatch load-bearing and would collide with its `imageRoles` key.
+   * Keys here are exactly the descriptor names the model declared, so the
+   * adapter converts unified parameters into provider-specific wire fields
+   * rather than the frontend ever learning those differences.
+   */
+  parameters?: Record<string, JsonValue>
   extra?: Record<string, unknown>
 }
 
@@ -264,4 +324,80 @@ export interface MediaProviderPlugin {
   cancel?(remoteId: string, opaqueState: Record<string, unknown> | undefined, config: ProviderConfig, context: ExecutionContext): Promise<OperationResult>
 
   openOutput?(descriptor: OutputDescriptor, config: ProviderConfig, context: ExecutionContext): Promise<BoundedOutput>
+}
+
+/* -------------------------------------------------------------------------
+ * Language Provider Kernel Types
+ *
+ * A minimal kernel for LLM completions; no media-specific types cross over.
+ * ------------------------------------------------------------------------- */
+
+/** LLM wire protocol family (single source of truth; re-exported from language-model.ts). */
+export type LanguageProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
+/** Reasoning-effort token (single source of truth; re-exported from language-model.ts). */
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
+
+/**
+ * Manifest describing a language-model plugin's protocol, host allowlist and models.
+ */
+export type LanguageProviderManifest = {
+  kind: 'language'
+  id: MediaProviderPluginId
+  version: MediaProviderPluginVersion
+  displayName: string
+  description?: string
+  languageProtocols: LanguageProtocol[]
+  allowedHosts: string[]
+  credentialSchemas: string[]
+  models?: {
+    id: string
+    name?: string
+    maxInputTokens?: number
+    maxOutputTokensDefault?: number
+    supportsStructuredOutput?: boolean
+  }[]
+}
+
+/** Normalized completion request crossing the plugin boundary (no transport secrets). */
+export type LanguageRequest = {
+  vendorModelId: string
+  system: string
+  user: string
+  schemaName?: string
+  schema?: Record<string, unknown>
+  maxOutputTokens: number
+  temperature?: number
+  reasoningEffort?: ReasoningEffort | null
+  timeoutMs: number
+}
+
+/** Normalized completion result returned by a language plugin. */
+export type LanguageCompletionResult = {
+  text: string
+  providerReferenceId?: string
+  inputTokens?: number
+  outputTokens?: number
+  error?: NormalizedProviderErrorDiagnostic
+}
+
+/**
+ * Language plugins get only a SafeHttpClient; there is no bounded binary output reader.
+ */
+export type LanguageExecutionContext = {
+  pluginId: string
+  version: string
+  http: SafeHttpClient
+}
+
+/**
+ * Language Provider Plugin Interface.
+ */
+export interface LanguageProviderPlugin {
+  readonly manifest: LanguageProviderManifest
+
+  probe?(config: ProviderConfig, context: LanguageExecutionContext): Promise<ProbeResult>
+
+  validateConfig(config: ProviderConfig): void | Promise<void>
+
+  complete(request: LanguageRequest, config: ProviderConfig, context: LanguageExecutionContext): Promise<LanguageCompletionResult>
 }

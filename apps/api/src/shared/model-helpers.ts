@@ -1,4 +1,5 @@
 import { modelPresets, type ModelPreset, type ReasoningEffort } from '../admin/model-presets'
+import { isPrivateProviderHost } from '../../../../packages/providers/src/index'
 
 export const reasoningEfforts: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh']
 
@@ -11,17 +12,9 @@ export function normalizedProviderBaseUrl(value: unknown): string | null | undef
     const insecureAllowed = process.env.ALLOW_INSECURE_PROVIDER_BASE_URL === 'true'
     if (url.protocol !== 'https:' && !(insecureAllowed && url.protocol === 'http:')) return null
     if (url.username || url.password || url.search || url.hash) return null
-    const host = url.hostname.toLowerCase()
-    const privateHost =
-      host === 'localhost' ||
-      host === '0.0.0.0' ||
-      host === '::1' ||
-      /^127\./.test(host) ||
-      /^10\./.test(host) ||
-      /^192\.168\./.test(host) ||
-      /^169\.254\./.test(host) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-    if (privateHost && process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL !== 'true') return null
+    // Single private-address definition (shared with the plugin scanner and the
+    // worker's SSRF guard) so a host can never be "private" for one layer only.
+    if (isPrivateProviderHost(url.hostname) && process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL !== 'true') return null
     return url.toString().replace(/\/$/, '')
   } catch {
     return null

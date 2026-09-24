@@ -1,4 +1,5 @@
-import { S3Client } from '@aws-sdk/client-s3'
+import { createHash } from 'node:crypto'
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { resolveStorageSettings } from './runtime'
 
 // Per-settings-revision S3 client resolution for the worker.
@@ -71,4 +72,45 @@ export async function getStorageClient(): Promise<StorageClientHandle> {
   cached = { key, handle }
   if (prev) destroy(prev.handle.s3)
   return handle
+}
+
+/**
+ * Read one object fully into memory, bounded by `maxBytes`.
+ *
+ * Lives here (rather than in the one caller, the thumbnail backfill) for two
+ * reasons: `@aws-sdk/client-s3` does not resolve from `scripts/` under pnpm's
+ * isolated layout, and this module already owns endpoint/credential resolution
+ * plus the revision-scoped client cache. One source, no second S3 config path.
+ */
+export async function getStorageObject(key: string, maxBytes: number): Promise<Buffer> {
+  const { s3, bucket } = await getStorageClient()
+  const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+  const body = response.Body
+  if (!body) return Buffer.alloc(0)
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of body as AsyncIterable<Uint8Array>) {
+    total += chunk.byteLength
+    if (total > maxBytes) {
+      // Stop the transfer instead of buffering an oversized object, then let the
+      // caller decide: the backfill marks the row and moves on.
+      const stream = body as { destroy?: () => void }
+      if (typeof stream.destroy === 'function') stream.destroy()
+      throw new Error(`STORAGE_OBJECT_TOO_LARGE:${String(total)}`)
+    }
+    chunks.push(Buffer.from(chunk))
+  }
+  return Buffer.concat(chunks)
+}
+
+/** Write one small object, mirroring the worker's checksum metadata convention. */
+export async function putStorageObject(key: string, data: Buffer, contentType: string): Promise<void> {
+  const { s3, bucket } = await getStorageClient()
+  await s3.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: data,
+    ContentType: contentType,
+    Metadata: { checksum: createHash('sha256').update(data).digest('hex') },
+  }))
 }

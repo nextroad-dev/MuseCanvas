@@ -20,6 +20,7 @@ import {
 
 function createMockPlugin(id: string, version: string): MediaProviderPlugin {
   const manifest: MediaProviderManifest = {
+    kind: 'media',
     id,
     version,
     displayName: `Mock Plugin ${id}`,

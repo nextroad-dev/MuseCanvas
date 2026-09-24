@@ -89,6 +89,11 @@ services:
       ALLOW_INSECURE_SMTP: "true"
       ALLOW_INSECURE_PROVIDER_BASE_URL: "false"
       ALLOW_PRIVATE_PROVIDER_BASE_URL: "false"
+      # Admin plugin code-package upload is default-deny; flip per deployment.
+      ALLOW_PLUGIN_UPLOAD: ${ALLOW_PLUGIN_UPLOAD:-false}
+      # Where the worker caches downloaded plugin artifacts. Never under /app:
+      # that is an ephemeral image layer shared by neither api nor worker.
+      PLUGIN_CACHE_DIR: ${PLUGIN_CACHE_DIR:-/tmp/musecanvas-plugin-cache}
       # This bundled stack is served directly over HTTP by default.
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       # One-release upgrade-only read fallback for pre-master-key rows (optional, fresh installs leave unset).

@@ -10,7 +10,7 @@ export const metadata = {
 export default function PrivacyPage() {
   return (
     <LegalShell title="隐私政策" updatedAt="2026-06-25">
-      <section className="rounded-[var(--radius-card)] border border-warning-soft bg-warning-soft p-6">
+      <section className="rounded-card bg-warning-soft p-4 sm:p-6">
         <h2 className="!text-warning">适用对象与地域限制</h2>
         <p>
           <strong>本服务不面向中国大陆用户。</strong>我们不向位于中国大陆境内的用户提供本服务，亦不接受来自中国大陆的注册、访问与使用。

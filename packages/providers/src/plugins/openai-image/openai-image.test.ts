@@ -1,17 +1,20 @@
 import sharp from 'sharp'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { MASK_INPUT_ROLE, MAX_MASK_BYTES } from '@musecanvas/contracts'
 import {
   LEGACY_OPENAI_IMAGE_PLUGIN_VERSION,
   OPENAI_IMAGE_PLUGIN_ID,
   OPENAI_IMAGE_PLUGIN_VERSION,
   OPENAI_IMAGE_SUPPORTED_MODELS,
+  createEditMask,
   globalProviderRegistry,
   legacyOpenAiImageManifest,
   legacyOpenAiImagePlugin,
   openAiImageManifest,
   openAiImagePlugin,
   NormalizedProviderError,
+  type MediaInputImage,
   type MediaRequest,
   type ProviderConfig,
 } from '../../index'
@@ -58,6 +61,11 @@ test('registry exposes both openai-image@1.1.0 and legacy openai-image@1.0.0', (
   assert.equal(openAiImageManifest.models?.find(m => m.id === 'gpt-image-2')?.maxInputImages, 4)
   assert.equal(openAiImageManifest.models?.find(m => m.id === 'dall-e-3')?.maxInputImages, 0)
   assert.equal(legacyOpenAiImageManifest.models?.find(m => m.id === 'gpt-image-2')?.maxInputImages, undefined)
+  // Only the active plugin accepts a separate alpha mask part, and only on the
+  // model whose edit endpoint has one.
+  assert.equal(openAiImageManifest.models?.find(m => m.id === 'gpt-image-2')?.supportsMask, true)
+  assert.equal(openAiImageManifest.models?.find(m => m.id === 'dall-e-3')?.supportsMask, undefined)
+  assert.equal(legacyOpenAiImageManifest.models?.find(m => m.id === 'gpt-image-2')?.supportsMask, undefined)
   assert.ok(OPENAI_IMAGE_SUPPORTED_MODELS.includes('gpt-image-2'))
   for (const version of [OPENAI_IMAGE_PLUGIN_VERSION, LEGACY_OPENAI_IMAGE_PLUGIN_VERSION]) {
     assert.equal(globalProviderRegistry.has(OPENAI_IMAGE_PLUGIN_ID, version), true)
@@ -152,6 +160,10 @@ test('submit maps reference images to the edits multipart body', async () => {
   assert.equal(sentImages.length, 1)
   assert.ok(sentImages[0] instanceof Blob)
   assert.equal((sentImages[0] as Blob).type, 'image/png')
+  // Regression guard: an edit without a mask must not grow a mask part, and the
+  // reference image must still be the only `image[]` part.
+  assert.equal(capturedForm.get('mask'), null)
+  assert.equal((capturedForm.get('image[]') as File).name, 'reference-1.png')
 })
 
 test('validateRequest rejects bad modality/prompt/model/size/count/quality/inputs before network', async () => {
@@ -174,11 +186,23 @@ test('validateRequest rejects bad modality/prompt/model/size/count/quality/input
     { ...base, prompt: '   ' },
     { ...base, vendorModelId: 'unknown-model' },
     { ...base, size: '9999x9999' },
-    { ...base, size: '1792x1024' }, // dall-e-3-only size
+    // `1792x1024` used to be rejected here as a dall-e-3-only size. It is now
+    // legal for gpt-image-2, whose contract declares a custom-size band (edges on
+    // a 16-pixel grid, 655,360–8,294,400 px, at most 3:1) that this value
+    // satisfies — the vendor accepts it, so refusing it would be the plugin
+    // inventing a limit. What must still fail is a value that breaks that band,
+    // or any custom value on a model that declares a fixed list.
+    { ...base, size: '1791x1024' }, // width off the 16-pixel grid
+    { ...base, size: '3840x1024' }, // 3.75:1, above the model's 3:1 limit
+    { ...base, vendorModelId: 'gpt-image-1.5', size: '2048x2048' }, // fixed-size model
+    { ...base, vendorModelId: 'dall-e-3', size: '1536x1024' }, // not in dall-e-3's list
+    { ...base, quality: 'max' }, // `max` exists only on the 2.5 models
+    { ...base, quality: 'xhigh' },
     { ...base, vendorModelId: 'dall-e-3', size: '1024x1024', count: 2 }, // exceeds dall-e-3 batch of 1
     { ...base, count: 5 }, // exceeds gpt-image-2 batch of 4
     { ...base, quality: 'ultra' },
     { ...base, vendorModelId: 'dall-e-3', size: '1024x1024', quality: 'low' },
+    { ...base, parameters: { background: 'transparent', output_format: 'jpeg' } }, // needs alpha
     {
       ...base,
       inputImages: Array.from({ length: 33 }, () => ({ data: mockPng, mimeType: 'image/png' as const })),
@@ -544,4 +568,209 @@ test('probe self-validates config and never fetches custom hosts', async () => {
     return true
   })
   assert.equal(fetchCalls, 0)
+})
+
+/* -------------------------------------------------------------------------
+ * Region-select edits: the alpha mask
+ * ------------------------------------------------------------------------- */
+
+/** A real 1024x1024 PNG that only has a structural header (see `mockPng`). */
+const BASE_IMAGE: MediaInputImage = { data: mockPng, mimeType: 'image/png', width: 1024, height: 1024 }
+
+/** A real, decodable alpha mask rasterised by the shipped generator. */
+async function realMask(width = 1024, height = 1024): Promise<Buffer> {
+  return createEditMask({
+    imageWidth: width,
+    imageHeight: height,
+    selection: { x: 4, y: 4, width: width - 8, height: height - 8 },
+  })
+}
+
+function editRequest(
+  inputImages: MediaInputImage[],
+  vendorModelId = 'gpt-image-2',
+): MediaRequest {
+  return {
+    modality: 'image',
+    vendorModelId,
+    prompt: 'Remove the scaffold',
+    size: '1024x1024',
+    count: 1,
+    inputImages,
+  }
+}
+
+function capturingFetch(): { fetchImpl: typeof globalThis.fetch; form: () => FormData | undefined } {
+  let captured: FormData | undefined
+  return {
+    form: () => captured,
+    fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+      captured = init?.body instanceof FormData ? (init.body as FormData) : undefined
+      return new Response(JSON.stringify({ data: [{ b64_json: mockPng.toString('base64') }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof globalThis.fetch,
+  }
+}
+
+test('an edit mask is forwarded as its own part and kept out of image[]', async () => {
+  const cfg = config()
+  const capture = capturingFetch()
+  const ctx = contextFor(OPENAI_IMAGE_PLUGIN_VERSION, cfg, capture.fetchImpl)
+  const mask = await realMask()
+
+  const result = await openAiImagePlugin.submit(
+    editRequest([BASE_IMAGE, { data: mask, mimeType: 'image/png', width: 1024, height: 1024, sizeBytes: mask.length, role: MASK_INPUT_ROLE }]),
+    cfg,
+    ctx,
+  )
+  assert.equal(result.status, 'succeeded')
+  const form = capture.form()
+  assert.ok(form instanceof FormData)
+  const keys = [...form.keys()]
+  // What the mask slice owns: exactly one `mask` part, `image[]` free of it, and
+  // the mask appended after the images rather than replacing one.
+  assert.equal(keys.filter(key => key === 'image[]').length, 1)
+  assert.equal(keys[keys.length - 1], 'mask')
+
+  const maskParts = form.getAll('mask')
+  assert.equal(maskParts.length, 1, 'the mask is appended exactly once')
+  const maskPart = maskParts[0] as File
+  assert.ok(maskPart instanceof Blob)
+  assert.equal(maskPart.name, 'mask.png')
+  assert.equal(maskPart.type, 'image/png')
+  assert.equal(Buffer.from(await maskPart.arrayBuffer()).equals(mask), true)
+
+  const imageParts = form.getAll('image[]')
+  assert.equal(imageParts.length, 1, 'the mask must not be sent as a picture the model sees')
+  assert.equal(Buffer.from(await (imageParts[0] as Blob).arrayBuffer()).equals(mockPng), true)
+})
+
+test('a mask alongside several reference images stays out of the image[] sequence', async () => {
+  const cfg = config()
+  const capture = capturingFetch()
+  const ctx = contextFor(OPENAI_IMAGE_PLUGIN_VERSION, cfg, capture.fetchImpl)
+  const mask = await realMask(64, 64)
+
+  const result = await openAiImagePlugin.submit(
+    editRequest([
+      BASE_IMAGE,
+      { data: mask, mimeType: 'image/png', width: 1024, height: 1024, role: MASK_INPUT_ROLE },
+      { data: mockPng, mimeType: 'image/png', width: 1024, height: 1024, role: 'style' },
+    ]),
+    cfg,
+    ctx,
+  )
+  assert.equal(result.status, 'succeeded')
+  const form = capture.form()!
+  const keys = [...form.keys()]
+  assert.deepEqual(
+    keys.filter(key => key === 'image[]'),
+    ['image[]', 'image[]'],
+    'both references, and only them, go to image[]',
+  )
+  assert.equal((form.getAll('image[]')[1] as File).name, 'reference-2.png')
+  assert.equal(form.getAll('mask').length, 1)
+  assert.equal(keys[keys.length - 1], 'mask')
+})
+
+test('every bad mask is rejected before the network, with a mask-specific message', async () => {
+  const cfg = config()
+  const mask = await realMask()
+  const maskInput = (overrides: Partial<MediaInputImage> = {}): MediaInputImage => ({
+    data: mask,
+    mimeType: 'image/png',
+    width: 1024,
+    height: 1024,
+    role: MASK_INPUT_ROLE,
+    ...overrides,
+  })
+  let fetchCalls = 0
+  const ctx = contextFor(OPENAI_IMAGE_PLUGIN_VERSION, cfg, (async () => {
+    fetchCalls++
+    return new Response('{}', { status: 200 })
+  }) as typeof globalThis.fetch)
+
+  const cases: Array<{ inputs: MediaInputImage[]; fragment: string }> = [
+    { inputs: [BASE_IMAGE, maskInput(), maskInput()], fragment: 'at most one mask' },
+    { inputs: [BASE_IMAGE, maskInput({ mimeType: 'image/jpeg' })], fragment: 'must be a PNG' },
+    { inputs: [maskInput()], fragment: 'no base image' },
+    { inputs: [BASE_IMAGE, maskInput({ width: 1280, height: 720 })], fragment: 'match the base image dimensions exactly' },
+    { inputs: [BASE_IMAGE, maskInput({ width: undefined, height: undefined })], fragment: 'must both declare width and height' },
+    { inputs: [{ ...BASE_IMAGE, width: undefined, height: undefined }, maskInput()], fragment: 'must both declare width and height' },
+    { inputs: [BASE_IMAGE, maskInput({ sizeBytes: MAX_MASK_BYTES + 1 })], fragment: 'exceeds the vendor limit' },
+  ]
+  for (const { inputs, fragment } of cases) {
+    await assert.rejects(
+      () => openAiImagePlugin.submit(editRequest(inputs), cfg, ctx),
+      (err: unknown) => {
+        assert.ok(err instanceof NormalizedProviderError)
+        assert.equal(err.diagnostic.code, 'INVALID_REQUEST')
+        assert.ok(
+          err.diagnostic.detail.includes(fragment),
+          `expected '${fragment}' in '${err.diagnostic.detail}'`,
+        )
+        assert.ok(
+          err.diagnostic.detail.toLowerCase().includes('mask'),
+          `a mask failure must name the mask, got '${err.diagnostic.detail}'`,
+        )
+        assert.ok(
+          !err.diagnostic.detail.startsWith('Invalid input image'),
+          'a bad mask must not be reported as an invalid input image',
+        )
+        return true
+      },
+      `expected rejection mentioning '${fragment}'`,
+    )
+  }
+  assert.equal(fetchCalls, 0, 'mask validation must reject before any network call')
+})
+
+test('dall-e-3 still rejects a mask alongside its other inputs', async () => {
+  const cfg = config()
+  const mask = await realMask()
+  let fetchCalls = 0
+  const ctx = contextFor(OPENAI_IMAGE_PLUGIN_VERSION, cfg, (async () => {
+    fetchCalls++
+    return new Response('{}', { status: 200 })
+  }) as typeof globalThis.fetch)
+  await assert.rejects(
+    () =>
+      openAiImagePlugin.submit(
+        editRequest(
+          [BASE_IMAGE, { data: mask, mimeType: 'image/png', width: 1024, height: 1024, role: MASK_INPUT_ROLE }],
+          'dall-e-3',
+        ),
+        cfg,
+        ctx,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof NormalizedProviderError)
+      assert.equal(err.diagnostic.code, 'INVALID_REQUEST')
+      assert.ok(err.diagnostic.detail.includes('dall-e-3'))
+      return true
+    },
+  )
+  assert.equal(fetchCalls, 0)
+})
+
+test('a mask is never run through the generic input-image dimension rules', async () => {
+  // The mask's own bytes are far below this package's minimum *input image*
+  // size, which is exactly the rule it must not be judged by: the vendor treats
+  // it as a control channel, and the declared dimensions are what has to line up.
+  const cfg = config()
+  const capture = capturingFetch()
+  const ctx = contextFor(OPENAI_IMAGE_PLUGIN_VERSION, cfg, capture.fetchImpl)
+  const mask = await realMask(20, 20)
+
+  const result = await openAiImagePlugin.submit(
+    editRequest([BASE_IMAGE, { data: mask, mimeType: 'image/png', width: 1024, height: 1024, role: MASK_INPUT_ROLE }]),
+    cfg,
+    ctx,
+  )
+  assert.equal(result.status, 'succeeded')
+  const form = capture.form()!
+  assert.equal(form.getAll('mask').length, 1)
+  assert.equal(form.getAll('image[]').length, 1)
 })

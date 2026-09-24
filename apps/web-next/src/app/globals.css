@@ -1,16 +1,24 @@
 @import "tailwindcss";
 
+/* Class/attribute-driven dark mode: `dark:` utilities key off data-theme. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 /*
  * Design tokens — single source of truth for the whole web app.
  *
- * Usage rules (enforced by scripts/check-design-tokens.mjs):
+ * Usage rules:
  *   main action            -> primary (ink solid)
  *   selected/active/progress -> accent / accent-strong / accent-soft
  *   neutral hover          -> surface-subtle
  *   pressed                -> surface-subtle-strong
  *   semantic status        -> success|warning|danger|info (+ *-soft)
- *   control outlines        -> border-control (>= 3:1 against surface)
- *   card/panel             -> border, never a shadow
+ *   control outlines       -> border-control (>= 3:1 against surface)
+ *   card/panel             -> bg-surface + shadow, no rule
+ *   sections and rows      -> whitespace and a surface step, no rule
+ *
+ * Cards and panels lost their rules; controls keep theirs, and a state that
+ * used to be drawn as a box outline (selected row, upload error) is now drawn
+ * as a fill plus an accent bar.
  */
 @theme {
   /* Surfaces */
@@ -76,16 +84,19 @@
   --z-index-sticky: 40;
   --z-index-nav: 40;
   --z-index-overlay: 50;
-  --z-index-toast: 100;
+  --z-index-toast: 50;
+  --z-index-tooltip: 60;
 
   /* Radius */
+  --radius-checkbox: 5px;
   --radius-control: 10px;
   --radius-popover: 12px;
   --radius-card: 14px;
   --radius-panel: 18px;
   --radius-pill: 9999px;
 
-  /* Shadows: popovers and overlays only — cards and panels use borders */
+  /* Shadows: the elevation ladder. `sm` marks small surfaces and sticky bars,
+     `md` is the default card, `lg` is a lifted card or popover. */
   --shadow-sm: 0 1px 2px 0 rgb(26 26 24 / 0.04);
   --shadow-md: 0 10px 24px -16px rgb(26 26 24 / 0.20);
   --shadow-lg: 0 18px 44px -24px rgb(26 26 24 / 0.26);
@@ -94,7 +105,19 @@
   --motion-fast: 120ms;
   --motion-base: 180ms;
   --motion-slow: 240ms;
+  /* Overlay-scale entrances (scrim + dialog panel) sit between `base` and `slow`:
+     long enough to read as deliberate, short enough to never block interaction. */
+  --motion-overlay: 200ms;
+  /* Press feedback is the fastest interaction beat. */
+  --motion-press: 80ms;
+  /* Skeleton sweep: one pass every 1.5s, linear (Jude-Frontweb loading spec). */
+  --motion-shimmer: 1.5s;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* Exits run ~1/3 faster than their entrance and ease in. */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  /* Per-item offset for `.motion-stagger` lists. Clamped to 8 steps in the
+     utility so a long page never ends up waiting on the last cell. */
+  --stagger-step: 50ms;
 }
 
 html,
@@ -107,6 +130,65 @@ body {
   line-height: 1.59;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Dark theme — Jude-Frontweb rule: every light token has a dark variant,
+ * status colors flip to a brighter foreground on a deeper background, and
+ * shadow alphas deepen so elevation stays visible on dark surfaces.
+ * Declared after @theme so these overrides win the cascade.
+ */
+@layer base {
+  :root[data-theme='dark'] {
+    /* Surfaces */
+    --color-canvas: #181816;
+    --color-surface: #21211f;
+    --color-surface-subtle: #2b2b28;
+    --color-surface-subtle-strong: #363632;
+    --color-foreground: #f1f1ec;
+    --color-foreground-inverse: #1a1a18;
+    --color-muted-foreground: #ababa3;
+    --color-border: #34342f;
+    --color-border-strong: #4b4b45;
+    --color-border-control: #96968d;
+
+    /* Primary action flips to a light solid on dark surfaces */
+    --color-primary: #f1f1ec;
+    --color-primary-hover: #ffffff;
+    --color-primary-active: #d9d9d3;
+
+    /* Brand accent: brighter green on deeper background */
+    --color-accent: #3ecf7a;
+    --color-accent-strong: #6fe3a0;
+    --color-accent-soft: #0e2e1d;
+    --color-accent-hover: #6fe3a0;
+    --color-accent-contrast: #062012;
+
+    /* Status — bright foreground + deep background */
+    --color-success: #4ade80;
+    --color-success-soft: #052e16;
+    --color-warning: #fbbf24;
+    --color-warning-soft: #422006;
+    --color-danger: #f87171;
+    --color-danger-hover: #fca5a5;
+    --color-danger-active: #fecaca;
+    --color-danger-soft: #450a0a;
+    --color-danger-border: #7f1d1d;
+    --color-info: #93c5fd;
+    --color-info-soft: #172554;
+    --color-neutral-status: #d6d6cf;
+    --color-neutral-soft: #2b2b28;
+
+    --color-positive: #4ade80;
+    --color-negative: #f87171;
+
+    --color-overlay: #0c0c0b;
+
+    /* Shadows deepen their alpha to stay legible on dark surfaces */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-md: 0 10px 24px -16px rgb(0 0 0 / 0.55);
+    --shadow-lg: 0 18px 44px -24px rgb(0 0 0 / 0.65);
+  }
 }
 
 /* One focus ring for every focusable element. Components must not redefine it. */
@@ -122,15 +204,121 @@ body {
 }
 
 /* Reduced motion: no spins, flashes, shifts or shimmer. State stays legible
-   through static shape, color and text only. */
+   through static shape, color and text only.
+   The delays are zeroed alongside the durations on purpose: `.motion-stagger`
+   offsets items with `animation-delay`, and a 12-step list would otherwise keep
+   the last cell invisible for ~480ms even though nothing animates any more. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * Keyframes — top level (never inside `@layer`, so a layer order change cannot
+ * hide them) and paired with the `.motion-*` utilities below.
+ *
+ * FAIL-VISIBLE RULE (read before adding an animation): the base declaration of
+ * every animated element must be its FINAL VISIBLE state, and the keyframes must
+ * carry the temporary invisible starting point. Because the block above rewrites
+ * durations to 0.01ms globally, an element whose *base* rule is `opacity: 0` and
+ * that relies on an animation to become visible would stay permanently invisible
+ * for anyone with reduced motion on. Entrances therefore use
+ * `animation-fill-mode: backwards` (the from-frame paints during the stagger
+ * delay and nothing after the run); exits use `forwards` only because the dialog
+ * hook (`src/shared/hooks/useDialog.ts`) also unmounts on a timer, so a missed
+ * `animationend` can never leave a faded-out element stuck on screen.
+ */
+@keyframes mc-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Grid/list entrance: 8px rise + fade. Geometry literals are fine here — the
+   token budget covers durations and easing only. */
+@keyframes mc-reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mc-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Skeleton sweep. With `background-size: 200% 100%` the highlight crosses two
+   container widths per pass, and the loop restarts off-screen: seamless. */
+@keyframes mc-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Toast entrance: drops 16px into place over the scrim-level duration. */
+@keyframes mc-slide-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Drawer entrance: slides in from the right edge. */
+@keyframes mc-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes mc-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes mc-scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
   }
 }
 
@@ -143,6 +331,132 @@ body {
       color-mix(in srgb, var(--color-overlay) 30%, transparent) 50%,
       color-mix(in srgb, var(--color-overlay) 0%, transparent) 100%
     );
+  }
+
+  /* Entrances. `animation` is written as longhands on purpose: the shorthand
+     resets `animation-delay`, which would silently kill `.motion-stagger`. */
+  .motion-fade-in {
+    animation-name: mc-fade-in;
+    animation-duration: var(--motion-overlay);
+    animation-timing-function: var(--ease-standard);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-reveal {
+    animation-name: mc-reveal-up;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: var(--ease-standard);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-pop {
+    animation-name: mc-pop-in;
+    animation-duration: var(--motion-base);
+    animation-timing-function: var(--ease-standard);
+    animation-fill-mode: backwards;
+  }
+
+  /* Page-level entrance: the slowest fade-in-up in the system. */
+  .motion-page {
+    animation-name: mc-reveal-up;
+    animation-duration: 400ms;
+    animation-timing-function: ease-out;
+    animation-fill-mode: backwards;
+  }
+
+  /* Press feedback: quick 0.98 dip, nothing more. */
+  .motion-press {
+    transition-property: transform;
+    transition-duration: var(--motion-press);
+    transition-timing-function: ease-in;
+  }
+
+  .motion-press:active {
+    transform: scale(0.98);
+  }
+
+  /* Toast entrance (paired with `.motion-fade-out` on dismiss). */
+  .motion-toast-in {
+    animation-name: mc-slide-in-down;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: ease-out;
+    animation-fill-mode: backwards;
+  }
+
+  /* Drawer entrance. */
+  .motion-drawer-in {
+    animation-name: mc-slide-in-right;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: ease-out;
+    animation-fill-mode: backwards;
+  }
+
+  /* Transition-only hover lift for cards and tiles. It rides `transform` on the
+     container, so a child image keeping `group-hover:scale-105` never fights
+     it — the two transforms live on different elements. */
+  .motion-lift {
+    transition-property: transform, box-shadow, border-color;
+    transition-duration: var(--motion-base);
+    transition-timing-function: var(--ease-standard);
+  }
+
+  .motion-lift:hover,
+  .motion-lift:focus-within {
+    transform: translateY(-2px);
+  }
+
+  /* Hover reveal for overlays and row actions: this owns the timing, while the
+     `opacity-0 group-hover:opacity-100` pair (plus its `sm:` gate) owns the value. */
+  .motion-hover-fade {
+    transition-property: opacity, transform;
+    transition-duration: var(--motion-fast);
+    transition-timing-function: var(--ease-standard);
+  }
+
+  /* Loading skeleton. Base state is the static, visible placeholder; the
+     animation only moves the highlight, so reduced motion keeps a legible box. */
+  .motion-shimmer {
+    background-color: var(--color-surface-subtle);
+    background-image: linear-gradient(
+      to right,
+      transparent 0%,
+      color-mix(in srgb, var(--color-surface) 70%, transparent) 45%,
+      transparent 90%
+    );
+    background-repeat: no-repeat;
+    background-size: 200% 100%;
+    animation-name: mc-shimmer;
+    animation-duration: var(--motion-shimmer);
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  /* Dialog lifecycle: `.motion-fade-in` / `.motion-fade-out` go on the scrim,
+     the pair below on the panel. Exits run ~1/3 faster than entrances, ease-in. */
+  .motion-dialog-in {
+    animation-name: mc-pop-in;
+    animation-duration: var(--motion-overlay);
+    animation-timing-function: var(--ease-standard);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-fade-out {
+    animation-name: mc-fade-out;
+    animation-duration: var(--motion-fast);
+    animation-timing-function: var(--ease-exit);
+    animation-fill-mode: forwards;
+  }
+
+  .motion-dialog-out {
+    animation-name: mc-scale-out;
+    animation-duration: var(--motion-fast);
+    animation-timing-function: var(--ease-exit);
+    animation-fill-mode: forwards;
+  }
+
+  /* Entrance offset: callers set `--stagger-index` (unitless, 0-based). */
+  .motion-stagger {
+    animation-delay: calc(min(var(--stagger-index, 0), 8) * var(--stagger-step));
   }
 }
 

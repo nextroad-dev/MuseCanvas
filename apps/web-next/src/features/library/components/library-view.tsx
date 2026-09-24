@@ -1,19 +1,25 @@
 'use client'
 
-import { useEffect } from 'react'
-import { useLibraryQuery, useDeleteAsset, useBatchDeleteAssets } from '@/shared/hooks/useLibrary'
+import { useCallback, useMemo } from 'react'
+import type { CSSProperties } from 'react'
+import {
+  libraryPageItems,
+  useBatchDeleteAssets,
+  useDeleteAsset,
+  useLibraryInfiniteQuery,
+} from '@/shared/hooks/useLibrary'
 import { MediaFrame } from '@/shared/components/media-frame'
 import { useLibraryUiStore } from '@/shared/stores/library-ui-store'
-import { assetPlaybackUrl, isVideoAsset } from '@/shared/types'
+import { assetPlaybackUrl, assetPreviewUrl, isVideoAsset } from '@/shared/types'
+import { AssetLightbox } from './asset-lightbox'
+import { Checkbox } from '@/shared/components/ui/checkbox'
+import { useToast } from '@/shared/components/ui/toast'
 import {
-  CheckSquare,
   Download,
   Image as ImageIcon,
   Loader2,
   RefreshCw,
-  Square,
   Trash2,
-  X,
   ZoomIn,
 } from 'lucide-react'
 
@@ -23,6 +29,10 @@ const FILTER_KINDS = [
   { value: 'image', label: '图像' },
   { value: 'video', label: '视频' },
 ] as const
+
+/** Cells past this index share one delay: `.motion-stagger` clamps at 12 steps,
+ *  so the tail of a 50-row page must not advertise a wait it will never pay. */
+const STAGGER_CLAMP = 8
 
 export function LibraryView() {
   // Per-field selectors: a bare store destructure re-renders on any field change.
@@ -37,43 +47,44 @@ export function LibraryView() {
   const previewAssetId = useLibraryUiStore((s) => s.previewAssetId)
   const setPreviewAssetId = useLibraryUiStore((s) => s.setPreviewAssetId)
 
-  const { data: assets = [], isLoading, refetch, isFetching } = useLibraryQuery()
+  // One keyset page at a time (see GET /api/library). `total` comes from the first
+  // page because it counts the whole predicate, not the window.
+  const { data, isLoading, refetch, isFetching, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useLibraryInfiniteQuery({ limit: 30 })
+  const assets = useMemo(() => libraryPageItems(data), [data])
+  const total = data?.pages[0]?.total ?? assets.length
   const deleteMutation = useDeleteAsset()
   const batchDeleteMutation = useBatchDeleteAssets()
 
-  // GET /api/library ignores `kind` and returns a fixed page of 50 rows, so the
-  // media-kind filter is client-side over the fetched list only.
+  // `kind` is a server-side predicate now, but the page keeps filtering the
+  // accumulated tiles locally so switching a filter never refetches what is already on
+  // screen. `hasNextPage` stays the way to reach what the filter has hidden.
   const visibleAssets =
     filterKind === 'all'
       ? assets
       : assets.filter((asset) => isVideoAsset(asset) === (filterKind === 'video'))
 
-  // The preview target is looked up from the fetched list instead of holding a
-  // snapshot, so a refetch (or delete) can never leave a stale object on screen.
-  const previewAsset = assets.find((asset) => asset.id === previewAssetId) ?? null
-  const previewIsVideo = previewAsset !== null && isVideoAsset(previewAsset)
+  // Escape / arrows / focus restore all live in `useDialog` behind the lightbox.
+  // These two callbacks are stable so the dialog never re-binds its window keydown.
+  const closePreview = useCallback(() => setPreviewAssetId(null), [setPreviewAssetId])
+  const openPreview = useCallback((assetId: string) => setPreviewAssetId(assetId), [setPreviewAssetId])
 
   const isAllSelected =
     visibleAssets.length > 0 && visibleAssets.every((asset) => selectedAssetIds.includes(asset.id))
   const isAnySelected = selectedAssetIds.length > 0
 
-  // Escape closes the lightbox. Focus may still sit on the tile button that
-  // opened it, so the listener lives on the window, not the dialog subtree.
-  useEffect(() => {
-    if (!previewAssetId) return
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      setPreviewAssetId(null)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [previewAssetId, setPreviewAssetId])
+  const toast = useToast()
 
   async function handleBatchDelete() {
     if (!isAnySelected) return
-    if (confirm(`确认删除选中的 ${selectedAssetIds.length} 个作品？此操作不可恢复。`)) {
-      await batchDeleteMutation.mutateAsync(selectedAssetIds)
+    const count = selectedAssetIds.length
+    if (confirm(`确认删除选中的 ${count} 个作品？此操作不可恢复。`)) {
+      try {
+        await batchDeleteMutation.mutateAsync(selectedAssetIds)
+        toast.push({ title: `已删除 ${count} 个作品`, variant: 'success' })
+      } catch {
+        toast.push({ title: '删除失败', description: '网络或服务端错误，请稍后重试。', variant: 'error' })
+      }
       clearSelectedAssets()
     }
   }
@@ -110,11 +121,13 @@ export function LibraryView() {
                 }
                 className="flex min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 text-xs font-medium text-foreground hover:bg-surface-subtle"
               >
-                {isAllSelected ? (
-                  <CheckSquare className="h-3.5 w-3.5 text-accent" />
-                ) : (
-                  <Square className="h-3.5 w-3.5 text-muted-foreground" />
-                )}
+                <Checkbox
+                  checked={isAllSelected}
+                  onCheckedChange={(checked) =>
+                    checked ? selectAllAssets(visibleAssets.map((a) => a.id)) : clearSelectedAssets()
+                  }
+                  aria-label={isAllSelected ? '取消全选' : '全选当前列表'}
+                />
                 {isAllSelected ? '取消全选' : '全选'}
               </button>
             )}
@@ -185,19 +198,23 @@ export function LibraryView() {
                     : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4'
             }`}
           >
-            {visibleAssets.map((asset) => {
+            {visibleAssets.map((asset, index) => {
               const selected = selectedAssetIds.includes(asset.id)
               return (
                 <div
                   key={asset.id}
-                  className={`group relative overflow-hidden rounded-[var(--radius-control)] border bg-surface transition-all ${
+                  style={{ '--stagger-index': String(Math.min(index, STAGGER_CLAMP)) } as CSSProperties}
+                  className={`group motion-lift motion-reveal motion-stagger relative overflow-hidden rounded-[var(--radius-control)] border bg-surface ${
                     selected
                       ? 'border-accent ring-2 ring-accent'
                       : 'border-border hover:border-border-control'
                   }`}
                 >
+                  {/* `src` stays the original: it is what a failed preview retries
+                      against and what the tile's download link serves. */}
                   <MediaFrame
                     src={assetPlaybackUrl(asset)}
+                    previewSrc={assetPreviewUrl(asset)}
                     kind={isVideoAsset(asset) ? 'video' : 'image'}
                     alt={asset.prompt || 'Generated asset'}
                     layout="tile"
@@ -209,20 +226,18 @@ export function LibraryView() {
                   />
 
                   {/* Top-right selection checkbox */}
-                  <div
-                    onClick={() => toggleSelectAsset(asset.id)}
-                    className="absolute right-2 top-2 z-10 cursor-pointer rounded-[var(--radius-control)] bg-surface/80 p-1 text-foreground shadow transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
-                  >
-                    {selected ? (
-                      <CheckSquare className="h-4 w-4 text-accent" />
-                    ) : (
-                      <Square className="h-4 w-4 text-muted-foreground" />
-                    )}
+                  <div className="motion-hover-fade absolute right-2 top-2 z-10 rounded-[var(--radius-control)] bg-surface/80 p-1 shadow sm:opacity-0 sm:group-hover:opacity-100">
+                    <Checkbox
+                      checked={selected}
+                      onCheckedChange={() => toggleSelectAsset(asset.id)}
+                      aria-label={selected ? '取消选择该作品' : '选择该作品'}
+                    />
                   </div>
 
-                  {/* Hover Overlay info and actions */}
-                  <div className="media-scrim absolute inset-0 flex flex-col justify-end p-3 opacity-0 transition-opacity group-hover:opacity-100">
-                    <p className="line-clamp-2 text-xs text-foreground-inverse">{asset.prompt || '无提示词'}</p>
+                  {/* Hover Overlay info and actions. The scrim sits over photos,
+                      so its text stays light in both themes. */}
+                  <div className="media-scrim motion-hover-fade absolute inset-0 flex flex-col justify-end p-3 opacity-0 group-hover:opacity-100">
+                    <p className="line-clamp-2 text-xs text-white">{asset.prompt || '无提示词'}</p>
                     <div className="mt-2 flex items-center justify-between pt-1 border-t border-white/20">
                       <span className="font-mono text-[10px] text-white/70">
                         {new Date(asset.createdAt).toLocaleDateString()}
@@ -230,21 +245,22 @@ export function LibraryView() {
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => setPreviewAssetId(asset.id)}
-                          className="rounded bg-overlay/40 p-1 text-foreground-inverse hover:bg-overlay/60"
-                          title="放大查看"
+                          onClick={() => openPreview(asset.id)}
+                          className="rounded bg-overlay/40 p-1 text-white hover:bg-overlay/60"
+                          aria-label="放大查看"
                         >
-                          <ZoomIn className="h-3.5 w-3.5" />
+                          <ZoomIn className="h-3.5 w-3.5" aria-hidden="true" />
                         </button>
                         <a
                           href={assetPlaybackUrl(asset)}
                           download
                           target="_blank"
                           rel="noreferrer"
-                          className="rounded bg-overlay/40 p-1 text-foreground-inverse hover:bg-overlay/60"
+                          className="rounded bg-overlay/40 p-1 text-white hover:bg-overlay/60"
+                          aria-label="下载作品"
                           title="下载"
                         >
-                          <Download className="h-3.5 w-3.5" />
+                          <Download className="h-3.5 w-3.5" aria-hidden="true" />
                         </a>
                         <button
                           type="button"
@@ -254,9 +270,9 @@ export function LibraryView() {
                             }
                           }}
                           className="rounded bg-danger-soft p-1 text-danger hover:bg-danger-soft/80"
-                          title="删除"
+                          aria-label="删除该作品"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                         </button>
                       </div>
                     </div>
@@ -280,58 +296,38 @@ export function LibraryView() {
           </div>
         )}
 
-        {/* Lightbox Modal */}
-        {previewAsset && (
-          <div
-            onClick={(event) => {
-              if (event.target === event.currentTarget) setPreviewAssetId(null)
-            }}
-            className="fixed inset-0 z-[var(--z-index-overlay)] flex items-center justify-center bg-overlay/80 p-4"
-          >
+        {/* The load-more control lives outside the grid branch on purpose: with a kind
+            filter active every loaded tile can be hidden while older work is still one
+            request away, and a button inside the grid would vanish with it. */}
+        {hasNextPage && (
+          <div className="flex flex-wrap items-center justify-center gap-3 pb-2">
             <button
               type="button"
-              onClick={() => setPreviewAssetId(null)}
-              aria-label="关闭预览"
-              className="absolute right-4 top-4 rounded-full bg-overlay/40 p-2 text-foreground-inverse hover:bg-overlay/60"
+              onClick={() => void fetchNextPage()}
+              disabled={isFetchingNextPage}
+              className="flex min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors duration-[var(--motion-fast)] hover:bg-surface-subtle disabled:opacity-60"
             >
-              <X className="h-6 w-6" />
+              {isFetchingNextPage ? (
+                <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+              加载更多作品
             </button>
-            <div className="max-h-[90vh] max-w-4xl overflow-hidden rounded-[var(--radius-card)] bg-surface shadow-lg">
-              <MediaFrame
-                src={assetPlaybackUrl(previewAsset)}
-                kind={previewIsVideo ? 'video' : 'image'}
-                alt={previewAsset.prompt || ''}
-                layout="stage"
-                showControls={previewIsVideo}
-                durationSeconds={previewAsset.durationSeconds}
-                width={previewAsset.width}
-                height={previewAsset.height}
-                hasAudio={previewAsset.hasAudio}
-                className={
-                  previewIsVideo
-                    ? 'max-h-[75vh] w-full object-contain'
-                    : 'max-h-[75vh] w-auto object-contain'
-                }
-              />
-              <div className="p-4">
-                <p className="text-xs font-medium text-foreground">{previewAsset.prompt}</p>
-                <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{new Date(previewAsset.createdAt).toLocaleString()}</span>
-                  <a
-                    href={assetPlaybackUrl(previewAsset)}
-                    download
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1 text-accent hover:underline"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    下载
-                  </a>
-                </div>
-              </div>
-            </div>
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              已显示 {assets.length} / {total}
+            </span>
           </div>
         )}
+
+        {/* Full-size preview: portal, focus trap and the close animation are all
+            in `AssetLightbox` / `useDialog`, so no window keydown lives here. */}
+        <AssetLightbox
+          assets={visibleAssets}
+          activeAssetId={previewAssetId}
+          onClose={closePreview}
+          onSelect={openPreview}
+        />
       </div>
     </div>
   )

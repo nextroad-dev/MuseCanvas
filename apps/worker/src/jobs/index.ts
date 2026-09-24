@@ -30,7 +30,6 @@ import {
 import {
   decryptApiKey,
   decodeCredential,
-  globalProviderRegistry,
   type MediaInputImage,
   type MediaProviderPlugin,
   type MediaRequest,
@@ -39,7 +38,11 @@ import {
   type ProviderConfig,
   LanguageModelHttpError,
   NormalizedProviderError,
+  buildDerivedPreview,
+  type DerivedPreview,
 } from '../../../../packages/providers/src/index'
+import { createMediaExecutionContext, resolveMediaPlugin } from '../plugins/availability'
+import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
 import {
   inspectInputImage,
   MAX_INPUT_IMAGES,
@@ -174,22 +177,63 @@ export async function loadAndValidateInputImages(
   return inputImages
 }
 
-/** Unified input resolver: reads media_uploads via upload_id, falls back to generation_input_images. Every byte path revalidates checksum and size against stored metadata after the S3 fetch. */
+/**
+ * Fail when a job linked an input the resolver could not load. The usual cause is a
+ * gallery image the user deleted between submitting and execution: the linkage row
+ * stays, the `assets` row goes soft-deleted, and the JOIN drops it. Continuing would
+ * generate against fewer references than the user chose, so this raises the retryable
+ * `INPUT_IMAGE_UNAVAILABLE` instead. It stays quiet when the count cannot be read (a
+ * database without the `asset_id` column), leaving the legacy resolver in charge.
+ */
+async function assertAllLinkedInputsPresent(jobId: string, loadedCount: number): Promise<void> {
+  let linkedCount = 0
+  try {
+    const res = await db().query(
+      `SELECT count(*)::int AS count FROM generation_job_inputs
+       WHERE job_id = $1 AND (upload_id IS NOT NULL OR asset_id IS NOT NULL)`,
+      [jobId],
+    )
+    linkedCount = Number(res.rows[0]?.count || 0)
+  } catch {
+    return
+  }
+  if (linkedCount > loadedCount) throw new Error('INPUT_IMAGE_UNAVAILABLE')
+}
+
+/** Unified input resolver: reads media_uploads via upload_id and gallery images via
+ *  asset_id, falling back to generation_input_images. Every byte path revalidates
+ *  checksum and size against stored metadata after the S3 fetch. */
 
 async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[] | undefined> {
   let rows: Array<Record<string, unknown>> = []
+  let unifiedRead = false
   try {
     const res = await db().query(
-      `SELECT gji.position, gji.role, mu.id, mu.object_key, mu.mime_type, mu.size_bytes, mu.checksum, mu.media_kind
-       FROM generation_job_inputs gji
-       JOIN media_uploads mu ON mu.id = gji.upload_id
-       WHERE gji.job_id = $1 AND mu.deleted_at IS NULL
-       ORDER BY gji.position ASC`,
+      `SELECT * FROM (
+         SELECT gji.position, gji.role, mu.id, mu.object_key, mu.mime_type, mu.size_bytes, mu.checksum, mu.media_kind
+         FROM generation_job_inputs gji
+         JOIN media_uploads mu ON mu.id = gji.upload_id
+         WHERE gji.job_id = $1 AND mu.deleted_at IS NULL
+         UNION ALL
+         SELECT gji.position, gji.role, a.id, a.object_key, a.mime_type, a.size_bytes, a.checksum, a.media_kind
+         FROM generation_job_inputs gji
+         JOIN assets a ON a.id = gji.asset_id
+         WHERE gji.job_id = $1 AND a.deleted_at IS NULL AND a.media_kind = 'image' AND a.mime_type IN ('image/png','image/jpeg')
+       ) inputs ORDER BY inputs.position ASC`,
       [jobId],
     )
     rows = res.rows as Array<Record<string, unknown>>
+    unifiedRead = true
   } catch {
+    // No asset_id column (or no media_uploads) on an older database: the UNION All
+    // fails as a whole, so the legacy reader below stays responsible.
     rows = []
+  }
+  if (unifiedRead) {
+    // A gallery pick is only a reference, so the user can delete that image after
+    // submitting. Loading fewer images than the job linked means one reference is
+    // gone — fail retryably instead of quietly generating against fewer inputs.
+    await assertAllLinkedInputsPresent(jobId, rows.length)
   }
   if (rows.length > 0) {
     const limits = await resolveInputLimits()
@@ -426,9 +470,16 @@ async function resolveSnapshot(job: Record<string, unknown>): Promise<ResolvedSn
 }
 
 /** Placement roles both video plugins understand; coarser stored roles stay positional. */
-const FORWARDABLE_INPUT_ROLES = ['first_frame', 'last_frame', 'reference_image']
+const FORWARDABLE_INPUT_ROLES = ['first_frame', 'last_frame', 'reference_image', 'mask']
 
-function buildMediaRequest(job: Record<string, unknown>, prompt: string, inputImages: MediaInputImage[] | undefined, revision: ModelConfigRevisionEntity): MediaRequest {
+/**
+ * Translate a queued job row into the normalized request a plugin receives.
+ *
+ * Exported for tests: this is the boundary where a declared parameter either
+ * reaches the vendor or silently does not, and a slip here is invisible in every
+ * other layer's output.
+ */
+export function buildMediaRequest(job: Record<string, unknown>, prompt: string, inputImages: MediaInputImage[] | undefined, revision: ModelConfigRevisionEntity): MediaRequest {
   const mediaKind = job.media_kind === 'video' ? 'video' : 'image'
   const normalized = (job.normalized_request as Record<string, unknown> | null) || null
   const params = (normalized?.parameters as Record<string, unknown> | undefined) || {}
@@ -441,6 +492,9 @@ function buildMediaRequest(job: Record<string, unknown>, prompt: string, inputIm
     : params.duration !== undefined ? Number(params.duration) : undefined
   const fps = params.fps !== undefined ? Number(params.fps) : undefined
   const extra: Record<string, unknown> = {}
+  // TODO(media-params): this mirror exists only so the two video adapters keep
+  // reading `extra` unchanged. Once they read `request.parameters` the loop goes
+  // away; until then the worker test asserts the two agree on these six keys.
   for (const key of ['aspectRatio', 'resolution', 'audio', 'duration', 'seed', 'fps']) {
     if (params[key] !== undefined) extra[key] = params[key]
   }
@@ -464,11 +518,19 @@ function buildMediaRequest(job: Record<string, unknown>, prompt: string, inputIm
     durationSeconds: durationSeconds !== undefined && Number.isFinite(durationSeconds) ? durationSeconds : undefined,
     fps: fps !== undefined && Number.isFinite(fps) ? fps : undefined,
     inputImages,
+    // Every declared parameter the API already admitted. This is the *stored*
+    // set rather than a re-filter against the pinned revision's descriptors, and
+    // that is deliberate: `normalized_request` is post-validation, so filtering
+    // again here would duplicate a decision already made — and dropping anything
+    // a legacy pinned revision still carries would silently remove a size from
+    // an in-flight job. Losing a parameter on the way to a vendor is a billable
+    // mistake; forwarding one a plugin ignores is not.
+    parameters: Object.keys(params).length > 0 ? { ...params } as MediaRequest['parameters'] : undefined,
     extra: Object.keys(extra).length > 0 ? extra : undefined,
   }
 }
 
-function classifySubmitError(error: unknown, _pluginId: string): { code: string; retryable: boolean; diagnostic: Record<string, unknown> | null } {
+export function classifySubmitError(error: unknown, _pluginId: string): { code: string; retryable: boolean; diagnostic: Record<string, unknown> | null } {
   if (error instanceof NormalizedProviderError) {
     const code = error.message
     const retryable = code === 'PROVIDER_TEMPORARY_ERROR' || code === 'PROVIDER_TIMEOUT' || code === 'OUTPUT_READ_FAILED'
@@ -481,6 +543,13 @@ function classifySubmitError(error: unknown, _pluginId: string): { code: string;
   }
   const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'GENERATION_FAILED'
   const retryable = ['PROVIDER_TEMPORARY_ERROR', 'PROVIDER_TIMEOUT', 'PROVIDER_DOWNLOAD_FAILED', 'PROVIDER_BUSY', 'INPUT_IMAGE_UNAVAILABLE', 'STORAGE_TEMPORARY_ERROR', 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR', 'LANGUAGE_MODEL_RESPONSE_INVALID'].includes(code)
+  // An uploaded bundle cannot import NormalizedProviderError (zero runtime imports), so
+  // it signals as `Object.assign(new Error('<CODE>'), { diagnostic })` and instanceof
+  // never matches. Keep that diagnostic instead of collapsing it to null.
+  const carried = error && typeof error === 'object' ? (error as { diagnostic?: unknown }).diagnostic : undefined
+  if (carried && typeof carried === 'object' && !Array.isArray(carried)) {
+    return { code, retryable, diagnostic: carried as Record<string, unknown> }
+  }
   return { code, retryable, diagnostic: null }
 }
 
@@ -649,8 +718,8 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
   }
   const mediaKind = job.media_kind === 'video' ? 'video' : 'image'
   const createdBy = String(job.created_by)
-  const plugin = globalProviderRegistry.get(revision.pluginId, revision.pluginVersion)
-  const context = globalProviderRegistry.createExecutionContext(revision.pluginId, revision.pluginVersion, { config })
+  const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
+  const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
   const manifest = stripOutputManifest(outputs)
   await updateProviderRunState(db(), {
     runId: run.id,
@@ -661,6 +730,10 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
   }).then(updated => { if (updated) run = updated }).catch(() => {})
   const persistedKeys: string[] = []
   const uploaded: PersistJobSuccessInput['uploaded'] = []
+  // Preview bytes are produced while the source buffer is still in hand, but
+  // uploaded and attached only after the persist transaction closes, so sharp /
+  // ffmpeg CPU time never holds `FOR UPDATE` locks.
+  const derivedPreviews = new Map<string, DerivedPreview>()
   try {
     for (const descriptor of outputs) {
       const existing = await getOutputIngestionByRunIndex(db(), run.id, descriptor.index).catch(() => null)
@@ -698,6 +771,15 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
       }
       persistedKeys.push(storageKey)
       await updateOutputIngestion(db(), { id: ingestionId, ingestionState: 'verifying', multipartUploadId: multipartId, downloadCompleted: true }).catch(() => null)
+      // Gallery preview, best effort: a preview is an optimisation, so nothing
+      // in here may change the outcome of a successful generation.
+      try {
+        const derived = await buildDerivedPreview(bounded.data, storageKey, bounded.mimeType, mediaKind)
+        if (derived.state === 'ready') derivedPreviews.set(storageKey, derived.preview)
+        else console.warn('asset_preview_skipped', { runId: run.id, storageKey, reason: derived.reason })
+      } catch (error) {
+        console.error('asset_preview_failed', { runId: run.id, storageKey, message: String(error) })
+      }
       uploaded.push({
         key: storageKey,
         image: {
@@ -716,11 +798,11 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
     }
     const latest = await getProviderRunById(db(), run.id)
     const revisionNow = latest ? latest.stateRevision : run.stateRevision
-    await transaction(async client => {
+    const persisted = await transaction(async client => {
       const ok = await persistJobSuccess(client, { jobId: String(job.id), createdBy, prompt, uploaded })
       if (!ok) {
         await deleteUploadedObjects(persistedKeys.map(key => ({ key })))
-        return
+        return false
       }
       for (const item of uploaded) {
         const assetRow = await client.query('SELECT id FROM assets WHERE job_id=$1 AND object_key=$2', [job.id, item.key])
@@ -740,10 +822,67 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
         completed: true,
         nextActionAt: null,
       }).catch(() => null)
+      return true
     })
+    if (persisted) {
+      await attachDerivedPreviews(String(job.id), mediaKind, uploaded.map(item => item.key), derivedPreviews)
+    }
   } catch (error) {
     await deleteUploadedObjects(persistedKeys.map(key => ({ key })))
     throw error
+  }
+}
+
+/**
+ * Upload the previews produced in `importRunOutputs` and point the asset rows at
+ * them, outside the persist transaction.
+ *
+ * Runs after the transaction on purpose: `assets` rows exist by then, and the
+ * (possibly seconds-long) ffmpeg spawn for a video poster never runs while
+ * row locks are held. Every failure path here is terminal for the preview only
+ * — the job already succeeded, so the worst outcome is a gallery tile that
+ * falls back to the original object.
+ */
+async function attachDerivedPreviews(
+  jobId: string,
+  mediaKind: 'image' | 'video',
+  storageKeys: string[],
+  derivedPreviews: Map<string, DerivedPreview>,
+): Promise<void> {
+  for (const key of storageKeys) {
+    let assetId: string | undefined
+    try {
+      const assetRow = await db().query('SELECT id FROM assets WHERE job_id=$1 AND object_key=$2', [jobId, key])
+      assetId = assetRow.rows[0]?.id as string | undefined
+      if (!assetId) continue
+      const preview = derivedPreviews.get(key)
+      if (!preview) {
+        // Skipped or failed above: record the attempt so a re-runnable backfill
+        // selects ('none','failed') and still terminates.
+        await db().query("UPDATE assets SET thumbnail_state='failed',updated_at=now() WHERE id=$1", [assetId])
+        continue
+      }
+      await uploadBufferToS3(preview.objectKey, preview.bytes, preview.mimeType)
+      // A video poster IS the preview: one object, both columns, which also
+      // finally gives the long-dormant `poster_object_key` a writer and the API
+      // a real `posterUrl`.
+      await db().query(
+        `UPDATE assets SET thumbnail_object_key=$2,thumbnail_mime_type=$3,thumbnail_width=$4,thumbnail_height=$5,thumbnail_state='ready',poster_object_key=CASE WHEN $6::boolean THEN $2 ELSE poster_object_key END,updated_at=now() WHERE id=$1`,
+        [
+          assetId,
+          preview.objectKey,
+          preview.mimeType,
+          preview.width > 0 ? preview.width : null,
+          preview.height > 0 ? preview.height : null,
+          mediaKind === 'video',
+        ],
+      )
+    } catch (error) {
+      console.error('asset_preview_attach_failed', { jobId, objectKey: key, assetId, message: String(error) })
+      if (assetId) {
+        await db().query("UPDATE assets SET thumbnail_state='failed',updated_at=now() WHERE id=$1", [assetId]).catch(() => null)
+      }
+    }
   }
 }
 
@@ -784,8 +923,8 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
     if (!isNonTerminalRunState(run.operationState)) return true
     const { revision, config } = await resolveSnapshot(job)
     const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
-    const plugin = globalProviderRegistry.get(revision.pluginId, revision.pluginVersion)
-    const context = globalProviderRegistry.createExecutionContext(revision.pluginId, revision.pluginVersion, { config })
+    const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
+    const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
     if (!run.remoteId) {
       if (isSynchronousPlugin(plugin)) {
         const recoveryCode = syncNoRemotePollCode(run.operationState)
@@ -850,8 +989,8 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
 async function requestRemoteCancel(run: ProviderRunEntity, job: Record<string, unknown>): Promise<void> {
   try {
     const { revision, config } = await resolveSnapshot(job)
-    const plugin = globalProviderRegistry.get(revision.pluginId, revision.pluginVersion)
-    const context = globalProviderRegistry.createExecutionContext(revision.pluginId, revision.pluginVersion, { config })
+    const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
+    const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
     const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
     await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'canceling', nextActionAt: null }).catch(() => null)
     await db().query("UPDATE generation_jobs SET phase='provider_canceling',updated_at=now() WHERE id=$1", [job.id]).catch(() => {})
@@ -877,8 +1016,10 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
   const claimed = await transaction(async client => {
     const r = await client.query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL FOR UPDATE', [jobId])
     const job = r.rows[0] as Record<string, unknown> | undefined
-    if (!job || !['queued', 'retry_wait'].includes(String(job.status))) return null
-    if (isCancelRequested(job)) {
+    if (!job) return null
+    const claimDecision = decideJobClaim(job)
+    if (claimDecision === 'ignore') return null
+    if (claimDecision === 'cancel') {
       await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [job.id])
       return { ...(job as object), status: 'canceled', canceledAtClaim: true } as unknown as Record<string, unknown>
     }
@@ -898,7 +1039,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
     const prompt = await preprocessPrompt(claimed)
     const currentRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [claimed.id])
     const current = currentRes.rows[0] as Record<string, unknown> | undefined
-    if (!current || current.status === 'canceled' || isCancelRequested(current)) {
+    if (decideClaimedJob(current) === 'cancel') {
       const latest = await getLatestProviderRunForJob(db(), String(claimed.id)).catch(() => null)
       if (latest && isNonTerminalRunState(latest.operationState)) {
         await requestRemoteCancel(latest, current || claimed)
@@ -927,8 +1068,8 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       })
     })
     if (!idempotent.acquired) {
-      const reason = idempotent.reason || 'CONCURRENCY_LIMIT_EXCEEDED'
-      if (reason === 'MODEL_NOT_FOUND') {
+      const capacityDecision = decideCapacityDenial(idempotent.reason)
+      if (capacityDecision === 'terminal_invalid_config') {
         await transaction(async client => {
           await persistJobFailure(client, { jobId: String(jobRow.id), promptOptimizationId: (jobRow.prompt_optimization_id as string) || null, phase: 'generation_failed', code: 'INVALID_CONFIG', retryable: false, providerError: null })
         })
@@ -945,8 +1086,8 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       throw new Error(code)
     })
     const request: MediaRequest = buildMediaRequest(jobRow, prompt, inputImages, revision)
-    const plugin = globalProviderRegistry.get(revision.pluginId, revision.pluginVersion)
-    const context = globalProviderRegistry.createExecutionContext(revision.pluginId, revision.pluginVersion, { config })
+    const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
+    const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
     let result: OperationResult
     try {
       try { await plugin.validateRequest(request, config) } catch (error) {
@@ -984,12 +1125,13 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         return true
       }
     }
-    if (result.status === 'waiting' || result.status === 'submission_unknown') {
-      if (!result.remoteId && isSynchronousPlugin(plugin)) {
+    const resultDisposition = decideSubmitResult(result, isSynchronousPlugin(plugin))
+    if (resultDisposition === 'waiting' || resultDisposition === 'submission_unknown' || resultDisposition === 'empty_sync_remote') {
+      if (resultDisposition === 'empty_sync_remote') {
         await failRunTerminal(run, jobRow, 'PROVIDER_EMPTY_RESULT', { detail: 'SYNC_PLUGIN_MISSING_REMOTE_ID' }, 'generation_failed')
         return true
       }
-      if (result.status === 'waiting') {
+      if (resultDisposition === 'waiting') {
         await storeRunWaiting(run, result)
         await db().query("UPDATE generation_jobs SET phase='provider_waiting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
         return true
@@ -998,7 +1140,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       await db().query("UPDATE generation_jobs SET phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
       return true
     }
-    if (result.status === 'submitting') {
+    if (resultDisposition === 'submitting') {
       await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'waiting', remoteId: result.remoteId ?? null, nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs), encryptedStatePayload: encryptOpaqueState(result.opaqueState), encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : null, providerAccepted: Boolean(result.remoteId) }).catch(() => null)
       return true
     }

@@ -4,8 +4,8 @@ import { api } from '@/shared/services/api'
 import { useGenerateUiStore } from '@/shared/stores/generate-ui-store'
 import { planRolePositions, resolveImageInputPlan } from '@/shared/lib/generation-params'
 import type { ImageInputPlanModel } from '@/shared/lib/generation-params'
-import { RUNTIME_SETTINGS_DEFAULTS } from '@/shared/types'
-import type { ModelConfig, StagedReferenceImage } from '@/shared/types'
+import { RUNTIME_SETTINGS_DEFAULTS, assetPlaybackUrl, assetPreviewUrl, isVideoAsset } from '@/shared/types'
+import type { Asset, ModelConfig, StagedReferenceImage } from '@/shared/types'
 
 export const ALLOWED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg'] as const
 
@@ -20,6 +20,10 @@ export const UPLOAD_LIMITS = {
 /** Live XHR handles stay outside the store: patching them would rebuild the
  *  staged array on every progress tick and keep unparsable objects in state. */
 const inflight = new Map<string, XMLHttpRequest>()
+
+/** Staged gallery previews already re-signed, so a permanently dead object cannot
+ *  turn a broken `<img>` into an error→sign→error request loop. */
+const previewRefreshed = new Set<string>()
 
 const store = () => useGenerateUiStore.getState()
 
@@ -148,6 +152,7 @@ export async function addReferenceFiles(
     return
   }
 
+  const pending: Array<{ localId: string; file: File }> = []
   for (const file of files) {
     const current = store().stagedImages
     if (current.length >= maxInputs) {
@@ -169,41 +174,167 @@ export async function addReferenceFiles(
       break
     }
 
-    const dimensions = await checkImageDimensions(file)
-    if (dimensions.error) {
-      setInlineError(`「${file.name}」${dimensions.error}`)
-      continue
-    }
-
-    // Decoding is async, so re-check the counters a concurrent pick may have moved.
-    const afterDecode = store().stagedImages
-    if (
-      afterDecode.length >= maxInputs ||
-      afterDecode.reduce((sum, image) => sum + image.sizeBytes, 0) + file.size >
-        UPLOAD_LIMITS.maxTotalBytes
-    ) {
-      setInlineError(
-        afterDecode.length >= maxInputs
-          ? `最多支持添加 ${maxInputs} 张参考图`
-          : `参考图总大小不能超过 ${formatSize(UPLOAD_LIMITS.maxTotalBytes)}`,
-      )
-      break
-    }
-
+    // Reserve every accepted file's slot synchronously before decoding. A gallery
+    // pick made while an image is being inspected then appends after these uploads,
+    // preserving the user's source-selection order in the shared staged list.
     const localId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     store().addStagedImage({
       localId,
+      source: 'upload',
       file,
       previewUrl: URL.createObjectURL(file),
       status: 'pending',
       progress: 0,
       mimeType: file.type,
       sizeBytes: file.size,
-      width: dimensions.width,
-      height: dimensions.height,
     })
+    pending.push({ localId, file })
+  }
+
+  await Promise.all(pending.map(async ({ localId, file }) => {
+    const dimensions = await checkImageDimensions(file)
+    if (dimensions.error) {
+      await removeReferenceImage(localId)
+      setInlineError(`「${file.name}」${dimensions.error}`)
+      return
+    }
+    if (!isStaged(localId)) return
+
+    patch(localId, { width: dimensions.width, height: dimensions.height })
     // Deliberately not awaited: each file uploads independently and keeps its own progress.
     void startUpload(localId, file, file.type, file.size)
+  }))
+}
+
+/**
+ * Can this gallery image feed a generation? The worker only decodes PNG and JPEG
+ * magic bytes (`inspectImageBytes`), so any other stored artifact — a WebP, a video
+ * — would fail the job minutes after submit. Checking it here keeps the picker honest
+ * instead of offering tiles that cannot be used.
+ */
+export function isReferenceEligibleAsset(asset: Pick<Asset, 'mediaKind' | 'mimeType' | 'url' | 'imageUrl'>): boolean {
+  if (isVideoAsset(asset)) return false
+  return (ALLOWED_IMAGE_MIME_TYPES as readonly string[]).includes((asset.mimeType || '').toLowerCase())
+}
+
+/** Geometry gate for a gallery pick, using the dimensions already stored on the row.
+ *
+ *  Rows written before those columns existed carry nothing to check; the server still
+ *  re-validates against the real bytes, so a missing dimension must not block a pick.
+ *  Same thresholds as `checkImageDimensions` applies to a local file. */
+function galleryGeometryError(asset: Pick<Asset, 'width' | 'height'>): string | null {
+  const { minDimension, maxDimension, maxAspectRatio } = UPLOAD_LIMITS
+  const width = asset.width
+  const height = asset.height
+  if (!width || !height) return null
+  if (width < minDimension || width > maxDimension || height < minDimension || height > maxDimension) {
+    return `分辨率须在 ${minDimension}~${maxDimension} 像素之间（当前 ${width}×${height}）`
+  }
+  const ratio = Math.max(width / height, height / width)
+  if (ratio > maxAspectRatio) {
+    return `宽高比不能超过 ${maxAspectRatio}:1（当前 ${ratio.toFixed(1)}:1）`
+  }
+  return null
+}
+
+/**
+ * Stage an existing gallery image as an input reference.
+ *
+ * The counterpart to `addReferenceFiles`, and deliberately not a download-then-upload:
+ * the bytes are already in storage under this user's account, so the pick goes
+ * straight to `ready` and the request carries `assetId`. No upload row, no second
+ * object, no progress to report — and removing it later must never delete the asset.
+ *
+ * @returns whether the image was added, so the caller can handle picker state explicitly.
+ */
+export async function addGalleryImage(
+  asset: Asset,
+  model: Pick<ModelConfig, 'inputSlots' | 'maxInputImages'> | null | undefined,
+): Promise<boolean> {
+  setInlineError(null)
+
+  const maxInputs = resolveMaxInputs(model)
+  if (maxInputs === 0) {
+    setInlineError('当前模型不支持参考图，请切换到支持图生图的模型')
+    return false
+  }
+  const staged = store().stagedImages
+  if (staged.length >= maxInputs) {
+    setInlineError(`最多支持添加 ${maxInputs} 张参考图`)
+    return false
+  }
+  if (staged.some((image) => image.assetId === asset.id)) {
+    setInlineError('这张图库图片已经在输入列表里了')
+    return false
+  }
+  if (!isReferenceEligibleAsset(asset)) {
+    setInlineError('图库中仅 PNG 或 JPEG 图片可作为参考图')
+    return false
+  }
+  if (asset.sizeBytes > UPLOAD_LIMITS.maxImageBytes) {
+    setInlineError(
+      `该图片超过单张 ${formatSize(UPLOAD_LIMITS.maxImageBytes)} 限制（当前 ${formatSize(asset.sizeBytes)}）`,
+    )
+    return false
+  }
+  if (referenceImagesTotalBytes() + asset.sizeBytes > UPLOAD_LIMITS.maxTotalBytes) {
+    setInlineError(`参考图总大小不能超过 ${formatSize(UPLOAD_LIMITS.maxTotalBytes)}`)
+    return false
+  }
+  const geometry = galleryGeometryError(asset)
+  if (geometry) {
+    setInlineError(geometry)
+    return false
+  }
+
+  store().addStagedImage({
+    // The asset id doubles as the local id, which is what makes re-picking the same
+    // image a no-op instead of a duplicate slot.
+    localId: `gallery-${asset.id}`,
+    source: 'gallery',
+    assetId: asset.id,
+    previewUrl: assetPreviewUrl(asset),
+    status: 'ready',
+    progress: 100,
+    imageUrl: assetPlaybackUrl(asset),
+    mimeType: asset.mimeType,
+    sizeBytes: asset.sizeBytes,
+    width: asset.width,
+    height: asset.height,
+  })
+  // Same role re-derivation an upload gets: position, not provenance, decides
+  // 首帧 / 尾帧, so a gallery pick can occupy either slot.
+  await reconcileStagedRoles(model)
+  return true
+}
+
+/**
+ * Swap an expired gallery preview for a freshly signed URL.
+ *
+ * Only `source: 'gallery'` needs this — a blob URL lives as long as we keep it. The
+ * reference itself is unaffected: submit carries `assetId`, and the server re-signs
+ * the bytes it reads, so a dead preview is cosmetic, never a failed generation.
+ */
+export async function refreshGalleryPreview(localId: string): Promise<void> {
+  const staged = store().stagedImages.find((image) => image.localId === localId)
+  if (!staged || staged.source !== 'gallery' || !staged.assetId) return
+  if (previewRefreshed.has(localId)) {
+    setInlineError('图库图片预览仍无法加载，请移除后重新选择该图片')
+    return
+  }
+  previewRefreshed.add(localId)
+
+  try {
+    const res = await api.getAssetDownloadUrl(staged.assetId)
+    const url = res.success ? res.data?.url : undefined
+    if (!isStaged(localId)) return
+    if (!url) {
+      setInlineError('图库图片预览链接已失效，请移除后重新选择该图片')
+      return
+    }
+    patch(localId, { previewUrl: url, imageUrl: url })
+  } catch {
+    if (isStaged(localId)) setInlineError('无法刷新图库图片预览，请检查网络后重试')
   }
 }
 
@@ -289,14 +420,22 @@ export async function removeReferenceImage(localId: string): Promise<void> {
   store().removeStagedImage(localId)
   inflight.get(localId)?.abort()
   inflight.delete(localId)
-  if (staged.uploadId) await api.deleteGenerationUpload(staged.uploadId)
-  URL.revokeObjectURL(staged.previewUrl)
+  previewRefreshed.delete(localId)
+  // Only an upload owns anything: an upload row and its object are ours to delete.
+  // A gallery pick is a reference to someone's existing work — dropping the slot must
+  // never reach into the library.
+  if (staged.source === 'upload') {
+    if (staged.uploadId) await api.deleteGenerationUpload(staged.uploadId)
+    URL.revokeObjectURL(staged.previewUrl)
+  }
   refreshInlineError()
 }
 
 export async function retryReferenceUpload(localId: string): Promise<void> {
   const staged = store().stagedImages.find((image) => image.localId === localId)
   if (!staged) return
+  // A gallery pick has no bytes to re-send; it is ready the moment it is added.
+  if (!staged.file) return
 
   if (staged.uploadId) await api.deleteGenerationUpload(staged.uploadId)
   patch(localId, { uploadId: undefined })
@@ -327,7 +466,10 @@ export async function clearReferenceImages(options: { deleteRemote?: boolean } =
   for (const image of images) {
     inflight.get(image.localId)?.abort()
     inflight.delete(image.localId)
+    previewRefreshed.delete(image.localId)
     if (deleteRemote && image.uploadId) await api.deleteGenerationUpload(image.uploadId)
-    URL.revokeObjectURL(image.previewUrl)
+    // Blob URLs are ours to reclaim; a gallery URL is a remote signed address and only
+    // the upload branch may call revokeObjectURL on it.
+    if (image.source === 'upload') URL.revokeObjectURL(image.previewUrl)
   }
 }

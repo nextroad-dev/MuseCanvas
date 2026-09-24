@@ -1,14 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { AdminJob } from '@/shared/types'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { ArrowUpDown, Loader2, RefreshCw } from 'lucide-react'
 
 export function AdminJobsView() {
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [timeSort, setTimeSort] = useState<'desc' | 'asc'>('desc')
 
   const {
     data: jobs = [],
@@ -27,6 +28,19 @@ export function AdminJobsView() {
       return res.data?.items || []
     },
   })
+
+  // Client-side sort over the fetched page: the monitor's natural order is
+  // newest-first, flipping stays cheap and keeps the filter server-driven.
+  const sortedJobs = useMemo(
+    () =>
+      [...jobs].sort((a, b) => {
+        const delta = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        return timeSort === 'desc' ? -delta : delta
+      }),
+    [jobs, timeSort],
+  )
+
+  const filterActive = statusFilter !== 'all'
 
   return (
     <div className="space-y-6">
@@ -69,7 +83,16 @@ export function AdminJobsView() {
               <th className="px-4 py-3 font-medium">模型</th>
               <th className="px-4 py-3 font-medium">状态</th>
               <th className="px-4 py-3 font-medium">耗时 / 错误</th>
-              <th className="px-4 py-3 font-medium">提交时间</th>
+              <th aria-sort={timeSort === 'desc' ? 'descending' : 'ascending'} className="px-4 py-3 text-right font-medium">
+                <button
+                  type="button"
+                  onClick={() => setTimeSort((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
+                  className="ml-auto inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] px-2 hover:bg-surface-subtle hover:text-foreground"
+                >
+                  提交时间
+                  <ArrowUpDown className="h-3 w-3" aria-hidden="true" />
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -79,8 +102,8 @@ export function AdminJobsView() {
                   <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                 </td>
               </tr>
-            ) : jobs.length > 0 ? (
-              jobs.map((job) => (
+            ) : sortedJobs.length > 0 ? (
+              sortedJobs.map((job) => (
                 <tr key={job.id} className="hover:bg-surface-subtle/50 transition-colors">
                   <td className="px-4 py-3 font-mono text-muted-foreground">{job.id.slice(0, 8)}...</td>
                   <td className="px-4 py-3 text-foreground">{job.userEmail || job.userId?.slice(0, 8)}</td>
@@ -93,7 +116,7 @@ export function AdminJobsView() {
                           : job.status === 'failed'
                             ? 'bg-danger-soft text-danger'
                             : job.status === 'running'
-                              ? 'bg-accent-soft text-accent'
+                              ? 'bg-accent-soft text-accent-strong'
                               : 'bg-surface-subtle text-muted-foreground'
                       }`}
                     >
@@ -109,7 +132,7 @@ export function AdminJobsView() {
                       '—'
                     )}
                   </td>
-                  <td className="px-4 py-3 font-mono text-muted-foreground">
+                  <td className="px-4 py-3 text-right font-mono tabular-nums text-muted-foreground">
                     {new Date(job.createdAt).toLocaleString('zh-CN')}
                   </td>
                 </tr>
@@ -117,7 +140,7 @@ export function AdminJobsView() {
             ) : (
               <tr>
                 <td colSpan={6} className="p-8 text-center text-muted-foreground">
-                  暂无匹配任务
+                  {filterActive ? '没有符合当前筛选条件的任务，调整筛选后重试。' : '暂无任务记录。'}
                 </td>
               </tr>
             )}

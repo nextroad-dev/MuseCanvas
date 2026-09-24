@@ -1,7 +1,19 @@
 import { createSign } from 'node:crypto'
 import type {
+  BooleanParameterDescriptor,
+  EnumParameterDescriptor,
+  InputSlotDescriptor,
+  IntegerParameterDescriptor,
+  JsonValue,
+  ModelCapabilities,
+  ParameterCrossFieldConstraint,
+  ParameterDescriptor,
+} from '@musecanvas/contracts'
+import { enumOptionValues, evaluateCrossFieldConstraints, validateParameterValue } from '@musecanvas/contracts'
+import type {
   BoundedOutput,
   ExecutionContext,
+  MediaModelDeclaration,
   MediaProviderManifest,
   MediaProviderPlugin,
   MediaRequest,
@@ -17,16 +29,151 @@ export const VEO_VIDEO_PLUGIN_VERSION = '1.0.0'
 
 export const VEO_STANDARD_MODEL = 'veo-3.1-generate-001'
 export const VEO_FAST_MODEL = 'veo-3.1-fast-generate-001'
-const VEO_SUPPORTED_MODELS = [VEO_STANDARD_MODEL, VEO_FAST_MODEL] as const
 
 const VEO_DEFAULT_LOCATION = 'us-central1'
-const VEO_ALLOWED_DURATIONS = [4, 6, 8] as const
-const VEO_ALLOWED_ASPECT_RATIOS = ['16:9', '9:16'] as const
-const VEO_ALLOWED_RESOLUTIONS = ['720p', '1080p', '4k'] as const
 const VEO_MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024
 const VEO_POLL_RETRY_AFTER_MS = 5000
 
+// ---------------------------------------------------------------------------
+// Capability declaration
+//
+// This block *is* Veo's parameter contract: what `GET /api/models` serves, what
+// the browser renders, what the API validates against, and what
+// `resolveVideoParameters` below enforces. The `VEO_ALLOWED_*` tables this
+// replaces were a second, private copy of the same facts, and the model/duration
+// coupling lived only inside imperative `if`s nobody else could see.
+//
+// Durations stay enum *strings* (`'4' | '6' | '8'`) because that is what the
+// admin preset has always offered; request normalization hands the adapter a
+// number, which is converted back to its string form for the membership test.
+// ---------------------------------------------------------------------------
+
+const veoDurationParameter: EnumParameterDescriptor = {
+  type: 'enum',
+  name: 'durationSeconds',
+  label: '时长（秒）',
+  options: ['4', '6', '8'],
+  defaultValue: '8',
+  ui: { control: 'segmented', unit: '秒', order: 1 },
+}
+
+const veoAspectRatioParameter: EnumParameterDescriptor = {
+  type: 'enum',
+  name: 'aspectRatio',
+  label: '宽高比',
+  options: ['16:9', '9:16'],
+  defaultValue: '16:9',
+  ui: { control: 'segmented', order: 2 },
+}
+
+function veoResolutionParameter(options: string[], defaultValue: string): EnumParameterDescriptor {
+  return {
+    type: 'enum',
+    name: 'resolution',
+    label: '分辨率',
+    options,
+    defaultValue,
+    ui: { control: 'segmented', order: 3 },
+  }
+}
+
+const veoStandardResolutionParameter = veoResolutionParameter(['720p', '1080p', '4k'], '1080p')
+// Today's rule "resolution '1080p'/'4k' requires the standard model" is really
+// the statement that the fast tier has never accepted them, so the fast model
+// simply does not offer them. Expressing it as an option set keeps the check
+// declarative and removes the only place the adapter read `request.vendorModelId`
+// to decide what a value meant.
+const veoFastResolutionParameter = veoResolutionParameter(['720p'], '720p')
+
+const veoAudioParameter: BooleanParameterDescriptor = {
+  type: 'boolean',
+  name: 'audio',
+  label: '生成音频',
+  defaultValue: true,
+  ui: { control: 'switch', order: 4 },
+}
+
+const veoCountParameter: IntegerParameterDescriptor = {
+  type: 'integer',
+  name: 'count',
+  label: '生成数量',
+  min: 1,
+  max: 4,
+  defaultValue: 1,
+  ui: { control: 'number', order: 5 },
+}
+
+/** Above 720p the vendor only renders an 8-second clip. */
+const veoResolutionDurationRules: ParameterCrossFieldConstraint[] = [
+  {
+    type: 'forbidden',
+    parameter: 'resolution',
+    whenValueEquals: '1080p',
+    targetParameter: 'durationSeconds',
+    targetValues: ['4', '6'],
+    message: '分辨率 1080p 需要时长 8 秒',
+  },
+  {
+    type: 'forbidden',
+    parameter: 'resolution',
+    whenValueEquals: '4k',
+    targetParameter: 'durationSeconds',
+    targetValues: ['4', '6'],
+    message: '分辨率 4k 需要时长 8 秒',
+  },
+]
+
+/**
+ * The three frames `buildInstance` actually places: `image`, `lastFrame` and
+ * `referenceImages[]`. `prompt_image` / `source_video` are absent because
+ * `resolveExplicitImageRoles` refuses them and falls back to positional
+ * placement instead.
+ */
+const veoInputSlots: InputSlotDescriptor[] = [
+  { role: 'first_frame', required: false, minCount: 0, maxCount: 1, allowedMediaKinds: ['image'], label: '首帧' },
+  { role: 'last_frame', required: false, minCount: 0, maxCount: 1, allowedMediaKinds: ['image'], label: '尾帧' },
+  { role: 'reference_image', required: false, minCount: 0, maxCount: 4, allowedMediaKinds: ['image'], label: '参考图' },
+]
+
+function veoCapabilities(resolution: EnumParameterDescriptor): ModelCapabilities {
+  return {
+    modes: ['text_to_video', 'image_to_video'],
+    parameters: [veoDurationParameter, veoAspectRatioParameter, resolution, veoAudioParameter, veoCountParameter],
+    inputSlots: veoInputSlots,
+    maxCount: 4,
+    supportedMediaKinds: ['video'],
+    crossFieldConstraints: veoResolutionDurationRules,
+    // `flags` stays absent on purpose: every flag in the contract describes an
+    // image capability (mask / inpainting / transparent background), and
+    // `validateFlagModeAgreement` only polices image modes, so a video plugin
+    // claiming one would never be caught contradicting itself.
+    declaredBy: 'plugin-manifest',
+  }
+}
+
+const veoStandardCapabilities = veoCapabilities(veoStandardResolutionParameter)
+const veoFastCapabilities = veoCapabilities(veoFastResolutionParameter)
+
+/**
+ * The console's starting point, taken from the current admin preset. The
+ * adapter's own fallback when a caller states no resolution at all stays the
+ * floor of the declared option set ('720p'), because that is what has always
+ * gone on the wire for an unqualified request.
+ */
+const veoStandardDefaults: Record<string, JsonValue> = {
+  durationSeconds: '8',
+  aspectRatio: '16:9',
+  resolution: '1080p',
+  audio: true,
+  count: 1,
+}
+const veoFastDefaults: Record<string, JsonValue> = {
+  ...veoStandardDefaults,
+  resolution: '720p',
+}
+
 export const veoVideoManifest: MediaProviderManifest = {
+  kind: 'media',
   id: VEO_VIDEO_PLUGIN_ID,
   version: VEO_VIDEO_PLUGIN_VERSION,
   displayName: 'Google Vertex AI Veo Video Generation',
@@ -42,10 +189,27 @@ export const veoVideoManifest: MediaProviderManifest = {
   ],
   credentialSchemas: ['json-v1', 'access-token-v1'],
   models: [
-    { id: VEO_STANDARD_MODEL, name: 'Veo 3.1', modalities: ['video'], maxBatchSize: 4 },
-    { id: VEO_FAST_MODEL, name: 'Veo 3.1 Fast', modalities: ['video'], maxBatchSize: 4 },
+    {
+      id: VEO_STANDARD_MODEL,
+      name: 'Veo 3.1',
+      modalities: ['video'],
+      maxBatchSize: 4,
+      capabilities: veoStandardCapabilities,
+      defaults: veoStandardDefaults,
+    },
+    {
+      id: VEO_FAST_MODEL,
+      name: 'Veo 3.1 Fast',
+      modalities: ['video'],
+      maxBatchSize: 4,
+      capabilities: veoFastCapabilities,
+      defaults: veoFastDefaults,
+    },
   ],
 }
+
+/** The manifest is the only model list, so the guard reads it rather than a copy. */
+const VEO_SUPPORTED_MODELS = (veoVideoManifest.models ?? []).map(model => model.id)
 
 type VeoImagePayload = {
   bytesBase64Encoded: string
@@ -127,6 +291,63 @@ function invalidConfig(detail: string): NormalizedProviderError {
   return NormalizedProviderError.create(VEO_VIDEO_PLUGIN_ID, VEO_VIDEO_PLUGIN_VERSION, 'INVALID_CONFIG', detail)
 }
 
+/**
+ * The manifest entry a request is validated against.
+ *
+ * A model with no declaration is refused rather than guessed at: falling back to
+ * a private band table is how the adapter and the console started disagreeing in
+ * the first place. `validateRequest` rejects an unknown id before this runs, so
+ * the only way to reach the throw is a manifest that lost its own contract.
+ */
+function veoModelDeclaration(modelId: string): MediaModelDeclaration {
+  const model = veoVideoManifest.models?.find(candidate => candidate.id === modelId)
+  if (!model?.capabilities) {
+    throw invalidRequest(`Unsupported Veo model '${modelId}': expected ${VEO_SUPPORTED_MODELS.join(' or ')}`)
+  }
+  return model
+}
+
+function veoDeclaredParameter(
+  model: MediaModelDeclaration,
+  name: string,
+): ParameterDescriptor | undefined {
+  return model.capabilities?.parameters.find(candidate => candidate.name === name)
+}
+
+/** The values the model itself offers for an enum control. */
+function veoDeclaredOptions(model: MediaModelDeclaration, name: string): string[] {
+  const descriptor = veoDeclaredParameter(model, name)
+  if (descriptor?.type !== 'enum') {
+    throw invalidRequest(`Veo model '${model.id}' declares no enum parameter '${name}'`)
+  }
+  return enumOptionValues(descriptor.options)
+}
+
+/** The bounds the model itself declares for an integer control. */
+function veoDeclaredIntegerRange(
+  model: MediaModelDeclaration,
+  name: string,
+): { min: number; max: number } {
+  const descriptor = veoDeclaredParameter(model, name)
+  if (descriptor?.type !== 'integer' || descriptor.min === undefined || descriptor.max === undefined) {
+    throw invalidRequest(`Veo model '${model.id}' declares no integer range for parameter '${name}'`)
+  }
+  return { min: descriptor.min, max: descriptor.max }
+}
+
+/** Whether the declared descriptor accepts the value — the same predicate the browser applies. */
+function veoAcceptsDeclaredValue(model: MediaModelDeclaration, name: string, value: JsonValue): boolean {
+  const descriptor = veoDeclaredParameter(model, name)
+  if (!descriptor) return false
+  return validateParameterValue(descriptor, value).length === 0
+}
+
+/** `4, 6, or 8`: the wording this adapter has always used to refuse an enum value. */
+function orList(values: string[]): string {
+  if (values.length < 2) return values.join('')
+  return `${values.slice(0, -1).join(', ')}, or ${values[values.length - 1]}`
+}
+
 function hasServiceAccountFields(extra: Record<string, unknown>): boolean {
   return typeof extra.client_email === 'string' || typeof extra.private_key === 'string'
 }
@@ -201,7 +422,7 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
     if (request.modality !== 'video') {
       throw invalidRequest(`Veo plugin supports video modality only, got '${request.modality}'`)
     }
-    if (!VEO_SUPPORTED_MODELS.includes(request.vendorModelId as (typeof VEO_SUPPORTED_MODELS)[number])) {
+    if (!VEO_SUPPORTED_MODELS.includes(request.vendorModelId)) {
       throw invalidRequest(
         `Unsupported Veo model '${request.vendorModelId}': expected ${VEO_SUPPORTED_MODELS.join(' or ')}`,
       )
@@ -614,6 +835,7 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
   }
 
   resolveVideoParameters(request: MediaRequest, config?: ProviderConfig): VeoParameters {
+    const model = veoModelDeclaration(request.vendorModelId)
     const extra = { ...(request.extra ?? {}), ...(config ? readExtra(config) : {}) }
     // Request-level fields win over shared config extras for per-call overrides.
     const requestFirst = <T>(...values: Array<T | undefined>): T | undefined => {
@@ -623,41 +845,52 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
       return undefined
     }
 
+    const durations = veoDeclaredOptions(model, 'durationSeconds')
     const durationSeconds = Number(requestFirst(request.durationSeconds, extra.durationSeconds) ?? 8)
-    if (!VEO_ALLOWED_DURATIONS.includes(durationSeconds as (typeof VEO_ALLOWED_DURATIONS)[number])) {
-      throw invalidRequest(`Invalid Veo durationSeconds '${durationSeconds}': expected 4, 6, or 8`)
+    if (!durations.includes(String(durationSeconds))) {
+      throw invalidRequest(`Invalid Veo durationSeconds '${durationSeconds}': expected ${orList(durations)}`)
     }
 
+    const ratios = veoDeclaredOptions(model, 'aspectRatio')
     const aspectRatio = String(requestFirst(request.size, extra.aspectRatio) ?? '16:9')
     const normalizedAspect = this.normalizeAspectRatio(aspectRatio)
-    if (!VEO_ALLOWED_ASPECT_RATIOS.includes(normalizedAspect as (typeof VEO_ALLOWED_ASPECT_RATIOS)[number])) {
-      throw invalidRequest(`Invalid Veo aspectRatio '${aspectRatio}': expected 16:9 or 9:16`)
+    if (!ratios.includes(normalizedAspect)) {
+      throw invalidRequest(`Invalid Veo aspectRatio '${aspectRatio}': expected ${ratios.join(' or ')}`)
     }
 
+    // 720p is what an unqualified request has always been sent as; the declared
+    // `defaultValue` describes the console's pre-selection, not this fallback.
     const resolution = requestFirst(extra.resolution !== undefined ? String(extra.resolution) : undefined, undefined) ?? '720p'
-    if (!VEO_ALLOWED_RESOLUTIONS.includes(resolution as (typeof VEO_ALLOWED_RESOLUTIONS)[number])) {
-      throw invalidRequest(`Invalid Veo resolution '${resolution}': expected 720p, 1080p, or 4k`)
+    const resolutions = veoDeclaredOptions(model, 'resolution')
+    if (!resolutions.includes(resolution)) {
+      throw invalidRequest(`Invalid Veo resolution '${resolution}': expected ${orList(resolutions)}`)
     }
-    if (resolution !== '720p') {
-      if (request.vendorModelId !== VEO_STANDARD_MODEL) {
-        throw invalidRequest(`Veo resolution '${resolution}' requires the standard model ${VEO_STANDARD_MODEL}`)
-      }
-      if (durationSeconds !== 8) {
-        throw invalidRequest(`Veo resolution '${resolution}' requires durationSeconds 8`)
-      }
+    // "1080p or 4k needs an 8-second clip" is no longer an `if` in here: the same
+    // `evaluateCrossFieldConstraints` the browser uses to grey out the submit
+    // button decides it, read off this model's own declaration.
+    const coupling = evaluateCrossFieldConstraints(model.capabilities?.crossFieldConstraints, {
+      durationSeconds: String(durationSeconds),
+      aspectRatio: normalizedAspect,
+      resolution,
+    })[0]
+    if (coupling) {
+      throw invalidRequest(coupling.message)
     }
 
+    const sampleCountBounds = veoDeclaredIntegerRange(model, 'count')
     const sampleCount = Number(requestFirst(request.count, extra.sampleCount) ?? 1)
-    if (!Number.isSafeInteger(sampleCount) || sampleCount < 1 || sampleCount > 4) {
-      throw invalidRequest(`Invalid Veo sampleCount '${sampleCount}': expected an integer from 1 to 4`)
+    if (!Number.isSafeInteger(sampleCount) || sampleCount < sampleCountBounds.min || sampleCount > sampleCountBounds.max) {
+      throw invalidRequest(
+        `Invalid Veo sampleCount '${sampleCount}': expected an integer from ${sampleCountBounds.min} to ${sampleCountBounds.max}`,
+      )
     }
 
     const parameters: VeoParameters = {
       sampleCount,
       aspectRatio: normalizedAspect,
       durationSeconds,
+      resolution,
     }
-    if (resolution !== undefined) parameters.resolution = resolution
 
     const storageUri = requestFirst(
       extra.storageUri !== undefined ? String(extra.storageUri) : undefined,
@@ -672,7 +905,13 @@ export class VeoVideoPlugin implements MediaProviderPlugin {
     if (extra.personGeneration !== undefined) parameters.personGeneration = String(extra.personGeneration)
     if (extra.negativePrompt !== undefined) parameters.negativePrompt = String(extra.negativePrompt)
     if (extra.enhancePrompt !== undefined) parameters.enhancePrompt = Boolean(extra.enhancePrompt)
-    if ((extra.generateAudio ?? extra.audio) !== undefined) parameters.generateAudio = Boolean(extra.generateAudio ?? extra.audio)
+    const audio = extra.generateAudio ?? extra.audio
+    if (audio !== undefined) {
+      if (!veoAcceptsDeclaredValue(model, 'audio', audio as JsonValue)) {
+        throw invalidRequest(`Invalid Veo audio '${String(audio)}': expected a boolean`)
+      }
+      parameters.generateAudio = Boolean(audio)
+    }
     if (request.fps !== undefined || extra.fps !== undefined) {
       const fps = Number(requestFirst(request.fps, extra.fps as number | undefined))
       if (!Number.isFinite(fps) || fps <= 0 || fps > 60) throw invalidRequest(`Invalid Veo fps '${fps}'`)

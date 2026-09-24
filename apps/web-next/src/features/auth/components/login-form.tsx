@@ -90,10 +90,10 @@ export function LoginForm() {
   return (
     <div className="space-y-6">
       <div className="space-y-1 text-center">
-        <h1 className="text-title font-semibold tracking-tight text-foreground">
-          {step === 'otp' ? '输入验证码' : step === 'invitation' ? '需要邀请码' : '登录 MuseCanvas'}
+        <h1 className="text-title font-normal leading-[1.25] text-foreground">
+          {step === 'otp' ? '输入验证码' : step === 'invitation' ? '需要邀请码' : '登录\u00A0MuseCanvas'}
         </h1>
-        <p className="text-sm text-muted-foreground">
+        <p className={`min-w-0 text-sm text-muted-foreground [text-wrap:pretty] ${step === 'otp' ? '[overflow-wrap:anywhere]' : ''}`}>
           {step === 'otp'
             ? `验证码已发送至 ${email}`
             : step === 'invitation'
@@ -131,13 +131,13 @@ export function LoginForm() {
           <button
             type="submit"
             disabled={loading}
-            className="flex w-full min-h-10 items-center justify-center gap-2 rounded-[var(--radius-control)] bg-accent px-4 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover disabled:opacity-50"
+            className="flex w-full min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] bg-accent px-4 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover disabled:opacity-50"
           >
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <>
-                <Mail className="h-4 w-4" />
+                <Mail className="h-4 w-4" aria-hidden="true" />
                 获取登录验证码
               </>
             )}
@@ -173,7 +173,7 @@ export function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="flex flex-1 min-h-10 items-center justify-center gap-2 rounded-[var(--radius-control)] bg-accent px-4 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover disabled:opacity-50"
+              className="flex flex-1 min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] bg-accent px-4 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover disabled:opacity-50"
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : '确认并发送验证码'}
             </button>
@@ -184,8 +184,8 @@ export function LoginForm() {
       {step === 'otp' && (
         <form onSubmit={handleVerifyOtp} className="space-y-4">
           <div className="space-y-1.5">
-            <label htmlFor="otp" className="block text-xs font-medium text-foreground">
-              6位验证码
+            <label htmlFor="otp" className="block whitespace-nowrap text-xs font-medium text-foreground">
+              6&nbsp;位验证码
             </label>
             <input
               id="otp"

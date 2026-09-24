@@ -5,43 +5,52 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { BuiltinProviderTemplate, ProviderCredentialInput } from '@/shared/types'
-import { buildTemplateCredentialInput, parseServiceAccountJson } from '../lib/provider-templates'
-import { Loader2, X } from 'lucide-react'
+import {
+  LEGACY_ADAPTER_OPTIONS,
+  buildTemplateCredentialInput,
+  parseServiceAccountJson,
+} from '../lib/provider-templates'
+import { Loader2 } from 'lucide-react'
+import { Dialog } from '@/shared/components/ui/dialog'
 
 interface AdminProviderCredentialDialogProps {
   open: boolean
   onClose: () => void
-  templates: BuiltinProviderTemplate[]
+  templates?: BuiltinProviderTemplate[]
   /** When set, the dialog is pinned to this plugin and hides both pickers. */
   lockedTemplate?: BuiltinProviderTemplate | null
+  /**
+   * Which credential family the dialog creates. `media` offers plugin-backed
+   * credentials (plus legacy media adapters); `language` is the plugin-less
+   * adapter + API key shape that language models bind to.
+   */
+  scope?: 'media' | 'language'
 }
-
-const LEGACY_ADAPTERS = [
-  { value: 'openai', label: 'OpenAI 兼容' },
-  { value: 'seedream', label: 'Seedream (火山引擎)' },
-  { value: 'anthropic', label: 'Anthropic（语言模型）' },
-]
 
 // Legacy (plugin-less) credentials remain the path for language models and
 // custom endpoints; the API rejects any other adapter without plugin identity.
 export function AdminProviderCredentialDialog({
   open,
   onClose,
-  templates,
+  templates = [],
   lockedTemplate,
+  scope = 'media',
 }: AdminProviderCredentialDialogProps) {
   const queryClient = useQueryClient()
-  const [mode, setMode] = useState<'template' | 'legacy'>('template')
+  const [mode, setMode] = useState<'template' | 'legacy'>(scope === 'language' ? 'legacy' : 'template')
   const [templateKey, setTemplateKey] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [serviceAccountRaw, setServiceAccountRaw] = useState('')
-  const [adapter, setAdapter] = useState('openai')
+  const [adapter, setAdapter] = useState(LEGACY_ADAPTER_OPTIONS[scope][0].value)
   const [baseUrl, setBaseUrl] = useState('')
   const [actionError, setActionError] = useState('')
 
-  const template = lockedTemplate ?? templates.find((t) => t.key === templateKey) ?? null
-  const effectiveMode = lockedTemplate ? 'template' : mode
+  const legacyAdapters = LEGACY_ADAPTER_OPTIONS[scope]
+  const template = scope === 'language'
+    ? null
+    : lockedTemplate ?? templates.find((t) => t.key === templateKey) ?? null
+  const effectiveMode = scope === 'language' ? 'legacy' : (lockedTemplate ? 'template' : mode)
   const useServiceAccount = template?.credential.kind === 'google_service_account'
 
   const resetFields = () => {
@@ -84,38 +93,27 @@ export function AdminProviderCredentialDialog({
     },
   })
 
-  if (!open) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="provider-credential-dialog-title"
-        className="relative z-10 w-full max-w-md rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-xl space-y-4"
-      >
-        <div className="flex items-center justify-between">
-          <h3 id="provider-credential-dialog-title" className="font-semibold text-foreground">
-            {effectiveMode === 'template' ? '从媒体插件创建凭据' : '创建自定义凭据'}
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭"
-            className="rounded p-1 text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={
+        effectiveMode === 'template'
+          ? '从媒体插件创建凭据'
+          : scope === 'language'
+            ? '创建语言模型凭据'
+            : '创建自定义凭据'
+      }
+      panelClassName="max-w-md"
+    >
+      <div className="mt-4 space-y-4">
         {actionError && (
-          <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger">
+          <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger" role="alert">
             {actionError}
           </div>
         )}
 
-        {!lockedTemplate && (
+        {scope === 'media' && !lockedTemplate && (
           <div className="flex gap-1 rounded-[var(--radius-control)] bg-surface-subtle p-1" role="group" aria-label="凭据类型">
             <button
               type="button"
@@ -139,7 +137,7 @@ export function AdminProviderCredentialDialog({
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              自定义 / 语言模型
+              自定义凭据
             </button>
           </div>
         )}
@@ -178,6 +176,17 @@ export function AdminProviderCredentialDialog({
 
           {effectiveMode === 'legacy' && (
             <>
+              {scope === 'language' ? (
+                <p className="rounded-[var(--radius-control)] bg-surface-subtle p-3 text-[11px] text-muted-foreground">
+                  语言模型不使用供应商插件，凭据按 <span className="font-mono text-foreground">适配协议 + API Key</span> 与语言模型绑定。
+                </p>
+              ) : (
+                <p className="rounded-[var(--radius-control)] bg-surface-subtle p-3 text-[11px] text-muted-foreground">
+                  自定义凭据不绑定插件身份，因此无法通过媒体凭据的连通测试；此类凭据列在
+                  <span className="font-mono text-foreground">语言模型</span>
+                  页的凭据列表中。
+                </p>
+              )}
               <div>
                 <label htmlFor="credential-name" className="mb-1 block text-xs font-medium text-foreground">显示名称</label>
                 <input
@@ -185,7 +194,7 @@ export function AdminProviderCredentialDialog({
                   type="text"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="例如: Anthropic 语言模型凭据"
+                  placeholder={scope === 'language' ? '例如: Anthropic 语言模型凭据' : '例如: 自建 OpenAI 兼容端点'}
                   className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
                 />
               </div>
@@ -197,7 +206,7 @@ export function AdminProviderCredentialDialog({
                   onChange={(e) => setAdapter(e.target.value)}
                   className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
                 >
-                  {LEGACY_ADAPTERS.map((a) => (
+                  {legacyAdapters.map((a) => (
                     <option key={a.value} value={a.value}>{a.label}</option>
                   ))}
                 </select>
@@ -300,6 +309,6 @@ export function AdminProviderCredentialDialog({
           </button>
         </div>
       </div>
-    </div>
+    </Dialog>
   )
 }

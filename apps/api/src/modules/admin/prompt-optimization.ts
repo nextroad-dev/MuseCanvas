@@ -13,6 +13,30 @@ const optimizationSettingsDto = (row: any) => ({
   updatedAt: row.updated_at.toISOString(),
 })
 
+/**
+ * GET projection for the same row.
+ *
+ * This is deliberately *not* the `optimizationSettingsDto` used by the PATCH
+ * response above. The read path coerces (`Boolean`/`Number`), falls back to the
+ * canonical 600000ms timeout, and tolerates a missing `updated_at` by stamping
+ * now, because it has to answer for a row that may predate the column. The write
+ * path returns the driver's raw values for a row it just read back. Merging them
+ * would change the payload of `GET /api/admin/prompt-optimization-settings`.
+ */
+const optimizationSettingsReadDto = (row: Record<string, unknown>) => ({
+  enabled: Boolean(row.enabled),
+  allowUserReadFinalPrompt: Boolean(row.allow_user_read_final_prompt),
+  languageModelConfigId: (row.language_model_config_id as string) || null,
+  timeoutMs: Number(row.timeout_ms || 600000),
+  updatedAt: row.updated_at ? new Date(row.updated_at as string | number | Date).toISOString() : new Date().toISOString(),
+})
+
+/** GET /api/admin/prompt-optimization-settings */
+export async function readPromptOptimizationSettings() {
+  const result = await db().query('SELECT * FROM prompt_optimization_settings WHERE singleton=true')
+  return ok(optimizationSettingsReadDto(result.rows[0]))
+}
+
 export async function updatePromptOptimizationSettings(
   actor: Actor,
   input: Record<string, unknown>,

@@ -5,7 +5,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type { AdminUser, Invitation } from '@/shared/types'
-import { Loader2, Plus, RefreshCw, Trash2, UserPlus, X } from 'lucide-react'
+import { Loader2, RefreshCw, UserPlus } from 'lucide-react'
+import { Dialog } from '@/shared/components/ui/dialog'
 
 export function AdminUsersView() {
   const queryClient = useQueryClient()
@@ -148,14 +149,14 @@ export function AdminUsersView() {
                       <span
                         className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${
                           u.role === 'admin'
-                            ? 'bg-accent-soft text-accent'
+                            ? 'bg-accent-soft text-accent-strong'
                             : 'bg-surface-subtle text-muted-foreground'
                         }`}
                       >
                         {u.role}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-muted-foreground">
+                    <td className="px-4 py-3 text-right font-mono tabular-nums text-muted-foreground">
                       {new Date(u.createdAt).toLocaleDateString('zh-CN')}
                     </td>
                   </tr>
@@ -207,7 +208,7 @@ export function AdminUsersView() {
                         {inv.used ? '已使用' : inv.revoked ? '已撤销' : '有效'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-muted-foreground">
+                    <td className="px-4 py-3 text-right font-mono tabular-nums text-muted-foreground">
                       {new Date(inv.createdAt).toLocaleDateString('zh-CN')}
                     </td>
                   </tr>
@@ -226,61 +227,59 @@ export function AdminUsersView() {
       )}
 
       {/* Create Invite Modal */}
-      {inviteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/40" onClick={() => setInviteModalOpen(false)} />
-          <div className="relative z-10 w-full max-w-sm rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-foreground">创建新邀请码</h3>
-              <button
-                type="button"
-                onClick={() => setInviteModalOpen(false)}
-                className="rounded p-1 text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
+      <Dialog
+        open={inviteModalOpen}
+        onClose={() => setInviteModalOpen(false)}
+        title="创建新邀请码"
+      >
+        <form
+          className="mt-4 space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            createInviteMutation.mutate()
+          }}
+        >
+          {actionError && (
+            <div id="invite-error" className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger" role="alert">
+              {actionError}
             </div>
+          )}
 
-            {actionError && (
-              <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger">
-                {actionError}
-              </div>
-            )}
-
-            <div>
-              <label className="block text-xs font-medium text-foreground mb-1">
-                限定邮箱（可选，留空则任意人可用）
-              </label>
-              <input
-                type="email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="user@example.com"
-                className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setInviteModalOpen(false)}
-                className="rounded-[var(--radius-control)] border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-surface-subtle"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => createInviteMutation.mutate()}
-                disabled={createInviteMutation.isPending}
-                className="flex items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-4 py-1.5 text-xs font-medium text-accent-contrast hover:bg-accent-hover disabled:opacity-50"
-              >
-                {createInviteMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                生成邀请码
-              </button>
-            </div>
+          <div>
+            <label htmlFor="invite-email" className="mb-1 block text-xs font-medium text-foreground">
+              限定邮箱（可选，留空则任意人可用）
+            </label>
+            <input
+              id="invite-email"
+              type="email"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="user@example.com"
+              aria-invalid={!!actionError}
+              aria-describedby={actionError ? 'invite-error' : undefined}
+              className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
+            />
           </div>
-        </div>
-      )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setInviteModalOpen(false)}
+              className="rounded-[var(--radius-control)] border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-surface-subtle"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              disabled={createInviteMutation.isPending}
+              className="flex items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-4 py-1.5 text-xs font-medium text-accent-contrast hover:bg-accent-hover disabled:opacity-50"
+            >
+              {createInviteMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              生成邀请码
+            </button>
+          </div>
+        </form>
+      </Dialog>
     </div>
   )
 }

@@ -40,18 +40,21 @@ export async function deleteJobWithAssets(userId: string, jobId: string) {
     // in-flight provider/output state markers so no signed output URL survives
     // privacy deletion in durable state.
     const assets = await client.query(
-      'UPDATE assets SET deleted_at=now(),updated_at=now() WHERE job_id=$1 AND created_by=$2 AND deleted_at IS NULL RETURNING id,object_key,poster_object_key',
+      'UPDATE assets SET deleted_at=now(),updated_at=now() WHERE job_id=$1 AND created_by=$2 AND deleted_at IS NULL RETURNING id,object_key,poster_object_key,thumbnail_object_key',
       [jobId, userId],
     )
     for (const asset of assets.rows) {
-      await client.query(
-        'INSERT INTO asset_deletion_jobs(asset_id,object_key) VALUES($1,$2) ON CONFLICT DO NOTHING',
-        [asset.id, asset.object_key],
-      )
-      if (asset.poster_object_key) {
+      // One asset can own two objects now (original + derived preview; a video
+      // points poster_object_key and thumbnail_object_key at the SAME preview
+      // object), so enqueue every distinct key exactly once. Dedupe keeps the
+      // (asset_id, object_key) active key from swallowing a duplicate insert.
+      const objectKeys = [asset.object_key, asset.poster_object_key, asset.thumbnail_object_key]
+        .filter((key: unknown): key is string => Boolean(key))
+      const distinctKeys = new Set<string>(objectKeys)
+      for (const objectKey of distinctKeys) {
         await client.query(
           'INSERT INTO asset_deletion_jobs(asset_id,object_key) VALUES($1,$2) ON CONFLICT DO NOTHING',
-          [asset.id, asset.poster_object_key],
+          [asset.id, objectKey],
         )
       }
     }

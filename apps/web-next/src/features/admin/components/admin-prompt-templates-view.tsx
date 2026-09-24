@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { API_ENDPOINTS, type PromptTemplateSetDetailDto } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
-import { Download, FileText, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Download, FileText, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Dialog } from '@/shared/components/ui/dialog'
 
 export function AdminPromptTemplatesView() {
   const queryClient = useQueryClient()
@@ -161,83 +162,77 @@ export function AdminPromptTemplatesView() {
       </div>
 
       {/* Create Modal */}
-      {createModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/40" onClick={() => setCreateModalOpen(false)} />
-          <div className="relative z-10 w-full max-w-md rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-foreground">添加提示词模板</h3>
-              <button
-                type="button"
-                onClick={() => setCreateModalOpen(false)}
-                className="rounded p-1 text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
+      <Dialog open={createModalOpen} onClose={() => setCreateModalOpen(false)} title="添加提示词模板" panelClassName="max-w-md">
+        <form
+          className="mt-4 space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            createMutation.mutate()
+          }}
+        >
+          {actionError && (
+            <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger" role="alert">
+              {actionError}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="prompt-template-name" className="block text-xs font-medium text-foreground mb-1">模板名称</label>
+              <input
+                id="prompt-template-name"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如: 赛博朋克都市风格"
+                className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
+              />
             </div>
 
-            {actionError && (
-              <div className="rounded border border-danger-soft bg-danger-soft/20 p-2 text-xs text-danger">
-                {actionError}
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">模板名称</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="例如: 赛博朋克都市风格"
-                  className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">说明描述</label>
-                <input
-                  type="text"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="例如: 增强色彩对比与霓虹光效"
-                  className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">模板指令内容 (Instruction)</label>
-                <textarea
-                  rows={4}
-                  value={instruction}
-                  onChange={(e) => setInstruction(e.target.value)}
-                  placeholder="输入详细的提示词引导模板，支持 {'{{input_prompt}}'} 插值..."
-                  className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none resize-none"
-                />
-              </div>
+            <div>
+              <label htmlFor="prompt-template-description" className="block text-xs font-medium text-foreground mb-1">说明描述</label>
+              <input
+                id="prompt-template-description"
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="例如: 增强色彩对比与霓虹光效"
+                className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none"
+              />
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setCreateModalOpen(false)}
-                className="rounded-[var(--radius-control)] border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-surface-subtle"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => createMutation.mutate()}
-                disabled={createMutation.isPending || !name.trim() || !instruction.trim()}
-                className="flex items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-4 py-1.5 text-xs font-medium text-accent-contrast hover:bg-accent-hover disabled:opacity-50"
-              >
-                {createMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                创建模板
-              </button>
+            <div>
+              <label htmlFor="prompt-template-instruction" className="block text-xs font-medium text-foreground mb-1">模板指令内容 (Instruction)</label>
+              <textarea
+                id="prompt-template-instruction"
+                rows={4}
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                placeholder="输入详细的提示词引导模板，支持 {'{{input_prompt}}'} 插值..."
+                className="w-full rounded-[var(--radius-control)] border border-border-control bg-canvas px-3 py-1.5 text-sm text-foreground outline-none resize-none"
+              />
             </div>
           </div>
-        </div>
-      )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setCreateModalOpen(false)}
+              className="rounded-[var(--radius-control)] border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-surface-subtle"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              disabled={createMutation.isPending || !name.trim() || !instruction.trim()}
+              className="flex items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-4 py-1.5 text-xs font-medium text-accent-contrast hover:bg-accent-hover disabled:opacity-50"
+            >
+              {createMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              创建模板
+            </button>
+          </div>
+        </form>
+      </Dialog>
 
     </div>
   )

@@ -29,6 +29,21 @@ const nextConfig = {
         destination: '/admin/users',
         permanent: false,
       },
+      {
+        source: '/admin/models',
+        destination: '/admin/language-models',
+        permanent: false,
+      },
+      {
+        source: '/admin/plugins',
+        destination: '/admin/media-models',
+        permanent: false,
+      },
+      {
+        source: '/admin/providers',
+        destination: '/admin/media-models',
+        permanent: false,
+      },
     ]
   },
   async rewrites() {

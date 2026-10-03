@@ -471,7 +471,11 @@ export type {
   InstalledPluginStatus,
   AdminPluginScanFinding,
   AdminPluginDto,
+  AdminPluginDocsDto,
   AdminPluginInstallResult,
+  PluginPackageFormat,
+  AdminPluginPackageFile,
+  AdminPluginPackageMeta,
 } from '@musecanvas/contracts'
 import type { AdminPluginDto, AdminPluginScanFinding, PluginKind } from '@musecanvas/contracts'
 

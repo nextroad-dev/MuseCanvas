@@ -172,6 +172,22 @@ test('NO_DEFAULT_EXPORT is the only warn-severity finding and carries no positio
   assert.ok(scanPluginSource(CLEAN_BUNDLE.join('\n')).every(finding => finding.severity === 'error'))
 })
 
+test('the esbuild re-export clause counts as a default export; a re-export from another module does not', () => {
+  const warnings = (source: string) => scanPluginSource(source).filter(finding => finding.rule === 'NO_DEFAULT_EXPORT')
+  // esbuild (format: esm, bundle: true) always ends a bundle this way.
+  assert.deepEqual(scanPluginSource('var plugin_default = { manifest: {} };\nexport {\n  plugin_default as default\n};\n'), [])
+  assert.deepEqual(warnings('const a = 1, b = 2\nexport { a, b as default, a as other }'), [])
+  assert.deepEqual(warnings('const p = {}\nexport{p as default}'), [])
+  // Nothing is exported as default here, and a type-only clause is erased.
+  assert.equal(warnings('const p = {}\nexport { p as notDefault }').length, 1)
+  assert.equal(warnings('export type { P as default }').length, 1)
+  // A re-export from another module is a runtime import, not the plugin object.
+  const reexport = scanPluginSource("export { plugin as default } from './plugin.mjs'")
+  assert.deepEqual(reexport.map(finding => finding.rule).sort(), ['FORBIDDEN_RUNTIME_IMPORT', 'NO_DEFAULT_EXPORT'])
+  const multiline = scanPluginSource("export {\n  plugin as default\n} from './plugin.mjs'")
+  assert.deepEqual(multiline.map(finding => finding.rule).sort(), ['FORBIDDEN_RUNTIME_IMPORT', 'NO_DEFAULT_EXPORT'])
+})
+
 test('findings are ordered by position and report a 1-based line and column', () => {
   const findings = scanPluginSource("const f = fetch('x')\nimport fs from 'node:fs'\nexport default process.env")
   assert.deepEqual(findings.map(finding => finding.line), [1, 2, 2, 3])

@@ -222,6 +222,9 @@ importers:
       '@musecanvas/contracts':
         specifier: workspace:*
         version: link:../contracts
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
       sharp:
         specifier: 0.34.5
         version: 0.34.5
@@ -989,6 +992,9 @@ packages:
   fast-xml-parser@5.7.3:
     resolution: {integrity: sha512-C0AaNuC+mscy6vrAQKAc/rMq+zAPHodfHGZu4sGVehvAQt/JLG1O5zEcYcXSY5zSqr4YVgxsB+pHXTq0i7eDlg==}
     hasBin: true
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -2049,6 +2055,8 @@ snapshots:
       fast-xml-builder: 1.2.0
       path-expression-matcher: 1.5.0
       strnum: 2.4.1
+
+  fflate@0.8.3: {}
 
   fsevents@2.3.3:
     optional: true

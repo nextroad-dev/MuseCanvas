@@ -384,6 +384,29 @@ export interface AdminPluginScanFinding {
   line?: number
   column?: number
   message: string
+  /** Package-relative file the finding is about (zip packages only). */
+  path?: string
+}
+
+/**
+ * How a plugin was delivered. `mjs` is the legacy `manifest` + `file` upload;
+ * `zip-v1` is a single zip package carrying `manifest.json`, the entry bundle
+ * and optional docs/icon (see MuseCanvas-Connector wiki/plugin-package-spec.md).
+ */
+export type PluginPackageFormat = 'mjs' | 'zip-v1'
+
+/** One file inside an uploaded zip package, after the wrapping directory is stripped. */
+export interface AdminPluginPackageFile {
+  path: string
+  sizeBytes: number
+  sha256: string
+}
+
+/** `manifest.package` display metadata; every field is author-supplied text. */
+export interface AdminPluginPackageMeta {
+  author?: string
+  license?: string
+  homepage?: string
 }
 
 export interface AdminPluginDto {
@@ -407,11 +430,31 @@ export interface AdminPluginDto {
   /** sha256 hex of the artifact; the storage object key is never exposed. */
   artifactDigest: string
   artifactSizeBytes: number
+  packageFormat: PluginPackageFormat
+  /** sha256 hex of the original zip; null for `mjs` rows. */
+  packageDigest: string | null
+  /** Files of the original zip; empty for `mjs` rows. */
+  packageFiles: AdminPluginPackageFile[]
+  packageMeta: AdminPluginPackageMeta
+  /** True when the package shipped an icon, served by API_ENDPOINTS.admin.pluginIcon(id). */
+  hasIcon: boolean
+  /**
+   * Which package docs exist. The texts themselves (up to 256 KiB each) are not
+   * in list payloads; fetch them from API_ENDPOINTS.admin.pluginDocs(id).
+   */
+  docs: { readme: boolean; changelog: boolean; licenseText: boolean }
   scanReport: AdminPluginScanFinding[]
   errorCode: string | null
   errorMessage: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** GET API_ENDPOINTS.admin.pluginDocs(id): raw package docs; render as text, never as HTML. */
+export interface AdminPluginDocsDto {
+  readme: string | null
+  changelog: string | null
+  licenseText: string | null
 }
 
 /** Result of a validate/upload call: the stored row plus the non-blocking warnings. */

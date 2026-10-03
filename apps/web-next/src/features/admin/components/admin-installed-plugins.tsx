@@ -6,18 +6,20 @@ import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type {
   AdminPluginDeleteResult,
+  AdminPluginDocsDto,
   AdminPluginDto,
-  AdminPluginScanFinding,
   InstalledPluginStatus,
   PluginKind,
 } from '@/shared/types'
-import { humanFileSize, shortDigest } from '../lib/plugin-upload'
+import { humanFileSize, resolveApiUrl, shortDigest } from '../lib/plugin-upload'
 import { AdminPluginUploadDialog } from './admin-plugin-upload-dialog'
-import { Blocks, RefreshCw, Trash2, Upload } from 'lucide-react'
+import { PluginFindingList } from './plugin-finding-list'
+import { Blocks, Download, ExternalLink, RefreshCw, Trash2, Upload } from 'lucide-react'
 import {
   Alert,
   Badge,
   Button,
+  buttonVariants,
   Card,
   EmptyState,
   IconButton,
@@ -76,30 +78,227 @@ function manifestModels(plugin: AdminPluginDto): { id: string; name?: string }[]
   }, [])
 }
 
-/** One scan finding: severity carried by a Badge plus text, never by colour alone. */
-function FindingList({ findings, emptyText }: { findings: AdminPluginScanFinding[]; emptyText?: string }) {
-  if (findings.length === 0) {
-    return emptyText ? <p className="text-xs text-muted-foreground">{emptyText}</p> : null
+/**
+ * Package icon, fetched by the browser from GET admin/plugins/{id}/icon through the
+ * same-origin proxy (the session cookie rides along). Only requested when `hasIcon`;
+ * any load failure (404, decode error) falls back to the generic glyph. Packages may
+ * only carry PNG/WebP icons (never SVG), and an `<img>` cannot execute script anyway.
+ */
+function PluginIcon({ plugin }: { plugin: AdminPluginDto }) {
+  const [failed, setFailed] = useState(false)
+  if (!plugin.hasIcon || failed) {
+    return <Blocks aria-hidden="true" className="h-[var(--icon-sm)] w-[var(--icon-sm)] shrink-0 text-muted-foreground" />
   }
   return (
-    <ul className="flex flex-col gap-2">
-      {findings.map((f, i) => (
-        <li
-          key={`${f.rule}-${f.line ?? 'x'}-${i}`}
-          className={`flex flex-wrap items-start gap-2 rounded-control p-2 text-xs ${
-            f.severity === 'error' ? 'bg-danger-soft text-danger' : 'bg-tonal text-muted-foreground'
-          }`}
-        >
-          {/* 严重级别以文字呈现，不依赖颜色区分 */}
-          <Badge tone={f.severity === 'error' ? 'danger' : 'warning'} className="shrink-0">
-            {f.severity === 'error' ? '错误' : '警告'}
+    <img
+      src={resolveApiUrl(API_ENDPOINTS.admin.pluginIcon(plugin.id))}
+      alt=""
+      width={32}
+      height={32}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+      className="h-8 w-8 shrink-0 rounded-control bg-tonal object-contain"
+    />
+  )
+}
+
+/** Only `https:` homepages become links (spec: homepage must be https); anything else stays inert text. */
+function safeHomepage(raw: string | undefined): string | null {
+  if (!raw) return null
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'https:' ? url.href : null
+  } catch {
+    return null
+  }
+}
+
+const DISCLOSURE_SUMMARY_CLASS =
+  'cursor-pointer select-none rounded-control px-3 py-2 font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary'
+
+type DocKey = keyof AdminPluginDocsDto
+
+const DOC_SECTIONS: { key: DocKey; title: string }[] = [
+  { key: 'readme', title: 'README' },
+  { key: 'changelog', title: 'CHANGELOG' },
+  { key: 'licenseText', title: 'LICENSE' },
+]
+
+/**
+ * README / CHANGELOG / LICENSE disclosures. The list payload only says which docs
+ * exist (`plugin.docs`); the texts (up to 256 KiB each) are fetched from
+ * GET admin/plugins/{id}/docs the first time any of them is opened, then cached.
+ * They are author-supplied Markdown or plain text; web-next ships no sanitising
+ * Markdown renderer, so they are shown verbatim as preformatted text (React
+ * escapes it) and never injected as HTML.
+ */
+function PackageDocs({ plugin }: { plugin: AdminPluginDto }) {
+  const [requested, setRequested] = useState(false)
+  const available = DOC_SECTIONS.filter((section) => plugin.docs?.[section.key])
+  const { data, error, isFetching, refetch } = useQuery({
+    queryKey: ['admin', 'plugin-docs', plugin.id],
+    queryFn: async () => {
+      const res = await api<AdminPluginDocsDto>(API_ENDPOINTS.admin.pluginDocs(plugin.id))
+      if (!res.success || !res.data) throw new Error(res.error?.message || '加载插件文档失败')
+      return res.data
+    },
+    enabled: requested,
+    // Docs of an installed version never change (versions are write-once).
+    staleTime: Infinity,
+    // Fail fast: the inline 重试 button is the recovery path, not silent backoff.
+    retry: 1,
+  })
+  if (available.length === 0) return null
+  return (
+    <>
+      {available.map(({ key, title }) => {
+        const text = data?.[key]
+        return (
+          <details
+            key={key}
+            className="rounded-control bg-tonal text-xs"
+            onToggle={(event) => {
+              if (event.currentTarget.open) setRequested(true)
+            }}
+          >
+            <summary className={DISCLOSURE_SUMMARY_CLASS}>{title}</summary>
+            <div className="px-3 pb-3">
+              {data === undefined && (isFetching || !error) ? (
+                <span className="inline-flex items-center gap-2 text-muted-foreground" role="status">
+                  <Spinner size="sm" />
+                  正在加载…
+                </span>
+              ) : error && data === undefined ? (
+                <div className="flex flex-wrap items-center gap-2 text-danger" role="alert">
+                  <span>{error.message || '加载插件文档失败'}。</span>
+                  <Button variant="ghost" size="sm" onClick={() => refetch()}>
+                    重试
+                  </Button>
+                </div>
+              ) : text && text.trim() ? (
+                <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-muted-foreground">
+                  {text}
+                </pre>
+              ) : (
+                <span className="text-muted-foreground">文档内容为空</span>
+              )}
+            </div>
+          </details>
+        )
+      })}
+    </>
+  )
+}
+
+/** Package format, metadata, file list, docs and the download entry for one installed row. */
+function PluginPackageDetails({ plugin }: { plugin: AdminPluginDto }) {
+  const isZip = plugin.packageFormat === 'zip-v1'
+  const meta = plugin.packageMeta ?? {}
+  const homepage = safeHomepage(meta.homepage)
+  const files = plugin.packageFiles ?? []
+  return (
+    <div className="flex flex-col gap-3">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
+        <dt className="text-muted-foreground">包格式</dt>
+        <dd>
+          <Badge tone="neutral" className="font-mono">
+            {isZip ? 'zip 包' : '旧版单文件 (.mjs)'}
           </Badge>
-          <span className="font-mono">{f.rule}</span>
-          {typeof f.line === 'number' && <span className="font-mono tabular-nums">第 {f.line} 行</span>}
-          <span>{f.message}</span>
-        </li>
-      ))}
-    </ul>
+        </dd>
+        {isZip && plugin.packageDigest && (
+          <>
+            <dt className="text-muted-foreground">包 sha256</dt>
+            <dd className="font-mono text-foreground" title={plugin.packageDigest}>
+              {shortDigest(plugin.packageDigest)}
+            </dd>
+          </>
+        )}
+        {meta.author && (
+          <>
+            <dt className="text-muted-foreground">作者</dt>
+            <dd className="break-words text-foreground">{meta.author}</dd>
+          </>
+        )}
+        {meta.license && (
+          <>
+            <dt className="text-muted-foreground">许可证</dt>
+            <dd className="font-mono text-foreground">{meta.license}</dd>
+          </>
+        )}
+        {meta.homepage && (
+          <>
+            <dt className="text-muted-foreground">主页</dt>
+            <dd className="min-w-0">
+              {homepage ? (
+                <a
+                  href={homepage}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex max-w-full items-center gap-1 text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                >
+                  <span className="break-all">{homepage}</span>
+                  <ExternalLink aria-hidden="true" className="h-3 w-3 shrink-0" />
+                  <span className="sr-only">（在新窗口打开）</span>
+                </a>
+              ) : (
+                <span className="break-all font-mono text-muted-foreground">{meta.homepage}</span>
+              )}
+            </dd>
+          </>
+        )}
+      </dl>
+
+      {isZip && files.length > 0 && (
+        <details className="rounded-control bg-tonal text-xs">
+          <summary className={DISCLOSURE_SUMMARY_CLASS}>
+            包内文件（<span className="font-mono tabular-nums">{files.length}</span>）
+          </summary>
+          <div className="overflow-x-auto px-3 pb-3">
+            <table className="w-full text-left text-xs">
+              <caption className="sr-only">
+                插件包 {plugin.pluginId}@{plugin.pluginVersion} 的文件清单
+              </caption>
+              <thead className="text-muted-foreground">
+                <tr>
+                  <th scope="col" className="py-1 pr-3 font-normal">路径</th>
+                  <th scope="col" className="py-1 pr-3 text-right font-normal">大小</th>
+                  <th scope="col" className="py-1 font-normal">sha256</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono text-foreground">
+                {files.map((f) => (
+                  <tr key={f.path}>
+                    <td className="break-all py-1 pr-3">{f.path}</td>
+                    <td className="whitespace-nowrap py-1 pr-3 text-right tabular-nums">{humanFileSize(f.sizeBytes)}</td>
+                    <td className="whitespace-nowrap py-1" title={f.sha256}>
+                      {shortDigest(f.sha256)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+
+      <PackageDocs plugin={plugin} />
+
+      {isZip && (
+        <div>
+          {/* Navigation to a file is a link, not a button; the server answers with a zip attachment. */}
+          <a
+            href={resolveApiUrl(API_ENDPOINTS.admin.pluginPackage(plugin.id))}
+            download
+            aria-label={`下载插件包 ${plugin.pluginId}@${plugin.pluginVersion}`}
+            className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+          >
+            <Download aria-hidden="true" />
+            下载插件包
+          </a>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -308,7 +507,7 @@ export function AdminInstalledPlugins({ kind }: AdminInstalledPluginsProps) {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <Blocks aria-hidden="true" className="h-[var(--icon-sm)] w-[var(--icon-sm)] shrink-0 text-muted-foreground" />
+                      <PluginIcon plugin={p} />
                       <h3 className="truncate text-sm font-medium">{p.displayName}</h3>
                     </div>
                     <p className="mt-1 font-mono text-xs text-muted-foreground">
@@ -368,7 +567,7 @@ export function AdminInstalledPlugins({ kind }: AdminInstalledPluginsProps) {
                       <dd className="font-mono text-foreground">{p.languageProtocols.join(', ')}</dd>
                     </>
                   )}
-                  <dt className="text-muted-foreground">制品</dt>
+                  <dt className="text-muted-foreground">入口制品</dt>
                   <dd className="font-mono text-foreground">
                     sha256: <span title={p.artifactDigest}>{shortDigest(p.artifactDigest)}</span>
                     <span className="ml-1 text-muted-foreground">· {humanFileSize(p.artifactSizeBytes)}</span>
@@ -380,11 +579,13 @@ export function AdminInstalledPlugins({ kind }: AdminInstalledPluginsProps) {
                   items={models.map((model) => ({ key: model.id, text: model.id, title: model.name }))}
                 />
 
+                <PluginPackageDetails plugin={p} />
+
                 <div className="flex flex-col gap-1">
                   <p className="text-overline text-muted-foreground">
                     扫描报告（<span className="font-mono tabular-nums">{p.scanReport.length}</span>）
                   </p>
-                  <FindingList findings={p.scanReport} emptyText="安装时未发现任何问题" />
+                  <PluginFindingList findings={p.scanReport} groupByPath emptyText="安装时未发现任何问题" />
                 </div>
 
                 <div className="mt-auto flex flex-wrap items-center justify-end gap-3">

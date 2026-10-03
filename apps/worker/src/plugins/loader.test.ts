@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { globalPluginRegistry } from '../../../../packages/providers/src/index'
+import { globalPluginRegistry, validatePluginManifest } from '../../../../packages/providers/src/index'
 import {
   installedLanguagePluginBinding,
   isPluginAvailable,
@@ -123,6 +123,7 @@ function rowFor(pluginId: string, bytes: Uint8Array, overrides: Partial<PluginRo
     artifactSha256: sha(bytes),
     artifactSizeBytes: bytes.length,
     manifest: {},
+    packageFormat: 'mjs',
     updatedAtMs: Date.now(),
     ...overrides,
   }
@@ -438,4 +439,112 @@ test('the cache dir never resolves inside the image layer', async () => {
   assert.equal(pluginCachePath('b'.repeat(64)), join(cacheRoot, 'env-dir', `${'b'.repeat(64)}.mjs`))
   if (original === undefined) delete process.env.PLUGIN_CACHE_DIR
   else process.env.PLUGIN_CACHE_DIR = original
+})
+
+/** What the API stores for a zip row: manifest.json minus `package`, normalized, then jsonb. */
+function storedManifestFor(source: string): unknown {
+  const literal = /const manifest = (\{[\s\S]*?\n\})/.exec(source)?.[1] ?? ''
+  const declared = new Function(`return ${literal}`)() as unknown
+  const normalized = validatePluginManifest(declared)
+  assert.ok(normalized.ok)
+  // jsonb neither keeps key order nor undefined members: reverse the keys to prove order is irrelevant.
+  const json = JSON.parse(JSON.stringify(normalized.manifest)) as Record<string, unknown>
+  return Object.fromEntries(Object.entries(json).reverse())
+}
+
+test('a zip row loads when the bundle manifest deep-equals the stored manifest.json', async () => {
+  const source = mediaSource('loader-test-zip-match')
+  const bytes = Buffer.from(source, 'utf8')
+  const fixture = testDeps(source, 'loader-test-zip-match')
+  const row = rowFor('loader-test-zip-match', bytes, { packageFormat: 'zip-v1', manifest: storedManifestFor(source) })
+  const outcome = await loadPluginRow(row, fixture.deps)
+  assert.deepEqual(outcome, { status: 'active', cacheHit: false })
+  assert.deepEqual(fixture.calls.promotes, [{ status: 'active' }])
+  assert.equal(globalPluginRegistry.has('loader-test-zip-match', '1.0.0'), true)
+})
+
+test('a zip row whose bundle drifts from manifest.json fails with PLUGIN_MANIFEST_MISMATCH', async () => {
+  const declared = mediaSource('loader-test-zip-drift')
+  // Same kind/id/version, so the legacy identity check alone would pass it.
+  const drifted = declared.replace("allowedHosts: ['api.example.com']", "allowedHosts: ['api.example.com', 'exfil.example.net']")
+  assert.notEqual(drifted, declared)
+  const bytes = Buffer.from(drifted, 'utf8')
+  const fixture = testDeps(drifted, 'loader-test-zip-drift')
+  const failures: string[] = []
+  const deps: PluginLoaderDeps = {
+    ...fixture.deps,
+    promote: async (_row, status, failure) => {
+      fixture.calls.promotes.push({ status, ...(failure ? { code: failure.code } : {}) })
+      if (failure) failures.push(failure.message)
+      return true
+    },
+  }
+  const outcome = await loadPluginRow(
+    rowFor('loader-test-zip-drift', bytes, { packageFormat: 'zip-v1', manifest: storedManifestFor(declared) }),
+    deps,
+  )
+  assert.equal(outcome.status, 'failed')
+  assert.equal(outcome.code, 'PLUGIN_MANIFEST_MISMATCH')
+  assert.deepEqual(fixture.calls.promotes, [{ status: 'failed', code: 'PLUGIN_MANIFEST_MISMATCH' }])
+  assert.match(failures[0] ?? '', /allowedHosts/)
+  assert.equal(globalPluginRegistry.has('loader-test-zip-drift', '1.0.0'), false)
+
+  // A stored manifest that no longer validates is a mismatch too, never a pass.
+  const brokenSource = mediaSource('loader-test-zip-broken')
+  const broken = testDeps(brokenSource, 'loader-test-zip-broken')
+  const brokenOutcome = await loadPluginRow(
+    rowFor('loader-test-zip-broken', Buffer.from(brokenSource, 'utf8'), { packageFormat: 'zip-v1', manifest: {} }),
+    broken.deps,
+  )
+  assert.equal(brokenOutcome.code, 'PLUGIN_MANIFEST_MISMATCH')
+})
+
+test('a legacy row keeps the identity-only comparison', async () => {
+  // The stored manifest is unrelated beyond identity; mjs rows were never held to more.
+  const source = mediaSource('loader-test-legacy-identity')
+  const bytes = Buffer.from(source, 'utf8')
+  const fixture = testDeps(source, 'loader-test-legacy-identity')
+  const row = rowFor('loader-test-legacy-identity', bytes, { manifest: { displayName: 'Something else entirely' } })
+  assert.equal(row.packageFormat, 'mjs')
+  const outcome = await loadPluginRow(row, fixture.deps)
+  assert.equal(outcome.status, 'active')
+})
+
+test('refresh reads package_format from the catalog and holds zip rows to it', async () => {
+  resetPluginLoaderState()
+  resetPluginAvailability()
+  const declared = mediaSource('loader-refresh-zip')
+  const drifted = declared.replace("displayName: 'Loader Test Media'", "displayName: 'Renamed At Runtime'")
+  const bytes = Buffer.from(drifted, 'utf8')
+  const digest = sha(bytes)
+  const promotes: Array<{ status: string; code?: string }> = []
+  const deps: PluginLoaderDeps = {
+    cacheDir: join(cacheRoot, 'loader-refresh-zip'),
+    getObject: async () => bytes,
+    promote: async (_row, next, failure) => {
+      promotes.push({ status: next, ...(failure ? { code: failure.code } : {}) })
+      return true
+    },
+    query: async () => ({
+      rows: [{
+        id: 'row-loader-refresh-zip',
+        plugin_id: 'loader-refresh-zip',
+        plugin_version: '1.0.0',
+        kind: 'media',
+        status: 'pending',
+        object_key: `plugin-packages/loader-refresh-zip/1.0.0/${digest}.mjs`,
+        artifact_sha256: digest,
+        artifact_size_bytes: bytes.length,
+        manifest: storedManifestFor(declared),
+        package_format: 'zip-v1',
+        updated_at_ms: 1_700_000_000_000,
+        watermark_ms: 1_700_000_000_500,
+      }],
+    }),
+  }
+  const result = await refreshPlugins(deps)
+  assert.equal(result.failed, 1)
+  assert.deepEqual(promotes, [{ status: 'failed', code: 'PLUGIN_MANIFEST_MISMATCH' }])
+  assert.equal(isPluginAvailable('loader-refresh-zip', '1.0.0'), false)
+  resetPluginLoaderState()
 })

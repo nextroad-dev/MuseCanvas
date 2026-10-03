@@ -33,6 +33,9 @@ test('dynamic helpers interpolate id and provider segments', () => {
   assert.equal(API_ENDPOINTS.admin.promptTemplateSetEntries('s1'), '/api/admin/prompt-templates/sets/s1/entries')
   assert.equal(API_ENDPOINTS.admin.promptTemplateEntry('e1'), '/api/admin/prompt-templates/entries/e1')
   assert.equal(API_ENDPOINTS.admin.plugin('p1'), '/api/admin/plugins/p1')
+  assert.equal(API_ENDPOINTS.admin.pluginIcon('p1'), '/api/admin/plugins/p1/icon')
+  assert.equal(API_ENDPOINTS.admin.pluginPackage('p1'), '/api/admin/plugins/p1/package')
+  assert.equal(API_ENDPOINTS.admin.pluginDocs('p1'), '/api/admin/plugins/p1/docs')
 })
 
 test('oauth provider whitelist matches backend path.match constraint', () => {

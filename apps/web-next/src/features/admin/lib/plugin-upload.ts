@@ -10,12 +10,34 @@
 // (`rejected()` in apps/api/src/modules/admin/plugins.ts), so it arrives as
 // `{ success: true, data: { installed: false, ok: false, code, findings } }` —
 // findings must be read from `res.data`; `res.error` only carries `fail()` codes.
-import type { ApiResponse } from '@/shared/types'
+import type { AdminPluginScanFinding, ApiResponse } from '@/shared/types'
 
 const BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
 
 /**
- * Cap for one uploaded `.mjs` artifact, mirroring `PLUGIN_ARTIFACT_MAX_BYTES` in
+ * Resolve an `API_ENDPOINTS` path the same way clientApi does: a relative `/api/...`
+ * path through the same-origin Next.js proxy, or `NEXT_PUBLIC_API_BASE_URL` when one
+ * is configured. Used for the multipart POST below and for plain `<img src>` /
+ * `<a href>` targets (plugin icon, package download) that the browser fetches itself
+ * with the session cookie.
+ */
+export function resolveApiUrl(path: string): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'
+  const relativeUrl = new URL(path, origin).pathname
+  return BASE_URL.endsWith('/api') && relativeUrl.startsWith('/api/')
+    ? BASE_URL + relativeUrl.slice(4)
+    : BASE_URL + relativeUrl
+}
+
+/**
+ * Cap for one uploaded plugin `.zip` package (spec section 2.2: zip itself <= 6 MiB).
+ * Local literal for the same reason as PLUGIN_ARTIFACT_MAX_BYTES below; the server
+ * remains the authority and enforces it on the received bytes.
+ */
+export const PLUGIN_PACKAGE_MAX_BYTES = 6_291_456
+
+/**
+ * Cap for the entry `.mjs` bundle inside a package, mirroring `PLUGIN_ARTIFACT_MAX_BYTES` in
  * `packages/providers/src/core/plugin-scan.ts` (5_242_880). Kept as a local literal
  * because web-next depends only on `@musecanvas/contracts` (see the webpack alias in
  * next.config.mjs); the server remains the authority — it enforces the cap on the
@@ -36,26 +58,50 @@ export function shortDigest(digest: string): string {
 }
 
 /**
- * POST `multipart/form-data` with exactly the two fields the server accepts
- * (`readPluginPackage` rejects any extra key, and requires one `manifest` string
- * plus one `.mjs` `file`). Returns the parsed envelope; on a network failure or a
+ * Location label of a scan finding: `path:line:column`, degrading to whichever parts
+ * are present (`path`, `path:line`, or `行 line:column` for legacy path-less
+ * findings). Returns null when the finding carries no location at all.
+ */
+export function formatFindingLocation(f: Pick<AdminPluginScanFinding, 'path' | 'line' | 'column'>): string | null {
+  const hasLine = typeof f.line === 'number'
+  const hasColumn = hasLine && typeof f.column === 'number'
+  if (!f.path && !hasLine) return null
+  const parts: string[] = []
+  if (f.path) parts.push(f.path)
+  if (hasLine) parts.push(String(f.line))
+  if (hasColumn) parts.push(String(f.column))
+  // Without a path the bare `12:4` reads poorly; prefix a label instead.
+  return f.path ? parts.join(':') : `行 ${parts.join(':')}`
+}
+
+/** Group findings by package path, keeping first-seen order; path-less findings go under `null` (package level). */
+export function groupFindingsByPath(findings: AdminPluginScanFinding[]): { path: string | null; findings: AdminPluginScanFinding[] }[] {
+  const groups = new Map<string | null, AdminPluginScanFinding[]>()
+  for (const f of findings) {
+    const key = f.path || null
+    const list = groups.get(key)
+    if (list) list.push(f)
+    else groups.set(key, [f])
+  }
+  return Array.from(groups, ([path, items]) => ({ path, findings: items }))
+}
+
+/**
+ * POST `multipart/form-data` with the single `package` field (the `.zip`) the
+ * upload/validate endpoints accept (plugin-package-spec section 6). The legacy
+ * `manifest` + `file` form is still accepted server-side during the transition but
+ * the UI no longer sends it. Returns the parsed envelope; on a network failure or a
  * non-JSON body (nginx error page) it degrades to `{ success: false }` like clientApi.
  */
 export async function postPluginPackage<T>(
   path: string,
-  manifestText: string,
-  file: File,
+  pkg: File,
   signal?: AbortSignal,
 ): Promise<ApiResponse<T>> {
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'
-  const relativeUrl = new URL(path, origin).pathname
-  const requestUrl = BASE_URL.endsWith('/api') && relativeUrl.startsWith('/api/')
-    ? BASE_URL + relativeUrl.slice(4)
-    : BASE_URL + relativeUrl
+  const requestUrl = resolveApiUrl(path)
 
   const form = new FormData()
-  form.append('manifest', manifestText)
-  form.append('file', file, file.name)
+  form.append('package', pkg, pkg.name)
 
   try {
     // No Content-Type header on purpose: the browser generates `multipart/form-data`

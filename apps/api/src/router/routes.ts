@@ -27,6 +27,9 @@ import { listInstalledCatalogPlugins, listModelPresets } from '../modules/admin/
 import { buildBuiltinProviderTemplates } from '../admin/provider-templates'
 import {
   deletePlugin,
+  downloadPluginPackage,
+  getPluginDocs,
+  getPluginIcon,
   installPlugin,
   listAdminPlugins,
   updatePluginStatus,
@@ -115,6 +118,11 @@ export const GET_ROUTES: Route[] = [
   { path: 'admin/model-presets', access: 'admin', handler: async () => ok(await listModelPresets()) },
   { path: 'admin/provider-templates', access: 'admin', handler: async () => ok({ templates: buildBuiltinProviderTemplates(await listInstalledCatalogPlugins()) }) },
   { path: 'admin/plugins', access: 'admin', handler: () => listAdminPlugins() },
+  // Binary responses (image / zip attachment) for zip-packaged plugins; 404 for legacy rows.
+  { path: 'admin/plugins/:hexid/icon', access: 'admin', handler: context => getPluginIcon(context.params.hexid) },
+  { path: 'admin/plugins/:hexid/package', access: 'admin', handler: context => downloadPluginPackage(context.params.hexid) },
+  // README / CHANGELOG / LICENSE text, kept out of the list payload; all-null for legacy rows.
+  { path: 'admin/plugins/:hexid/docs', access: 'admin', handler: context => getPluginDocs(context.params.hexid) },
   { path: 'admin/models', access: 'admin', handler: () => listAdminModels() },
   { path: 'admin/prompt-templates', access: 'admin', handler: () => getAdminPromptTemplates() },
   { path: 'admin/prompt-templates/sets', access: 'admin', handler: () => listPromptTemplateSets() },

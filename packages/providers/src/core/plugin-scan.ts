@@ -25,6 +25,8 @@ export type PluginScanFinding = {
   line?: number
   column?: number
   message: string
+  /** Package-relative file the finding is about; set only for zip packages. */
+  path?: string
 }
 
 export type AnyProviderManifest = MediaProviderManifest | LanguageProviderManifest
@@ -137,7 +139,7 @@ export function scanPluginSource(source: string): PluginScanFinding[] {
     report(offset, 0, 'FORBIDDEN_TOP_LEVEL_AWAIT', 'top-level await runs at import time, before any manifest or scan check')
   }
 
-  if (!/\bexport\s+default\b/.test(source)) {
+  if (!hasDefaultExport(source)) {
     hits.push({
       offset: source.length,
       precedence: 0,
@@ -154,6 +156,17 @@ export function scanPluginSource(source: string): PluginScanFinding[] {
     findings.push(hit.finding)
   }
   return findings
+}
+
+/**
+ * `export default x`, or the local re-export clause `export { x as default }` that
+ * esbuild ends every ESM bundle with (other specifiers may share the braces).
+ * `export { x as default } from '...'` is a runtime import, reported as
+ * FORBIDDEN_RUNTIME_IMPORT above, and never counts as the plugin's default export.
+ */
+function hasDefaultExport(source: string): boolean {
+  if (/\bexport\s+default\b/.test(source)) return true
+  return /\bexport\s*\{[^}]*\bas\s+default\b[^}]*\}(?!\s*from\b)/.test(source)
 }
 
 export function validatePluginManifest(

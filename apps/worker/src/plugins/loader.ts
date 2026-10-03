@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -49,6 +50,8 @@ export const DEFAULT_PLUGIN_CACHE_DIR = '/tmp/musecanvas-plugin-cache'
 
 export type PluginCatalogStatus = 'pending' | 'active' | 'disabled' | 'failed'
 export type PluginKind = 'media' | 'language'
+/** How the row was uploaded; the worker only ever sees the entry bundle either way. */
+export type PluginPackageFormat = 'mjs' | 'zip-v1'
 
 export interface PluginRow {
   id: string
@@ -60,6 +63,7 @@ export interface PluginRow {
   artifactSha256: string
   artifactSizeBytes: number
   manifest: unknown
+  packageFormat: PluginPackageFormat
   updatedAtMs: number
 }
 
@@ -172,7 +176,7 @@ async function promotePluginRow(
 }
 
 const CATALOG_COLUMNS = `p.id, p.plugin_id, p.plugin_version, p.kind, p.status, p.object_key,
-       p.artifact_sha256, p.artifact_size_bytes, p.manifest,
+       p.artifact_sha256, p.artifact_size_bytes, p.manifest, p.package_format,
        (EXTRACT(EPOCH FROM p.updated_at) * 1000)::float8 AS updated_at_ms,
        (EXTRACT(EPOCH FROM tick.ts) * 1000)::float8 AS watermark_ms`
 
@@ -218,6 +222,8 @@ function mapCatalogRow(row: Record<string, unknown>): PluginRow | null {
     artifactSha256: sha256,
     artifactSizeBytes: Number(row.artifact_size_bytes) || 0,
     manifest: row.manifest,
+    // Absent on rows read before the column existed: those are all legacy uploads.
+    packageFormat: row.package_format === 'zip-v1' ? 'zip-v1' : 'mjs',
     updatedAtMs: Number(row.updated_at_ms) || 0,
   }
 }
@@ -262,6 +268,36 @@ function identityFailure(row: PluginRow, manifest: AnyProviderManifest): string 
   if (manifest.id !== row.pluginId) return 'PLUGIN_ID_MISMATCH'
   if (manifest.version !== row.pluginVersion) return 'PLUGIN_VERSION_MISMATCH'
   return null
+}
+
+/**
+ * Zip packages (plugin-package-spec §3.1, §5.3): the stored manifest is
+ * manifest.json minus its package block, already normalized by the API. The
+ * bundle must declare the very same thing — not just the same kind/id/version —
+ * because the console, credential templates and model capabilities all come
+ * from the stored copy while the runtime uses the bundle's. Both sides go through
+ * validatePluginManifest and a JSON round trip (the stored side is jsonb, which
+ * drops undefined members and reorders keys), then compare structurally.
+ */
+function manifestMismatch(row: PluginRow, manifest: AnyProviderManifest): string | null {
+  const stored = validatePluginManifest(typeof row.manifest === 'string' ? safeJsonParse(row.manifest) : row.manifest)
+  if (!stored.ok) return 'stored manifest no longer validates'
+  const canonical = (value: AnyProviderManifest): Record<string, unknown> => JSON.parse(JSON.stringify(value))
+  const expected = canonical(stored.manifest)
+  const actual = canonical(manifest)
+  if (isDeepStrictEqual(expected, actual)) return null
+  // Field names only: values may be long, and the message lands in error_message.
+  const differing = [...new Set([...Object.keys(expected), ...Object.keys(actual)])]
+    .filter(key => !isDeepStrictEqual(expected[key], actual[key]))
+  return `bundle manifest differs from manifest.json in: ${differing.join(', ')}`
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
 }
 
 async function materialize(absPath: string, bytes: Uint8Array, digest: string): Promise<void> {
@@ -393,6 +429,11 @@ export async function loadPluginRow(row: PluginRow, deps: PluginLoaderDeps = {})
   const mismatch = identityFailure(row, shape.manifest)
   if (mismatch) {
     return reject(mismatch, `bundle declares ${shape.manifest.kind} ${shape.manifest.id}@${shape.manifest.version}`)
+  }
+  // Legacy rows keep the identity comparison above; zip rows must match in full.
+  if (row.packageFormat === 'zip-v1') {
+    const drift = manifestMismatch(row, shape.manifest)
+    if (drift) return reject('PLUGIN_MANIFEST_MISMATCH', drift)
   }
 
   try {

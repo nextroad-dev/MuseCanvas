@@ -197,15 +197,16 @@ export async function createUploadPresignedPost(
 
 /**
  * Writes server-held bytes into the private bucket: an administrator-uploaded
- * plugin artifact, and the two inputs of a masked edit (`POST /api/images/edit`)
- * that arrive in its own request body — the source image the browser posted and
- * the alpha mask rasterised from the selection.
+ * plugin artifact (entry bundle, original zip package, icon), and the two inputs
+ * of a masked edit (`POST /api/images/edit`) that arrive in its own request body
+ * — the source image the browser posted and the alpha mask rasterised from the
+ * selection.
  *
- * Never presigned, and a plugin artifact is never read back through this helper:
- * clients must not be able to pull executable plugin code from storage, so only
- * the worker fetches those bytes. A staged input is an ordinary image, visible to
- * its owner through the same short-lived signed URL every other generation input
- * uses, and to nobody else.
+ * Never presigned. The entry bundle is never handed to a client: only the worker
+ * fetches and executes it. The admin-only package download and icon routes read
+ * the zip and icon back through the API, never through a signed URL. A staged
+ * input is an ordinary image, visible to its owner through the same short-lived
+ * signed URL every other generation input uses, and to nobody else.
  */
 export async function putPrivateS3ObjectBytes(
   objectKey: string,

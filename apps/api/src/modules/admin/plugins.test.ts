@@ -6,12 +6,28 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Actor } from '../../auth/security'
 import type { AnyProviderManifest, MediaProviderManifest } from '../../../../../packages/providers/src/index'
-import { PLUGIN_ARTIFACT_MAX_BYTES, pluginObjectKey, scanPluginSource } from '../../../../../packages/providers/src/index'
 import {
+  PLUGIN_PACKAGE_MAX_BYTES,
+  PLUGIN_ARTIFACT_MAX_BYTES,
+  createPluginPackageZip,
+  pluginIconObjectKey,
+  pluginObjectKey,
+  pluginPackageObjectKey,
+  scanPluginSource,
+  validatePluginManifest,
+} from '../../../../../packages/providers/src/index'
+import {
+  LEGACY_UPLOAD_WARNING,
   analyzePluginPackage,
+  analyzeZipPluginPackage,
+  getPluginDocs,
   installPlugin,
   pluginArtifactIdentity,
+  pluginDocsFromRow,
+  pluginDtoFromRow,
+  pluginPackageFilename,
   validatePluginPackage,
+  type PluginInstallDeps,
 } from './plugins'
 import {
   manifestAllowsHost,
@@ -99,11 +115,17 @@ test('validate reports the digest and warn-only findings without blocking', asyn
   assert.deepEqual(data.allowedHosts, ['api.acme.example'])
   assert.equal(data.artifactDigest, createHash('sha256').update(bytes).digest('hex'))
   assert.equal(data.artifactSizeBytes, bytes.byteLength)
-  assert.deepEqual(data.warnings, [])
+  assert.equal(data.packageFormat, 'mjs')
+  assert.equal(data.packageDigest, null)
+  // The legacy envelope still works, with a non-blocking notice to move to zip.
+  assert.deepEqual(data.warnings, [LEGACY_UPLOAD_WARNING])
   // A bundle without `export default` is warn-only, so it still validates.
   const noDefault = await dataOf(await validatePluginPackage(packageRequest(uploadFields(GOOD_MANIFEST, 'const meta = 1\n'))))
   assert.equal(noDefault.ok, true)
-  assert.deepEqual(noDefault.warnings, [{ rule: 'NO_DEFAULT_EXPORT', severity: 'warn', message: 'the plugin object is expected as `export default`' }])
+  assert.deepEqual(noDefault.warnings, [
+    { rule: 'NO_DEFAULT_EXPORT', severity: 'warn', message: 'the plugin object is expected as `export default`' },
+    LEGACY_UPLOAD_WARNING,
+  ])
 })
 
 test('the scanner is the shared one: error findings abort with PLUGIN_SCAN_FAILED', () => {
@@ -399,4 +421,339 @@ test('uploads dispatch before the JSON-only body reader and never match the id r
   assert.equal(matchPath('admin/plugins/:hexid', 'admin/plugins/upload'), null)
   assert.equal(matchPath('admin/plugins/:hexid', 'admin/plugins/validate'), null)
   assert.ok(matchPath('admin/plugins/:hexid', 'admin/plugins/123e4567-e89b-12d3-a456-426614174000'))
+})
+
+// ---------------------------------------------------------------------------
+// Zip packages (plugin-package-spec): `package` field, storage keys, columns
+// ---------------------------------------------------------------------------
+
+const ZIP_MANIFEST = { ...GOOD_MANIFEST, id: 'acme-zip', version: '1.2.0' }
+const ZIP_BUNDLE = `const manifest = ${JSON.stringify(ZIP_MANIFEST)}\nexport default { manifest, validateConfig() {}, validateRequest() {}, async submit() { return { status: 'succeeded', outputs: [] } } }\n`
+// The canonical 1x1 RGBA PNG.
+const PNG_1X1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+
+const enc = (value: string) => new TextEncoder().encode(value)
+const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+
+function zipPackage(overrides: Record<string, Uint8Array | null> = {}, packageBlock: Record<string, unknown> = {}): Uint8Array {
+  const files: Record<string, Uint8Array> = {
+    'manifest.json': enc(JSON.stringify({
+      ...ZIP_MANIFEST,
+      package: { format: 1, entry: 'plugin.mjs', icon: 'assets/icon.png', author: 'Acme', license: 'MIT', homepage: 'https://acme.example', ...packageBlock },
+    })),
+    'plugin.mjs': enc(ZIP_BUNDLE),
+    'README.md': enc('# Acme Zip\n'),
+    'CHANGELOG.md': enc('## 1.2.0\n'),
+    LICENSE: enc('MIT\n'),
+    'assets/icon.png': new Uint8Array(PNG_1X1),
+  }
+  for (const [path, bytes] of Object.entries(overrides)) {
+    if (bytes === null) delete files[path]
+    else files[path] = bytes
+  }
+  return createPluginPackageZip(files)
+}
+
+const zipFields = (zip: Uint8Array, name = 'acme-zip-1.2.0.zip'): PackageFields => ({ package: { bytes: zip, name } })
+
+test('a zip package validates through the same endpoint, with package details and no legacy warning', async () => {
+  const zip = zipPackage()
+  const response = await validatePluginPackage(packageRequest(zipFields(zip)))
+  assert.equal(response.status, 200)
+  const data = await dataOf(response)
+  assert.equal(data.ok, true)
+  assert.equal(data.pluginId, 'acme-zip')
+  assert.equal(data.pluginVersion, '1.2.0')
+  assert.equal(data.packageFormat, 'zip-v1')
+  assert.equal(data.artifactDigest, sha(enc(ZIP_BUNDLE)))
+  assert.equal(data.artifactSizeBytes, enc(ZIP_BUNDLE).byteLength)
+  assert.equal(data.packageDigest, sha(zip))
+  assert.equal(data.hasIcon, true)
+  assert.deepEqual(data.packageMeta, { author: 'Acme', license: 'MIT', homepage: 'https://acme.example' })
+  const files = data.packageFiles as Array<{ path: string; sizeBytes: number; sha256: string }>
+  assert.deepEqual(files.map(file => file.path), ['CHANGELOG.md', 'LICENSE', 'README.md', 'assets/icon.png', 'manifest.json', 'plugin.mjs'])
+  assert.equal(files.find(file => file.path === 'plugin.mjs')?.sha256, sha(enc(ZIP_BUNDLE)))
+  assert.deepEqual(data.warnings, [])
+})
+
+test('analysis derives every storage key from content, and the entry key keeps the worker format', async () => {
+  const zip = zipPackage()
+  const analysis = await analyzeZipPluginPackage(Buffer.from(zip))
+  assert.equal(analysis.ok, true)
+  if (!analysis.ok || !analysis.package) return
+  const entrySha = sha(enc(ZIP_BUNDLE))
+  assert.equal(analysis.format, 'zip-v1')
+  assert.equal(analysis.objectKey, pluginObjectKey('acme-zip', '1.2.0', entrySha))
+  assert.equal(analysis.objectKey, `plugin-packages/acme-zip/1.2.0/${entrySha}.mjs`)
+  assert.equal(analysis.package.packageObjectKey, pluginPackageObjectKey('acme-zip', '1.2.0', sha(zip)))
+  assert.equal(analysis.package.icon?.objectKey, pluginIconObjectKey('acme-zip', '1.2.0', sha(PNG_1X1), 'png'))
+  assert.equal(analysis.package.icon?.objectKey, `plugin-packages/acme-zip/1.2.0/icon-${sha(PNG_1X1)}.png`)
+  // The stored manifest is manifest.json without its package block, normalized.
+  const expected = validatePluginManifest(ZIP_MANIFEST)
+  assert.ok(expected.ok)
+  assert.deepEqual(analysis.manifest, expected.manifest)
+})
+
+test('zip rejections answer 422 with path-carrying findings', async () => {
+  const cases: Array<[string, Uint8Array, string, string | undefined]> = [
+    ['path traversal', zipPackage({ '../evil.md': enc('x') }), 'PLUGIN_PACKAGE_UNSAFE_PATH', '../evil.md'],
+    ['second bundle', zipPackage({ 'extra.mjs': enc('export default {}') }), 'PLUGIN_PACKAGE_FORBIDDEN_FILE', 'extra.mjs'],
+    ['missing entry', zipPackage({ 'plugin.mjs': null }), 'PLUGIN_PACKAGE_ENTRY_MISSING', 'manifest.json'],
+    ['scan failure', zipPackage({ 'plugin.mjs': enc('const k = process.env.K\nexport default { k }\n') }), 'PLUGIN_SCAN_FAILED', 'plugin.mjs'],
+    ['icon is not a png', zipPackage({ 'assets/icon.png': enc('nope') }), 'PLUGIN_PACKAGE_INVALID', 'assets/icon.png'],
+    ['not a zip', enc('plain text'), 'PLUGIN_PACKAGE_INVALID', undefined],
+  ]
+  const install = (request: ReturnType<typeof packageRequest>) => installPlugin(ADMIN, request)
+  for (const [label, zip, code, path] of cases) {
+    for (const handler of [validatePluginPackage, install]) {
+      const response = await handler(packageRequest(zipFields(zip)))
+      assert.equal(response.status, 422, label)
+      const data = await dataOf(response)
+      assert.equal(data.ok, false, label)
+      assert.equal(data.code, code, `${label}: ${JSON.stringify(data.findings)}`)
+      if (path) assert.ok((data.findings as Array<{ path?: string }>).some(finding => finding.path === path), `${label} -> ${JSON.stringify(data.findings)}`)
+    }
+  }
+  // The 6 MiB cap is part of the same envelope.
+  const oversized = await validatePluginPackage(packageRequest(zipFields(new Uint8Array(PLUGIN_PACKAGE_MAX_BYTES + 1))))
+  assert.equal(oversized.status, 422)
+  assert.equal((await dataOf(oversized)).code, 'PLUGIN_PACKAGE_TOO_LARGE')
+})
+
+test('the package envelope is exclusive: one .zip, no legacy fields alongside', async () => {
+  const zip = zipPackage()
+  const cases: Array<[string, PackageFields | (() => FormData)]> = [
+    ['package plus manifest', { ...zipFields(zip), manifest: JSON.stringify(ZIP_MANIFEST) }],
+    ['package plus file', { ...zipFields(zip), file: { bytes: enc(ZIP_BUNDLE), name: 'plugin.mjs' } }],
+    ['not a .zip name', zipFields(zip, 'plugin.tar')],
+    ['empty zip', zipFields(new Uint8Array(0))],
+    ['text field', { package: 'not-a-file' }],
+    ['two packages', () => {
+      const form = new FormData()
+      form.append('package', new Blob([new Uint8Array(zip)]), 'a.zip')
+      form.append('package', new Blob([new Uint8Array(zip)]), 'b.zip')
+      return form
+    }],
+    ['no fields at all', {}],
+  ]
+  for (const [label, fields] of cases) {
+    const request = typeof fields === 'function' ? { formData: async () => fields() } : packageRequest(fields)
+    const response = await validatePluginPackage(request)
+    assert.equal(response.status, 400, label)
+    assert.equal(await errorCode(response), 'INVALID_INPUT', label)
+  }
+  // Upper-case extension is still a zip.
+  assert.equal((await validatePluginPackage(packageRequest(zipFields(zip, 'ACME.ZIP')))).status, 200)
+})
+
+/** In-memory stand-ins for the pool and the bucket. */
+function fakeInstallDeps(options: { failPutAt?: number; failInsert?: boolean } = {}) {
+  const puts: Array<{ key: string; bytes: Buffer; contentType: string }> = []
+  const deletes: string[] = []
+  const statements: Array<{ sql: string; params: unknown[] }> = []
+  const deps: PluginInstallDeps = {
+    query: async (sql, params) => {
+      statements.push({ sql, params })
+      return { rows: [] }
+    },
+    transaction: async fn => fn({
+      query: async (sql, params) => {
+        statements.push({ sql, params })
+        if (sql.startsWith('INSERT INTO provider_plugins')) {
+          if (options.failInsert) throw new Error('insert failed')
+          return { rows: [insertedRow(sql, params)] }
+        }
+        return { rows: [] }
+      },
+    }),
+    putObject: async (key, bytes, contentType) => {
+      if (options.failPutAt !== undefined && puts.length === options.failPutAt) throw new Error('bucket down')
+      puts.push({ key, bytes, contentType })
+    },
+    deleteObject: async key => {
+      deletes.push(key)
+    },
+  }
+  return { deps, puts, deletes, statements }
+}
+
+/** Echoes the INSERT back as the row Postgres would return (jsonb parsed). */
+function insertedRow(sql: string, params: unknown[]): Record<string, unknown> {
+  const flat = sql.replace(/\s+/g, ' ')
+  const columns = /provider_plugins\(([^)]*)\)/.exec(flat)?.[1].split(',').map(column => column.trim()) ?? []
+  const placeholders = /VALUES\(([^)]*)\)/.exec(flat)?.[1].split(',').map(value => value.trim()) ?? []
+  const row: Record<string, unknown> = { id: '123e4567-e89b-12d3-a456-426614174000', created_at: new Date(0), updated_at: new Date(0) }
+  columns.forEach((column, index) => {
+    const placeholder = placeholders[index] ?? ''
+    const match = /^\$(\d+)(::jsonb)?$/.exec(placeholder)
+    if (!match) {
+      row[column] = placeholder.replace(/^'|'$/g, '')
+      return
+    }
+    const value = params[Number(match[1]) - 1]
+    row[column] = match[2] && typeof value === 'string' ? JSON.parse(value) : value
+  })
+  return row
+}
+
+test('a zip install writes bundle, zip and icon, and persists the package columns', async () => {
+  const zip = zipPackage()
+  const fake = fakeInstallDeps()
+  const response = await installPlugin(ADMIN, packageRequest(zipFields(zip)), fake.deps)
+  assert.equal(response.status, 201)
+  const entrySha = sha(enc(ZIP_BUNDLE))
+  assert.deepEqual(fake.puts.map(put => [put.key, put.contentType]), [
+    [`plugin-packages/acme-zip/1.2.0/${entrySha}.mjs`, 'text/javascript'],
+    [`plugin-packages/acme-zip/1.2.0/${sha(zip)}.zip`, 'application/zip'],
+    [`plugin-packages/acme-zip/1.2.0/icon-${sha(PNG_1X1)}.png`, 'image/png'],
+  ])
+  assert.equal(fake.puts[0].bytes.equals(Buffer.from(enc(ZIP_BUNDLE))), true)
+  assert.equal(fake.puts[1].bytes.equals(Buffer.from(zip)), true)
+  assert.deepEqual(fake.deletes, [])
+
+  const insert = fake.statements.find(statement => statement.sql.startsWith('INSERT INTO provider_plugins'))
+  assert.ok(insert)
+  const row = insertedRow(insert.sql, insert.params)
+  assert.equal(row.object_key, `plugin-packages/acme-zip/1.2.0/${entrySha}.mjs`)
+  assert.equal(row.artifact_sha256, entrySha)
+  assert.equal(row.package_format, 'zip-v1')
+  assert.equal(row.package_object_key, `plugin-packages/acme-zip/1.2.0/${sha(zip)}.zip`)
+  assert.equal(row.package_sha256, sha(zip))
+  assert.equal(row.readme, '# Acme Zip\n')
+  assert.equal(row.changelog, '## 1.2.0\n')
+  assert.equal(row.license_text, 'MIT\n')
+  assert.deepEqual((row.package_meta as Record<string, unknown>).icon, {
+    path: 'assets/icon.png',
+    objectKey: `plugin-packages/acme-zip/1.2.0/icon-${sha(PNG_1X1)}.png`,
+    sha256: sha(PNG_1X1),
+    mimeType: 'image/png',
+    width: 1,
+    height: 1,
+  })
+  assert.equal((row.package_files as unknown[]).length, 6)
+  assert.equal((row.manifest as Record<string, unknown>).package, undefined)
+
+  const result = (await payload(response)).data as { installed: boolean; plugin: Record<string, unknown>; warnings: unknown[] }
+  assert.equal(result.installed, true)
+  assert.deepEqual(result.warnings, [])
+  assert.equal(result.plugin.packageFormat, 'zip-v1')
+  assert.equal(result.plugin.packageDigest, sha(zip))
+  assert.equal(result.plugin.hasIcon, true)
+  assert.deepEqual(result.plugin.packageMeta, { author: 'Acme', license: 'MIT', homepage: 'https://acme.example' })
+  assert.deepEqual(result.plugin.docs, { readme: true, changelog: true, licenseText: true })
+  assert.equal('readme' in result.plugin, false)
+  // Storage keys never reach the client.
+  assert.equal(JSON.stringify(result).includes('plugin-packages/'), false)
+})
+
+test('a legacy install keeps the mjs columns and warns', async () => {
+  const fake = fakeInstallDeps()
+  const response = await installPlugin(ADMIN, packageRequest(uploadFields(GOOD_MANIFEST)), fake.deps)
+  assert.equal(response.status, 201)
+  assert.deepEqual(fake.puts.map(put => put.key), [pluginArtifactIdentity('acme-image', '1.0.0', Buffer.from(CLEAN_ARTIFACT)).objectKey])
+  const insert = fake.statements.find(statement => statement.sql.startsWith('INSERT INTO provider_plugins'))
+  assert.ok(insert)
+  const row = insertedRow(insert.sql, insert.params)
+  assert.equal(row.package_format, 'mjs')
+  assert.equal(row.package_object_key, null)
+  assert.deepEqual(row.package_files, [])
+  assert.deepEqual(row.package_meta, {})
+  const result = (await payload(response)).data as { plugin: Record<string, unknown>; warnings: unknown[] }
+  assert.deepEqual(result.warnings, [LEGACY_UPLOAD_WARNING])
+  assert.equal(result.plugin.packageFormat, 'mjs')
+  assert.equal(result.plugin.hasIcon, false)
+})
+
+test('a failed write rolls back every object already stored', async () => {
+  const zip = zipPackage()
+  const storeFailure = fakeInstallDeps({ failPutAt: 2 })
+  const stored = await installPlugin(ADMIN, packageRequest(zipFields(zip)), storeFailure.deps)
+  assert.equal(stored.status, 503)
+  assert.equal(await errorCode(stored), 'PLUGIN_ARTIFACT_STORE_FAILED')
+  assert.deepEqual(storeFailure.deletes, storeFailure.puts.map(put => put.key))
+  assert.equal(storeFailure.deletes.length, 2)
+
+  const dbFailure = fakeInstallDeps({ failInsert: true })
+  const inserted = await installPlugin(ADMIN, packageRequest(zipFields(zip)), dbFailure.deps)
+  assert.equal(inserted.status, 503)
+  assert.equal(await errorCode(inserted), 'PLUGIN_INSTALL_FAILED')
+  assert.deepEqual(dbFailure.deletes, dbFailure.puts.map(put => put.key))
+  assert.equal(dbFailure.deletes.length, 3)
+})
+
+test('the DTO exposes package fields for zip rows only, and never a storage key', () => {
+  const base = {
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    plugin_id: 'acme-zip',
+    plugin_version: '1.2.0',
+    kind: 'media',
+    display_name: 'Acme',
+    status: 'active',
+    source: 'uploaded',
+    object_key: 'plugin-packages/acme-zip/1.2.0/x.mjs',
+    artifact_sha256: 'a'.repeat(64),
+    artifact_size_bytes: 10,
+    manifest: { modalities: ['image'] },
+    allowed_hosts: ['api.acme.example'],
+    credential_schemas: ['legacy-api-key-v1'],
+    scan_report: [{ rule: 'NO_DEFAULT_EXPORT', severity: 'warn', message: 'm', path: 'plugin.mjs' }],
+    created_at: new Date(0),
+    updated_at: new Date(0),
+  }
+  const zipRow = pluginDtoFromRow({
+    ...base,
+    package_format: 'zip-v1',
+    package_object_key: 'plugin-packages/acme-zip/1.2.0/z.zip',
+    package_sha256: 'b'.repeat(64),
+    package_files: JSON.stringify([{ path: 'plugin.mjs', sizeBytes: 10, sha256: 'a'.repeat(64) }]),
+    package_meta: { format: 1, entry: 'plugin.mjs', author: 'Acme', icon: { objectKey: 'plugin-packages/acme-zip/1.2.0/icon-c.png', mimeType: 'image/png' } },
+    readme: '# hi',
+    changelog: null,
+    license_text: 'MIT',
+  })
+  assert.equal(zipRow.packageFormat, 'zip-v1')
+  assert.equal(zipRow.packageDigest, 'b'.repeat(64))
+  assert.deepEqual(zipRow.packageFiles, [{ path: 'plugin.mjs', sizeBytes: 10, sha256: 'a'.repeat(64) }])
+  assert.deepEqual(zipRow.packageMeta, { author: 'Acme' })
+  assert.equal(zipRow.hasIcon, true)
+  // Flags only: the doc texts never ride along in the DTO.
+  assert.deepEqual(zipRow.docs, { readme: true, changelog: false, licenseText: true })
+  assert.equal(JSON.stringify(zipRow).includes('# hi'), false)
+  assert.deepEqual(zipRow.scanReport, [{ rule: 'NO_DEFAULT_EXPORT', severity: 'warn', message: 'm', path: 'plugin.mjs' }])
+  assert.equal(JSON.stringify(zipRow).includes('plugin-packages/'), false)
+
+  // The list query selects has_* booleans instead of the texts.
+  const listed = pluginDtoFromRow({ ...base, package_format: 'zip-v1', has_readme: false, has_changelog: true, has_license_text: false })
+  assert.deepEqual(listed.docs, { readme: false, changelog: true, licenseText: false })
+
+  // A legacy row: defaults, whatever stray columns say.
+  const legacy = pluginDtoFromRow({ ...base, package_meta: { icon: { objectKey: 'k', mimeType: 'image/png' } }, readme: 'stray', has_changelog: true })
+  assert.equal(legacy.packageFormat, 'mjs')
+  assert.equal(legacy.packageDigest, null)
+  assert.deepEqual(legacy.packageFiles, [])
+  assert.deepEqual(legacy.packageMeta, {})
+  assert.equal(legacy.hasIcon, false)
+  assert.deepEqual(legacy.docs, { readme: false, changelog: false, licenseText: false })
+})
+
+test('the docs payload carries the texts for zip rows and nulls for legacy rows', () => {
+  assert.deepEqual(
+    pluginDocsFromRow({ package_format: 'zip-v1', readme: '# hi', changelog: null, license_text: 'MIT' }),
+    { readme: '# hi', changelog: null, licenseText: 'MIT' },
+  )
+  assert.deepEqual(
+    pluginDocsFromRow({ package_format: 'mjs', readme: 'stray', changelog: 'stray', license_text: 'stray' }),
+    { readme: null, changelog: null, licenseText: null },
+  )
+})
+
+test('the docs endpoint rejects a malformed id before touching the database', async () => {
+  const response = await getPluginDocs('not-a-uuid')
+  assert.equal(response.status, 404)
+  assert.equal(await errorCode(response), 'NOT_FOUND')
+})
+
+test('the download filename is derived from the plugin identity only', () => {
+  assert.equal(pluginPackageFilename('acme-zip', '1.2.0'), 'acme-zip-1.2.0.zip')
+  assert.equal(pluginPackageFilename('a"b', '1/2'), 'a_b-1_2.zip')
 })

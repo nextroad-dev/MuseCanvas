@@ -87,11 +87,16 @@ export const API_ENDPOINTS = {
     providerCredential: (id: string) => `${P}/admin/provider-credentials/${id}`,
     providerCredentialTest: (id: string) => `${P}/admin/provider-credentials/${id}/test`,
     providerTemplates: `${P}/admin/provider-templates`,
-    // 上传插件：GET 列表，POST upload 为 multipart(manifest + file)，validate 只扫描不落库
+    // 上传插件：GET 列表，POST upload 为 multipart(package=zip；旧格式 manifest + file 过渡期仍接受)，validate 只扫描不落库
     plugins: `${P}/admin/plugins`,
     plugin: (id: string) => `${P}/admin/plugins/${id}`,
     pluginUpload: `${P}/admin/plugins/upload`,
     pluginValidate: `${P}/admin/plugins/validate`,
+    // zip 包的图标（image/png|webp）与原始包下载（application/zip, attachment）；mjs 行返回 404
+    pluginIcon: (id: string) => `${P}/admin/plugins/${id}/icon`,
+    pluginPackage: (id: string) => `${P}/admin/plugins/${id}/package`,
+    // 包内 README / CHANGELOG / LICENSE 全文（AdminPluginDocsDto）；列表只带 docs 存在标记
+    pluginDocs: (id: string) => `${P}/admin/plugins/${id}/docs`,
     oauthProviders: `${P}/admin/oauth-providers`,
     oauthProvider: (provider: OAuthProviderName) => `${P}/admin/oauth-providers/${provider}`,
     // GET 返回当前激活集详情（PromptTemplateSetDetailDto | null）

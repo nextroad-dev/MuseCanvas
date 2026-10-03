@@ -9,63 +9,25 @@ import type {
   AdminPluginValidateSuccess,
   PluginKind,
 } from '@/shared/types'
-import { PLUGIN_ARTIFACT_MAX_BYTES, humanFileSize, postPluginPackage, shortDigest } from '../lib/plugin-upload'
+import { PLUGIN_PACKAGE_MAX_BYTES, humanFileSize, postPluginPackage, shortDigest } from '../lib/plugin-upload'
+import { PluginFindingList } from './plugin-finding-list'
 import { ShieldAlert } from 'lucide-react'
 import {
   Alert,
-  Badge,
   Button,
   Dialog,
   FileDropZone,
-  FormField,
   Spinner,
-  Textarea,
 } from '@/shared/components/ui'
 import type { DropZoneFile } from '@/shared/components/ui'
 
-/** The drop zone holds at most one artifact; a stable id keeps its row keyed. */
-const ARTIFACT_FILE_ID = 'plugin-artifact'
+/** The drop zone holds at most one package; a stable id keeps its row keyed. */
+const PACKAGE_FILE_ID = 'plugin-package'
 
-/**
- * Manifest prefills. Field names follow `validatePluginManifest` in
- * packages/providers/src/core/plugin-scan.ts (id ^[a-z][a-z0-9-]{1,40}$, version
- * semver x.y.z, non-empty allowedHosts / credentialSchemas / models, and per-kind
- * modalities / languageProtocols). The server validates; this is only a starting draft.
- */
-const MANIFEST_TEMPLATES: Record<PluginKind, string> = {
-  media: JSON.stringify(
-    {
-      kind: 'media',
-      id: 'my-media-plugin',
-      version: '1.0.0',
-      displayName: '示例媒体插件',
-      description: '请替换为真实插件清单',
-      modalities: ['image'],
-      allowedHosts: ['api.example.com'],
-      credentialSchemas: ['legacy-api-key-v1'],
-      models: [{ id: 'example-model', name: '示例模型', modalities: ['image'] }],
-    },
-    null,
-    2,
-  ),
-  language: JSON.stringify(
-    {
-      kind: 'language',
-      id: 'my-language-plugin',
-      version: '1.0.0',
-      displayName: '示例语言插件',
-      description: '请替换为真实插件清单',
-      languageProtocols: ['openai_chat'],
-      allowedHosts: ['api.example.com'],
-      credentialSchemas: ['legacy-api-key-v1'],
-      models: [{ id: 'example-model', name: '示例模型' }],
-    },
-    null,
-    2,
-  ),
-}
+/** Mirrors PLUGIN_PACKAGE_MAX_BYTES (6 MiB) for copy; the server enforces the cap. */
+const PACKAGE_MAX_LABEL = '6 MiB'
 
-/** Worker reloads the catalog on a 5s maintenance tick; debounce typing bursts well below that. */
+/** Debounce rapid re-selection so only the last picked package is validated. */
 const VALIDATE_DEBOUNCE_MS = 400
 
 type ValidatePhase = 'idle' | 'checking' | 'ready' | 'rejected' | 'error'
@@ -82,46 +44,19 @@ const IDLE: ValidateState = { phase: 'idle', findings: [], summary: null, messag
 interface AdminPluginUploadDialogProps {
   open: boolean
   onClose: () => void
-  /** Which kernel the uploaded package targets; seeds the manifest prefill. */
+  /** Which kernel the section belongs to; only used for the dialog title (the package's manifest.json decides the real kind). */
   kind: PluginKind
   /** Called after a successful install so the parent can announce the `待加载` handshake. */
   onInstalled?: (plugin: { pluginId: string; pluginVersion: string }) => void
 }
 
-/** One scan finding: severity as text + Badge, never colour alone. */
-function FindingList({ findings }: { findings: AdminPluginScanFinding[] }) {
-  if (findings.length === 0) return null
-  return (
-    <ul className="flex flex-col gap-2">
-      {findings.map((f, i) => (
-        <li
-          key={`${f.rule}-${f.line ?? 'x'}-${i}`}
-          className={`flex flex-wrap items-start gap-2 rounded-control p-2 text-xs ${
-            f.severity === 'error' ? 'bg-danger-soft text-danger' : 'bg-tonal text-muted-foreground'
-          }`}
-        >
-          {/* 严重级别以文字呈现，不依赖颜色区分 */}
-          <Badge tone={f.severity === 'error' ? 'danger' : 'warning'} className="shrink-0">
-            {f.severity === 'error' ? '错误' : '警告'}
-          </Badge>
-          <span className="font-mono">{f.rule}</span>
-          {typeof f.line === 'number' && <span className="font-mono tabular-nums">第 {f.line} 行</span>}
-          <span>{f.message}</span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: AdminPluginUploadDialogProps) {
   const queryClient = useQueryClient()
   const [file, setFile] = useState<File | null>(null)
-  const [manifestText, setManifestText] = useState(MANIFEST_TEMPLATES[kind])
   const [validate, setValidate] = useState<ValidateState>(IDLE)
 
   const resetFields = () => {
     setFile(null)
-    setManifestText(MANIFEST_TEMPLATES[kind])
     setValidate(IDLE)
   }
 
@@ -130,24 +65,24 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
     onClose()
   }
 
-  // Pre-flight: whenever a file and a manifest are present, re-run POST admin/plugins/validate
+  // Pre-flight: whenever a package is selected, run POST admin/plugins/validate
   // (scan-only, writes nothing) so the admin sees findings before installing. Stale responses
   // are dropped via the AbortController owned by this effect run.
   useEffect(() => {
     if (!open) return
-    if (!file || !manifestText.trim()) {
+    if (!file) {
       setValidate(IDLE)
       return
     }
-    if (!file.name.endsWith('.mjs')) {
-      setValidate({ ...IDLE, phase: 'error', message: '插件包必须是单个 .mjs 文件（服务端同样强制）' })
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      setValidate({ ...IDLE, phase: 'error', message: '插件包必须是单个 .zip 文件（服务端同样强制）' })
       return
     }
-    if (file.size > PLUGIN_ARTIFACT_MAX_BYTES) {
+    if (file.size > PLUGIN_PACKAGE_MAX_BYTES) {
       setValidate({
         ...IDLE,
         phase: 'error',
-        message: `插件包不能超过 ${PLUGIN_ARTIFACT_MAX_BYTES} 字节（5 MB，上限由服务端强制）`,
+        message: `插件包不能超过 ${PLUGIN_PACKAGE_MAX_BYTES.toLocaleString('en-US')} 字节（${PACKAGE_MAX_LABEL}，上限由服务端强制），当前为 ${humanFileSize(file.size)}`,
       })
       return
     }
@@ -156,7 +91,6 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
     const timer = setTimeout(async () => {
       const res = await postPluginPackage<AdminPluginValidateSuccess | { ok: false; installed: false; code: string; findings: AdminPluginScanFinding[] }>(
         API_ENDPOINTS.admin.pluginValidate,
-        manifestText,
         file,
         controller.signal,
       )
@@ -180,11 +114,11 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
       clearTimeout(timer)
       controller.abort()
     }
-  }, [open, file, manifestText])
+  }, [open, file])
 
   const installMutation = useMutation({
-    mutationFn: async (artifact: { file: File; manifest: string }) =>
-      postPluginPackage<AdminPluginUploadResponse>(API_ENDPOINTS.admin.pluginUpload, artifact.manifest, artifact.file),
+    mutationFn: async (pkg: File) =>
+      postPluginPackage<AdminPluginUploadResponse>(API_ENDPOINTS.admin.pluginUpload, pkg),
     onSuccess: (res) => {
       if (!res.success) {
         // fail() envelope: PLUGIN_UPLOAD_DISABLED / PLUGIN_VERSION_IMMUTABLE /
@@ -215,16 +149,15 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
   const blockingFindings = validate.findings.some((f) => f.severity === 'error')
   const canSubmit =
     !!file &&
-    !!manifestText.trim() &&
     (validate.phase === 'ready' || validate.phase === 'rejected') &&
     !blockingFindings &&
     !installMutation.isPending
 
-  // One selected artifact, mirrored into the shared drop zone's file row. No byte
+  // One selected package, mirrored into the shared drop zone's file row. No byte
   // progress is available from `postPluginPackage`, so no percentage is claimed:
   // the install button carries the busy state instead.
-  const artifactFiles: DropZoneFile[] = file
-    ? [{ id: ARTIFACT_FILE_ID, name: file.name, size: file.size }]
+  const packageFiles: DropZoneFile[] = file
+    ? [{ id: PACKAGE_FILE_ID, name: file.name, size: file.size }]
     : []
 
   return (
@@ -241,7 +174,7 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
           <Button
             loading={installMutation.isPending}
             disabled={!canSubmit}
-            onClick={() => file && installMutation.mutate({ file, manifest: manifestText })}
+            onClick={() => file && installMutation.mutate(file)}
           >
             安装插件
           </Button>
@@ -258,72 +191,68 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
           <div className="flex flex-col gap-2">
             <p>
               上传的插件代码会由 Worker 进程<strong>以该进程的全部权限直接执行</strong>（可读写任务数据、访问已配置的供应商凭据与网络）。
-              仅允许受信任的管理员上传，请勿加载任何来源不明的 <code className="font-mono">.mjs</code> 文件。
+              仅允许受信任的管理员上传，请勿加载任何来源不明的插件包。
             </p>
             <p>
               <strong>同版本不可覆盖，升级版本号后重新上传</strong>：插件以 <code className="font-mono">pluginId@pluginVersion</code>{' '}
-              为一次性写入身份，Worker 的注册表与模块缓存都以该身份为键，同版本热替换不会生效，服务端会直接拒绝（PLUGIN_VERSION_IMMUTABLE）。
+              为一次性写入身份（取自包内 <code className="font-mono">manifest.json</code> 的 id / version），Worker 的注册表与模块缓存都以该身份为键，同版本热替换不会生效，服务端会直接拒绝（PLUGIN_VERSION_IMMUTABLE）。
             </p>
           </div>
         </Alert>
 
         <FileDropZone
-          files={artifactFiles}
+          files={packageFiles}
           onFilesSelected={(files) => setFile(files[0] ?? null)}
           onRemove={() => setFile(null)}
-          accept=".mjs,application/javascript,text/javascript"
-          maxFileSize={PLUGIN_ARTIFACT_MAX_BYTES}
+          accept=".zip,application/zip"
+          maxFileSize={PLUGIN_PACKAGE_MAX_BYTES}
           maxFiles={1}
-          label="拖拽 .mjs 插件包到此处，或点击选择文件"
-          hint={`单个 .mjs 文件，大小上限 5 MB（${PLUGIN_ARTIFACT_MAX_BYTES.toLocaleString('en-US')} 字节），以服务端强制为准。`}
+          label="拖拽 .zip 插件包到此处，或点击选择文件"
+          hint={`单个 .zip 文件，大小上限 ${PACKAGE_MAX_LABEL}（${PLUGIN_PACKAGE_MAX_BYTES.toLocaleString('en-US')} 字节），以服务端强制为准。`}
         />
 
-        <FormField
-          label="插件清单 manifest（JSON）"
-          required
-          hint="manifest 的 id / version 必须与插件包内注册的插件一致；字段规则由服务端校验。"
-        >
-          <Textarea
-            value={manifestText}
-            onChange={(e) => setManifestText(e.target.value)}
-            rows={10}
-            spellCheck={false}
-            className="font-mono text-xs"
-          />
-        </FormField>
+        <div className="flex flex-col gap-1 rounded-control bg-tonal p-3 text-xs text-muted-foreground">
+          <p>
+            插件包须在根目录（或唯一一层顶级目录）包含 <code className="font-mono text-foreground">manifest.json</code> 与其{' '}
+            <code className="font-mono text-foreground">package.entry</code> 指向的单个 <code className="font-mono text-foreground">.mjs</code>{' '}
+            入口；可选附带 <code className="font-mono text-foreground">README.md</code>、<code className="font-mono text-foreground">CHANGELOG.md</code>、
+            <code className="font-mono text-foreground">LICENSE</code> 与 PNG / WebP 图标。
+          </p>
+          <p>清单只从包内 manifest.json 读取，无需另行填写；字段规则由服务端校验。</p>
+        </div>
 
         {/* aria-live region: pre-flight verdict + findings update without a click. */}
         <div aria-live="polite" role="status" className="flex flex-col gap-2">
           {validate.phase === 'checking' && (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner label="正在校验" />
-              正在服务端扫描插件包与清单（不落库）…
+              正在服务端解包并扫描插件包（不落库）…
             </p>
           )}
           {validate.phase === 'error' && (
             <Alert tone="danger" role="alert" title="无法完成预检">
-              {validate.message}。请更换插件包文件或修正清单内容后重试。
+              {validate.message}。请更换插件包文件或修正包内 manifest.json 后重试。
             </Alert>
           )}
           {validate.phase === 'rejected' && (
             <div className="flex flex-col gap-2">
               <Alert tone="danger" role="alert" title="服务端拒绝该插件包">
-                {validate.message}。请按下列发现修正文件或清单后，以新的版本号重新上传。
+                {validate.message}。请按下列发现（按包内文件分组）修正后，以新的版本号重新上传。
               </Alert>
-              <FindingList findings={validate.findings} />
+              <PluginFindingList findings={validate.findings} groupByPath />
             </div>
           )}
           {validate.phase === 'ready' && validate.summary && (
             <div className="flex flex-col gap-2">
               <Alert tone="success" title="校验通过">
-                插件包与清单已通过服务端扫描，可以安装插件。
+                插件包已通过服务端扫描，可以安装插件。
               </Alert>
               <div className="flex flex-col gap-1 rounded-control bg-tonal p-3 text-xs text-muted-foreground">
                 <span className="font-mono text-foreground">
                   {validate.summary.pluginId}@{validate.summary.pluginVersion}
                 </span>
                 <span>
-                  {validate.summary.displayName} · {validate.summary.modelIds.length} 个模型 · 制品 sha256{' '}
+                  {validate.summary.displayName} · {validate.summary.modelIds.length} 个模型 · 入口制品 sha256{' '}
                   <span className="font-mono text-foreground" title={validate.summary.artifactDigest}>
                     {shortDigest(validate.summary.artifactDigest)}
                   </span>{' '}
@@ -333,13 +262,13 @@ export function AdminPluginUploadDialog({ open, onClose, kind, onInstalled }: Ad
               {validate.summary.warnings.length > 0 && (
                 <div className="flex flex-col gap-2">
                   <p className="text-xs text-muted-foreground">警告（不阻断安装，但请确认符合预期）：</p>
-                  <FindingList findings={validate.summary.warnings} />
+                  <PluginFindingList findings={validate.summary.warnings} groupByPath />
                 </div>
               )}
             </div>
           )}
           {validate.phase === 'idle' && (
-            <p className="text-xs text-muted-foreground">选择插件包文件后将自动进行服务端预检。</p>
+            <p className="text-xs text-muted-foreground">选择 .zip 插件包后将自动进行服务端预检。</p>
           )}
         </div>
 

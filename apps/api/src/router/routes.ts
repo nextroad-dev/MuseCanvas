@@ -13,7 +13,7 @@ import { cancelJob, deleteJob, getJob, listJobs, retryJob } from '../modules/job
 import { deleteAsset, downloadAsset, listLibrary } from '../modules/library/handlers'
 import { createGeneration } from '../modules/generations/create'
 import { listCanvases, createCanvas, getCanvas, updateCanvas, deleteCanvas } from '../modules/canvases/handlers'
-import { postCanvasAgentMessages, getCanvasAgentHistory, postCanvasAgentConfirm } from '../modules/canvas-agent'
+import { postCanvasAgentMessages, getCanvasAgentHistory, getCanvasAgentTurn, postCanvasAgentConfirm, postCanvasAgentApply, getCanvasAgentStatus } from '../modules/canvases/agent'
 import { readCanvasAgentSettings, updateCanvasAgentSettings } from '../modules/admin/canvas-agent-settings'
 import { editImage } from '../modules/image-edit/handlers'
 import {
@@ -112,6 +112,8 @@ export const GET_ROUTES: Route[] = [
   { path: 'canvases', access: 'actor', handler: context => listCanvases(context) },
   { path: 'canvases/:id', access: 'actor', handler: context => getCanvas(context) },
   { path: 'canvases/:id/agent/history', access: 'actor', handler: context => getCanvasAgentHistory(context) },
+  { path: 'canvases/:id/agent/turns/:turnId', access: 'actor', handler: context => getCanvasAgentTurn(context) },
+  { path: 'canvas-agent/status', access: 'actor', handler: context => getCanvasAgentStatus(context) },
   { path: 'jobs', access: 'actor', handler: context => listJobs(context) },
   { path: 'jobs/:id', access: 'actor', handler: context => getJob(context) },
   { path: 'library', access: 'actor', handler: context => listLibrary(context) },
@@ -163,6 +165,7 @@ export const POST_ROUTES: Route[] = [
   { path: 'canvases', access: 'actor', handler: context => createCanvas(context) },
   { path: 'canvases/:id/agent/messages', access: 'actor', handler: context => postCanvasAgentMessages(context) },
   { path: 'canvases/:id/agent/confirm', access: 'actor', handler: context => postCanvasAgentConfirm(context) },
+  { path: 'canvases/:id/agent/apply', access: 'actor', handler: context => postCanvasAgentApply(context) },
   // Multipart like the plugin uploads above, and it never calls `context.json()`:
   // the source image and the mask arrive as file parts.
   { path: 'images/edit', access: 'actor', handler: context => editImage(context) },

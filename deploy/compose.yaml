@@ -148,10 +148,10 @@ services:
         condition: service_completed_successfully
     environment: *backend-env
 
-  web-next:
+  web:
     build:
       context: .
-      dockerfile: deploy/docker/web-next.Dockerfile
+      dockerfile: deploy/docker/web.Dockerfile
     depends_on:
       api:
         condition: service_healthy
@@ -171,7 +171,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      web-next:
+      web:
         condition: service_healthy
     ports:
       - "8080:80"

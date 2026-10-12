@@ -353,3 +353,11 @@ test('targetValues narrows a forbidden pair to the offending value only', () => 
   assert.deepEqual(evaluateCrossFieldConstraints(constraints, { background: 'transparent', output_format: 'png' }), [])
   assert.deepEqual(evaluateCrossFieldConstraints(constraints, { background: 'opaque', output_format: 'jpeg' }), [])
 })
+
+test('validateModelCapabilities accepts the existing inpaint mode without accepting unknown modes or bypassing flag/slot checks', () => {
+  const capabilities = { modes: ['inpaint'], parameters: [], inputSlots: [{ role: 'mask', required: false, minCount: 0, maxCount: 1 }], declaredBy: 'plugin-manifest' }
+  assert.equal(validateModelCapabilities(capabilities).ok, true)
+  assert.equal(validateModelCapabilities({ ...capabilities, modes: ['invented_mode'] }).ok, false)
+  assert.equal(validateModelCapabilities({ ...capabilities, inputSlots: [{ role: 'mask', minCount: 2, maxCount: 1 }] }).ok, false)
+  assert.equal(validateModelCapabilities({ ...capabilities, modes: ['inpaint', 'image_to_image'], flags: { imageToImage: false } }).ok, false)
+})

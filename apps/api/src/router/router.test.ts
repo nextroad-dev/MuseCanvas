@@ -29,6 +29,7 @@ const SAMPLE_UUID = '123e4567-e89b-12d3-a456-426614174000'
 /** A pattern is only comparable to a declared URL once its parameters are filled. */
 function concrete(path: string): string {
   return path
+    .replaceAll(':turnId', SAMPLE_UUID)
     .replaceAll(':hexid', SAMPLE_UUID)
     .replaceAll(':id', SAMPLE_UUID)
     .replaceAll(':oauth', 'github')
@@ -39,8 +40,8 @@ function concrete(path: string): string {
  * an oauth provider name, so one endpoint can have several legitimate concrete
  * spellings.
  */
-function declaredCandidates(value: (argument: string) => string): string[] {
-  return [value(SAMPLE_UUID), ...['github', 'google'].map(provider => value(provider))]
+function declaredCandidates(value: (argument: string, second?: string) => string): string[] {
+  return [value(SAMPLE_UUID, SAMPLE_UUID), ...['github', 'google'].map(provider => value(provider, SAMPLE_UUID))]
 }
 
 /** Every URL the registry declares, as its possible concrete paths. */
@@ -239,4 +240,15 @@ test('GET is never CSRF-gated', async () => {
   // adding one now would break image URLs the browser fetches cross-site.
   const [status] = await statusAndCode(await dispatchGet(fakeRequest({ origin: 'http://evil.test' }), 'does/not/exist'))
   assert.equal(status, 401)
+})
+
+test('turn recovery has a named turnId, is actor-only and real dispatch rejects anonymous before store access', async () => {
+  const path = API_ENDPOINTS.canvases.agent.turn(SAMPLE_UUID, SAMPLE_UUID).replace(/^\/api\//, '')
+  const matched = matchRoute(GET_ROUTES, path)!
+  assert.equal(matched.route.path, 'canvases/:id/agent/turns/:turnId'); assert.equal(matched.route.access, 'actor')
+  assert.deepEqual(matched.params, { id: SAMPLE_UUID, turnId: SAMPLE_UUID })
+  assert.deepEqual(await statusAndCode(await dispatchGet(fakeRequest(), path)), [401, 'UNAUTHORIZED'])
+  assert.deepEqual(await statusAndCode(await dispatchGet(fakeRequest(), `canvases/${SAMPLE_UUID}/agent/turns/deadbeef`)), [401, 'UNAUTHORIZED'])
+  assert.equal(matchRoute(GET_ROUTES, `canvases/${SAMPLE_UUID}/agent/turns/not-a-uuid`), null)
+  assert.equal(matchRoute(GET_ROUTES, `${path}/extra`), null)
 })

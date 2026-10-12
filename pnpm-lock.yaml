@@ -72,7 +72,7 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  apps/web-next:
+  apps/web:
     dependencies:
       '@fontsource/ibm-plex-mono':
         specifier: ^5.3.0

@@ -21,3 +21,5 @@ export * from './repositories/prompt-templates'
 export * from './repositories/provider-credentials'
 export * from './repositories/canvas-documents'
 export * from './repositories/canvas-agent'
+
+export * from './repositories/canvas-agent-preparations'

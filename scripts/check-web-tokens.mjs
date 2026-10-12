@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Design-token guard for apps/web-next.
+ * Design-token guard for apps/web.
  *
  * The app has one token source (`src/app/globals.css`) and a design system that
  * says which value belongs to which job. Nothing enforced that until now: there is
@@ -18,6 +18,12 @@
  *   E. tokens defined but referenced by neither `var()` nor a plausible generated
  *      utility — advisory only, because a `--color-*` can be consumed as
  *      `text-*`/`bg-*`/`hover:`/`dark:` and that cannot be decided reliably
+ *   F. arbitrary font sizes (`text-[11px]`) in TS/TSX, which bypass the type scale
+ *      (use `text-caption` for 11px, or a `--text-*` token)
+ *   G. `rounded-full` in TS/TSX outside the circular-primitive allowlist
+ *
+ * F and G are WARN-only while the migration is in flight. Set their entry in
+ * `SEVERITY` to `'fail'` to turn them into hard failures.
  *
  * Usage: `node scripts/check-web-tokens.mjs [--root <dir>]`
  * Exit code 0 = clean (advisory findings may still print), 1 = at least one failure.
@@ -32,7 +38,7 @@ const REPO_ROOT = path.resolve(HERE, '..')
 
 const rootArgIndex = process.argv.indexOf('--root')
 const WEB_ROOT = rootArgIndex === -1
-  ? path.join(REPO_ROOT, 'apps', 'web-next', 'src')
+  ? path.join(REPO_ROOT, 'apps', 'web', 'src')
   : path.resolve(process.argv[rootArgIndex + 1])
 
 const GLOBALS_CSS = path.join(WEB_ROOT, 'app', 'globals.css')
@@ -102,11 +108,26 @@ function lineOf(source, index) {
   return source.slice(0, index).split('\n').length
 }
 
+/**
+ * Severity per rule. A, B, C and D always fail. F and G start as `'warn'`: they are
+ * printed but do not change the exit code, so files still being migrated do not
+ * block CI. Flip an entry to `'fail'` once the codebase is clean for that rule.
+ */
+const SEVERITY = { F: 'warn', G: 'warn' }
+
 const failures = []
+const warnings = []
 const advisories = []
 
 function report(rule, file, line, detail) {
   failures.push(`${rule}  ${path.relative(REPO_ROOT, file)}:${line}  ${detail}`)
+}
+
+/** Rule-aware reporter: fails or warns according to `SEVERITY`. */
+function reportRule(rule, file, line, detail) {
+  const entry = `${rule}  ${path.relative(REPO_ROOT, file)}:${line}  ${detail}`
+  if (SEVERITY[rule] === 'fail') failures.push(entry)
+  else warnings.push(entry)
 }
 
 // ---------------------------------------------------------------- read the tokens
@@ -183,6 +204,41 @@ for (const { file, clean } of sources) {
   }
 }
 
+// ------------------------------------- F. arbitrary font size (warn, see SEVERITY)
+
+/**
+ * `text-[11px]` sits outside the type scale. The 11px metadata size is
+ * `text-caption`; any other size should be a `--text-*` token.
+ */
+const ARBITRARY_FONT_SIZE = /\btext-\[(\d+(?:\.\d+)?)px\]/g
+
+for (const { file, clean } of sources) {
+  if (!/\.tsx?$/.test(file)) continue
+  for (const match of clean.matchAll(ARBITRARY_FONT_SIZE)) {
+    const fix = Number(match[1]) === 11 ? 'use `text-caption`' : 'use a `--text-*` token'
+    reportRule('F', file, lineOf(clean, match.index), `${match[0]} bypasses the type scale — ${fix}`)
+  }
+}
+
+// ----------------------------- G. rounded-full outside the primitives (warn, see SEVERITY)
+
+/**
+ * `rounded-full` is for circular primitives. Everything else takes a shape from the
+ * radius scale (`rounded-control`, `rounded-card`, `rounded-panel`) or `rounded-pill`.
+ * Matched by file stem, so `radio.tsx` covers the whole radio primitive.
+ */
+const ROUNDED_FULL = /\brounded-full\b/g
+const ROUNDED_FULL_ALLOW = ['badge', 'checkbox', 'radio', 'skeleton', 'spinner', 'avatar']
+
+for (const { file, clean } of sources) {
+  if (!/\.tsx?$/.test(file)) continue
+  const stem = path.basename(file).replace(/\.tsx?$/, '')
+  if (ROUNDED_FULL_ALLOW.includes(stem)) continue
+  for (const match of clean.matchAll(ROUNDED_FULL)) {
+    reportRule('G', file, lineOf(clean, match.index), 'rounded-full outside the circular-primitive allowlist — use `rounded-pill` for a pill, or a radius token')
+  }
+}
+
 // ------------------------------------------- E. tokens with no discoverable consumer
 
 const allClean = readAll.map((s) => s.clean).join('\n')
@@ -252,10 +308,13 @@ const ruleTitles = {
   B: 'B · raw colour literal',
   C: 'C · off-scale transition value',
   D: 'D · hand-written size pair',
+  F: 'F · arbitrary font size (warning)',
+  G: 'G · rounded-full outside the primitives (warning)',
 }
-for (const rule of ['A', 'B', 'C', 'D']) {
-  const hits = failures.filter((f) => f.startsWith(rule + '  '))
-  rel(ruleTitles[rule], hits.map((h) => h.replace(/^[A-E]\s+/, '')))
+const allFindings = [...failures, ...warnings]
+for (const rule of ['A', 'B', 'C', 'D', 'F', 'G']) {
+  const hits = allFindings.filter((f) => f.startsWith(rule + '  '))
+  rel(ruleTitles[rule], hits.map((h) => h.replace(/^[A-G]\s+/, '')))
 }
 
 rel('E · unused token (advisory, not a failure)', advisories.map((a) => a.replace(/\s+/g, ' ')))
@@ -265,4 +324,5 @@ if (failures.length > 0) {
   process.exit(1)
 }
 console.log('\nPASS: no undefined tokens, raw colours, off-scale motion or hand-written size pairs.')
+if (warnings.length > 0) console.log(`${warnings.length} warning(s) under F/G — advisory until SEVERITY is set to 'fail'.`)
 if (advisories.length > 0) console.log(`${advisories.length} token(s) reported as unused — review, then delete or document.`)

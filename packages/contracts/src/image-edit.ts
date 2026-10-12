@@ -1,7 +1,7 @@
 // Shared contract for region-select image editing ("局部修改").
 //
-// Geometry lives here rather than in apps/web-next for two reasons. First,
-// web-next has no test runner, and every rounding rule below is a correctness
+// Geometry lives here rather than in apps/web for two reasons. First,
+// web has no test runner, and every rounding rule below is a correctness
 // rule: a mask one pixel wider than its image is exactly what the vendor
 // rejects, and a reversed drag that skips normalisation edits the wrong pixels.
 // Second, the browser and the server must agree on the *same* interpretation of

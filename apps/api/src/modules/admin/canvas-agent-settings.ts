@@ -3,7 +3,7 @@ import { transaction, getCanvasAgentSettings, updateCanvasAgentSettings as persi
 import type { Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { writeAudit } from '../../shared/audit'
-import { safeError, validateLanguageConfig } from '../canvas-agent/config'
+import { safeError, validateLanguageConfig } from '../canvases/agent/config'
 
 export function canvasAgentSettingsDto(settings: CanvasAgentSettingsDto): CanvasAgentSettingsDto {
   const { enabled, languageModelConfigId, maxToolCallsPerTurn, maxJobsPerTurn, timeoutMs, maxAutoContinuations, updatedAt } = settings

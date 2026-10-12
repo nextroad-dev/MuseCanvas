@@ -1,6 +1,6 @@
 name: Web Checks CI
 
-# Frontend-only gate for `apps/web-next`.
+# Frontend-only gate for `apps/web`.
 #
 # `media-quality.yml` already runs `pnpm -r --if-present typecheck` and
 # `pnpm -r --if-present build` for every workspace on the same PRs, so the
@@ -11,7 +11,7 @@ name: Web Checks CI
 # a token regression is reported as a token failure rather than as a build error
 # somewhere downstream.
 #
-# The web-next typecheck stays too, scoped with `--filter` (seconds, not minutes) so
+# The web typecheck stays too, scoped with `--filter` (seconds, not minutes) so
 # this workflow is meaningful on its own even if that workflow's path filters change.
 #
 # No secrets, no external services, no image build or push.
@@ -20,7 +20,7 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "apps/web-next/**"
+      - "apps/web/**"
       - "scripts/check-web-tokens.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -29,7 +29,7 @@ on:
   pull_request:
     branches: ["main"]
     paths:
-      - "apps/web-next/**"
+      - "apps/web/**"
       - "scripts/check-web-tokens.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -72,4 +72,4 @@ jobs:
         run: pnpm check:tokens
 
       - name: Typecheck the web app (no external services)
-        run: pnpm --filter @musecanvas/web-next typecheck
+        run: pnpm --filter @musecanvas/web typecheck

@@ -9,6 +9,7 @@ import type { CreateGenerationJobCommand } from '../generations/create-job'
 import type { Actor } from '../../auth/security'
 import type { AuthedContext } from '../../router/types'
 import { editImage, storeReadyInputImage, type ImageEditPorts, type SqlClient } from './handlers'
+import { createStableUploadIds } from './prepare'
 
 /**
  * `POST /api/images/edit`, against stubbed collaborators.
@@ -36,6 +37,13 @@ const sourcePng = await createEditMask({
   imageWidth: SOURCE_WIDTH,
   imageHeight: SOURCE_HEIGHT,
   selection: { x: 0, y: 0, width: MIN_EDIT_SELECTION_PX, height: MIN_EDIT_SELECTION_PX },
+})
+
+/** The exact mask `assetFields()`'s region produces: the identity an existing-job retry must match. */
+const assetRegionMask = await createEditMask({
+  imageWidth: SOURCE_WIDTH,
+  imageHeight: SOURCE_HEIGHT,
+  selection: { x: 100, y: 100, width: 400, height: 300 },
 })
 
 /** The capability snapshot a real enabled `openai-gpt-image-2` row carries. */
@@ -97,6 +105,12 @@ interface HarnessOptions {
   limited?: boolean
   putFails?: boolean
   transactionFails?: boolean
+  /** Simulates a stored job for the request's explicit idempotency key. */
+  existingJob?: Record<string, unknown> | null
+  /** Upload rows answered to the artifact-identity reads done for an existing job. */
+  uploadRows?: Record<string, Record<string, unknown>>
+  /** Pre-seeded `generation_input_images` rows, keyed by upload id. */
+  stagedRows?: Record<string, Record<string, unknown>>
 }
 
 /**
@@ -113,10 +127,49 @@ function harness(options: HarnessOptions = {}) {
   const asset = options.asset === undefined ? assetRow() : options.asset
   const objects = options.objects ?? { [ASSET_KEY]: sourcePng }
 
+  // A small row store so the keyed claim/promote SQL is exercised for real: the
+  // inserted row answers the follow-up SELECT, and the promote UPDATE flips it.
+  const rowsById = new Map<string, Record<string, unknown>>(Object.entries(options.stagedRows ?? {}))
   const client: SqlClient = {
     query: async (sql, params = []) => {
       queries.push({ sql, params })
       if (options.transactionFails) throw new Error('DB_WRITE_FAILED')
+      if (sql.includes('INSERT INTO generation_input_images')) {
+        const id = String(params[0])
+        if (!rowsById.has(id)) {
+          rowsById.set(id, {
+            created_by: String(params[1]),
+            object_key: String(params[2]),
+            mime_type: String(params[3]),
+            width: Number(params[4]),
+            height: Number(params[5]),
+            size_bytes: Number(params[6]),
+            checksum: String(params[7]),
+            status: sql.includes("'pending'") ? 'pending' : 'ready',
+            object_deleted_at: null,
+            expires_at: new Date(Date.now() + Number(params[8]) * 1000).toISOString(),
+          })
+        }
+        return { rows: [] }
+      }
+      if (sql.includes('FROM generation_input_images') && sql.includes('WHERE id=$1')) {
+        const row = rowsById.get(String(params[0]))
+        return { rows: row ? [row] : [] }
+      }
+      if (sql.includes('UPDATE generation_input_images')) {
+        const row = rowsById.get(String(params[0]))
+        if (row) {
+          // The success marker carries its own retirement's updated_at fence.
+          if (sql.includes('updated_at=$2') && row.updated_at !== params[1]) return { rows: [] }
+          if (sql.includes("status='ready'")) row.status = 'ready'
+          if (sql.includes("status='deleted'")) row.status = 'deleted'
+          if (sql.includes('object_deleted_at=NULL')) row.object_deleted_at = null
+          if (sql.includes('object_deleted_at=now()')) row.object_deleted_at = new Date().toISOString()
+          if (sql.includes('SET expires_at')) row.expires_at = new Date(Date.now() + Number(params[2]) * 1000).toISOString()
+          if (sql.includes('updated_at=now()')) row.updated_at = new Date().toISOString()
+        }
+        return { rows: sql.includes('RETURNING updated_at') ? [{ updated_at: row?.updated_at }] : [] }
+      }
       return { rows: [] }
     },
   }
@@ -134,6 +187,13 @@ function harness(options: HarnessOptions = {}) {
           if (!asset) return { rows: [] }
           const owned = String(asset.id) === String(params[0]) && String(asset.created_by) === String(params[1])
           return { rows: owned ? [asset] : [] }
+        }
+        if (sql.includes('FROM generation_jobs')) {
+          return { rows: options.existingJob ? [options.existingJob] : [] }
+        }
+        if (sql.includes('FROM generation_input_images') || sql.includes('FROM media_uploads')) {
+          const row = options.uploadRows?.[String(params[0])]
+          return { rows: row ? [row] : [] }
         }
         return { rows: [] }
       },
@@ -563,6 +623,220 @@ test('the idempotency key comes from the header, then the form field, then a fre
   assert.notEqual(generated.commands[0].idempotencyKey, generated.commands[1].idempotencyKey)
 })
 
+test('an explicit key derives one stable upload id for the same edit content', async () => {
+  const h = harness()
+  await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'stable-key-1' }), h.ports)
+  await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'stable-key-1' }), h.ports)
+  const [first, second] = h.commands
+  assert.deepEqual(first.normalizedInputs, second.normalizedInputs, 'a retry must normalize to the same payload')
+  const maskId = String((first.normalizedInputs[1] as { uploadId?: string }).uploadId)
+  // Version 5 (name-based), not the random v4 a keyless call gets.
+  assert.match(maskId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  // Different edit content under the same key must not borrow that identity.
+  await editImage(editContext(editForm(assetFields({
+    region: JSON.stringify({ x: 40, y: 40, width: 120, height: 120 }),
+  })), { 'idempotency-key': 'stable-key-1' }), h.ports)
+  const changedMaskId = String((h.commands[2].normalizedInputs[1] as { uploadId?: string }).uploadId)
+  assert.notEqual(changedMaskId, maskId)
+})
+
+test('a duplicate explicit key replays the frozen payload without staging a second artifact', async () => {
+  const first = harness()
+  await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'replay-key' }), first.ports)
+  const storedInputs = first.commands[0].normalizedInputs
+  const maskId = String((storedInputs[1] as { uploadId?: string }).uploadId)
+  assert.match(maskId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  const replay = harness({
+    existingJob: { id: 'job-1', normalized_request: { inputs: storedInputs } },
+    uploadRows: { [maskId]: { checksum: sha256(assetRegionMask), width: SOURCE_WIDTH, height: SOURCE_HEIGHT, size_bytes: assetRegionMask.length } },
+  })
+  await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'replay-key' }), replay.ports)
+  assert.deepEqual(replay.puts, [], 'the frozen payload already has bytes in the bucket')
+  assert.equal(replay.insertsFor('generation_input_images').length, 0, 'the frozen payload already has its row')
+  assert.equal(replay.commands.length, 1)
+  assert.equal(replay.commands[0].idempotencyKey, 'replay-key')
+  assert.deepEqual(replay.commands[0].normalizedInputs, storedInputs)
+})
+
+test('a pre-keyed job with random upload ids replays once its bytes are verified', async () => {
+  const legacyMaskId = '99999999-9999-4999-8999-999999999999'
+  const legacyInputs = [
+    { assetId: ASSET_ID, role: 'reference_image', position: 0 },
+    { uploadId: legacyMaskId, role: 'mask', position: 1 },
+  ]
+  const matching = harness({
+    existingJob: { id: 'job-1', normalized_request: { inputs: legacyInputs } },
+    uploadRows: { [legacyMaskId]: { checksum: sha256(assetRegionMask), width: SOURCE_WIDTH, height: SOURCE_HEIGHT, size_bytes: assetRegionMask.length } },
+  })
+  await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'legacy-key' }), matching.ports)
+  assert.equal(matching.commands.length, 1)
+  assert.deepEqual(matching.commands[0].normalizedInputs, legacyInputs, 'the frozen ids are reused, not re-derived')
+  assert.deepEqual(matching.puts, [])
+
+  // Different bytes under the same key is a conflict, not a replay.
+  const conflict = harness({
+    existingJob: { id: 'job-1', normalized_request: { inputs: legacyInputs } },
+    uploadRows: { [legacyMaskId]: { checksum: 'f'.repeat(64), width: SOURCE_WIDTH, height: SOURCE_HEIGHT, size_bytes: assetRegionMask.length } },
+  })
+  const error = await errorOf(await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'legacy-key' }), conflict.ports))
+  assert.equal(error.status, 409)
+  assert.equal(error.code, 'IDEMPOTENCY_CONFLICT')
+  assert.equal(conflict.commands.length, 0)
+  assert.deepEqual(conflict.puts, [])
+})
+
+test('a failed keyed retry never deletes the shared object', async () => {
+  const h = harness()
+  let transactions = 0
+  const ports: ImageEditPorts = {
+    ...h.ports,
+    runTransaction: async fn => {
+      transactions += 1
+      if (transactions === 2) throw new Error('DB_WRITE_FAILED')
+      await h.ports.runTransaction(fn)
+    },
+  }
+  const error = await errorOf(await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'shared-key' }), ports))
+  assert.equal(error.status, 503)
+  assert.deepEqual(h.deletes, [], 'a loser cannot remove the winner object')
+  const claim = h.insertsFor('generation_input_images')[0]
+  assert.ok(claim && claim.sql.includes("'pending'"), 'the reclaimable row exists before the object write')
+})
+
+test('a late keyed PUT is discarded when its row was reclaimed mid-flight', async () => {
+  const maskId = createStableUploadIds(`${ACTOR_ID}:late-key`).derive('mask', sha256(assetRegionMask))
+  const live: Record<string, unknown> = {
+    created_by: ACTOR_ID,
+    object_key: `inputs/${ACTOR_ID}/${maskId}.png`,
+    mime_type: 'image/png',
+    width: SOURCE_WIDTH,
+    height: SOURCE_HEIGHT,
+    size_bytes: assetRegionMask.length,
+    checksum: sha256(assetRegionMask),
+    status: 'ready',
+    object_deleted_at: null,
+    expires_at: new Date(Date.now() + 86400000).toISOString(),
+  }
+  const h = harness({ stagedRows: { [maskId]: live } })
+  let transactions = 0
+  const ports: ImageEditPorts = {
+    ...h.ports,
+    runTransaction: async fn => {
+      transactions += 1
+      await h.ports.runTransaction(fn)
+      // The TTL sweep reclaims the row between the claim and the promote.
+      if (transactions === 1) {
+        live.status = 'deleted'
+        live.object_deleted_at = new Date().toISOString()
+      }
+    },
+  }
+  const error = await errorOf(await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'late-key' }), ports))
+  assert.equal(error.status, 409)
+  assert.equal(error.code, 'IDEMPOTENCY_CONFLICT')
+  assert.deepEqual(h.deletes, [`inputs/${ACTOR_ID}/${maskId}.png`], 'the late object is reclaimed, not leaked')
+  assert.equal(h.commands.length, 0)
+  assert.ok(live.object_deleted_at, 'the reclaimed marker is restored after a successful delete')
+})
+
+test('a stale success marker cannot clobber a newer retirement', async () => {
+  const maskId = createStableUploadIds(`${ACTOR_ID}:late-key-3`).derive('mask', sha256(assetRegionMask))
+  const live: Record<string, unknown> = {
+    created_by: ACTOR_ID,
+    object_key: `inputs/${ACTOR_ID}/${maskId}.png`,
+    mime_type: 'image/png',
+    width: SOURCE_WIDTH,
+    height: SOURCE_HEIGHT,
+    size_bytes: assetRegionMask.length,
+    checksum: sha256(assetRegionMask),
+    status: 'ready',
+    object_deleted_at: null,
+    updated_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 86400000).toISOString(),
+  }
+  const h = harness({ stagedRows: { [maskId]: live } })
+  let transactions = 0
+  const ports: ImageEditPorts = {
+    ...h.ports,
+    runTransaction: async fn => {
+      transactions += 1
+      await h.ports.runTransaction(fn)
+      if (transactions === 1) {
+        live.status = 'deleted'
+        live.object_deleted_at = new Date().toISOString()
+      }
+    },
+    deleteObject: async objectKey => {
+      await h.ports.deleteObject(objectKey)
+      // A newer late writer re-registers cleanup for a fresh object right before
+      // the older success marker would run.
+      live.status = 'deleted'
+      live.object_deleted_at = null
+      live.updated_at = new Date(Date.now() + 5).toISOString()
+    },
+  }
+  const error = await errorOf(await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'late-key-3' }), ports))
+  assert.equal(error.status, 409)
+  assert.equal(live.object_deleted_at, null, 'a stale success marker must not hide the newer retry state')
+})
+
+test('a failed late-object DELETE leaves a maintenance-retryable retired row', async () => {
+  const maskId = createStableUploadIds(`${ACTOR_ID}:late-key-2`).derive('mask', sha256(assetRegionMask))
+  const live: Record<string, unknown> = {
+    created_by: ACTOR_ID,
+    object_key: `inputs/${ACTOR_ID}/${maskId}.png`,
+    mime_type: 'image/png',
+    width: SOURCE_WIDTH,
+    height: SOURCE_HEIGHT,
+    size_bytes: assetRegionMask.length,
+    checksum: sha256(assetRegionMask),
+    status: 'ready',
+    object_deleted_at: null,
+    expires_at: new Date(Date.now() + 86400000).toISOString(),
+  }
+  const h = harness({ stagedRows: { [maskId]: live } })
+  let transactions = 0
+  const ports: ImageEditPorts = {
+    ...h.ports,
+    deleteObject: async () => { throw new Error('S3_DELETE_FAILED') },
+    runTransaction: async fn => {
+      transactions += 1
+      await h.ports.runTransaction(fn)
+      if (transactions === 1) {
+        live.status = 'deleted'
+        live.object_deleted_at = new Date().toISOString()
+      }
+    },
+  }
+  const error = await errorOf(await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'late-key-2' }), ports))
+  assert.equal(error.status, 409)
+  assert.equal(live.status, 'deleted', 'attach can no longer bind the retired row')
+  assert.equal(live.object_deleted_at, null, 'the failed deletion stays reclaimable by maintenance')
+})
+
+test('a reclaimed keyed row refuses to rebuild its object', async () => {
+  const maskId = createStableUploadIds(`${ACTOR_ID}:reclaimed-key`).derive('mask', sha256(assetRegionMask))
+  const reclaimed = harness({
+    stagedRows: {
+      [maskId]: {
+        created_by: ACTOR_ID,
+        object_key: `inputs/${ACTOR_ID}/${maskId}.png`,
+        mime_type: 'image/png',
+        width: SOURCE_WIDTH,
+        height: SOURCE_HEIGHT,
+        size_bytes: assetRegionMask.length,
+        checksum: sha256(assetRegionMask),
+        status: 'deleted',
+        object_deleted_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 86400000).toISOString(),
+      },
+    },
+  })
+  const error = await errorOf(await editImage(editContext(editForm(assetFields()), { 'idempotency-key': 'reclaimed-key' }), reclaimed.ports))
+  assert.equal(error.status, 409)
+  assert.deepEqual(reclaimed.puts, [], 'no object is written under a reclaimed row')
+})
+
 test('a body that is not multipart is refused with a readable message', async () => {
   const context = {
     actor: { id: ACTOR_ID, role: 'user' } as Actor,
@@ -635,18 +909,47 @@ test('storeReadyInputImage writes both rows in one shape and survives a missing 
     ttlSeconds: 86400,
   }
   await storeReadyInputImage(client, row)
-  assert.deepEqual(queries.map(entry => entry.sql.match(/INSERT INTO (\w+)/)?.[1]), ['generation_input_images', 'media_uploads'])
+  assert.deepEqual(queries.map(entry => entry.sql.match(/INSERT INTO (\w+)/)?.[1]).filter(Boolean), ['generation_input_images', 'media_uploads'])
   assert.equal(queries[0].params[3], 'image/png')
   // Both rows carry the same nine values in the same order: id, owner, key, mime,
   // geometry, byte count, digest, TTL.
   assert.deepEqual(queries[0].params, queries[1].params)
   assert.equal(queries[1].params[6], bytes.length)
   assert.equal(queries[1].params[8], 86400)
+  // The duplicate-safe insert is followed by a read that decides whether the
+  // existing row really describes those bytes.
+  const verify = queries[2]
+  assert.match(verify.sql, /SELECT .+ FROM generation_input_images WHERE id=\$1/)
+  assert.deepEqual(verify.params, [row.uploadId])
   // An older database without the generic table keeps working on the legacy row.
   queries.length = 0
   mirrorThrows = true
   await storeReadyInputImage(client, row)
-  assert.equal(queries.length, 2)
+  assert.equal(queries.length, 3)
+})
+
+test('storeReadyInputImage refuses an existing id whose stored bytes differ', async () => {
+  const client: SqlClient = {
+    query: async sql => ({
+      rows: sql.includes('SELECT')
+        ? [{ created_by: ACTOR_ID, object_key: 'inputs/other.png', mime_type: 'image/png', width: 1, height: 1, size_bytes: 1, checksum: 'different' }]
+        : [],
+    }),
+  }
+  await assert.rejects(
+    storeReadyInputImage(client, {
+      uploadId: '55555555-5555-4555-8555-555555555555',
+      actorId: ACTOR_ID,
+      objectKey: `inputs/${ACTOR_ID}/55555555-5555-4555-8555-555555555555.png`,
+      mimeType: 'image/png',
+      width: SOURCE_WIDTH,
+      height: SOURCE_HEIGHT,
+      sizeBytes: sourcePng.length,
+      checksum: sha256(sourcePng),
+      ttlSeconds: 86400,
+    }),
+    /INPUT_ROW_CONFLICT/,
+  )
 })
 
 test('every declared control rides in `parameters` and reaches the job', async () => {

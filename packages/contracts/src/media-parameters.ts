@@ -9,7 +9,7 @@
 // drift, so nothing here is duplicated into apps/* or packages/domain.
 //
 // Everything in this file (and in media-parameter-validation.ts) must stay a
-// pure, dependency-free type/function module: `apps/web-next` imports it at
+// pure, dependency-free type/function module: `apps/web` imports it at
 // runtime through the webpack alias in next.config.mjs, so a Node or DOM
 // reference here would break the browser bundle.
 
@@ -311,7 +311,7 @@ export interface ParameterErrorDetails {
  * The wire shape of `GET /api/models`.
  *
  * Declared here because until now it existed only as the return value of
- * `publicModelDto` plus a hand-maintained mirror in `apps/web-next` that every
+ * `publicModelDto` plus a hand-maintained mirror in `apps/web` that every
  * response was `as`-cast to. That cast is the reason backend/frontend drift was
  * invisible: a renamed field typechecked forever. With a real contract type the
  * mirror can be checked against it.

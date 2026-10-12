@@ -12,6 +12,8 @@ import type { MatchedRoute, Route, RouteParams } from './types'
 const SEGMENT_PATTERNS: Record<string, string> = {
   // /^jobs\/([0-9a-f-]+)$/, /^library\/([0-9a-f-]+)\/download$/ and friends
   id: '[0-9a-f-]+',
+  // Recovery names both UUID identities; handlers apply the strict UUID boundary.
+  turnId: '[0-9a-f-]+',
   // /^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)$/ and the plugin id routes
   hexid: '[0-9a-fA-F-]+',
   // /^auth\/oauth\/(github|google)\/start$/ — the OAUTH_PROVIDERS whitelist

@@ -98,8 +98,8 @@ jobs:
             dockerfile: deploy/docker/worker.Dockerfile
             build_args: ""
 
-          - image: musecanvas-web-next
-            dockerfile: deploy/docker/web-next.Dockerfile
+          - image: musecanvas-web
+            dockerfile: deploy/docker/web.Dockerfile
             build_args: ""
 
           - image: musecanvas-nginx

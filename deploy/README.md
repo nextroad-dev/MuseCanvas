@@ -2,11 +2,11 @@
 
 仓库的所有部署产物都集中在此目录。所有命令都从仓库根目录运行，并通过 `--project-directory .` 固定仓库根目录为 Compose 路径基准；环境文件显式使用根目录 `.env`。
 
-- `compose.yaml`：默认本地全栈环境，从源码构建 `api`、`worker`、`web-next`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit。`db-migrate` 在 SQL 迁移后以 `BUNDLED_SERVICES=true` 运行 `scripts/seed-bundled-services.ts`，把 Mailpit / 内嵌 MinIO 的开发默认值写入数据库（已配置、未验证），引导页直接预填。
+- `compose.yaml`：默认本地全栈环境，从源码构建 `api`、`worker`、`web`、`nginx`，并启动 PostgreSQL、Redis、MinIO、Mailpit。`db-migrate` 在 SQL 迁移后以 `BUNDLED_SERVICES=true` 运行 `scripts/seed-bundled-services.ts`，把 Mailpit / 内嵌 MinIO 的开发默认值写入数据库（已配置、未验证），引导页直接预填。
 - `compose.dev.yaml`：开发环境兼容入口，保留给显式 `docker compose --project-directory . --env-file .env -f deploy/compose.dev.yaml` 使用，同样面向本地开发。
 - `compose.prod.yaml`：从源码构建的部署模板，不包含 MinIO / Mailpit，不预置任何 SMTP / S3 默认值；应用配置全部走 `/setup` 引导页写入数据库。
 - `compose.images.yaml`：使用 GHCR 已构建镜像部署，不包含 MinIO / Mailpit，默认通过 `18080:80` 暴露 Nginx，同样不预置应用配置。
-- `docker/`：`api`、`worker`、`web-next`、`nginx` 四个镜像定义（Compose 构建上下文均为仓库根目录 `.`，Nginx 配置从 `deploy/nginx` 复制；`api` 镜像包含 `scripts/`，供 `db-migrate` 调用迁移与种子脚本）。
+- `docker/`：`api`、`worker`、`web`、`nginx` 四个镜像定义（Compose 构建上下文均为仓库根目录 `.`，Nginx 配置从 `deploy/nginx` 复制；`api` 镜像包含 `scripts/`，供 `db-migrate` 调用迁移与种子脚本）。
 - `nginx/`：Web 静态资源及 `/api` 反向代理配置。
 
 图库缩略图（派生预览对象）：`apps/worker` 在产物上传成功后生成一张 512px 长边的预览图（图像用 sharp 转 WebP，视频用 ffmpeg 抽一帧转 JPEG），对象键由源键纯函数派生（`<source>.thumb-512.webp|.jpg`，同目录同前缀），视频那一帧同时写入 `assets.poster_object_key` 与 `thumbnail_object_key`。ffmpeg 由 `deploy/docker/worker.Dockerfile` 的 `apk add --no-cache ffmpeg` 提供（Alpine musl 原生包；`ffmpeg-static` 的 glibc 二进制在本镜像内无法执行）。任何预览生成失败都只把 `thumbnail_state` 记为 `failed`，绝不影响任务结果，图库格子自动回退到原图。

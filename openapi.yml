@@ -1544,6 +1544,17 @@
             "description": "Exclusive seq lower bound."
           },
           {
+            "name": "beforeSeq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "description": "Exclusive seq upper bound for backward pagination."
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -1869,6 +1880,250 @@
         }
       }
     },
+    "/api/canvases/{id}/agent/apply": {
+      "post": {
+        "operationId": "postCanvasAgentApply",
+        "summary": "Apply completed agent turn scene operations to canvas document",
+        "description": "Applies proposed operations for a completed turn in an agent-managed session using CAS revision checking. Idempotent replay if already committed. Shared actor limit 30/min.",
+        "tags": [
+          "Canvas"
+        ],
+        "x-access": "actor",
+        "security": [
+          {
+            "museSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanvasAgentApplyResultDtoEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT",
+            "x-error-codes": [
+              "INVALID_INPUT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "INVALID_INPUT": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_INPUT",
+                        "message": "INVALID_INPUT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED",
+            "x-error-codes": [
+              "UNAUTHORIZED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "UNAUTHORIZED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "UNAUTHORIZED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN or CSRF_REJECTED",
+            "x-error-codes": [
+              "CSRF_REJECTED",
+              "FORBIDDEN"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CSRF_REJECTED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CSRF_REJECTED",
+                        "message": "CSRF_REJECTED"
+                      }
+                    }
+                  },
+                  "FORBIDDEN": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "FORBIDDEN"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CANVAS_NOT_FOUND",
+            "x-error-codes": [
+              "CANVAS_NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CANVAS_NOT_FOUND": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_NOT_FOUND",
+                        "message": "CANVAS_NOT_FOUND"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CANVAS_REVISION_CONFLICT or CANVAS_AGENT_APPLY_CONFLICT",
+            "x-error-codes": [
+              "CANVAS_REVISION_CONFLICT",
+              "CANVAS_AGENT_APPLY_CONFLICT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CANVAS_REVISION_CONFLICT": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_REVISION_CONFLICT",
+                        "message": "CANVAS_REVISION_CONFLICT"
+                      }
+                    }
+                  },
+                  "CANVAS_AGENT_APPLY_CONFLICT": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_AGENT_APPLY_CONFLICT",
+                        "message": "CANVAS_AGENT_APPLY_CONFLICT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CANVAS_AGENT_RATE_LIMITED",
+            "x-error-codes": [
+              "CANVAS_AGENT_RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CANVAS_AGENT_RATE_LIMITED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_AGENT_RATE_LIMITED",
+                        "message": "CANVAS_AGENT_RATE_LIMITED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CANVAS_AGENT_FAILED",
+            "x-error-codes": [
+              "CANVAS_AGENT_FAILED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CANVAS_AGENT_FAILED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_AGENT_FAILED",
+                        "message": "CANVAS_AGENT_FAILED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            },
+            "description": "Owned live canvas UUID; foreign/deleted/missing are indistinguishable (404)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanvasAgentApplyRequest"
+              },
+              "examples": {
+                "example1": {
+                  "value": {
+                    "turnId": "123e4567-e89b-12d3-a456-000000000021"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/canvas-agent-settings": {
       "get": {
         "operationId": "readCanvasAgentSettings",
@@ -2155,6 +2410,197 @@
             }
           }
         }
+      }
+    },
+    "/api/canvases/{id}/agent/turns/{turnId}": {
+      "get": {
+        "operationId": "getCanvasAgentTurn",
+        "summary": "Read safe owner-only original turn snapshot and recovery state",
+        "description": "Works even disabled. Shared actor agent limiter 30/min consumed by history too. afterSeq default 0; limit default 50/max 100. Decimal digits including leading zeros, repeated fields use first. Snapshot recovery, not SSE replay.",
+        "tags": [
+          "Canvas"
+        ],
+        "x-access": "actor",
+        "security": [
+          {
+            "museSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanvasAgentTurnRecoveryDtoEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT",
+            "x-error-codes": [
+              "INVALID_INPUT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "INVALID_INPUT": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_INPUT",
+                        "message": "INVALID_INPUT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED",
+            "x-error-codes": [
+              "UNAUTHORIZED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "UNAUTHORIZED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "UNAUTHORIZED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "x-error-codes": [
+              "FORBIDDEN"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "FORBIDDEN": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "FORBIDDEN"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CANVAS_NOT_FOUND",
+            "x-error-codes": [
+              "CANVAS_NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CANVAS_NOT_FOUND": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_NOT_FOUND",
+                        "message": "CANVAS_NOT_FOUND"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CANVAS_AGENT_RATE_LIMITED",
+            "x-error-codes": [
+              "CANVAS_AGENT_RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CANVAS_AGENT_RATE_LIMITED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_AGENT_RATE_LIMITED",
+                        "message": "CANVAS_AGENT_RATE_LIMITED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CANVAS_AGENT_FAILED",
+            "x-error-codes": [
+              "CANVAS_AGENT_FAILED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "CANVAS_AGENT_FAILED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "CANVAS_AGENT_FAILED",
+                        "message": "CANVAS_AGENT_FAILED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            },
+            "description": "Owned live canvas UUID; foreign/deleted/missing are indistinguishable (404)."
+          },
+          {
+            "name": "turnId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            }
+          }
+        ]
       }
     }
   },
@@ -3556,6 +4002,108 @@
         ],
         "description": "Example batch applies to CanvasScene example in order and validates every intermediate scene."
       },
+      "CanvasAgentEditSelection": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": 0
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0
+          },
+          "width": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "height": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false
+      },
+      "CanvasAgentStructuredInputItem": {
+        "type": "object",
+        "properties": {
+          "uploadId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "assetId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 15
+          }
+        },
+        "required": [
+          "role",
+          "position"
+        ],
+        "additionalProperties": false
+      },
+      "CanvasAgentStructuredEditSource": {
+        "type": "object",
+        "properties": {
+          "assetId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "nodeId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/CanvasAgentEditSelection"
+          }
+        },
+        "required": [
+          "selection"
+        ],
+        "additionalProperties": false
+      },
+      "CanvasAgentStructuredContext": {
+        "type": "object",
+        "properties": {
+          "intent": {
+            "type": "string",
+            "enum": [
+              "generate",
+              "edit",
+              "continue"
+            ]
+          },
+          "modelId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/Parameters"
+          },
+          "inputs": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/CanvasAgentStructuredInputItem"
+            }
+          },
+          "editSource": {
+            "$ref": "#/components/schemas/CanvasAgentStructuredEditSource"
+          }
+        },
+        "additionalProperties": false
+      },
       "AgentUserRequest": {
         "type": "object",
         "properties": {
@@ -3577,6 +4125,17 @@
           "requireConfirmation": {
             "type": "boolean",
             "default": true
+          },
+          "sceneCommitMode": {
+            "type": "string",
+            "enum": [
+              "client-managed",
+              "agent-managed"
+            ],
+            "default": "client-managed"
+          },
+          "context": {
+            "$ref": "#/components/schemas/CanvasAgentStructuredContext"
           }
         },
         "required": [
@@ -3603,6 +4162,14 @@
           },
           "baseRevision": {
             "$ref": "#/components/schemas/Revision"
+          },
+          "sceneCommitMode": {
+            "type": "string",
+            "enum": [
+              "client-managed",
+              "agent-managed"
+            ],
+            "default": "client-managed"
           }
         },
         "required": [
@@ -3768,6 +4335,36 @@
           },
           "jobId": {
             "$ref": "#/components/schemas/NullableUuid"
+          },
+          "turnId": {
+            "$ref": "#/components/schemas/NullableUuid"
+          },
+          "baseRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "requestVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "normalizedInputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanvasAgentStructuredInputItem"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "text_to_image",
+              "image_to_image",
+              "inpaint",
+              "text_to_video",
+              "image_to_video"
+            ]
+          },
+          "editMetadata": {
+            "$ref": "#/components/schemas/CanvasAgentEditMetadata"
           }
         },
         "required": [
@@ -3907,6 +4504,9 @@
           "content": {
             "type": "string"
           },
+          "turnId": {
+            "$ref": "#/components/schemas/NullableUuid"
+          },
           "toolCalls": {
             "type": "array",
             "items": {
@@ -3921,6 +4521,9 @@
           },
           "createdAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "contextSummary": {
+            "$ref": "#/components/schemas/CanvasAgentStructuredContext"
           }
         },
         "required": [
@@ -3961,6 +4564,14 @@
             "maximum": 9007199254740991
           },
           "nextAfterSeq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "nextBeforeSeq": {
             "type": [
               "integer",
               "null"
@@ -4172,6 +4783,7 @@
           "CANVAS_AGENT_CONFIRM_NOT_FOUND",
           "CANVAS_AGENT_CONFIRM_EXPIRED",
           "CANVAS_AGENT_CONFIRM_CONFLICT",
+          "CANVAS_AGENT_APPLY_CONFLICT",
           "SOURCE_NOT_READY"
         ]
       },
@@ -4421,6 +5033,72 @@
             }
           }
         ]
+      },
+      "CanvasAgentApplyRequest": {
+        "type": "object",
+        "properties": {
+          "turnId": {
+            "$ref": "#/components/schemas/Uuid"
+          }
+        },
+        "required": [
+          "turnId"
+        ],
+        "additionalProperties": false,
+        "description": "Turn identifier whose completed proposed operations should be committed to the canvas document.",
+        "examples": [
+          {
+            "turnId": "123e4567-e89b-12d3-a456-000000000021"
+          }
+        ],
+        "x-runtime-invalid-examples": [
+          {
+            "turnId": "not-a-uuid"
+          },
+          {
+            "turnId": "123e4567-e89b-12d3-a456-000000000021",
+            "extra": true
+          }
+        ]
+      },
+      "CanvasAgentApplyResultDto": {
+        "type": "object",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ops": {
+            "$ref": "#/components/schemas/CanvasOps"
+          }
+        },
+        "required": [
+          "applied",
+          "revision",
+          "ops"
+        ],
+        "additionalProperties": false,
+        "description": "Committed canvas scene revision and operations."
+      },
+      "CanvasAgentApplyResultDtoEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/CanvasAgentApplyResultDto"
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ],
+        "additionalProperties": false
       },
       "CanvasAgentHistoryDtoEnvelope": {
         "type": "object",
@@ -4956,6 +5634,129 @@
           }
         },
         "description": "event: equals type; data: entire JSON event including UUID turnId/eventId. IDs assigned per emission, not durable replay cursors. Upstream nonstreaming; text_delta complete segment, not token realtime. Expected error terminates; retryable only CANVAS_AGENT_FAILED."
+      },
+      "CanvasAgentEditMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/CanvasAgentEditSelection"
+          },
+          "sourceWidth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32768
+          },
+          "sourceHeight": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32768
+          }
+        },
+        "required": [
+          "selection",
+          "sourceWidth",
+          "sourceHeight"
+        ],
+        "description": "Actual clamped rectangle in original source pixels. Rectangle must fit the source dimensions."
+      },
+      "CanvasAgentTurnRecoveryDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "turnId",
+          "messageId",
+          "status",
+          "requestSnapshot",
+          "legacySnapshotUnavailable",
+          "sceneCommitRevision",
+          "sceneCommitAt",
+          "pendingJobs"
+        ],
+        "properties": {
+          "turnId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "messageId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "canceled",
+              "expired"
+            ]
+          },
+          "requestSnapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanvasAgentMessageRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "legacySnapshotUnavailable": {
+            "type": "boolean"
+          },
+          "sceneCommitRevision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "sceneCommitAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "pendingJobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanvasAgentPendingJobDto"
+            }
+          }
+        },
+        "description": "Owner-only read without model/provider calls. Null legacy or invalid snapshots cannot be fully recovered. No leases, credentials or raw provider blocks."
+      },
+      "CanvasAgentTurnRecoveryDtoEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/CanvasAgentTurnRecoveryDto"
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "success": true,
+            "data": {
+              "turnId": "123e4567-e89b-12d3-a456-426614174000",
+              "messageId": "123e4567-e89b-12d3-a456-426614174001",
+              "status": "canceled",
+              "requestSnapshot": null,
+              "legacySnapshotUnavailable": true,
+              "sceneCommitRevision": null,
+              "sceneCommitAt": null,
+              "pendingJobs": []
+            }
+          }
+        ]
       }
     },
     "securitySchemes": {

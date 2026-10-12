@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from './index'
+import type { JsonObject, JsonValue, GenerationMode } from './index'
 
 export const CANVAS_MAX_SCENE_BYTES = 512 * 1024
 export const CANVAS_MAX_NODES = 500
@@ -46,6 +46,7 @@ export const CanvasErrorCode = {
   CANVAS_AGENT_CONFIRM_NOT_FOUND: 'CANVAS_AGENT_CONFIRM_NOT_FOUND',
   CANVAS_AGENT_CONFIRM_EXPIRED: 'CANVAS_AGENT_CONFIRM_EXPIRED',
   CANVAS_AGENT_CONFIRM_CONFLICT: 'CANVAS_AGENT_CONFIRM_CONFLICT',
+  CANVAS_AGENT_APPLY_CONFLICT: 'CANVAS_AGENT_APPLY_CONFLICT',
   SOURCE_NOT_READY: 'SOURCE_NOT_READY',
 } as const
 export type CanvasErrorCode = (typeof CanvasErrorCode)[keyof typeof CanvasErrorCode]
@@ -103,9 +104,59 @@ export type CanvasOp =
   | { type: 'disconnect'; edgeId: string }
   | { type: 'arrange'; positions: { nodeId: string; position: CanvasPosition }[] }
 
+export type CanvasAgentSceneCommitMode = 'client-managed' | 'agent-managed'
+
+export interface CanvasAgentEditSelection {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+/** Actual prepared pixels, not the original un-clamped request rectangle. */
+export interface CanvasAgentEditMetadata {
+  readonly selection: CanvasAgentEditSelection
+  readonly sourceWidth: number
+  readonly sourceHeight: number
+}
+export interface CanvasAgentStructuredInputItem {
+  readonly uploadId?: string
+  readonly assetId?: string
+  readonly role: string
+  readonly position: number
+}
+
+export interface CanvasAgentStructuredEditSource {
+  readonly assetId?: string
+  readonly nodeId?: string
+  readonly selection: CanvasAgentEditSelection
+}
+
+export interface CanvasAgentStructuredContext {
+  readonly intent?: 'generate' | 'edit' | 'continue'
+  readonly modelId?: string
+  readonly parameters?: JsonObject
+  readonly inputs?: CanvasAgentStructuredInputItem[]
+  readonly editSource?: CanvasAgentStructuredEditSource
+}
+
 export type CanvasAgentMessageRequest =
-  | { kind: 'user'; messageId: string; text: string; baseRevision: number; requireConfirmation?: boolean }
-  | { kind: 'job_event'; messageId: string; jobId: string; baseRevision: number }
+  | {
+      kind: 'user'
+      messageId: string
+      text: string
+      baseRevision: number
+      requireConfirmation?: boolean
+      sceneCommitMode?: CanvasAgentSceneCommitMode
+      context?: CanvasAgentStructuredContext
+    }
+  | {
+      kind: 'job_event'
+      messageId: string
+      jobId: string
+      baseRevision: number
+      sceneCommitMode?: CanvasAgentSceneCommitMode
+    }
 export interface CanvasAgentConfirmRequest { pendingId: string; approve: boolean }
 export type CanvasAgentPendingStatus = 'pending' | 'submitting' | 'submitted' | 'rejected' | 'expired'
 /** Generation inputs are immutable after creation; only status/jobId may advance.
@@ -123,6 +174,17 @@ export interface CanvasAgentPendingJobDto {
   readonly expiresAt: string
   status: CanvasAgentPendingStatus
   jobId: string | null
+  readonly turnId?: string | null
+  readonly baseRevision?: number
+  readonly mode?: GenerationMode
+  readonly editMetadata?: CanvasAgentEditMetadata
+  readonly requestVersion?: number
+  readonly normalizedInputs?: Array<{
+    readonly uploadId?: string
+    readonly assetId?: string
+    readonly role: string
+    readonly position: number
+  }>
 }
 export interface CanvasAgentConfirmResultDto { pending: CanvasAgentPendingJobDto; ops: CanvasOp[]; jobId: string | null }
 export interface CanvasAgentToolCallDto { id: string; name: string; arguments: JsonObject }
@@ -130,6 +192,8 @@ export interface CanvasAgentUsageDto { inputTokens: number; outputTokens: number
 export interface AgentMessageDto {
   id: string
   seq: number
+  turnId?: string | null
+  contextSummary?: CanvasAgentStructuredContext
   role: 'user' | 'assistant' | 'tool'
   content: string
   toolCalls?: CanvasAgentToolCallDto[]
@@ -146,6 +210,33 @@ export interface CanvasAgentHistoryDto {
   requireConfirmation: boolean
   autoContinuationCount: number
   nextAfterSeq: number | null
+  nextBeforeSeq?: number | null
+}
+/** Safe owner-only recovery. Legacy/invalid snapshots are never reconstructed. */
+export interface CanvasAgentTurnRecoveryDto {
+  turnId: string
+  messageId: string
+  status: 'running' | 'completed' | 'failed' | 'canceled' | 'expired'
+  requestSnapshot: CanvasAgentMessageRequest | null
+  legacySnapshotUnavailable: boolean
+  sceneCommitRevision: number | null
+  sceneCommitAt: string | null
+  pendingJobs: CanvasAgentPendingJobDto[]
+}
+export interface CanvasAgentStatusDto {
+  enabled: boolean
+  available: boolean
+  reason: 'ready' | 'disabled' | 'not_configured' | 'model_unsupported'
+  maxToolCallsPerTurn: number
+  maxJobsPerTurn: number
+  timeoutMs: number
+  maxAutoContinuations: number
+}
+export interface CanvasAgentApplyRequest { turnId: string }
+export interface CanvasAgentApplyResultDto {
+  applied: boolean
+  revision: number
+  ops: CanvasOp[]
 }
 export interface CanvasAgentSettingsDto {
   enabled: boolean
@@ -444,18 +535,107 @@ export function applyCanvasOps(inputScene: unknown, inputOps: unknown): CanvasPa
     return current
   })
 }
+function editSelection(value: unknown, path: string): CanvasAgentEditSelection {
+  const obj = strict(value, ['x', 'y', 'width', 'height'], path)
+  for (const k of ['x', 'y'] as const) {
+    if (typeof obj[k] !== 'number' || !Number.isFinite(obj[k]) || (obj[k] as number) < 0) {
+      invalid(`${path}.${k}`, 'Expected finite non-negative number')
+    }
+  }
+  for (const k of ['width', 'height'] as const) {
+    if (typeof obj[k] !== 'number' || !Number.isFinite(obj[k]) || (obj[k] as number) <= 0) {
+      invalid(`${path}.${k}`, 'Expected finite positive number')
+    }
+  }
+  return { x: obj.x as number, y: obj.y as number, width: obj.width as number, height: obj.height as number }
+}
+export function parseCanvasAgentEditMetadata(value: unknown): CanvasParseResult<CanvasAgentEditMetadata> {
+  return result(() => {
+    const obj = strict(value, ['selection', 'sourceWidth', 'sourceHeight'], '$')
+    const selection = editSelection(obj.selection, '$.selection')
+    const sourceWidth = integer(obj.sourceWidth, 1, 32768, '$.sourceWidth')
+    const sourceHeight = integer(obj.sourceHeight, 1, 32768, '$.sourceHeight')
+    if (selection.x + selection.width > sourceWidth || selection.y + selection.height > sourceHeight) invalid('$.selection', 'Selection exceeds source dimensions')
+    return { selection, sourceWidth, sourceHeight }
+  })
+}
+function structuredInputItem(value: unknown, path: string): CanvasAgentStructuredInputItem {
+  const obj = strict(value, ['uploadId', 'assetId', 'role', 'position'], path)
+  const hasUpload = 'uploadId' in obj && obj.uploadId !== undefined
+  const hasAsset = 'assetId' in obj && obj.assetId !== undefined
+  if (hasUpload === hasAsset) invalid(path, 'Expected exactly one of uploadId or assetId')
+  const uploadId = hasUpload ? uuid(obj.uploadId, `${path}.uploadId`) : undefined
+  const assetId = hasAsset ? uuid(obj.assetId, `${path}.assetId`) : undefined
+  const roleStr = text(obj.role, `${path}.role`, true)
+  if (roleStr.length > 64) invalid(`${path}.role`, 'Role exceeds 64 characters')
+  const pos = integer(obj.position, 0, 15, `${path}.position`)
+  return { ...(uploadId ? { uploadId } : {}), ...(assetId ? { assetId } : {}), role: roleStr, position: pos }
+}
+function structuredEditSource(value: unknown, path: string): CanvasAgentStructuredEditSource {
+  const obj = strict(value, ['assetId', 'nodeId', 'selection'], path)
+  const hasAsset = 'assetId' in obj && obj.assetId !== undefined
+  const hasNode = 'nodeId' in obj && obj.nodeId !== undefined
+  if (!hasAsset && !hasNode) invalid(path, 'Expected at least one of assetId or nodeId')
+  const assetId = hasAsset ? uuid(obj.assetId, `${path}.assetId`) : undefined
+  const nodeId = hasNode ? uuid(obj.nodeId, `${path}.nodeId`) : undefined
+  const sel = editSelection(obj.selection, `${path}.selection`)
+  return { ...(assetId ? { assetId } : {}), ...(nodeId ? { nodeId } : {}), selection: sel }
+}
+function structuredContext(value: unknown, path: string): CanvasAgentStructuredContext {
+  const obj = strict(value, ['intent', 'modelId', 'parameters', 'inputs', 'editSource'], path)
+  const output: CanvasAgentStructuredContext = {}
+  const res = output as Record<string, unknown>
+  if ('intent' in obj && obj.intent !== undefined) {
+    if (!['generate', 'edit', 'continue'].includes(String(obj.intent))) invalid(`${path}.intent`, 'Invalid intent')
+    res.intent = obj.intent
+  }
+  if ('modelId' in obj && obj.modelId !== undefined) res.modelId = uuid(obj.modelId, `${path}.modelId`)
+  if ('parameters' in obj && obj.parameters !== undefined) res.parameters = parameters(obj.parameters, `${path}.parameters`)
+  if ('inputs' in obj && obj.inputs !== undefined) {
+    res.inputs = array(obj.inputs, 16, `${path}.inputs`).map((it, i) => structuredInputItem(it, `${path}.inputs[${i}]`))
+  }
+  if ('editSource' in obj && obj.editSource !== undefined) {
+    res.editSource = structuredEditSource(obj.editSource, `${path}.editSource`)
+  }
+  return output
+}
+function sceneCommitMode(value: unknown, path: string): CanvasAgentSceneCommitMode {
+  if (value !== 'client-managed' && value !== 'agent-managed') invalid(path, 'Expected client-managed or agent-managed')
+  return value
+}
 export function parseCanvasAgentMessageRequest(value: unknown): CanvasParseResult<CanvasAgentMessageRequest> {
   return result(() => {
     const head = object(value, '$')
     if (head.kind === 'user') {
-      const obj = strict(value, ['kind', 'messageId', 'text', 'baseRevision', 'requireConfirmation'], '$')
-      return { kind: 'user', messageId: uuid(obj.messageId, '$.messageId'), text: text(obj.text, '$.text', true),
-        baseRevision: revision(obj.baseRevision, '$.baseRevision'), requireConfirmation: 'requireConfirmation' in obj
-          ? boolean(obj.requireConfirmation, '$.requireConfirmation') : CANVAS_AGENT_DEFAULT_REQUIRE_CONFIRMATION }
+      const obj = strict(value, ['kind', 'messageId', 'text', 'baseRevision', 'requireConfirmation', 'sceneCommitMode', 'context'], '$')
+      const req: CanvasAgentMessageRequest = {
+        kind: 'user',
+        messageId: uuid(obj.messageId, '$.messageId'),
+        text: text(obj.text, '$.text', true),
+        baseRevision: revision(obj.baseRevision, '$.baseRevision'),
+        requireConfirmation: 'requireConfirmation' in obj
+          ? boolean(obj.requireConfirmation, '$.requireConfirmation')
+          : CANVAS_AGENT_DEFAULT_REQUIRE_CONFIRMATION,
+        sceneCommitMode: 'sceneCommitMode' in obj
+          ? sceneCommitMode(obj.sceneCommitMode, '$.sceneCommitMode')
+          : 'client-managed',
+        ...('context' in obj && obj.context !== undefined
+          ? { context: structuredContext(obj.context, '$.context') }
+          : {}),
+      }
+      return req
     }
     if (head.kind === 'job_event') {
-      const obj = strict(value, ['kind', 'messageId', 'jobId', 'baseRevision'], '$')
-      return { kind: 'job_event', messageId: uuid(obj.messageId, '$.messageId'), jobId: uuid(obj.jobId, '$.jobId'), baseRevision: revision(obj.baseRevision, '$.baseRevision') }
+      const obj = strict(value, ['kind', 'messageId', 'jobId', 'baseRevision', 'sceneCommitMode'], '$')
+      return {
+        kind: 'job_event',
+        messageId: uuid(obj.messageId, '$.messageId'),
+        jobId: uuid(obj.jobId, '$.jobId'),
+        baseRevision: revision(obj.baseRevision, '$.baseRevision'),
+        sceneCommitMode: 'sceneCommitMode' in obj
+          ? sceneCommitMode(obj.sceneCommitMode, '$.sceneCommitMode')
+          : 'client-managed',
+      }
     }
     return invalid('$.kind', 'Unknown message kind')
   })
@@ -464,6 +644,12 @@ export function parseCanvasAgentConfirmRequest(value: unknown): CanvasParseResul
   return result(() => {
     const obj = strict(value, ['pendingId', 'approve'], '$')
     return { pendingId: uuid(obj.pendingId, '$.pendingId'), approve: boolean(obj.approve, '$.approve') }
+  })
+}
+export function parseCanvasAgentApplyRequest(value: unknown): CanvasParseResult<CanvasAgentApplyRequest> {
+  return result(() => {
+    const obj = strict(value, ['turnId'], '$')
+    return { turnId: uuid(obj.turnId, '$.turnId') }
   })
 }
 export function parseUpdateCanvasAgentSettingsRequest(value: unknown): CanvasParseResult<UpdateCanvasAgentSettingsRequest> {

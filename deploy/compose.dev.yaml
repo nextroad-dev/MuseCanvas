@@ -38,7 +38,7 @@ services:
     ports: ["8025:8025"]
   api:
     build: { context: ., dockerfile: deploy/docker/api.Dockerfile }
-    # Published for local `web-next dev` rewrites (API_ORIGIN=http://localhost:3001).
+    # Published for local `web dev` rewrites (API_ORIGIN=http://localhost:3001).
     ports: ["127.0.0.1:3001:3001"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -92,13 +92,13 @@ services:
     build: { context: ., dockerfile: deploy/docker/worker.Dockerfile }
     depends_on: { api: { condition: service_healthy }, db-migrate: { condition: service_completed_successfully } }
     environment: *backend-env
-  web-next:
-    build: { context: ., dockerfile: deploy/docker/web-next.Dockerfile }
+  web:
+    build: { context: ., dockerfile: deploy/docker/web.Dockerfile }
     depends_on: { api: { condition: service_healthy } }
     environment: { INTERNAL_API_BASE_URL: http://api:3001 }
     healthcheck: { test: [CMD, wget, -qO-, http://127.0.0.1:3000/], interval: 10s, timeout: 3s, retries: 30, start_period: 20s }
   nginx:
     build: { context: ., dockerfile: deploy/docker/nginx.Dockerfile }
-    depends_on: { api: { condition: service_healthy }, web-next: { condition: service_healthy } }
+    depends_on: { api: { condition: service_healthy }, web: { condition: service_healthy } }
     ports: ["8080:80"]
 volumes: { postgres_data: {}, postgres_socket: {}, redis_data: {}, minio_data: {} }

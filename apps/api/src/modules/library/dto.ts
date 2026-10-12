@@ -1,7 +1,7 @@
 import { signedAssetUrl } from '../../shared/services'
 
 /**
- * Gallery row → the shape `apps/web-next` renders.
+ * Gallery row → the shape `apps/web` renders.
  *
  * This projection deliberately lives here rather than in `shared/dto.ts`: it is
  * the only place that presigns three objects per row, and the reuse below is a

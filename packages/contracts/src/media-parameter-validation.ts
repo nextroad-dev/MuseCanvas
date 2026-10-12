@@ -556,7 +556,7 @@ export interface ModelCapabilitiesValidationResult {
 }
 
 const DESCRIPTOR_TYPES = new Set(['enum', 'integer', 'number', 'boolean', 'text', 'image-size'])
-const GENERATION_MODES = new Set(['text_to_image', 'image_to_image', 'text_to_video', 'image_to_video'])
+const GENERATION_MODES = new Set(['text_to_image', 'image_to_image', 'inpaint', 'text_to_video', 'image_to_video'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

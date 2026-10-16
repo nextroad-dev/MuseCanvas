@@ -395,11 +395,17 @@ export function LibraryView() {
         <div ref={gridRef} className={`grid gap-4 sm:gap-5 ${gridClass(columnCount)}`}>
           {visibleAssets.map((asset, index) => {
             const selected = selectedAssetIds.includes(asset.id)
+            // Tab switches replay the entrance, but only the first screen earns
+            // it: past STAGGER_CLAMP there is no `motion-reveal` at all, so the
+            // tail never advertises a wait it will never pay.
+            const staged = index < STAGGER_CLAMP
             return (
               <div
                 key={asset.id}
-                style={{ '--stagger-index': String(Math.min(index, STAGGER_CLAMP)) } as CSSProperties}
-                className={`group motion-reveal motion-stagger relative overflow-hidden rounded-card bg-surface ${
+                style={staged ? ({ '--stagger-index': String(index) } as CSSProperties) : undefined}
+                className={`group relative overflow-hidden rounded-card bg-surface ${
+                  staged ? 'motion-reveal motion-stagger' : ''
+                } ${
                   selected ? 'ring-2 ring-primary' : 'ring-0'
                 }`}
               >

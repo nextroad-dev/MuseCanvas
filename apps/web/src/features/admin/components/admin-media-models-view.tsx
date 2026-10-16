@@ -8,6 +8,7 @@ import { useQuery,
   useMutation,
   useQueryClient } from '@tanstack/react-query'
 import { API_ENDPOINTS, validateModelCapabilities } from '@musecanvas/contracts'
+import type { MediaModelDefaultsDto } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import type {
   AdminModel,
@@ -23,6 +24,17 @@ import {
   templateConfiguredCount,
   } from '../lib/provider-templates'
 import { requireAdminData } from '../lib/admin-query'
+import {
+  MEDIA_MODEL_DEFAULTS_QUERY_KEY,
+  PUBLIC_MODELS_QUERY_KEY,
+  defaultsPatchForKind,
+  isModelDefault,
+  mediaDefaultKindOf,
+  patchMediaModelDefaults,
+  rewriteDefaultInUseError,
+  type MediaDefaultKind,
+} from '../lib/admin-media-model-defaults'
+import { AdminMediaModelDefaults } from './admin-media-model-defaults'
 import { AdminQueryFeedback } from './admin-query-feedback'
 import { AdminListToolbar } from './admin-list-toolbar'
 import { AdminCredentialTable } from './admin-credential-table'
@@ -52,6 +64,7 @@ import {
   PageHeader,
   SectionHeader,
   Select,
+  SegmentedControl,
   SkeletonText,
   SkeletonTile,
   Switch,
@@ -63,6 +76,7 @@ import {
   TableSkeletonRow,
   TableStateRow,
   iconSize,
+  useToast,
 } from '@/shared/components/ui'
 
 const MEDIA_KIND_LABEL: Record<'image' | 'video', string> = {
@@ -84,7 +98,9 @@ export function AdminMediaModelsView() {
   const [actionError, setActionError] = useState('')
   const [detailModel, setDetailModel] = useState<AdminModel | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AdminModel | null>(null)
+  const [kindFilter, setKindFilter] = useState<'all' | MediaDefaultKind>('all')
   const actions = useAdminActions()
+  const toast = useToast()
 
   const {
     data: modelsData,
@@ -145,6 +161,18 @@ export function AdminMediaModelsView() {
   const allCredentials = credentialsData ?? []
   const templates = templatesData ?? []
 
+  const {
+    data: defaultsData,
+    error: defaultsError,
+    refetch: refetchDefaults,
+  } = useQuery({
+    queryKey: MEDIA_MODEL_DEFAULTS_QUERY_KEY,
+    queryFn: async () => {
+      const res = await api<MediaModelDefaultsDto>(API_ENDPOINTS.admin.mediaModelDefaults)
+      return requireAdminData(res, '加载默认模型失败')
+    },
+  })
+
   // This page owns everything media-shaped: image/video model rows, the plugin
   // directory that signs media credentials, and the plugin-bound credentials.
   const models = allModels.filter((m) => m.modelKind !== 'language')
@@ -154,6 +182,7 @@ export function AdminMediaModelsView() {
   }).findings]))
   const presets = allPresets.filter((p) => p.modelKind !== 'language')
   const mediaCredentials = allCredentials.filter(isPluginBoundCredential)
+  const visibleModels = kindFilter === 'all' ? models : models.filter((m) => mediaKind(m) === kindFilter)
 
   const selectedPreset = presets.find((p) => p.id === selectedPresetId) || null
   const selectedPresetPluginKey = presetPluginKey(selectedPreset)
@@ -193,7 +222,15 @@ export function AdminMediaModelsView() {
         method: 'PATCH',
         body: { enabled },
       })
-      if (!res.success) throw new Error(res.error?.message || '更新状态失败')
+      if (!res.success) {
+        const code = res.error?.code
+        if (code === 'DEFAULT_MODEL_IN_USE') {
+          const target = allModels.find((m) => m.id === id)
+          const kind: MediaDefaultKind = target ? mediaDefaultKindOf(target) : 'image'
+          throw Object.assign(new Error(rewriteDefaultInUseError(res.error, kind, '更新状态失败')), { code })
+        }
+        throw Object.assign(new Error(res.error?.message || '更新状态失败'), { code: code || 'INVALID_RESPONSE' })
+      }
       return res.data
     },
     onSuccess: async () => {
@@ -204,11 +241,31 @@ export function AdminMediaModelsView() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await api(API_ENDPOINTS.admin.model(id), { method: 'DELETE' })
-      if (!res.success) throw new Error(res.error?.message || '删除模型失败')
+      if (!res.success) {
+        const code = res.error?.code
+        if (code === 'DEFAULT_MODEL_IN_USE') {
+          const target = allModels.find((m) => m.id === id)
+          const kind: MediaDefaultKind = target ? mediaDefaultKindOf(target) : 'image'
+          throw Object.assign(new Error(rewriteDefaultInUseError(res.error, kind, '删除模型失败')), { code })
+        }
+        throw Object.assign(new Error(res.error?.message || '删除模型失败'), { code: code || 'INVALID_RESPONSE' })
+      }
       return res.data
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['admin', 'models'] })
+    },
+  })
+
+  const setDefaultMutation = useMutation({
+    mutationFn: async ({ kind, id }: { kind: MediaDefaultKind; id: string }) =>
+      patchMediaModelDefaults(api, API_ENDPOINTS.admin.mediaModelDefaults, defaultsPatchForKind(kind, id)),
+    onSuccess: async () => {
+      toast.push({ variant: 'success', title: '默认模型已更新' })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: PUBLIC_MODELS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: MEDIA_MODEL_DEFAULTS_QUERY_KEY }),
+      ])
     },
   })
 
@@ -256,6 +313,10 @@ export function AdminMediaModelsView() {
   function toggleModel(model: AdminModel, enabled: boolean) {
     return actions.run(model.id, model.displayName, () => toggleMutation.mutateAsync({ id: model.id, enabled }), enabled ? '模型已启用' : '模型已停用', 'toggle')
   }
+  function setDefaultModel(model: AdminModel) {
+    const kind = mediaKind(model)
+    return setDefaultMutation.mutateAsync({ kind, id: model.id })
+  }
 
   return (
     <div className={adminPageRoot}>
@@ -279,6 +340,7 @@ export function AdminMediaModelsView() {
               variant="secondary"
               onClick={() => {
                 refetchModels()
+                refetchDefaults()
                 refetchCredentials()
                 refetchTemplates()
                 refetchPresets()
@@ -293,6 +355,7 @@ export function AdminMediaModelsView() {
       />
 
       {modelsData !== undefined && <AdminQueryFeedback error={modelsQueryError} hasData label="媒体模型" onRetry={() => refetchModels()} />}
+      {defaultsData !== undefined && <AdminQueryFeedback error={defaultsError} hasData label="默认模型" onRetry={() => refetchDefaults()} />}
       <AdminQueryFeedback error={presetsError} hasData={presetsData !== undefined} label="模型预设" onRetry={() => refetchPresets()} />
       {credentialsData !== undefined && <AdminQueryFeedback error={credentialsQueryError} hasData label="媒体凭据" onRetry={() => refetchCredentials()} />}
       {templatesData !== undefined && <AdminQueryFeedback error={templatesError} hasData label="供应商插件" onRetry={() => refetchTemplates()} />}
@@ -308,13 +371,34 @@ export function AdminMediaModelsView() {
           <a href="#installed-plugins-media" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>上传版本</a>
         </nav>} />
 
+      <AdminMediaModelDefaults models={models} />
+
       <div id="media-models" ref={recordListRef} tabIndex={-1} role="region" aria-label="媒体模型列表" className="flex min-w-0 flex-col gap-4 scroll-mt-6">
-      <SectionHeader id="media-models-heading" title="已配置模型" description="查看图像与视频模型的绑定和状态；参数契约与并发上限在详情中展开。" />
-      <AdminMobileRecords records={models} loading={modelsLoading}
+      <SectionHeader id="media-models-heading" title="已配置模型" description="查看图像与视频模型的绑定和状态；参数契约与并发上限在详情中展开。"
+        actions={
+          <SegmentedControl
+            size="sm"
+            label="按类型筛选模型"
+            value={kindFilter}
+            onChange={setKindFilter}
+            items={[
+              { value: 'all', label: `全部 ${models.length}` },
+              { value: 'image', label: `图像 ${models.filter((m) => mediaKind(m) === 'image').length}` },
+              { value: 'video', label: `视频 ${models.filter((m) => mediaKind(m) === 'video').length}` },
+            ]}
+          />
+        }
+      />
+      {setDefaultMutation.isError ? (
+        <Alert tone="danger" role="alert" title="无法设为默认">
+          {(setDefaultMutation.error as Error)?.message || '设为默认失败，请重试。'}
+        </Alert>
+      ) : null}
+      <AdminMobileRecords records={visibleModels} loading={modelsLoading}
         error={modelsError && modelsData === undefined ? modelsQueryError?.message || '加载模型失败' : null}
         onRetry={() => { void refetchModels() }}
-        empty={<><span>创建模型前请先准备可用预设与凭据。</span><Button variant="secondary" onClick={() => { setActionError(''); setCreateModalOpen(true) }}>创建模型</Button></>}
-        title={(model) => model.displayName}
+        empty={<><span>{kindFilter === 'all' ? '创建模型前请先准备可用预设与凭据。' : `暂无${kindFilter === 'image' ? '图像' : '视频'}模型。`}</span><Button variant="secondary" onClick={() => { setActionError(''); setCreateModalOpen(true) }}>创建模型</Button></>}
+        title={(model) => (<span className="inline-flex items-center gap-2">{model.displayName}{isModelDefault(model.id, defaultsData) ? <Badge tone="neutral" variant="solid">默认</Badge> : null}</span>)}
         status={(model) => <Badge tone={model.enabled ? 'success' : 'neutral'}>{model.enabled ? '已启用' : '已停用'}</Badge>}
         summary={(model) => <><span className="font-mono">{model.vendorModelId || model.name || '—'}</span> · 并发 {model.concurrencyLimit}{(modelContractFindings.get(model.id)?.length ?? 0) > 0 && <span className="mt-2 block text-danger">参数契约异常，请查看详情。</span>}</>}
         onDetails={setDetailModel}
@@ -353,11 +437,14 @@ export function AdminMediaModelsView() {
                 action={<Button variant="secondary" onClick={() => refetchModels()}>刷新重试</Button>}
               />
             </TableStateRow>
-          ) : models.length > 0 ? (
-            models.map((m) => (
+          ) : visibleModels.length > 0 ? (
+            visibleModels.map((m) => (
               <TableRow key={m.id}>
                 <TableCell tone="strong">
-                  <Button variant="ghost" size="sm" className="max-w-full whitespace-normal break-words text-left" onClick={() => setDetailModel(m)} aria-label={`查看模型 ${m.displayName} 详情`}>{m.displayName}</Button>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Button variant="ghost" size="sm" className="max-w-full whitespace-normal break-words text-left" onClick={() => setDetailModel(m)} aria-label={`查看模型 ${m.displayName} 详情`}>{m.displayName}</Button>
+                    {isModelDefault(m.id, defaultsData) ? <Badge tone="neutral" variant="solid">默认</Badge> : null}
+                  </span>
                   <div className="font-mono text-xs font-normal text-muted-foreground">
                     {m.vendorModelId || m.name || '-'}
                   </div>
@@ -386,19 +473,32 @@ export function AdminMediaModelsView() {
                   </div>
                 </TableCell>
                 <TableCell align="right">
-                  <IconButton
-                    className="min-h-[var(--control-md)] min-w-[var(--control-md)]"
-                    variant="danger-ghost"
-                    size="sm"
-                    disabled={actions.isPending(m.id)}
-                    onClick={() => requestDeleteModel(m)}
-                    aria-label={`删除模型 ${m.displayName}`}
-                    icon={<Trash2 weight="bold" aria-hidden="true" />}
-                  />
+                  <span className="inline-flex items-center gap-1">
+                    {m.enabled && !isModelDefault(m.id, defaultsData) ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={setDefaultMutation.isPending || actions.isPending(m.id)}
+                        onClick={() => { void setDefaultModel(m) }}
+                        aria-label={`将 ${m.displayName} 设为默认${MEDIA_KIND_LABEL[mediaKind(m)]}模型`}
+                      >
+                        设为默认
+                      </Button>
+                    ) : null}
+                    <IconButton
+                      className="min-h-[var(--control-md)] min-w-[var(--control-md)]"
+                      variant="danger-ghost"
+                      size="sm"
+                      disabled={actions.isPending(m.id)}
+                      onClick={() => requestDeleteModel(m)}
+                      aria-label={`删除模型 ${m.displayName}`}
+                      icon={<Trash2 weight="bold" aria-hidden="true" />}
+                    />
+                  </span>
                 </TableCell>
               </TableRow>
             ))
-          ) : (
+          ) : models.length === 0 ? (
             <TableStateRow>
               <EmptyState
                 variant="first-use"
@@ -416,6 +516,16 @@ export function AdminMediaModelsView() {
                     创建第一个模型
                   </Button>
                 }
+              />
+            </TableStateRow>
+          ) : (
+            <TableStateRow>
+              <EmptyState
+                variant="no-results"
+                density="compact"
+                objectName="媒体模型"
+                title={`暂无${kindFilter === 'image' ? '图像' : '视频'}模型`}
+                description="当前筛选下没有模型。切换到其他类型或创建新模型。"
               />
             </TableStateRow>
           )}

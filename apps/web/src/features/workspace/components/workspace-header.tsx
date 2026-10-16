@@ -14,12 +14,9 @@ import { SignOutIcon as LogOut,
   ListIcon as Menu,
   GearSixIcon as Settings,
   XIcon as X } from '@phosphor-icons/react'
-import type { GenerateModeTab,
-  User } from '@/shared/types'
+import type { User } from '@/shared/types'
 import { useLogout } from '@/shared/hooks/useAuth'
 import { useDialog } from '@/shared/hooks/useDialog'
-import { useGenerationMode } from '@/shared/hooks/useGenerationMode'
-import { useGenerateUiStore } from '@/shared/stores/generate-ui-store'
 import { GENERATE_ROUTE } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import { Avatar,
@@ -47,22 +44,17 @@ const WORKSPACE_DESKTOP_BREAKPOINT_QUERY = '(min-width: 60rem)'
 const SCRIM_BACKGROUND = 'color-mix(in srgb, var(--color-overlay) calc(var(--opacity-overlay) * 100%), transparent)'
 
 /**
- * Shared by the desktop nav and the mobile drawer so the two cannot disagree.
- * The current entry is `tonal-selected` plus a 3px primary bar (foundations →
- * 选中态); brand green never marks selection.
+ * Segmented navigation (design 02): the container is a tonal well, the live
+ * entry floats (`bg-surface shadow-soft`); brand green never marks selection.
  */
-const navItemClass = (isActive: boolean) =>
+const segmentedItemClass = (isActive: boolean) =>
   cn(
-    'relative flex min-h-[var(--control-md)] items-center gap-2 rounded-control px-3 text-sm font-medium',
+    'flex min-h-[var(--control-md)] items-center justify-center rounded-control px-4 text-sm font-medium',
     'motion-press',
-    isActive ? 'bg-tonal-selected text-foreground' : 'text-muted-foreground hover:bg-tonal-hover hover:text-foreground active:bg-tonal-active',
+    isActive
+      ? 'bg-surface text-foreground shadow-soft'
+      : 'text-muted-foreground hover:text-foreground active:text-foreground',
   )
-
-/** `orientation` follows the nav: the desktop bar underlines, the drawer rules on the left. */
-const activeBarClass = (horizontal: boolean) =>
-  horizontal
-    ? 'absolute inset-x-2 bottom-0 h-[3px] rounded-pill bg-primary'
-    : 'absolute inset-y-1.5 left-0 w-[3px] rounded-pill bg-primary'
 
 export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
   const pathname = usePathname()
@@ -82,17 +74,14 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
     rootProps: drawerRootProps,
     dialogProps: drawerDialogProps,
   } = useDialog({ open: drawerOpen, onClose: closeDrawer })
-  const { mode, selectMode } = useGenerationMode()
-  const submissionBusy = useGenerateUiStore((state) => state.isGenerating)
 
   const logoutMutation = useLogout()
 
   const userInitial = initialUser.email?.charAt(0).toUpperCase() || 'U'
   const isAdmin = initialUser.role === 'admin'
 
-  // 作图 and 生视频 share `/generate`, so the path alone cannot say which entry
-  // is live — `mode` has to come in. See `resolveActiveNavKey`.
-  const activeKey = resolveActiveNavKey(pathname, mode)
+  // Two routes, no modes: the pathname alone says which entry is live.
+  const activeKey = resolveActiveNavKey(pathname)
   const currentPageName = navLabelFor(activeKey)
 
   useEffect(() => {
@@ -115,13 +104,6 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
     router.refresh()
   }
 
-  /** Mode entries also close the drawer; the route entries do it on their Link. */
-  function handleModeSelect(next: GenerateModeTab) {
-    if (useGenerateUiStore.getState().isGenerating) return
-    closeDrawer()
-    selectMode(next)
-  }
-
   return (
     <>
       <header className="relative z-sticky flex h-[var(--layout-header)] shrink-0 items-center border-b border-border bg-surface">
@@ -134,38 +116,19 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
             <BrandMark variant="wordmark" priority className="h-6 w-auto" />
           </Link>
 
-          {/* Desktop nav */}
-          <nav className="hidden items-center gap-1 md:flex" aria-label="主导航">
+          {/* Desktop nav: 创作 / 图库 segmented control */}
+          <nav className="hidden items-center gap-1 rounded-control bg-tonal p-1 md:flex" aria-label="主导航">
             {workspaceNavItems.map((item) => {
               const isActive = item.key === activeKey
-              if (item.kind === 'route') {
-                return (
-                  <Link
-                    key={item.key}
-                    href={item.href}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={navItemClass(isActive)}
-                  >
-                    {isActive ? <span aria-hidden="true" className={activeBarClass(true)} /> : null}
-                    {item.label}
-                  </Link>
-                )
-              }
-              const Icon = item.icon
               return (
-                <button
+                <Link
                   key={item.key}
-                  type="button"
-                  disabled={submissionBusy}
-                  title={submissionBusy ? '正在提交，请稍候再切换模式' : undefined}
-                  onClick={() => handleModeSelect(item.mode)}
+                  href={item.href}
                   aria-current={isActive ? 'page' : undefined}
-                  className={navItemClass(isActive)}
+                  className={segmentedItemClass(isActive)}
                 >
-                  {isActive ? <span aria-hidden="true" className={activeBarClass(true)} /> : null}
-                  <Icon weight="duotone" className={iconSize.sm} aria-hidden="true" />
                   {item.label}
-                </button>
+                </Link>
               )
             })}
           </nav>
@@ -265,38 +228,19 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
               />
             </div>
 
-            <nav className="mt-6 flex flex-col gap-1" aria-label="抽屉导航">
+            <nav className="mt-6 flex flex-col gap-1 rounded-control bg-tonal p-1" aria-label="抽屉导航">
               {workspaceNavItems.map((item) => {
                 const isActive = item.key === activeKey
-                if (item.kind === 'route') {
-                  return (
-                    <Link
-                      key={item.key}
-                      href={item.href}
-                      onClick={closeDrawer}
-                      aria-current={isActive ? 'page' : undefined}
-                      className={navItemClass(isActive)}
-                    >
-                      {isActive ? <span aria-hidden="true" className={activeBarClass(false)} /> : null}
-                      {item.label}
-                    </Link>
-                  )
-                }
-                const Icon = item.icon
                 return (
-                  <button
+                  <Link
                     key={item.key}
-                    type="button"
-                    disabled={submissionBusy}
-                    title={submissionBusy ? '正在提交，请稍候再切换模式' : undefined}
-                    onClick={() => handleModeSelect(item.mode)}
+                    href={item.href}
+                    onClick={closeDrawer}
                     aria-current={isActive ? 'page' : undefined}
-                    className={cn(navItemClass(isActive), 'w-full text-left')}
+                    className={cn(segmentedItemClass(isActive), 'w-full')}
                   >
-                    {isActive ? <span aria-hidden="true" className={activeBarClass(false)} /> : null}
-                    <Icon weight="duotone" className={iconSize.sm} aria-hidden="true" />
                     {item.label}
-                  </button>
+                  </Link>
                 )
               })}
 

@@ -49,6 +49,25 @@ export function exitDurationMs(): number {
   return readMotionMs('--motion-exit', MOTION_FALLBACK_MS.fast)
 }
 
+/** Fallback mirrors the `--ease-standard` token, so a missing stylesheet still eases sanely. */
+export const MOTION_FALLBACK_EASING = 'cubic-bezier(0.2,0,0,1)'
+
+/**
+ * Easing string of a `--ease-*` token as computed on the document root. Returns
+ * `fallback` when there is no document, the token is not defined, or its value
+ * is empty. Always call from an effect or an event handler: it touches
+ * `window`/`document` and must not run during SSR.
+ */
+export function readMotionEasing(token: `--${string}`, fallback: string): string {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback
+  try {
+    const raw = window.getComputedStyle(document.documentElement).getPropertyValue(token).trim()
+    return raw || fallback
+  } catch {
+    return fallback
+  }
+}
+
 /** Backstop for an exit: the exit duration plus slack. Never shorter than the exit. */
 export function exitBackstopMs(): number {
   return exitDurationMs() + BACKSTOP_SLACK_MS

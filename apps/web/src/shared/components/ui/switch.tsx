@@ -28,7 +28,7 @@ const PENDING_SUFFIX = '，正在保存'
  * Immediate-setting toggle: a tonal track that keeps a `border-control` outline so
  * the OFF state is never read from a lightness difference alone (states.md:
  * 不靠浅色差辨认), and a solid ink track when ON. The thumb glides on
- * `--motion-fast` (120ms) inside the spec's 120–180ms window.
+ * `.motion-position` (`--motion-base`, inside the spec's 120–180ms window).
  *
  * Native button semantics give Enter/Space activation for free. While a save is
  * running the control keeps its width, its name and — deliberately — its focus:
@@ -88,7 +88,7 @@ export function Switch({ checked, onCheckedChange, disabled = false, ...aria }: 
         className={cn(
           'flex items-center justify-center rounded-pill border',
           controlSquare.xs,
-          'motion-hover-fade',
+          'motion-position',
           checked ? 'translate-x-6 border-transparent bg-on-primary' : 'border-border-control bg-surface',
         )}
       >

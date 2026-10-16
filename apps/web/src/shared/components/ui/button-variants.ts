@@ -63,19 +63,20 @@ const buttonCva = cva(
     compoundVariants: [
       { variant: 'primary', state: 'idle', className: 'not-disabled:hover:bg-primary-hover not-disabled:active:bg-primary-active' },
       { variant: 'secondary', state: 'idle', className: 'not-disabled:hover:bg-tonal-hover not-disabled:active:bg-tonal-active' },
-      // Ghost scrim = `--opacity-ghost-hover` .06 / `--opacity-ghost-active` .10
-      // (light) and .08 / .14 (dark); expressed as color-mix percentages.
+      // Ghost scrim = `--opacity-ghost-hover` / `--opacity-ghost-active`, which
+      // already flip per theme (light .06/.10, dark .08/.14), so one pair of
+      // classes covers both themes — no `dark:` duplicates.
       {
         variant: 'ghost',
         state: 'idle',
         className:
-          'not-disabled:hover:bg-foreground/6 not-disabled:active:bg-foreground/10 dark:not-disabled:hover:bg-foreground/8 dark:not-disabled:active:bg-foreground/14',
+          'not-disabled:hover:bg-foreground/(--opacity-ghost-hover) not-disabled:active:bg-foreground/(--opacity-ghost-active)',
       },
       {
         variant: 'danger-ghost',
         state: 'idle',
         className:
-          'not-disabled:hover:bg-danger/6 not-disabled:active:bg-danger/10 dark:not-disabled:hover:bg-danger/8 dark:not-disabled:active:bg-danger/14',
+          'not-disabled:hover:bg-danger/(--opacity-ghost-hover) not-disabled:active:bg-danger/(--opacity-ghost-active)',
       },
       { variant: 'danger', state: 'idle', className: 'not-disabled:hover:bg-danger-hover not-disabled:active:bg-danger-active' },
       // Square hit area, equal to the control height of the matching size.

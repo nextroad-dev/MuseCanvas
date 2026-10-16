@@ -84,7 +84,7 @@ export interface RadioProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
 /**
  * Jude-Frontweb v22 Circular Radio:
  * - 16px circular outer frame (`h-4 w-4 rounded-pill border border-border-control bg-surface`).
- * - Checked state: `border-primary bg-surface` with centered 6-7px solid dot (`bg-primary rounded-pill`).
+ * - Checked state: `border-primary bg-surface` with centered 6px solid dot (`bg-primary rounded-pill`).
  * - Unchecked: `border border-border-control bg-surface`, hover deepens border to foreground.
  * - Arrow key navigation handled natively via shared `name` attribute in browser accessibility tree.
  * - `focus-visible` 2px outline on keyboard focus.
@@ -135,7 +135,7 @@ export function Radio({
       )}
     >
       {isChecked ? (
-        <span className="h-[6.5px] w-[6.5px] rounded-pill bg-primary" />
+        <span className="size-1.5 rounded-pill bg-primary" />
       ) : null}
     </span>
   )

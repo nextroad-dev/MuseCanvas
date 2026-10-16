@@ -1,10 +1,12 @@
 'use client'
 
-import { useId } from 'react'
+import { useCallback, useEffect, useId } from 'react'
 import type { CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { PlusIcon, XIcon } from '@phosphor-icons/react'
 import type { CanvasListItemDto } from '@musecanvas/contracts'
 import { Alert, Button, IconButton, iconSize } from '@/shared/components/ui'
+import { useDialog } from '@/shared/hooks/useDialog'
 import { cn } from '@/shared/lib/cn'
 
 export interface ConversationSidebarProps {
@@ -24,6 +26,12 @@ export interface ConversationSidebarProps {
 
 /** Cells past this index share one delay, matching the library grid's clamp. */
 const STAGGER_CLAMP = 8
+
+/** Scrim: `--color-overlay` at `--opacity-overlay` (40% light, 55% dark). */
+const SCRIM_BACKGROUND = 'color-mix(in srgb, var(--color-overlay) calc(var(--opacity-overlay) * 100%), transparent)'
+
+/** Below `lg` the docked rail is gone, so a lingering mobile drawer must close. */
+const DESKTOP_BREAKPOINT_QUERY = '(min-width: 64rem)'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '对话列表加载失败'
@@ -50,6 +58,26 @@ export function ConversationSidebar({
 }: ConversationSidebarProps) {
   const current = items.find((item) => item.id === currentCanvasId) ?? null
   const headingId = useId()
+  const closeDrawer = useCallback(() => onClose(), [onClose])
+  const {
+    mounted: drawerMounted,
+    phase: drawerPhase,
+    closeButtonRef: drawerCloseButtonRef,
+    portalTarget: drawerPortalTarget,
+    rootProps: drawerRootProps,
+    dialogProps: drawerDialogProps,
+  } = useDialog({ open, onClose: closeDrawer })
+
+  // The rail docks at `lg`: reaching it retires the overlay drawer instead of
+  // leaving an invisible open dialog behind.
+  useEffect(() => {
+    const breakpoint = window.matchMedia(DESKTOP_BREAKPOINT_QUERY)
+    const closeOnDesktop = () => {
+      if (breakpoint.matches) closeDrawer()
+    }
+    breakpoint.addEventListener('change', closeOnDesktop)
+    return () => breakpoint.removeEventListener('change', closeOnDesktop)
+  }, [closeDrawer])
 
   const content = (
     <nav aria-label="对话列表" className="flex h-full min-h-0 flex-col gap-4">
@@ -69,6 +97,7 @@ export function ConversationSidebar({
             size="sm"
             aria-label="关闭对话列表"
             className="lg:hidden"
+            ref={drawerCloseButtonRef}
             onClick={onClose}
             icon={<XIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
           />
@@ -126,16 +155,35 @@ export function ConversationSidebar({
       <aside className="hidden lg:flex lg:w-[var(--container-settings-nav)] lg:shrink-0 lg:flex-col lg:border-r lg:border-border lg:pr-6">
         {content}
       </aside>
-      {open ? (
-        <div className="fixed inset-0 z-modal lg:hidden" role="presentation">
-          <div aria-hidden="true" className="motion-fade-in absolute inset-0 bg-overlay/40" onClick={onClose} />
+      {drawerMounted && drawerPortalTarget ? createPortal(
+        <div
+          {...drawerRootProps}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeDrawer()
+          }}
+          className={cn(
+            'fixed inset-0 z-modal lg:hidden',
+            drawerPhase === 'close' ? 'motion-fade-out pointer-events-none' : 'motion-fade-in',
+          )}
+        >
           <div
-            className="motion-drawer-in-left absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] flex-col bg-surface p-4 shadow-modal"
+            aria-hidden="true"
+            className="absolute inset-0"
+            style={{ backgroundColor: SCRIM_BACKGROUND }}
+            onClick={closeDrawer}
+          />
+          <div
+            {...drawerDialogProps}
             aria-labelledby={headingId}
+            className={cn(
+              'absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] flex-col bg-surface p-4 shadow-drawer',
+              drawerPhase === 'close' ? 'motion-drawer-out-left' : 'motion-drawer-in-left',
+            )}
           >
             {content}
           </div>
-        </div>
+        </div>,
+        drawerPortalTarget,
       ) : null}
     </>
   )

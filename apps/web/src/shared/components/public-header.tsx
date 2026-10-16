@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ThemeToggle } from '@/shared/components/ui/theme-toggle'
 import { buttonVariants } from '@/shared/components/ui/button-variants'
 import { ContentFrame } from '@/shared/components/content-frame'
+import { PublicMobileNav } from '@/shared/components/public-mobile-nav'
 import { BrandMark } from '@/shared/components/brand-mark'
 import { cn } from '@/shared/lib/cn'
 
@@ -105,7 +106,7 @@ export function PublicHeader({ current = 'landing', className }: PublicHeaderPro
             </Link>
           )}
 
-          {/* F2 挂载点：在此处渲染 <PublicMobileNav />（<640px 菜单按钮 + 顶部落下面板，'use client' island）。 */}
+          <PublicMobileNav />
 
           <ThemeToggle />
 

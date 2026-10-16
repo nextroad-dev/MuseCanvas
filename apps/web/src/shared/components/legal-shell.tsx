@@ -36,9 +36,17 @@ interface LegalShellProps {
 export function LegalShell({ title, updatedAt, current = 'terms', sections = [], children }: LegalShellProps) {
   return (
     <div className="flex min-h-screen flex-col bg-canvas text-foreground antialiased">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-tooltip focus:rounded-control focus:bg-primary focus:px-4 focus:py-2 focus:text-on-primary"
+      >
+        跳到主要内容
+      </a>
+      {/* 阅读进度条：2px bg-primary，`@supports (animation-timeline: scroll())` 才显示（见 globals.css）。 */}
+      <div aria-hidden="true" className="motion-reading-progress" />
       <PublicHeader current={current} />
 
-      <main className="motion-page-enter flex-1 py-12 md:py-16 lg:py-20">
+      <main id="main" className="motion-page-enter flex-1 py-12 md:py-16 lg:py-20">
         <ContentFrame>
           <div
             className={cn(

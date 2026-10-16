@@ -909,6 +909,47 @@ body {
       opacity: 1;
     }
   }
+
+  /*
+   * Reading progress (legal pages, see `shared/components/legal-shell.tsx`):
+   * a 2px `bg-primary` bar pinned to the viewport top, driven by the scroll
+   * timeline. Hidden by default; only displayed where `scroll()` timelines are
+   * supported AND the user has not asked for reduced motion — everywhere else
+   * the page is simply complete without it (fail-visible).
+   */
+  .motion-reading-progress {
+    display: none;
+  }
+
+  @keyframes mc-reading-progress {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  @supports (animation-timeline: scroll()) {
+    @media (prefers-reduced-motion: no-preference) {
+      .motion-reading-progress {
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background-color: var(--color-primary);
+        transform-origin: 0 50%;
+        z-index: var(--z-index-sticky);
+        animation-name: mc-reading-progress;
+        animation-duration: auto;
+        animation-timing-function: linear;
+        animation-fill-mode: both;
+        animation-timeline: scroll();
+      }
+    }
+  }
 }
 
 /* Custom Scrollbar */

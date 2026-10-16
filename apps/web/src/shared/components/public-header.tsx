@@ -10,13 +10,22 @@ export interface PublicHeaderProps {
   className?: string
 }
 
-const navLink = buttonVariants({ variant: 'ghost', size: 'sm' })
-const headerLogin = buttonVariants({ variant: 'primary', size: 'md' })
+/** 落地页桌面锚点导航：作品 / 产品能力 / 创作流程 / 条款。 */
+const landingNav: { href: string; label: string; className: string }[] = [
+  { href: '#works', label: '作品', className: 'hidden md:inline-flex' },
+  { href: '#capabilities', label: '产品能力', className: 'hidden md:inline-flex' },
+  { href: '#workflow', label: '创作流程', className: 'hidden md:inline-flex' },
+  { href: '/terms', label: '条款', className: 'hidden sm:inline-flex' },
+]
 
-/** Legal switcher: one tonal track holding both documents, the current one lifted to surface. */
+const desktopNavLink =
+  'rounded-control px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground'
+const headerLogin = buttonVariants({ variant: 'ghost', size: 'md' })
+const headerPrimary = buttonVariants({ variant: 'primary', size: 'md' })
+
+/** Legal switcher: one tonal track holding both documents, the current one selected. */
 const legalTrack = 'hidden items-center gap-1 rounded-pill bg-tonal p-1 sm:flex'
-const legalItem =
-  'rounded-pill px-3 py-1 text-sm transition-colors hover:text-foreground'
+const legalItem = 'rounded-pill px-3 py-1 text-sm transition-colors hover:text-foreground'
 
 /**
  * Top navigation for public pages (landing, terms, privacy).
@@ -26,7 +35,10 @@ const legalItem =
  *   anchors its content to the same line.
  * - Sits in the shared `ContentFrame` gutters, on an opaque `bg-surface` band
  *   with a single rule (`border-b`): the header is a page edge, not a card.
- * - Brand wordmark is `h-6` (24px); the sticky layer is `z-sticky`.
+ * - Brand mark is `h-5` (20px) plus the wordmark text; the sticky layer is `z-sticky`.
+ * - Desktop navigation only. The mobile (<640px) menu button + drop-down panel
+ *   belong to F2: render `<PublicMobileNav />` at the marked slot below
+ *   (a `'use client'` island; this file stays a server component).
  */
 export function PublicHeader({ current = 'landing', className }: PublicHeaderProps) {
   const isLegal = current === 'terms' || current === 'privacy'
@@ -40,10 +52,11 @@ export function PublicHeader({ current = 'landing', className }: PublicHeaderPro
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
           <Link
             href="/"
-            className="flex min-w-0 shrink items-center rounded-control"
+            className="flex min-w-0 shrink items-center gap-2.5 rounded-control"
             aria-label="MuseCanvas 首页"
           >
-            <BrandMark variant="wordmark" priority className="h-6 w-auto" />
+            <BrandMark variant="mark" priority className="h-5" />
+            <span className="whitespace-nowrap text-base font-medium text-foreground">MuseCanvas</span>
           </Link>
 
           {/* On the legal pages the header carries the switch between the two documents. */}
@@ -55,7 +68,7 @@ export function PublicHeader({ current = 'landing', className }: PublicHeaderPro
                 className={cn(
                   legalItem,
                   current === 'terms'
-                    ? 'bg-surface font-medium text-foreground'
+                    ? 'bg-tonal-selected font-medium text-foreground'
                     : 'text-muted-foreground',
                 )}
               >
@@ -67,7 +80,7 @@ export function PublicHeader({ current = 'landing', className }: PublicHeaderPro
                 className={cn(
                   legalItem,
                   current === 'privacy'
-                    ? 'bg-surface font-medium text-foreground'
+                    ? 'bg-tonal-selected font-medium text-foreground'
                     : 'text-muted-foreground',
                 )}
               >
@@ -79,30 +92,28 @@ export function PublicHeader({ current = 'landing', className }: PublicHeaderPro
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           {current === 'landing' ? (
-            <>
-              <Link href="#capabilities" className={cn(navLink, 'hidden md:inline-flex')}>
-                产品能力
-              </Link>
-              <Link href="#workflow" className={cn(navLink, 'hidden md:inline-flex')}>
-                创作流程
-              </Link>
-              <Link href="/terms" className={cn(navLink, 'hidden sm:inline-flex')}>
-                用户协议
-              </Link>
-              <Link href="/privacy" className={cn(navLink, 'hidden sm:inline-flex')}>
-                隐私政策
-              </Link>
-            </>
+            <nav aria-label="页面导航" className="flex items-center gap-1">
+              {landingNav.map((item) => (
+                <Link key={item.href} href={item.href} className={cn(desktopNavLink, item.className)}>
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
           ) : (
-            <Link href="/" className={cn(navLink, 'hidden sm:inline-flex')}>
+            <Link href="/" className={cn(desktopNavLink, 'hidden sm:inline-flex')}>
               返回首页
             </Link>
           )}
+
+          {/* F2 挂载点：在此处渲染 <PublicMobileNav />（<640px 菜单按钮 + 顶部落下面板，'use client' island）。 */}
 
           <ThemeToggle />
 
           <Link href="/login" className={headerLogin}>
             登录
+          </Link>
+          <Link href="/login" className={cn(headerPrimary, 'hidden sm:inline-flex')}>
+            开始创作
           </Link>
         </div>
       </ContentFrame>

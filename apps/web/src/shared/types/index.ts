@@ -595,6 +595,8 @@ export interface AdminJob {
   errorMessage?: string
   modelId: string
   modelName: string
+  /** Image or video, from `generation_jobs.media_kind` (defaults to image server-side). */
+  mediaKind?: string
   phase?: string | null
   templateName?: string | null
   languageModelName?: string | null

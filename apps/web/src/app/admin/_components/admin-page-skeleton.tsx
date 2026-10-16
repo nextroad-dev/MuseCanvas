@@ -22,6 +22,12 @@ export function AdminPageSkeleton({ title, description, variant = 'list' }: Admi
         <div className="grid grid-cols-1 gap-4 @min-[480px]/admin:grid-cols-2 @min-[1040px]/admin:grid-cols-4">
           {[0, 1, 2, 3].map((index) => <Card key={index}><SkeletonText width="7rem" /><SkeletonTile className="aspect-auto h-10 w-28 rounded-control" /><SkeletonText width="9rem" /></Card>)}
         </div>
+        <Card density="compact" className="flex-row flex-wrap items-center gap-4">
+          <SkeletonText width="6rem" />
+          <SkeletonText width="10rem" />
+          <SkeletonText width="10rem" />
+          <SkeletonTile className="aspect-auto h-10 w-24 rounded-control" />
+        </Card>
       </section>}
       {(variant === 'settings' || title === '用户与邀请管理') && <div aria-hidden="true" className="flex max-w-full gap-2 overflow-hidden">
         {Array.from({ length: variant === 'settings' ? 4 : 2 }, (_, index) => <SkeletonTile key={index} className="aspect-auto h-10 w-28 shrink-0 rounded-control" />)}
@@ -46,8 +52,8 @@ export function AdminPageSkeleton({ title, description, variant = 'list' }: Admi
           {[0, 1, 2].map((index) => <Card key={index} density="compact"><SkeletonText width="12rem" className="text-module" /><SkeletonText width="16rem" /><SkeletonTile className="aspect-auto h-12 w-full rounded-control" /></Card>)}
         </div>
         <Card className="hidden gap-3 @min-[800px]/admin:flex">
-          <SkeletonRow cells={variant === 'resources' ? 5 : 4} />
-          {[0, 1, 2, 3, 4].map((index) => <SkeletonRow key={index} cells={variant === 'resources' ? 5 : 4} />)}
+          <SkeletonRow cells={variant === 'resources' || variant === 'dashboard' ? 5 : 4} />
+          {[0, 1, 2, 3, 4].map((index) => <SkeletonRow key={index} cells={variant === 'resources' || variant === 'dashboard' ? 5 : 4} />)}
         </Card>
       </div>}
     </div>

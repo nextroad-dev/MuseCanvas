@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { ImageBrokenIcon as ImageOff, PlayIcon as Play, SpeakerSlashIcon as VolumeX } from '@phosphor-icons/react'
 import type { MediaKind } from '@/shared/types'
-import { iconSize } from '@/shared/components/ui'
+import { iconSize, Spinner } from '@/shared/components/ui'
 import { cn } from '@/shared/lib/cn'
 
 export type MediaFrameLayout = 'tile' | 'stage' | 'thumb'
@@ -21,22 +21,23 @@ export interface MediaFrameProps {
   height?: number
   hasAudio?: boolean
   showControls?: boolean
-  /** Worker-derived preview (≈512px WebP / JPEG poster) for this asset. Honoured by
-   *  `tile` and `thumb` only — `stage` is the full-size surface, and a thumbnail
-   *  there would upscale into mush. For video it becomes `poster`, for an image the
-   *  `src`; `src` stays the real media either way, so retry, click-through and
-   *  download never see the thumbnail. */
+  /** Worker-derived preview (≈512px WebP / JPEG poster) for this asset. `tile`
+  *  and `thumb` use it as the first paint; `stage` also paints it first (no
+  *  shimmer) and fades the full-size `src` in over it once decoded, so Slow 3G
+  *  still shows the first frame immediately. `src` stays the real media either
+  *  way, so retry, click-through and download never see the thumbnail. For
+  *  video it becomes `poster`, for an image the first-paint `src`. */
   previewSrc?: string
   /** Full class string for the media element. Callers own their exact styling so
    *  swapping in this component never moves existing pixels; omit to use the
    *  per-layout defaults below. */
   className?: string
-  /** Fired once the element has failed against the original `src` too — i.e. after the
-   *  internal preview→original retry is spent. A presigned URL expiring is the case
-   *  this exists for: the caller can re-sign and hand back a new `src`, and the
-   *  identity change resets the load cycle. Omit it and behaviour is unchanged.
-   *  Wired only for the decorated (`tile`) layout; `stage`/`thumb` still render the
-   *  bare element they always have, with no load states of their own. */
+  /** Fired when the original `src` fails (after the internal preview→original
+   *  retry is spent on `tile`). A presigned URL expiring is the case this
+   *  exists for: the caller can re-sign and hand back a new `src`, and the
+   *  identity change resets the load cycle. On `stage` the preview stays
+   *  painted behind the failure note, so the frame never goes blank. Omit it
+   *  and behaviour is unchanged. */
   onMediaError?: () => void
 }
 
@@ -134,9 +135,9 @@ function asPreviewUrl(value: string | undefined): string | undefined {
 
 /** The one img-vs-video decision point shared by the console result grid, the
  *  console history rail and the library. Only the library (`tile`) gets the
- *  loading skeleton, so `stage` and `thumb` keep rendering the exact same markup
- *  they did before: a bare `<img>` with no wrapper for images, and for video the
- *  wrapper plus duration chip. */
+ *  loading skeleton; `thumb` keeps rendering the exact same markup it did
+ *  before, and `stage` owns its progressive preview→original lifecycle below
+ *  (preview first, no shimmer, original fades in on top). */
 export function MediaFrame({
   src,
   kind,
@@ -152,9 +153,27 @@ export function MediaFrame({
   className,
   onMediaError,
 }: MediaFrameProps) {
+  if (layout === 'stage') {
+    return (
+      <StageMedia
+        src={src}
+        kind={kind}
+        alt={alt}
+        previewSrc={previewSrc}
+        aspectRatio={aspectRatio}
+        width={width}
+        height={height}
+        showControls={showControls}
+        className={className}
+        onMediaError={onMediaError}
+      />
+    )
+  }
+
   const isVideo = kind === 'video'
-  // `stage` is the full-size surface; a thumbnail there is a downgrade.
-  const rawPreview = layout === 'stage' ? undefined : asPreviewUrl(previewSrc)
+  // A preview that *is* the original (no thumbnail derived yet) is no preview at
+  // all: keeping it would burn the one retry on a request that already failed.
+  const rawPreview = asPreviewUrl(previewSrc)
   // A preview that *is* the original (no thumbnail derived yet) is no preview at
   // all: keeping it would burn the one retry on a request that already failed.
   const preview = rawPreview && rawPreview !== src ? rawPreview : undefined
@@ -198,60 +217,6 @@ export function MediaFrame({
         preload="metadata"
         muted
         playsInline
-      />
-    )
-  }
-
-  if (layout === 'stage' && phase === 'failed') {
-    return (
-      <div
-        className={cn('flex flex-col items-center justify-center gap-2 rounded-card border border-border bg-tonal p-8 text-center', className)}
-        style={{ aspectRatio: stageAspectRatio(aspectRatio, width, height) }}
-      >
-        <ImageOff weight="duotone" aria-hidden="true" className={`${iconSize.xl} text-muted-foreground`} />
-        <p className="text-sm text-muted-foreground">媒体资源加载失败或链接已失效</p>
-        {onMediaError ? (
-          <button
-            type="button"
-            onClick={() => {
-              setState({ identity, phase: 'loading' })
-              onMediaError?.()
-            }}
-            className="text-xs font-medium text-primary underline underline-offset-4 hover:text-foreground"
-          >
-            重新加载 / 重新签名
-          </button>
-        ) : null}
-      </div>
-    )
-  }
-
-  if (layout === 'stage') {
-    return isVideo ? (
-      <video
-        src={videoPosterSrc(mediaSrc)}
-        poster={poster}
-        aria-label={alt}
-        className={className ?? VIDEO_CLASS.stage}
-        style={{ aspectRatio: stageAspectRatio(aspectRatio, width, height) }}
-        preload="metadata"
-        muted
-        playsInline
-        controls={showControls === true}
-        onLoadedMetadata={markReady}
-        onLoadedData={markReady}
-        onError={markFailed}
-      />
-    ) : (
-      <img
-        src={mediaSrc}
-        alt={alt}
-        className={className ?? IMAGE_CLASS.stage}
-        width={width}
-        height={height}
-        loading="lazy"
-        onLoad={markReady}
-        onError={markFailed}
       />
     )
   }
@@ -332,6 +297,182 @@ export function MediaFrame({
           )}
         </span>
       ) : null}
+    </div>
+  )
+}
+
+/** `stage` without a usable preview: the existing failure card, unchanged. */
+function StageFailure({
+  aspectRatio,
+  width,
+  height,
+  className,
+  onRetry,
+}: {
+  aspectRatio?: string
+  width?: number
+  height?: number
+  className?: string
+  onRetry: (() => void) | undefined
+}) {
+  return (
+    <div
+      className={cn('flex flex-col items-center justify-center gap-2 rounded-card border border-border bg-tonal p-8 text-center', className)}
+      style={{ aspectRatio: stageAspectRatio(aspectRatio, width, height) }}
+    >
+      <ImageOff weight="duotone" aria-hidden="true" className={`${iconSize.xl} text-muted-foreground`} />
+      <p className="text-sm text-muted-foreground">媒体资源加载失败或链接已失效</p>
+      {onRetry ? (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="text-xs font-medium text-primary underline underline-offset-4 hover:text-foreground"
+        >
+          重新加载 / 重新签名
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The large preview surface (the lightbox stage). The worker preview paints
+ * first — no shimmer, so Slow 3G still shows the first frame immediately — and
+ * the full-size original fades in over it (`.motion-fade-in`) once decoded,
+ * at which point the preview layer is removed. An original that fails keeps
+ * the preview painted and adds the failure note below; only a stage with no
+ * usable preview falls back to the failure card. The capsule is the single
+ * `role="status"` announcer for the original fetch.
+ */
+function StageMedia({
+  src,
+  kind,
+  alt,
+  previewSrc,
+  aspectRatio,
+  width,
+  height,
+  showControls,
+  className,
+  onMediaError,
+}: {
+  src: string
+  kind: MediaKind
+  alt: string
+  previewSrc?: string
+  aspectRatio?: string
+  width?: number
+  height?: number
+  showControls?: boolean
+  className?: string
+  onMediaError?: () => void
+}) {
+  const isVideo = kind === 'video'
+  const preview = asPreviewUrl(previewSrc)
+  // A preview that *is* the original is no preview at all.
+  const stagedPreview = preview && preview !== src ? preview : undefined
+
+  const identity = `${kind}|${src}|${stagedPreview ?? ''}`
+  const [state, setState] = useState({ identity, originalReady: false, originalFailed: false, previewGone: false })
+  // Source swapped (flipped asset, URL re-signed): reset during render rather
+  // than in an effect, so no frame ever shows the old element state.
+  if (state.identity !== identity) {
+    setState({ identity, originalReady: false, originalFailed: false, previewGone: false })
+  }
+  const current = state.identity === identity ? state : { identity, originalReady: false, originalFailed: false, previewGone: false }
+  const { originalReady, originalFailed } = current
+  // A preview that itself 404s (expired thumbnail) is dropped so the original
+  // paints directly instead of leaving a broken frame behind it.
+  const livePreview = current.previewGone ? undefined : stagedPreview
+  const loading = !originalReady && !originalFailed
+
+  function markOriginalReady() {
+    setState({ identity, originalReady: true, originalFailed: false, previewGone: current.previewGone })
+  }
+  function markOriginalFailed() {
+    setState({ identity, originalReady: false, originalFailed: true, previewGone: current.previewGone })
+    onMediaError?.()
+  }
+  function markPreviewGone() {
+    setState({ identity, originalReady: current.originalReady, originalFailed: current.originalFailed, previewGone: true })
+  }
+  function retryOriginal() {
+    setState({ identity, originalReady: false, originalFailed: false, previewGone: false })
+    onMediaError?.()
+  }
+
+  const capsule = loading ? (
+    <p role="status" className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-pill bg-overlay/70 px-3 py-1.5 text-xs text-foreground-inverse">
+      <Spinner size="sm" />
+      正在加载原图
+    </p>
+  ) : null
+  const failureNote = originalFailed && livePreview ? (
+    <div className="absolute inset-x-0 bottom-0 flex justify-center p-4">
+      <p role="alert" className="inline-flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-pill bg-overlay/70 px-3 py-1.5 text-center text-xs text-foreground-inverse">
+        <span>原图加载失败，当前显示预览图。</span>
+        {onMediaError ? (
+          <button type="button" onClick={retryOriginal} className="font-medium underline underline-offset-4">
+            重新加载
+          </button>
+        ) : null}
+      </p>
+    </div>
+  ) : null
+
+  if (isVideo) {
+    if (originalFailed && !livePreview) {
+      return <StageFailure aspectRatio={aspectRatio} width={width} height={height} className={className} onRetry={onMediaError ? retryOriginal : undefined} />
+    }
+    return (
+      <div className="relative flex w-full items-center justify-center overflow-hidden" aria-busy={loading}>
+        <video
+          src={videoPosterSrc(src)}
+          poster={livePreview}
+          aria-label={alt}
+          className={`${className ?? VIDEO_CLASS.stage} ${originalReady ? 'motion-fade-in' : ''}`}
+          style={{ aspectRatio: stageAspectRatio(aspectRatio, width, height) }}
+          preload="metadata"
+          muted
+          playsInline
+          controls={showControls === true}
+          onLoadedMetadata={markOriginalReady}
+          onLoadedData={markOriginalReady}
+          onError={markOriginalFailed}
+        />
+        {failureNote}
+        {capsule}
+      </div>
+    )
+  }
+
+  if (originalFailed && !livePreview) {
+    return <StageFailure aspectRatio={aspectRatio} width={width} height={height} className={className} onRetry={onMediaError ? retryOriginal : undefined} />
+  }
+  const mediaClass = className ?? IMAGE_CLASS.stage
+  // The base state is always a painted frame (preview, or the original itself
+  // when there is no preview), never a blank box — the fail-visible rule.
+  const behindPreview = Boolean(livePreview) && !originalReady
+  return (
+    <div className="relative flex w-full items-center justify-center overflow-hidden" aria-busy={loading}>
+      {livePreview && !originalReady ? (
+        <img src={livePreview} alt="" aria-hidden="true" className={mediaClass} loading="eager" onError={markPreviewGone} />
+      ) : null}
+      {!originalFailed ? (
+        <img
+          src={src}
+          alt={alt}
+          aria-hidden={behindPreview || undefined}
+          className={behindPreview ? 'pointer-events-none absolute h-px w-px opacity-0' : `${mediaClass} ${originalReady ? 'motion-fade-in' : ''}`}
+          width={width}
+          height={height}
+          loading="eager"
+          onLoad={markOriginalReady}
+          onError={markOriginalFailed}
+        />
+      ) : null}
+      {failureNote}
+      {capsule}
     </div>
   )
 }

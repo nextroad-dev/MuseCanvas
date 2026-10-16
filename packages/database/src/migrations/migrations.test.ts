@@ -286,3 +286,26 @@ test('migrations directory resolves from the module, not the working directory',
   // `pnpm migrate` run from the repository root.
   assert.ok(loadMigrations().length > 0)
 })
+
+test('the media model defaults migration is idempotent and repairs before constraining', () => {
+  const defaults = migrationNamed('media_model_defaults')
+  assert.equal(defaults.version, '0034')
+  // Every DDL/DML statement must be replay-safe: the runner records a migration
+  // as applied only after success, but a crashed deploy can still replay it.
+  assert.match(defaults.sql, /ADD COLUMN IF NOT EXISTS is_default/)
+  assert.match(defaults.sql, /CREATE UNIQUE INDEX IF NOT EXISTS model_configs_single_default_per_kind_idx/)
+  // The partial index must see at most one live default per kind, so cleanup
+  // and backfill have to precede it in the same transaction.
+  const cleanupAt = defaults.sql.indexOf('EXISTS (')
+  const backfillAt = defaults.sql.indexOf('SET is_default = true')
+  const indexAt = defaults.sql.indexOf('CREATE UNIQUE INDEX IF NOT EXISTS')
+  assert.ok(cleanupAt >= 0 && backfillAt >= 0 && indexAt >= 0)
+  assert.ok(cleanupAt < indexAt && backfillAt < indexAt, 'dirty-data repair must precede the partial unique index')
+  // Backfill elects only enabled, non-deleted media rows; video may stay null.
+  assert.match(defaults.sql, /model_kind = 'image' AND m\.enabled/)
+  assert.match(defaults.sql, /model_kind = 'video' AND m\.enabled/)
+  assert.match(defaults.sql, /ORDER BY o\.sort_order, o\.created_at/)
+  // The uniqueness scope is per media kind over live defaults only, and
+  // language rows are outside the predicate.
+  assert.match(defaults.sql, /WHERE is_default AND deleted_at IS NULL AND model_kind IN \('image','video'\)/)
+})

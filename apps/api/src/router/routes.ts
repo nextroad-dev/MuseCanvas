@@ -15,6 +15,7 @@ import { createGeneration } from '../modules/generations/create'
 import { listCanvases, createCanvas, getCanvas, updateCanvas, deleteCanvas } from '../modules/canvases/handlers'
 import { postCanvasAgentMessages, getCanvasAgentHistory, getCanvasAgentTurn, postCanvasAgentConfirm, postCanvasAgentApply, getCanvasAgentStatus } from '../modules/canvases/agent'
 import { readCanvasAgentSettings, updateCanvasAgentSettings } from '../modules/admin/canvas-agent-settings'
+import { readMediaModelDefaults, updateMediaModelDefaults } from '../modules/admin/media-model-defaults'
 import { editImage } from '../modules/image-edit/handlers'
 import {
   completeGenerationUpload,
@@ -138,6 +139,7 @@ export const GET_ROUTES: Route[] = [
   { path: 'admin/prompt-templates/sets/:hexid', access: 'admin', handler: context => getPromptTemplateSetDetail(context.params.hexid) },
   { path: 'admin/prompt-optimization-settings', access: 'admin', handler: () => readPromptOptimizationSettings() },
   { path: 'admin/canvas-agent-settings', access: 'admin', handler: () => readCanvasAgentSettings() },
+  { path: 'admin/media-model-defaults', access: 'admin', handler: context => readMediaModelDefaults(context.actor) },
   { path: 'admin/jobs', access: 'admin', handler: context => listAdminJobs(context) },
   { path: 'admin/invitations', access: 'admin', handler: () => listInvitations() },
   { path: 'admin/oauth-providers', access: 'admin', handler: async () => ok(await adminOAuthSettings()) },
@@ -186,6 +188,7 @@ export const POST_ROUTES: Route[] = [
 export const PATCH_ROUTES: Route[] = [
   { path: 'canvases/:id', access: 'actor', handler: context => updateCanvas(context) },
   { path: 'admin/canvas-agent-settings', access: 'admin', handler: async context => updateCanvasAgentSettings(context.actor, await context.json()) },
+  { path: 'admin/media-model-defaults', access: 'admin', handler: async context => updateMediaModelDefaults(context.actor, await context.json()) },
   { path: 'admin/registration', access: 'admin', handler: context => setRegistrationMode(context) },
   { path: 'admin/prompt-optimization-settings', access: 'admin', handler: async context => updatePromptOptimizationSettings(context.actor, await context.json()) },
   // The old single regex accepted both the bare id and the `/status` alias. Two

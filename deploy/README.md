@@ -20,7 +20,7 @@ docker compose --project-directory . --env-file .env -f deploy/compose.yaml \
 
 脚本幂等可重跑，支持 `--dry-run`、`--limit=<n>`、`--kind=image|video|all`；`deploy/compose.prod.yaml` / `compose.images.yaml` 把 `compose.yaml` 换掉即可。
 
-`.env` 只承载 bootstrap 与部署开关：`POSTGRES_PASSWORD`、`APP_MASTER_KEY`、`MINIO_ROOT_*`（内嵌栈）、`MUSECANVAS_IMAGE_TAG` / `MUSECANVAS_HTTP_PORT`，`COOKIE_SECURE`，以及默认全为 `false` 的 `ALLOW_INSECURE_*` / `ALLOW_PLUGIN_UPLOAD` 开关。SMTP、应用 S3 配置、公开访问地址、OAuth 客户端凭据、上传限制和提示词模板是数据库配置，不再经环境变量传递。旧 `prepare-prompt-templates` 脚本仍在 `scripts/` 供手动兼容使用，不再被任何 Compose 文件挂载或执行。
+`.env` 只承载 bootstrap 与部署开关：`POSTGRES_PASSWORD`、`APP_MASTER_KEY`、`MINIO_ROOT_*`（内嵌栈）、`MUSECANVAS_IMAGE_TAG` / `MUSECANVAS_HTTP_PORT`，`COOKIE_SECURE`，以及默认全为 `false` 的 `ALLOW_INSECURE_*` / `ALLOW_PLUGIN_UPLOAD` 开关。`compose.images.yaml` 额外透传 `S3_*` / `SMTP_*`，供尚无数据库配置行的全新安装作环境兜底（DB 行优先）；一旦在 `/setup` 向导或管理页写入配置，DB 行即接管。SMTP、应用 S3 配置、公开访问地址、OAuth 客户端凭据、上传限制和提示词模板是数据库配置，不再经环境变量传递。旧 `prepare-prompt-templates` 脚本仍在 `scripts/` 供手动兼容使用，不再被任何 Compose 文件挂载或执行。
 
 Cookie 策略：本地 `compose.yaml` / `compose.dev.yaml` 直接通过 HTTP 提供服务，因此 `COOKIE_SECURE` 默认 `false`；在 TLS 反向代理后使用这两个入口时应设为 `true`。`compose.prod.yaml` / `compose.images.yaml` 按生产 TLS 部署默认 `true`；若明确要把它们的 Nginx 端口直接暴露为纯 HTTP，必须在 `.env` 设置 `COOKIE_SECURE=false`，否则浏览器不会回传 setup/session cookie。
 

@@ -24,9 +24,16 @@ import {
   ListChecksIcon as ListTodo,
   ListIcon as Menu,
   XIcon as X,
+  CaretDoubleLeftIcon as CollapseSidebar,
+  CaretDoubleRightIcon as ExpandSidebar,
+  ArrowLeftIcon as BackToConsole,
 } from '@phosphor-icons/react'
 import { iconSize } from '@/shared/components/ui'
-import { adminTouchTargetsSquare } from '../lib/admin-layout'
+import {
+  adminTouchTargetsSquare,
+  readAdminSidebarCollapsed,
+  writeAdminSidebarCollapsed,
+} from '../lib/admin-layout'
 
 interface AdminShellProps {
   user: User
@@ -73,13 +80,16 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
+    title: '运行',
+    items: [{ path: '/admin/jobs', label: '任务监控', icon: ListTodo }],
+  },
+  {
     title: '系统设置',
     items: [
       { path: '/admin/oauth', label: 'OAuth', icon: ShieldCheck },
       { path: '/admin/settings', label: '系统配置', icon: Settings },
     ],
   },
-  { items: [{ path: '/admin/jobs', label: '任务监控', icon: ListTodo }] },
 ]
 
 /** path → visible label, shared by the nav and the breadcrumb. */
@@ -154,6 +164,19 @@ function Breadcrumbs({ pathname }: { pathname: string }) {
 export function AdminShell({ user, children }: AdminShellProps) {
   const pathname = usePathname()
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // First paint always renders expanded (SSR-safe); the stored choice is
+  // applied after mount, so a refresh keeps the operator's collapse state.
+  const [collapsed, setCollapsed] = useState(false)
+  useEffect(() => {
+    setCollapsed(readAdminSidebarCollapsed())
+  }, [])
+  const toggleSidebar = useCallback(() => {
+    setCollapsed((previous) => {
+      const next = !previous
+      writeAdminSidebarCollapsed(next)
+      return next
+    })
+  }, [])
   const closeDrawer = useCallback(() => setDrawerOpen(false), [])
   const {
     mounted: drawerMounted,
@@ -187,13 +210,19 @@ export function AdminShell({ user, children }: AdminShellProps) {
     return pathname.startsWith(cleanPath)
   }
 
-  const renderNavLinks = (options?: { onNavigate?: () => void }) => {
+  /**
+   * Sidebar link list. In the collapsed desktop rail only the glyphs show, so
+   * each item carries its name as `aria-label` + `title`; expanded items (and
+   * the mobile drawer, which always renders expanded) get their name from the
+   * visible text instead. Group headings are hidden while collapsed.
+   */
+  const renderNavLinks = (isCollapsed: boolean, options?: { onNavigate?: () => void }) => {
     const { onNavigate } = options ?? {}
     return (
       <div className="flex flex-col gap-6">
         {navGroups.map((group, groupIndex) => (
           <div key={group.title ?? groupIndex} className="flex flex-col gap-1">
-            {group.title && (
+            {group.title && !isCollapsed && (
               <h2 className="mb-2 px-3 text-xs font-medium text-muted-foreground">
                 {group.title}
               </h2>
@@ -207,9 +236,12 @@ export function AdminShell({ user, children }: AdminShellProps) {
                   href={item.path}
                   onClick={onNavigate}
                   aria-current={active ? 'page' : undefined}
+                  aria-label={isCollapsed ? item.label : undefined}
+                  title={isCollapsed ? item.label : undefined}
                   className={cn(
                     'relative flex min-h-[var(--control-lg)] items-center gap-3 rounded-control md:min-h-[var(--control-md)]',
-                    'px-3 text-sm font-medium transition-colors',
+                    'text-sm font-medium transition-colors',
+                    isCollapsed ? 'justify-center px-2' : 'px-3',
                     active
                       ? 'bg-tonal-selected text-foreground'
                       : 'text-muted-foreground hover:bg-tonal-hover hover:text-foreground',
@@ -223,7 +255,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
                     />
                   ) : null}
                   <Icon weight="duotone" className={`${iconSize.sm} shrink-0`} aria-hidden="true" />
-                  <span className="truncate">{item.label}</span>
+                  {isCollapsed ? null : <span className="truncate">{item.label}</span>}
                 </Link>
               )
             })}
@@ -232,6 +264,22 @@ export function AdminShell({ user, children }: AdminShellProps) {
       </div>
     )
   }
+
+  const renderBackToConsole = (isCollapsed: boolean) => (
+    <Link
+      href="/generate"
+      aria-label={isCollapsed ? '返回创作台' : undefined}
+      title={isCollapsed ? '返回创作台' : undefined}
+      className={cn(
+        'flex min-h-[var(--control-lg)] items-center gap-3 rounded-control text-sm font-medium text-muted-foreground transition-colors md:min-h-[var(--control-md)]',
+        'hover:bg-tonal-hover hover:text-foreground',
+        isCollapsed ? 'justify-center px-2' : 'px-3',
+      )}
+    >
+      <BackToConsole weight="bold" className={`${iconSize.sm} shrink-0`} aria-hidden="true" />
+      {isCollapsed ? null : <span className="truncate">返回创作台</span>}
+    </Link>
+  )
 
   return (
     <div className="flex h-dvh min-w-0 flex-col bg-canvas text-foreground">
@@ -270,13 +318,35 @@ export function AdminShell({ user, children }: AdminShellProps) {
       {/* Header and shell share one border-box frame; main owns only vertical padding. */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <ContentFrame className="flex min-h-0 flex-1 gap-6 overflow-hidden">
-          {/* Sidebar — fixed at the 260px `--layout-sidebar` width on desktop. A hairline
-              rule divides it from the content; it is navigation, not a floating card. */}
-          <aside className="hidden w-sidebar shrink-0 flex-col border-r border-border py-6 md:flex">
-            <div className="mb-6 flex flex-col gap-1 px-3"><p className="text-module">管理工作台</p><p className="text-xs text-muted-foreground">资源、成员与实例状态</p></div>
-            <nav className="flex w-full flex-1 flex-col overflow-hidden px-3" aria-label="管理后台导航">
-              <div className="min-h-0 flex-1 overflow-y-auto">{renderNavLinks()}</div>
+          {/* Sidebar — 260px `--layout-sidebar` wide, 64px (`w-sidebar-collapsed`)
+              icon rail while collapsed. A hairline rule divides it from the
+              content; it is navigation, not a floating card. Below `md` it is
+              replaced by the overlay drawer, so the collapsed width can never
+              cover content on a 375px viewport. */}
+          <aside className={cn('hidden shrink-0 flex-col border-r border-border py-6 transition-[width] md:flex', collapsed ? 'w-sidebar-collapsed' : 'w-sidebar')}>
+            <div className={cn('mb-6 flex items-center gap-1', collapsed ? 'justify-center px-2' : 'px-3')}>
+              {collapsed ? null : (
+                <p className="min-w-0 flex-1 truncate text-module">管理后台</p>
+              )}
+              <IconButton
+                variant="ghost"
+                size="sm"
+                onClick={toggleSidebar}
+                aria-expanded={!collapsed}
+                aria-controls="admin-sidebar-nav"
+                aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+                title={collapsed ? '展开侧栏' : '收起侧栏'}
+                icon={collapsed
+                  ? <ExpandSidebar weight="bold" className={iconSize.md} aria-hidden="true" />
+                  : <CollapseSidebar weight="bold" className={iconSize.md} aria-hidden="true" />}
+              />
+            </div>
+            <nav id="admin-sidebar-nav" className={cn('flex w-full flex-1 flex-col overflow-hidden', collapsed ? 'px-2' : 'px-3')} aria-label="管理后台导航">
+              <div className="min-h-0 flex-1 overflow-y-auto">{renderNavLinks(collapsed)}</div>
             </nav>
+            <div className={cn('mt-6 border-t border-border pt-3', collapsed ? 'px-2' : 'px-3')}>
+              {renderBackToConsole(collapsed)}
+            </div>
           </aside>
 
           <main className="@container/admin min-h-0 min-w-0 flex-1 overflow-y-auto py-6 md:py-8">
@@ -327,8 +397,11 @@ export function AdminShell({ user, children }: AdminShellProps) {
             </div>
 
             <nav className="min-h-0 flex-1 overflow-y-auto" aria-label="管理后台导航">
-              {renderNavLinks({ onNavigate: closeDrawer })}
+              {renderNavLinks(false, { onNavigate: closeDrawer })}
             </nav>
+            <div className="border-t border-border pt-3">
+              {renderBackToConsole(false)}
+            </div>
           </div>
         </div>,
         drawerPortalTarget,

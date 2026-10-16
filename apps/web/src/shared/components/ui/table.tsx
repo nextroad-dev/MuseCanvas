@@ -182,13 +182,16 @@ export function TableBody({ busy, className, children }: TableBodyProps) {
 }
 
 export interface TableRowProps {
-  /** Colour-only hover. Off for skeleton and state rows, which are not targets. */
+  /**
+   * Colour-only hover. Defaults off: only a table whose whole row is clickable
+   * opts in, so a static grid never implies an action (P2-7).
+   */
   hover?: boolean
   className?: string
   children: ReactNode
 }
 
-export function TableRow({ hover = true, className, children }: TableRowProps) {
+export function TableRow({ hover = false, className, children }: TableRowProps) {
   const density = useDensity()
   // `|| undefined` rather than an empty string: a row that only exists to hold
   // placeholders (skeleton, dense manifest) should carry no `class` attribute at

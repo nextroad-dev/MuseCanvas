@@ -42,3 +42,33 @@ export const adminPageHeader = 'min-w-0 border-b border-border pb-6 [overflow-wr
 
 /** `PageHeader.actionsClassName`: header actions take the touch size below `md`. */
 export const adminPageActions = `max-w-full min-w-0 ${adminTouchTargets}`
+
+/**
+ * Admin sidebar collapse persistence.
+ *
+ * The collapsed flag lives in `localStorage` so a refresh keeps the operator's
+ * choice. Both helpers are SSR-safe (first paint always renders expanded, the
+ * stored value is applied after mount) and swallow storage failures, so private
+ * mode or a blocked store simply falls back to expanded.
+ */
+export const adminSidebarCollapsedKey = 'musecanvas:admin:sidebar-collapsed'
+
+/** Stored value, or `false` (expanded) when storage is unavailable. */
+export function readAdminSidebarCollapsed(): boolean {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return false
+    return window.localStorage.getItem(adminSidebarCollapsedKey) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Persist the operator's choice; storage failures keep the in-memory state. */
+export function writeAdminSidebarCollapsed(collapsed: boolean): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return
+    window.localStorage.setItem(adminSidebarCollapsedKey, collapsed ? '1' : '0')
+  } catch {
+    // Blocked storage: the sidebar still toggles, it just resets next load.
+  }
+}

@@ -96,7 +96,7 @@ export function Stepper({
 
             <span
               className={cn(
-                'relative z-[1] flex shrink-0 items-center justify-center self-start rounded-pill font-medium',
+                'relative z-sticky flex shrink-0 items-center justify-center self-start rounded-pill font-medium',
                 size === 'sm' ? `${controlSquare.xs} text-xs` : `${controlSquare.sm} text-sm`,
                 orientation !== 'vertical' && 'sm:self-center',
                 orientation === 'horizontal' && 'self-center',

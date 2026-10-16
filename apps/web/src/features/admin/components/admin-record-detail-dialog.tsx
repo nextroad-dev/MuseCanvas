@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import type { ReactNode, RefObject } from 'react'
-import { Alert, Button, Card, Dialog, EmptyState, SkeletonText } from '@/shared/components/ui'
+import { Alert, Button, Card, Dialog, EmptyState, Skeleton, SkeletonText } from '@/shared/components/ui'
 import { AdminDeleteConfirmation } from './admin-confirm-dialog'
 import type { AdminDeleteConfirmationProps } from './admin-confirm-dialog'
 import { cn } from '@/shared/lib/cn'
@@ -68,7 +68,7 @@ function AdminRecordDialogContent({ open, title, children, actions, danger, conf
       onFocusCapture={(event) => { detailFocusRef.current = event.target }}>
       {children}
       {actions && <div className="flex flex-wrap items-center gap-3">{actions}</div>}
-      {danger && <div className="flex flex-wrap items-center gap-3 rounded-control bg-danger-soft p-3">{danger}</div>}
+      {danger && <div className="flex flex-wrap items-center gap-3 rounded-control border border-danger-border bg-danger-soft p-3">{danger}</div>}
     </div>
     {confirmation && <AdminDeleteConfirmation {...confirmation} />}
   </>
@@ -108,7 +108,7 @@ export function AdminMobileRecords<T extends { id: string }>({
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-3 @min-[800px]/admin:hidden">
-      {loading ? <div className="flex flex-col gap-3" role="status" aria-busy="true"><span className="sr-only">正在加载列表</span>{[0, 1, 2].map((index) => <Card key={index} density="compact" aria-hidden="true"><SkeletonText width="12rem" className="text-module" /><SkeletonText width="16rem" /><div className="h-12 rounded-control bg-tonal motion-shimmer" /></Card>)}</div>
+      {loading ? <div className="flex flex-col gap-3" role="status" aria-busy="true"><span className="sr-only">正在加载列表</span>{[0, 1, 2].map((index) => <Card key={index} density="compact" aria-hidden="true"><SkeletonText width="12rem" className="text-module" /><SkeletonText width="16rem" /><Skeleton className="h-12" /></Card>)}</div>
         : error ? <Alert tone="danger" role="alert" action={onRetry && <Button variant="secondary" onClick={onRetry}>刷新重试</Button>}>{error}</Alert>
         : records.length === 0 ? <Card><EmptyState density="compact" variant={emptyVariant} title={emptyTitle} description={empty} action={emptyAction} /></Card>
         : records.map((record) => (

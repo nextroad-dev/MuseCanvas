@@ -55,7 +55,7 @@ export interface DropdownMenuProps {
 }
 
 const ITEM_BASE = [
-  'flex w-full shrink-0 select-none items-center gap-2 whitespace-nowrap rounded-[8px] px-3',
+  'flex w-full shrink-0 select-none items-center gap-2 whitespace-nowrap rounded-control px-3',
   'text-left text-sm text-foreground',
   `${iconSlot.sm} [&>svg]:shrink-0`,
   'transition-colors',
@@ -67,8 +67,8 @@ const ITEM_TONE = {
 } as const
 
 const ITEM_SIZE = {
-  sm: 'min-h-[32px] h-8',
-  md: 'min-h-[36px] h-9',
+  sm: 'h-[var(--control-sm)] min-h-[var(--control-sm)]',
+  md: 'h-[var(--control-md)] min-h-[var(--control-md)]',
 } as const
 
 /**

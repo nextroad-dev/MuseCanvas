@@ -162,7 +162,9 @@ export function ResultDialog({ open, onClose, subject, onUseEditSource }: Result
             onSelectionChange={setSelection}
           />
         ) : (
-          <div className="overflow-hidden rounded-card bg-tonal">
+          // Keyed on the output identity: switching variants remounts the stage
+          // so the new media fades in instead of swapping mid-frame.
+          <div key={variant.id} className="motion-fade-in overflow-hidden rounded-card bg-tonal">
             <MediaFrame
               src={url}
               kind={video ? 'video' : 'image'}

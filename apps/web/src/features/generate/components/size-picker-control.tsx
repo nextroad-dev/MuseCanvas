@@ -8,6 +8,7 @@ import {
   imageSizeOptions,
 } from '@/shared/lib/media-parameters'
 import { Input, Select } from '@/shared/components/ui'
+import { cn } from '@/shared/lib/cn'
 import type { DescriptorOption } from '@/shared/lib/media-parameters'
 import type { ParameterDescriptor } from '@musecanvas/contracts'
 
@@ -102,8 +103,20 @@ export function SizePickerControl({ descriptor, value, onChange, label, labelId 
         )}
       </Select>
 
-      {customActive && (
-        <div className="flex flex-col gap-2 rounded-control bg-tonal p-2">
+      {/* The custom block stays mounted and expands through
+          `grid-template-rows: 0fr → 1fr` at `--motion-base`: mounting it only
+          when opened would pop the surrounding controls down a frame late.
+          Collapsed it is `invisible` + `aria-hidden`, so it never tab-stops or
+          announces while shut. */}
+      <div
+        aria-hidden={!customActive}
+        className={cn(
+          'grid transition-[grid-template-rows] duration-[var(--motion-base)] ease-[var(--ease-standard)]',
+          customActive ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+        )}
+      >
+        <div className="min-h-0 min-w-0 overflow-hidden">
+          <div className={cn('flex flex-col gap-2 rounded-control bg-tonal p-2', !customActive && 'invisible')}>
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1 text-xs text-muted-foreground">
               宽
@@ -148,8 +161,9 @@ export function SizePickerControl({ descriptor, value, onChange, label, labelId 
               </p>
             ))}
           </div>
+          </div>
         </div>
-      )}
+      </div>
 
       {!customActive && options.find((option) => option.value === selected)?.description && (
         <p className="text-xs leading-relaxed text-muted-foreground">

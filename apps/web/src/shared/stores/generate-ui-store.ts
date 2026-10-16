@@ -36,9 +36,14 @@ export interface GenerateUiState {
   // Core text / model selections
   prompt: string
   negativePrompt: string
-  /** 'image' | 'video' creation-console tab. */
+  /**
+   * Current output kind: which model catalogue and parameter set the composer
+   * drives. This is *not* a navigation mode any more — the workspace nav is two
+   * plain route links (创作 / 图库) and never touches it; only an explicit model
+   * pick (or a `?tab=` deep link) changes it.
+   */
   activeTab: GenerateModeTab
-  /** Model choice is remembered per tab so switching tabs never loses a selection. */
+  /** Model choice is remembered per kind so switching kinds never loses a selection. */
   selectedModelIdByKind: Record<GenerateModeTab, string>
 
   /**
@@ -78,6 +83,12 @@ export interface GenerateUiState {
   setNegativePrompt: (negativePrompt: string) => void
   setActiveTab: (tab: GenerateModeTab) => void
   setSelectedModelId: (tab: GenerateModeTab, modelId: string) => void
+  /**
+   * Forget both kinds' remembered picks so the next resolution falls back to
+   * the admin defaults. Called when a new conversation starts (and on actor
+   * switch): within a conversation the user's explicit switch stays put.
+   */
+  clearSelectedModels: () => void
   setParam: (tab: GenerateModeTab, name: string, value: ParameterValue) => void
   clearParams: (tab: GenerateModeTab) => void
   /**
@@ -144,6 +155,10 @@ export const useGenerateUiStore = create<GenerateUiState>((set, get) => ({
     set((state) => ({
       selectedModelIdByKind: state.isGenerating ? state.selectedModelIdByKind : { ...state.selectedModelIdByKind, [tab]: id },
     })),
+  clearSelectedModels: () => {
+    if (get().isGenerating) return
+    set({ selectedModelIdByKind: { image: '', video: '' } })
+  },
   setParam: (tab, name, value) =>
     set((state) => ({
       paramsByKind: state.isGenerating ? state.paramsByKind : { ...state.paramsByKind, [tab]: { ...state.paramsByKind[tab], [name]: value } },

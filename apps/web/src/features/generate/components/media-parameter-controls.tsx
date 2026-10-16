@@ -2,15 +2,16 @@
 
 import {
   useEffect,
+  useId,
   useState } from 'react'
 import { CaretDownIcon as ChevronDown } from '@phosphor-icons/react'
 import { Switch } from '@/shared/components/ui/switch'
 import { Button,
-  Dialog,
   Input,
   SegmentedControl,
   Select,
 } from '@/shared/components/ui'
+import { cn } from '@/shared/lib/cn'
 import {
   descriptorLabel,
   descriptorOptions,
@@ -66,6 +67,7 @@ export function MediaParameterControls({ model, values, onChange, countUnit, dis
   const advancedControls = controls.filter((descriptor) => isAdvancedParameter(descriptor))
   const primaryControls = controls.filter((descriptor) => !isAdvancedParameter(descriptor))
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const advancedId = useId()
   useEffect(() => { if (disabled) setAdvancedOpen(false) }, [disabled])
   const advancedIssues = parameterIssues(model, values).filter((issue) => advancedControls.some((descriptor) => descriptor.name === issue.parameter || canonicalNameOf(descriptor) === issue.parameter))
 
@@ -179,21 +181,48 @@ export function MediaParameterControls({ model, values, onChange, countUnit, dis
       )}
 
       {advancedControls.length > 0 && (
-        <>
-          <Button type="button" variant="secondary" size="sm" disabled={disabled} aria-haspopup="dialog" onClick={() => setAdvancedOpen(true)} icon={<ChevronDown weight="bold" aria-hidden="true" />}>
+        <div className="flex min-w-0 flex-col gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={disabled}
+            aria-expanded={advancedOpen}
+            aria-controls={advancedId}
+            onClick={() => setAdvancedOpen((open) => !open)}
+            icon={<ChevronDown weight="bold" aria-hidden="true" className={cn('motion-position', advancedOpen && 'rotate-180')} />}
+          >
             {advancedIssues.length > 0 ? '检查更多参数' : '更多参数'}
           </Button>
-          <Dialog open={advancedOpen && !disabled} onClose={() => setAdvancedOpen(false)} title="更多参数" size="wide" description="参数范围与默认值来自当前模型；修改仅更新草稿，不会提交。" footer={<Button variant="secondary" onClick={() => setAdvancedOpen(false)}>完成</Button>}>
-            <fieldset disabled={disabled} className="m-0 flex min-w-0 flex-wrap items-start gap-4 border-0 p-0">
-              {advancedControls.map((descriptor) => (
-                <ParameterField key={descriptor.name} descriptor={descriptor} model={model}>
-                  {renderControl(descriptor)}
-                  {advancedIssues.filter((issue) => issue.parameter === descriptor.name || issue.parameter === canonicalNameOf(descriptor)).map((issue) => <p key={issue.parameter} role="alert" className="text-xs text-danger">{issue.message}</p>)}
-                </ParameterField>
-              ))}
-            </fieldset>
-          </Dialog>
-        </>
+          {/* Inline expansion through `grid-template-rows: 0fr → 1fr` at
+              `--motion-base` instead of a modal: advanced picks sit next to the
+              controls they refine, and the bar never loses its place. */}
+          <div
+            id={advancedId}
+            aria-hidden={!advancedOpen}
+            className={cn(
+              'grid transition-[grid-template-rows] duration-[var(--motion-base)] ease-[var(--ease-standard)]',
+              advancedOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+            )}
+          >
+            <div className="min-h-0 min-w-0 overflow-hidden">
+              <fieldset
+                disabled={disabled}
+                className={cn(
+                  'm-0 flex min-w-0 flex-wrap items-start gap-4 rounded-control border-0 bg-tonal p-3',
+                  !advancedOpen && 'invisible',
+                )}
+              >
+                {advancedControls.map((descriptor) => (
+                  <ParameterField key={descriptor.name} descriptor={descriptor} model={model}>
+                    {renderControl(descriptor)}
+                    {advancedIssues.filter((issue) => issue.parameter === descriptor.name || issue.parameter === canonicalNameOf(descriptor)).map((issue) => <p key={issue.parameter} role="alert" className="text-xs text-danger">{issue.message}</p>)}
+                  </ParameterField>
+                ))}
+              </fieldset>
+            </div>
+          </div>
+        </div>
       )}
     </fieldset>
   )

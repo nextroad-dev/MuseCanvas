@@ -6,12 +6,12 @@ import { JobStatusBadge } from '@/shared/components/job-status-badge'
 import { MediaFrame } from '@/shared/components/media-frame'
 import { Alert, Button, Progress, Skeleton, SkeletonRow, SkeletonTile } from '@/shared/components/ui'
 import { formatElapsed, isJobActive, phaseLabel } from '@/shared/lib/job-status'
+import { exitDurationMs } from '@/shared/lib/motion'
 import { cn } from '@/shared/lib/cn'
 import { isVideoOutput, outputUrl } from '@/shared/types'
 import type { GenerationJob } from '@/shared/types'
 
 const LINGER_MS = 6000
-const FADE_MS = 500
 const TICK_MS = 500
 
 export interface ActiveJobsBoardProps {
@@ -317,13 +317,14 @@ function ActiveJobRow({
       data-job-row={job.id}
       className={cn(
         'relative flex gap-3 rounded-control p-3',
-        // The row leaves the list on a token exit, not a hand-set opacity: same
-        // 160ms ease-in every other departing surface uses.
-        expiringAt !== undefined && expiringAt - now <= FADE_MS && 'motion-fade-out',
+        // The row leaves the list on a token exit, not a hand-set opacity: the
+        // `--motion-exit` duration read at render time (SSR-safe: falls back to
+        // 120ms without a document), so retuning the token retunes this fade.
+        expiringAt !== undefined && expiringAt - now <= exitDurationMs() && 'motion-fade-out',
         selected ? 'bg-tonal-selected' : active ? 'bg-tonal' : 'bg-neutral-soft',
       )}
     >
-      {firstOutput && (
+      {firstOutput ? (
         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-control bg-tonal">
           <MediaFrame
             src={outputUrl(firstOutput)}
@@ -336,6 +337,14 @@ function ActiveJobRow({
             hasAudio={isVideoOutput(firstOutput) ? firstOutput.metadata.hasAudio : undefined}
           />
         </div>
+      ) : active ? (
+        // No output yet: a shimmering placeholder keeps the row's shape while the
+        // worker is still producing. Static under reduced motion (global rule).
+        <div aria-hidden="true" className="relative h-12 w-12 shrink-0 overflow-hidden rounded-control bg-tonal">
+          <span className="motion-shimmer absolute inset-0" />
+        </div>
+      ) : (
+        <div aria-hidden="true" className="h-12 w-12 shrink-0 rounded-control bg-neutral-soft" />
       )}
 
       <div className="flex min-w-0 flex-1 flex-col gap-2">

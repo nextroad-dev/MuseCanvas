@@ -74,7 +74,7 @@ export function PendingGenerationCard({
   const parameterEntries = Object.entries(pending.parameters ?? {}).filter(([key]) => key !== 'count')
 
   return (
-    <article aria-label="待确认的生成提案" className="flex flex-col gap-3 rounded-card border border-warning-border bg-warning-soft/40 p-4">
+    <article aria-label="待确认的生成提案" className="flex flex-col gap-3 rounded-card border border-warning-border bg-warning-soft p-4">
       <header className="flex flex-wrap items-center gap-2">
         <Icon weight="bold" aria-hidden="true" className={cn(iconSize.sm, 'shrink-0 text-foreground')} />
         <h3 className="text-sm font-medium text-foreground">需要确认：{modeLabel(pending)}</h3>

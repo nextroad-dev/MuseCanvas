@@ -30,10 +30,13 @@ import { clearReferenceImages,
 import { GENERATE_ROUTE } from '@/shared/lib/app-routes'
 import { Alert, Button, Dialog, PageHeader } from '@/shared/components/ui'
 import { ContentFrame } from '@/shared/components/content-frame'
+import { MediaFrame } from '@/shared/components/media-frame'
 import { isJobActive } from '@/shared/lib/job-status'
-import { isVideoOutput, modelMediaKind, outputUrl } from '@/shared/types'
+import { resolveActiveModel } from '@/shared/lib/model-capabilities'
+import { isVideoOutput, modelMediaKind, outputPoster, outputUrl } from '@/shared/types'
 import type { GenerateModeTab, GenerationJob } from '@/shared/types'
 import { GenerationTaskPanel } from './generation-task-panel'
+import { ActiveJobsBoard } from './active-jobs-board'
 import { ConversationSidebar } from './conversation-sidebar'
 import { ConversationTimeline } from './conversation-timeline'
 import { PendingGenerationCard } from './pending-generation-card'
@@ -114,6 +117,9 @@ export function GenerateConsole() {
   )
   const setActiveTab = useGenerateUiStore((s) => s.setActiveTab)
   const setSelectedModelId = useGenerateUiStore((s) => s.setSelectedModelId)
+  const clearSelectedModels = useGenerateUiStore((s) => s.clearSelectedModels)
+  const activeBoardOpen = useGenerateUiStore((s) => s.activeBoardOpen)
+  const setActiveBoardOpen = useGenerateUiStore((s) => s.setActiveBoardOpen)
   const setParam = useGenerateUiStore((s) => s.setParam)
   const replaceParams = useGenerateUiStore((s) => s.replaceParams)
   const setSelectedJobId = useGenerateUiStore((s) => s.setSelectedJobId)
@@ -191,7 +197,8 @@ export function GenerateConsole() {
     setAgentDraft(createComposerDraft())
     setResultJobId(null)
     continuedJobIdsRef.current = new Set()
-  }, [agentActorId])
+    clearSelectedModels()
+  }, [agentActorId, clearSelectedModels])
 
   // Opt-in continuation: only a succeeded result, once per job, and never while a
   // turn is streaming. There is no default and no timer.
@@ -232,6 +239,9 @@ export function GenerateConsole() {
   async function handleNewConversation() {
     if (createCanvas.isPending) return
     setAgentNotice('')
+    // A new conversation forgets both kinds' picks, so each tab falls back to
+    // its admin default; within a conversation the explicit switch stays put.
+    clearSelectedModels()
     const created = await startAgentConversation()
     if (created) setAgentDrawerOpen(false)
   }
@@ -320,8 +330,11 @@ export function GenerateConsole() {
     }
   }
 
-  // GET /api/models returns image AND video models: each mode may only drive its
-  // own kind, otherwise a video model gets auto-selected into the image composer.
+  // GET /api/models returns image AND video models: each kind resolves only
+  // from its own catalogue, otherwise a video model gets auto-selected into
+  // the image composer. Resolution is per kind — remembered pick (when still
+  // offered and enabled), else the admin default, else the first
+  // non-deprecated row — so a fresh conversation lands on each tab's default.
   const imageModels = useMemo(
     () => (models ?? []).filter((model) => modelMediaKind(model) !== 'video'),
     [models],
@@ -335,18 +348,19 @@ export function GenerateConsole() {
   // back to, so a vendor-retired model must never occupy the recommended slot;
   // within each group the admin's own `sort_order` still decides, because this
   // is a presentation rule and not a re-ranking of the catalogue.
-  const tabModels = useMemo(() => {
-    const list = isVideoTab ? videoModels : imageModels
-    return [...list].sort((left, right) => Number(left.deprecated === true) - Number(right.deprecated === true))
-  }, [isVideoTab, videoModels, imageModels])
+  const sortedImageModels = useMemo(() => (
+    [...imageModels].sort((left, right) => Number(left.deprecated === true) - Number(right.deprecated === true))
+  ), [imageModels])
+  const sortedVideoModels = useMemo(() => (
+    [...videoModels].sort((left, right) => Number(left.deprecated === true) - Number(right.deprecated === true))
+  ), [videoModels])
 
-  const storedModelId = selectedModelIdByKind[activeTab]
-  // Same id and still offered -> keep it; otherwise fall back to the first model
-  // of *this* kind. Never across kinds.
-  const activeModelId = tabModels.some((model) => model.id === storedModelId)
-    ? storedModelId
-    : tabModels[0]?.id ?? ''
-  const currentModel = tabModels.find((model) => model.id === activeModelId)
+  const activeImageModel = resolveActiveModel(sortedImageModels, selectedModelIdByKind.image)
+  const activeVideoModel = resolveActiveModel(sortedVideoModels, selectedModelIdByKind.video)
+  const currentModel = isVideoTab ? activeVideoModel : activeImageModel
+  // Same id and still offered -> keep it; otherwise fall back to this kind's
+  // own default. Never across kinds.
+  const activeModelId = currentModel?.id ?? ''
   const params = paramsByKind[activeTab]
   const inputPlan = useMemo(() => resolveImageInputPlan(currentModel), [currentModel])
   // One noun for the staged-image surface: frame slots stop calling them references.
@@ -383,9 +397,16 @@ export function GenerateConsole() {
   // run sees `storedModelId === activeModelId` and returns.
   useEffect(() => {
     if (!activeModelId) return
-    if (storedModelId === activeModelId) return
+    if (selectedModelIdByKind[activeTab] === activeModelId) return
     setSelectedModelId(activeTab, activeModelId)
-  }, [activeTab, activeModelId, storedModelId, setSelectedModelId])
+  }, [activeTab, activeModelId, selectedModelIdByKind, setSelectedModelId])
+
+  /** A pick from either picker tab: the kind travels with the id, so the
+   *  request modelId always comes from the catalogue it was chosen from. */
+  function handleSelectModel(kind: GenerateModeTab, id: string) {
+    setActiveTab(kind)
+    setSelectedModelId(kind, id)
+  }
 
   // Reconcile the parameter picks whenever the selected model changes, so the
   // controls on screen and the Agent context built from them agree.
@@ -438,6 +459,12 @@ export function GenerateConsole() {
     pendingRetryId: retryJobMutation.isPending ? (retryJobMutation.variables ?? null) : null,
   }
   const activeJobCount = jobs.filter(isJobActive).length
+  // Right rail "最近完成": the newest succeeded jobs that actually produced
+  // media. Read straight from the existing jobs query — no new endpoint.
+  const recentCompleted = useMemo(
+    () => jobs.filter((job) => job.status === 'succeeded' && (job.outputs?.length ?? 0) > 0).slice(0, 6),
+    [jobs],
+  )
 
   const reuseConfig = useMemo(() => reuseJob ? buildJobConfigReuse(reuseJob, models ?? []) : null, [reuseJob, models])
   const reuseBlocked = isPreparingReferences || isReferenceUploadBusy
@@ -594,11 +621,13 @@ export function GenerateConsole() {
           <AgentComposer
             draft={agentDraft}
             onDraftChange={setAgentDraft}
-            models={tabModels}
-            modelId={activeModelId}
+            imageModels={sortedImageModels}
+            videoModels={sortedVideoModels}
+            activeKind={activeTab}
+            selectedModelIdByKind={selectedModelIdByKind}
+            onSelectModel={handleSelectModel}
             parameterModel={currentModel}
             values={params}
-            onModelChange={(id) => setSelectedModelId(activeTab, id)}
             onParameterChange={(name, value) => setParam(activeTab, name, value)}
             countUnit={activeTab === 'video' ? ' 条' : ' 张'}
             modelsLoading={modelsLoading}
@@ -616,6 +645,48 @@ export function GenerateConsole() {
             onRemoveEditSource={() => setAgentDraft((previous) => ({ ...previous, editSource: null, intent: 'generate' }))}
           />
         </div>
+        <aside aria-label="任务" className="flex min-h-0 w-full shrink-0 flex-col gap-4 lg:w-80 lg:border-l lg:border-border lg:pl-6">
+          <ActiveJobsBoard
+            {...boardProps}
+            variant="rail"
+            open={activeBoardOpen}
+            onToggle={setActiveBoardOpen}
+          />
+          <section aria-label="最近完成" className="flex min-h-0 flex-col gap-2 px-2 pb-2">
+            <h2 className="text-sm font-medium text-foreground">最近完成</h2>
+            {recentCompleted.length === 0 ? (
+              <p className="py-2 text-xs text-muted-foreground">
+                {jobsLoading ? '正在加载…' : '完成后会在这里显示，并自动保存到图库。'}
+              </p>
+            ) : (
+              <ul className="m-0 grid list-none grid-cols-3 gap-2 p-0">
+                {recentCompleted.map((job) => {
+                  const first = job.outputs[0]
+                  if (!first) return null
+                  return (
+                    <li key={job.id}>
+                      <button
+                        type="button"
+                        onClick={() => selectJob(job.id)}
+                        aria-label={`查看结果：${(job.inputPrompt ?? job.prompt).slice(0, 20)}`}
+                        aria-current={job.id === selectedJobId ? 'true' : undefined}
+                        className="block w-full overflow-hidden rounded-control bg-tonal transition-colors hover:bg-tonal-hover"
+                      >
+                        <MediaFrame
+                          src={outputUrl(first)}
+                          kind={isVideoOutput(first) ? 'video' : 'image'}
+                          alt=""
+                          layout="thumb"
+                          previewSrc={outputPoster(first)}
+                        />
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </section>
+        </aside>
       </section>
 
       {/* 既有任务: the unique list of persisted jobs. Old rows are never dressed up as

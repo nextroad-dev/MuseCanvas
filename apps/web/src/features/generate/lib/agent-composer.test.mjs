@@ -197,6 +197,21 @@ test('a stream error settles as an error, distinct from an abort', async () => {
   assert.equal(isAbortError(outcome.error), false)
 })
 
+test('the active video model id is carried into the request unchanged', () => {
+  const videoModelId = '99999999-9999-4999-8999-999999999999'
+  const draft = createComposerDraft({
+    text: 'a rainy neon street, 6s clip',
+    intent: 'generate',
+    modelId: videoModelId,
+    parameters: { durationSeconds: 6 },
+  })
+  const request = buildComposerUserRequest({ messageId: 'm', baseRevision: 1, draft })
+  // The picker hands the video catalogue's id over with its kind; the context
+  // must echo exactly that id — never the image tab's model.
+  assert.equal(request.context.modelId, videoModelId)
+  assert.deepEqual(request.context.parameters, { durationSeconds: 6 })
+})
+
 test('newComposerMessageId returns a uuid when crypto.randomUUID is available', () => {
   const id = newComposerMessageId()
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)

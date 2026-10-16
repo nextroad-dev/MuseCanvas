@@ -52,6 +52,7 @@ test('canvas M1/M2 endpoint samples use the shared helpers', () => {
   assert.equal(API_ENDPOINTS.canvases.agent.apply(id), `/api/canvases/${id}/agent/apply`)
   assert.equal(API_ENDPOINTS.canvasAgent.status, '/api/canvas-agent/status')
   assert.equal(API_ENDPOINTS.admin.canvasAgentSettings, '/api/admin/canvas-agent-settings')
+  assert.equal(API_ENDPOINTS.admin.mediaModelDefaults, '/api/admin/media-model-defaults')
 })
 
 test('oauth provider whitelist matches backend path.match constraint', () => {

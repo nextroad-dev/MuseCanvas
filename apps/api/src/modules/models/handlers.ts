@@ -319,6 +319,7 @@ type ModelConfigRow = {
   concurrency_limit?: number | null
   display_name?: string | null
   enabled?: boolean | null
+  is_default?: boolean | null
   model_kind?: string | null
   plugin_id?: string | null
   plugin_version?: string | null
@@ -329,6 +330,27 @@ type ModelConfigRow = {
   sort_order?: number | null
   vendor_model_id?: string | null
   watermark?: boolean | null
+}
+
+/**
+ * True when saving `effectiveEnabled` would switch off a live media-kind
+ * default. The caller answers 409 `DEFAULT_MODEL_IN_USE` so the kind is never
+ * left without its elected default by accident; the admin elects a replacement
+ * through `PATCH admin/media-model-defaults` first.
+ *
+ * A re-point that changes `model_kind` is not blocked here: both media UPDATEs
+ * relinquish the flag (`is_default = model_kind unchanged`) in the same
+ * statement, so the row can never carry a default into a kind that already
+ * elected one and trip the partial unique index.
+ */
+export function defaultDisableBlocked(
+  existing: Pick<ModelConfigRow, 'is_default' | 'model_kind' | 'enabled'> | null | undefined,
+  effectiveEnabled: boolean,
+): boolean {
+  return Boolean(existing?.is_default)
+    && (existing?.model_kind === 'image' || existing?.model_kind === 'video')
+    && Boolean(existing?.enabled)
+    && effectiveEnabled === false
 }
 
 async function savePluginModel(
@@ -434,6 +456,9 @@ async function savePluginModel(
     const defaults = resolved.defaults
     const watermark = typeof input.watermark === 'boolean' ? input.watermark : Boolean(existing?.watermark ?? false)
     const enabled = typeof input.enabled === 'boolean' ? input.enabled : Boolean(existing?.enabled ?? false)
+    if (id && defaultDisableBlocked(existing, enabled)) {
+      return fail('DEFAULT_MODEL_IN_USE', '该模型是当前默认模型，请先指定其他默认模型后再停用', 409)
+    }
     const columns = legacyColumnValues(capabilities, mediaKind)
     if (hardenedImageWrite) {
       const contract = await validateImageModelContract(globalProviderRegistry.get(pluginId, pluginVersion), {
@@ -450,7 +475,7 @@ async function savePluginModel(
           `UPDATE model_configs SET display_name=$1,vendor_model_id=$2,base_url=$3,sizes=$4::jsonb,quality_options=$5::jsonb,max_count=$6,
             concurrency_limit=$7,enabled=$8,watermark=$9,sort_order=$10,
             provider_credential_id=CASE WHEN $11::text IS NULL THEN provider_credential_id WHEN $11::text = '' THEN NULL ELSE $11::uuid END,
-            model_kind=$12,provider_id=$13,plugin_id=$14,plugin_version=$15,max_input_images=$16,plugin_source=$18,updated_at=now()
+            model_kind=$12,is_default=CASE WHEN model_kind<>$12 THEN false ELSE is_default END,provider_id=$13,plugin_id=$14,plugin_version=$15,max_input_images=$16,plugin_source=$18,updated_at=now()
            WHERE id=$17 AND deleted_at IS NULL RETURNING *`,
           [displayName, vendorModelId, baseUrl === undefined ? existing?.base_url || null : baseUrl || null,
             columns.sizes, columns.qualityOptions, columns.maxCount, concurrencyLimit, enabled, watermark, sortOrder,
@@ -518,6 +543,9 @@ async function savePresetModel(
   const credId = input.providerCredentialId
   const effectiveCredId = credId === undefined ? existing?.provider_credential_id : credId
   const targetKind = targetPreset?.modelKind || existing?.model_kind || 'image'
+  if (id && typeof input.enabled === 'boolean' && defaultDisableBlocked(existing, input.enabled)) {
+    return fail('DEFAULT_MODEL_IN_USE', '该模型是当前默认模型，请先指定其他默认模型后再停用', 409)
+  }
   if (targetKind === 'language' && (typeof effectiveCredId !== 'string' || !effectiveCredId))
     return fail('LANGUAGE_MODEL_CONFIG_INVALID', '语言模型必须选择供应商凭据')
   if (typeof effectiveCredId === 'string' && effectiveCredId) {
@@ -593,7 +621,7 @@ async function savePresetModel(
     )
   } else if (id && targetPreset) {
     result = await db().query(
-      `UPDATE model_configs SET preset_id=$1,display_name=$2,adapter=$3,vendor_model_id=$4,base_url=$5,sizes=$6,quality_options=$7,max_count=$8,concurrency_limit=$9,enabled=COALESCE($10,enabled),watermark=$11,sort_order=$12,provider_credential_id=CASE WHEN $13::text IS NULL THEN provider_credential_id WHEN $13::text = '' THEN NULL ELSE $13::uuid END,model_kind=$14,language_protocol=$15,max_output_tokens=$16,temperature=$17,reasoning_effort=$18,max_input_images=$19,provider_id=$20,plugin_id=$21,plugin_version=$22,plugin_source=$24,updated_at=now() WHERE id=$23 AND deleted_at IS NULL RETURNING *`,
+      `UPDATE model_configs SET preset_id=$1,display_name=$2,adapter=$3,vendor_model_id=$4,base_url=$5,sizes=$6,quality_options=$7,max_count=$8,concurrency_limit=$9,enabled=COALESCE($10,enabled),watermark=$11,sort_order=$12,provider_credential_id=CASE WHEN $13::text IS NULL THEN provider_credential_id WHEN $13::text = '' THEN NULL ELSE $13::uuid END,model_kind=$14,is_default=CASE WHEN model_kind<>$14 THEN false ELSE is_default END,language_protocol=$15,max_output_tokens=$16,temperature=$17,reasoning_effort=$18,max_input_images=$19,provider_id=$20,plugin_id=$21,plugin_version=$22,plugin_source=$24,updated_at=now() WHERE id=$23 AND deleted_at IS NULL RETURNING *`,
       [
         targetPreset.id,
         targetPreset.displayName,
@@ -670,18 +698,28 @@ async function savePresetModel(
 }
 
 export async function deleteModel(actor: Actor, id: string) {
-  const deleted = await transaction(async (client) => {
+  const outcome = await transaction(async (client) => {
+    const current = (await client.query(
+      'SELECT is_default, model_kind FROM model_configs WHERE id=$1 AND deleted_at IS NULL FOR UPDATE',
+      [id],
+    )).rows[0] as { is_default?: boolean; model_kind?: string } | undefined
+    if (current?.is_default && (current.model_kind === 'image' || current.model_kind === 'video')) {
+      return 'default-in-use' as const
+    }
     const r = await client.query(
       'UPDATE model_configs SET deleted_at=now(),enabled=false,updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id',
       [id],
     )
-    if (!r.rows[0]) return false
+    if (!r.rows[0]) return 'not-found' as const
     await client.query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5)', [actor.id, 'model.delete', 'model', id, {}])
     await client.query(
       'UPDATE prompt_optimization_settings SET enabled=false,language_model_config_id=NULL,updated_by=$2,updated_at=now() WHERE language_model_config_id=$1',
       [id, actor.id],
     )
-    return true
+    return 'deleted' as const
   })
-  return deleted ? ok({ deleted: true }) : fail('NOT_FOUND', '模型不存在', 404)
+  if (outcome === 'default-in-use') {
+    return fail('DEFAULT_MODEL_IN_USE', '该模型是当前默认模型，请先指定其他默认模型后再删除', 409)
+  }
+  return outcome === 'deleted' ? ok({ deleted: true }) : fail('NOT_FOUND', '模型不存在', 404)
 }

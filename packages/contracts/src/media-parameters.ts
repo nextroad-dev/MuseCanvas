@@ -347,4 +347,103 @@ export interface PublicModelDto {
   qualityOptions: string[]
   enabled: boolean
   sortOrder: number
+  /**
+   * Whether the admin picked this model as the default for its media kind.
+   * Backed by `model_configs.is_default` with a partial unique index keeping
+   * at most one live default per kind; `false` for language rows, which never
+   * participate.
+   */
+  isDefault: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Default media models
+// ---------------------------------------------------------------------------
+
+/**
+ * The admin-chosen default model per media kind, served by
+ * `GET admin/media-model-defaults`.
+ *
+ * Either side may be `null` when no default is set — video routinely is until a
+ * video model is configured — and a kind with no enabled model keeps `null`
+ * rather than electing a disabled row.
+ */
+export interface MediaModelDefaultsDto {
+  imageModelId: string | null
+  videoModelId: string | null
+  updatedAt: string
+}
+
+/**
+ * Patch for `PATCH admin/media-model-defaults`. An absent key leaves that kind
+ * untouched; an explicit `null` clears it; a UUID elects a new default after
+ * the API verifies the row exists, is not deleted, is enabled and matches the
+ * kind.
+ */
+export interface UpdateMediaModelDefaultsRequest {
+  imageModelId?: string | null
+  videoModelId?: string | null
+}
+
+/**
+ * Machine-readable failures of the default-model write path. Modelled on
+ * `SetupErrorCode` / `PromptTemplateErrorCode` — a const object plus a derived
+ * union, so the values stay importable at runtime.
+ */
+export const MediaModelErrorCode = {
+  /** The elected row does not exist, is deleted, is disabled, or is of the wrong kind. */
+  DEFAULT_MODEL_INVALID: 'DEFAULT_MODEL_INVALID',
+  /** Disabling or deleting the row that is currently a kind default. Set another default first. */
+  DEFAULT_MODEL_IN_USE: 'DEFAULT_MODEL_IN_USE',
+} as const
+
+export type MediaModelErrorCode = (typeof MediaModelErrorCode)[keyof typeof MediaModelErrorCode]
+
+export type MediaModelDefaultsParseResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: { code: string; message: string; path: string } }
+
+const MEDIA_DEFAULTS_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Hand-written validator in the style of `parseUpdateCanvasAgentSettingsRequest`:
+ * plain objects only, unknown fields rejected, an empty patch rejected. No
+ * runtime validation library — this module must stay dependency-free for the
+ * browser bundle.
+ */
+export function parseUpdateMediaModelDefaultsRequest(value: unknown): MediaModelDefaultsParseResult<UpdateMediaModelDefaultsRequest> {
+  try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw { path: '$', message: 'Expected object' }
+    }
+    const obj = value as Record<string, unknown>
+    for (const key of Object.keys(obj)) {
+      if (key !== 'imageModelId' && key !== 'videoModelId') {
+        throw { path: `$.${key}`, message: 'Unknown field' }
+      }
+    }
+    if (Object.keys(obj).length === 0) {
+      throw { path: '$', message: 'Empty defaults patch' }
+    }
+    const output: UpdateMediaModelDefaultsRequest = {}
+    for (const key of ['imageModelId', 'videoModelId'] as const) {
+      if (!(key in obj)) continue
+      const entry = obj[key]
+      if (entry === null) {
+        output[key] = null
+        continue
+      }
+      if (typeof entry !== 'string' || !MEDIA_DEFAULTS_UUID_PATTERN.test(entry)) {
+        throw { path: `$.${key}`, message: 'Expected UUID or null' }
+      }
+      output[key] = entry.toLowerCase()
+    }
+    return { success: true, data: output }
+  } catch (error) {
+    const detail = error as { path?: string; message?: string }
+    return {
+      success: false,
+      error: { code: 'INVALID_INPUT', message: detail.message ?? 'Invalid input', path: detail.path ?? '$' },
+    }
+  }
 }

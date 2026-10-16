@@ -197,6 +197,7 @@ export const publicModelDto = (row: Record<string, unknown>): PublicModelDto => 
     qualityOptions: legacy.qualityOptions,
     enabled: Boolean(row.enabled),
     sortOrder: Number(row.sort_order || 0),
+    isDefault: Boolean(row.is_default),
   }
 }
 

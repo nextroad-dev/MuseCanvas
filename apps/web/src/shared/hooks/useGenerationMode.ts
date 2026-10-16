@@ -7,20 +7,19 @@ import { GENERATE_ROUTE, isOnGenerate } from '@/shared/lib/app-routes'
 import type { GenerateModeTab } from '@/shared/types'
 
 /**
- * The workspace header's 作图 / 生视频 entries.
+ * Programmatic jumps into the creation console with an output type.
  *
- * The mode itself lives in `useGenerateUiStore.activeTab`; this only turns a
- * click into "switch mode, and get to `/generate` if we are not already there".
- *
- * Why it is not `<Link href="/generate?tab=video">`: the console honours `?tab=`
- * once per mount (see the projection in `generate-console.tsx`), so a
- * query-only change on the route it already sits on would be swallowed and the
- * second click would look dead. Writing the store is the reactive path, and it
- * also keeps a mode switch from costing a same-route RSC refetch.
+ * The workspace nav no longer calls this (it is two plain route links now);
+ * the remaining caller is the library lightbox's 局部修改 entry
+ * (`selectMode('image')`), which hands an asset over as a composer draft and
+ * needs the console in image mode. `generate-console.tsx` keeps consuming the
+ * same `activeTab` store plus the one-shot `?tab=` deep link, so old links and
+ * bookmarks keep working.
  *
  * Order matters: `setActiveTab` runs *before* `push`, so the console's first
- * frame is already the requested mode instead of flashing 作图. Nothing appends
- * `?tab=` — the URL is an input to the mode, never a record of it.
+ * frame is already the requested mode instead of flashing the other one.
+ * Nothing appends `?tab=` — the URL is an input to the mode, never a record
+ * of it.
  */
 export function useGenerationMode() {
   const router = useRouter()

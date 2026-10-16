@@ -7,6 +7,7 @@ import { MediaFrame } from '@/shared/components/media-frame'
 import { Alert, Button, Progress, Skeleton, SkeletonRow, SkeletonTile } from '@/shared/components/ui'
 import { formatElapsed, isJobActive, phaseLabel } from '@/shared/lib/job-status'
 import { exitDurationMs } from '@/shared/lib/motion'
+import { useFlipList } from '@/shared/hooks/useFlipList'
 import { cn } from '@/shared/lib/cn'
 import { isVideoOutput, outputUrl } from '@/shared/types'
 import type { GenerationJob } from '@/shared/types'
@@ -126,6 +127,10 @@ export function ActiveJobsBoard({
     .map((id) => jobsById.get(id))
     .filter((job): job is GenerationJob => Boolean(job) && !isJobActive(job!))
   const rows = [...activeJobs, ...finishedRows]
+  const listRef = useRef<HTMLUListElement>(null)
+  // Order-only trigger: the 500ms `now` tick re-renders every row clock, but the
+  // ids join only changes on add / settle / expiry, so ticks never re-measure.
+  useFlipList(listRef, rows.map((job) => job.id).join(','))
 
   if (hideWhenEmpty && rows.length === 0 && !isLoading && !isError) return null
 
@@ -204,6 +209,7 @@ export function ActiveJobsBoard({
       ) : (
         <ul
           id={listId}
+          ref={listRef}
           role="list"
           className={cn(
             'm-0 list-none flex flex-col gap-1 overflow-y-auto p-0',
@@ -313,17 +319,19 @@ function ActiveJobRow({
     .join(' · ')
 
   return (
-    <li
-      data-job-row={job.id}
-      className={cn(
-        'relative flex gap-3 rounded-control p-3',
-        // The row leaves the list on a token exit, not a hand-set opacity: the
-        // `--motion-exit` duration read at render time (SSR-safe: falls back to
-        // 120ms without a document), so retuning the token retunes this fade.
-        expiringAt !== undefined && expiringAt - now <= exitDurationMs() && 'motion-fade-out',
-        selected ? 'bg-tonal-selected' : active ? 'bg-tonal' : 'bg-neutral-soft',
-      )}
-    >
+    // FLIP owns the outer `li` (`data-flip-key`); the exit fade stays on the
+    // inner node so WAAPI transforms are never overridden by the keyframe.
+    <li data-job-row={job.id} data-flip-key={job.id} className="relative">
+      <div
+        className={cn(
+          'flex gap-3 rounded-control p-3',
+          // The row leaves the list on a token exit, not a hand-set opacity: the
+          // `--motion-exit` duration read at render time (SSR-safe: falls back to
+          // 120ms without a document), so retuning the token retunes this fade.
+          expiringAt !== undefined && expiringAt - now <= exitDurationMs() && 'motion-fade-out',
+          selected ? 'bg-tonal-selected' : active ? 'bg-tonal' : 'bg-neutral-soft',
+        )}
+      >
       {firstOutput ? (
         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-control bg-tonal">
           <MediaFrame
@@ -417,6 +425,7 @@ function ActiveJobRow({
         {job.status === 'failed' && job.errorMessage && (
           <p className="line-clamp-1 text-xs text-danger">{job.errorMessage}</p>
         )}
+        </div>
       </div>
     </li>
   )

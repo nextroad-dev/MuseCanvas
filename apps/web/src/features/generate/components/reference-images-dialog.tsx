@@ -37,6 +37,7 @@ import { Alert,
   iconSize,
 } from '@/shared/components/ui'
 import { cn } from '@/shared/lib/cn'
+import { useFlipList } from '@/shared/hooks/useFlipList'
 import type { ImageInputPlan, ImageInputPlanModel } from '@/shared/lib/generation-params'
 import type { Asset, StagedReferenceImage } from '@/shared/types'
 import { GalleryImagePicker } from './gallery-image-picker'
@@ -109,6 +110,23 @@ export function ReferenceImagesDialog({
     (slot) => slot.role === 'first_frame' || slot.role === 'last_frame',
   )
   const noun = frameMode ? '输入画面' : '参考图'
+
+  const gridRef = useRef<HTMLUListElement>(null)
+  // Order-only trigger: upload progress re-renders tiles, but localIds join only
+  // changes on add / remove / reorder, so progress never re-measures.
+  useFlipList(gridRef, stagedImages.map((image) => image.localId).join(','))
+
+  // Reorder keeps focus on the moved tile's own control: the tile keyed by
+  // `localId` moves with its DOM node, but the edge button disables at the ends,
+  // so re-query by stable id + direction after commit.
+  function moveAndKeepFocus(localId: string, from: number, to: number, direction: 'forward' | 'backward') {
+    mutateInputs(() => reorderReferenceImages(from, to))
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-ref-move="${direction}:${localId}"]`)
+        ?.focus({ preventScroll: true })
+    })
+  }
 
   // Counts only, never progress, so the live region stays quiet during a transfer.
   const announcement = useMemo(() => {
@@ -294,7 +312,7 @@ export function ReferenceImagesDialog({
         )}
 
         {stagedImages.length > 0 && (
-          <ul className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <ul ref={gridRef} className="grid grid-cols-2 gap-3 md:grid-cols-3">
             {stagedImages.map((image, index) => {
               const role = rolePositions[index]
               const slot = role ? plan.slots.find((candidate) => candidate.role === role) : undefined
@@ -302,6 +320,7 @@ export function ReferenceImagesDialog({
               return (
                 <li
                   key={image.localId}
+                  data-flip-key={image.localId}
                   className="flex flex-col gap-3 rounded-card border border-border bg-surface p-2"
                 >
                   <div className="relative aspect-square overflow-hidden rounded-control bg-tonal">
@@ -383,18 +402,20 @@ export function ReferenceImagesDialog({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => mutateInputs(() => reorderReferenceImages(index, index - 1))}
+                        onClick={() => moveAndKeepFocus(image.localId, index, index - 1, 'forward')}
                         disabled={index === 0}
                         aria-label={`将${noun} ${index + 1} 前移`}
+                        data-ref-move={`forward:${image.localId}`}
                         icon={<ChevronLeft weight="bold" aria-hidden="true" />}
                       />
                       <IconButton
                         type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => mutateInputs(() => reorderReferenceImages(index, index + 1))}
+                        onClick={() => moveAndKeepFocus(image.localId, index, index + 1, 'backward')}
                         disabled={index === stagedImages.length - 1}
                         aria-label={`将${noun} ${index + 1} 后移`}
+                        data-ref-move={`backward:${image.localId}`}
                         icon={<ChevronRight weight="bold" aria-hidden="true" />}
                       />
                       <IconButton

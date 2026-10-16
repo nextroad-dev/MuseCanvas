@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { CheckIcon as Check, WarningCircleIcon as CircleAlert, InfoIcon as Info, WarningIcon as TriangleAlert, XIcon as X } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { exitDurationMs } from '@/shared/lib/motion'
+import { useFlipList } from '@/shared/hooks/useFlipList'
 import type { ReactNode } from 'react'
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { ghostIconButtonVariants } from './button-variants'
@@ -173,13 +174,17 @@ function ToastViewport({
   // server HTML and the first client paint stay identical.
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
-  if (!mounted) return null
-
+  const viewportRef = useRef<HTMLDivElement>(null)
   const overflow = Math.max(0, toasts.length - MAX_VISIBLE)
   const visible = overflow > 0 ? toasts.slice(-MAX_VISIBLE) : toasts
+  // Order-only trigger: auto-dismiss timers re-render, but the ids join only
+  // changes on push / dismiss, so ticks never re-measure.
+  useFlipList(viewportRef, visible.map((toast) => toast.id).join(','))
+  if (!mounted) return null
 
   return createPortal(
     <div
+      ref={viewportRef}
       aria-live="polite"
       // Toasts float above an open dialog, so `useDialog` must not make them inert.
       data-inert-exempt
@@ -196,14 +201,16 @@ function ToastViewport({
         // neutral glyph instead of a crash on an undefined component.
         const Glyph = TONE_GLYPH[toast.variant] ?? Info
         return (
-          <div
-            key={toast.id}
-            role={TONE_ROLE[toast.variant]}
-            className={cn(
-              'pointer-events-auto relative w-full max-w-sm overflow-hidden rounded-card bg-surface border border-border p-4 shadow-toast motion-toast-in',
-              leaving && 'motion-toast-out',
-            )}
-          >
+          // FLIP owns the outer wrapper (`data-flip-key`); the slide keyframes
+          // stay on the inner node so WAAPI transforms are never overridden.
+          <div key={toast.id} data-flip-key={toast.id} className="w-full max-w-sm">
+            <div
+              role={TONE_ROLE[toast.variant]}
+              className={cn(
+                'pointer-events-auto relative w-full overflow-hidden rounded-card bg-surface border border-border p-4 shadow-toast motion-toast-in',
+                leaving && 'motion-toast-out',
+              )}
+            >
             <div className="flex items-start gap-3">
               <Glyph weight="fill" className={cn(`mt-0.5 ${iconSize.sm} shrink-0`, TONE_ICON[toast.variant])} aria-hidden="true" />
               <div className="min-w-0 flex-1">
@@ -238,6 +245,7 @@ function ToastViewport({
                   <X weight="bold" className={iconSize.sm} aria-hidden="true" />
                 </button>
               </div>
+            </div>
             </div>
           </div>
         )

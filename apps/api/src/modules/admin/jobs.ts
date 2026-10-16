@@ -1,4 +1,4 @@
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { adminJobDto } from '../../shared/dto'
 import { ok } from '../../shared/http'
 import { decodeCursor, encodeCursor, boundedLimit } from '../../shared/pagination'

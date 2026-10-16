@@ -1,4 +1,4 @@
-import { db } from '../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { CONSUMER_BLOCK_MS, GENERATION_GROUP, GENERATION_STREAM, HEARTBEAT_RENEW_MS, HEARTBEAT_TTL_MS, STALE_PENDING_IDLE_MS, consumer, redis } from '../shared/infra'
 import { resolveJobLeaseMs } from '../shared/runtime'
 

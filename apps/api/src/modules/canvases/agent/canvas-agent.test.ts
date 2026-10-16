@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { NextRequest, NextResponse } from 'next/server'
 import { CANVAS_AGENT_SETTINGS_DEFAULTS, CanvasErrorCode as C, type CanvasScene, type JsonValue, type JsonObject, type CanvasOp, type CanvasAgentMessageRequest, type CanvasAgentConfirmRequest } from '@musecanvas/contracts'
-import { canvasAgentPendingIdentity, type CanvasAgentStoredMessage, type CanvasAgentPendingJob, type CanvasAgentMessageInput, type CreateCanvasAgentPendingInput, type CanvasAgentScope } from '../../../../../../packages/database/src/index'
-import type { LanguageModelChatResult, LanguageModelChatToolCall, LanguageModelChatInput, callLanguageModelChat } from '../../../../../../packages/providers/src/index'
+import { canvasAgentPendingIdentity, type CanvasAgentStoredMessage, type CanvasAgentPendingJob, type CanvasAgentMessageInput, type CreateCanvasAgentPendingInput, type CanvasAgentScope } from '@musecanvas/database'
+import type { LanguageModelChatResult, LanguageModelChatToolCall, LanguageModelChatInput, callLanguageModelChat } from '@musecanvas/providers'
 import type { Actor } from '../../../auth/security'
 import type { AuthedContext } from '../../../router/types'
 import { AgentError, assertLanguageModel, assertStorageStrings, modelConfigDigest, runtimeConfig } from './config'
@@ -91,16 +91,16 @@ class MemoryStore implements AgentStore {
     pending.status = 'submitting'; pending.leaseToken = randomUUID(); return { scope: this.ctx.scope, pending, claimed: true }
   }
   async complete(_scope: CanvasAgentScope, pending: CanvasAgentPendingJob, id: string) { pending.status = 'submitted'; pending.jobId = id; pending.ops = pending.ops.map(op => op.type === 'add_node' ? { ...op, node: { ...op.node, data: { ...op.node.data, jobId: id } } } as CanvasOp : op); return pending }
-  preparations = new Map<string, import('../../../../../../packages/database/src/index').CanvasAgentEditPreparation>()
+  preparations = new Map<string, import('@musecanvas/database').CanvasAgentEditPreparation>()
   async reserveEdit(ctx: RunContext, toolCallId: string, identity: JsonObject) {
     const existing = this.preparations.get(toolCallId)
     if (existing) return existing
-    const reservation: import('../../../../../../packages/database/src/index').CanvasAgentEditPreparation = { id: randomUUID(), sessionId: ctx.scope.sessionId, canvasId, createdBy: actor.id, turnId: ctx.lease.turnId, toolCallId,
+    const reservation: import('@musecanvas/database').CanvasAgentEditPreparation = { id: randomUUID(), sessionId: ctx.scope.sessionId, canvasId, createdBy: actor.id, turnId: ctx.lease.turnId, toolCallId,
       requestDigest: 'c'.repeat(64), requestSnapshot: identity, maskUploadId: randomUUID(), expiresAt: new Date(Date.now() + 600000).toISOString(), status: 'preparing', leaseToken: randomUUID(), leaseExpiresAt: new Date(Date.now() + 60000).toISOString(), artifact: null, readySnapshot: null }
     this.preparations.set(toolCallId, reservation); return reservation
   }
-  async stageEditMask(_ctx: RunContext, _preparation: import('../../../../../../packages/database/src/index').CanvasAgentEditPreparation, _row: any, put: () => Promise<void>) { await put() }
-  async completeEdit(_ctx: RunContext, preparation: import('../../../../../../packages/database/src/index').CanvasAgentEditPreparation, snapshot: import('../../../../../../packages/database/src/index').CanvasAgentPreparedEdit) {
+  async stageEditMask(_ctx: RunContext, _preparation: import('@musecanvas/database').CanvasAgentEditPreparation, _row: any, put: () => Promise<void>) { await put() }
+  async completeEdit(_ctx: RunContext, preparation: import('@musecanvas/database').CanvasAgentEditPreparation, snapshot: import('@musecanvas/database').CanvasAgentPreparedEdit) {
     preparation.status = 'ready'; preparation.readySnapshot = snapshot; return preparation
   }
   async existingPending(ctx: RunContext, toolCallId: string) {

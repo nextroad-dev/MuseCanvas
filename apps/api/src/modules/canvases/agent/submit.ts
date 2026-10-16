@@ -1,5 +1,5 @@
 import { CanvasErrorCode as C, isCanvasUuid, type CanvasAgentConfirmRequest } from '@musecanvas/contracts'
-import { canvasAgentGenerationRequest } from '../../../../../../packages/database/src/index'
+import { canvasAgentGenerationRequest } from '@musecanvas/database'
 import type { Actor } from '../../../auth/security'
 import type { createGenerationJob } from '../../generations/create-job'
 import type { AgentStore } from './store'

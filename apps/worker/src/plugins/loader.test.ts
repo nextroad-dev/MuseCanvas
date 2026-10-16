@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { globalPluginRegistry, validatePluginManifest } from '../../../../packages/providers/src/index'
+import { globalPluginRegistry, validatePluginManifest } from '@musecanvas/providers'
 import {
   installedLanguagePluginBinding,
   isPluginAvailable,

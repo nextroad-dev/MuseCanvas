@@ -1,4 +1,4 @@
-import { assertBootstrapConfig } from '../../../packages/config/src/index'
+import { assertBootstrapConfig } from '@musecanvas/config'
 import { redis } from './shared/infra'
 import { consume } from './queue'
 import { processJob } from './jobs'

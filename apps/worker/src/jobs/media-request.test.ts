@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { MediaInputImage } from '../../../../packages/providers/src/core/types'
-import type { ModelConfigRevisionEntity } from '../../../../packages/database/src/repositories/model-config-revisions'
+import type { MediaInputImage } from '@musecanvas/providers/core/types'
+import type { ModelConfigRevisionEntity } from '@musecanvas/database/repositories/model-config-revisions'
 import { buildMediaRequest } from './index'
 
 /**

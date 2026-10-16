@@ -1,7 +1,7 @@
 import type pg from 'pg'
 import { CanvasErrorCode, isCanvasStorageString, type CanvasAgentSettingsDto, type JsonObject } from '@musecanvas/contracts'
-import { canvasAgentRequestDigest, findProviderCredential } from '../../../../../../packages/database/src/index'
-import { decodeStoredCredential, decryptStoredCredential, hasStoredCredentialSecret, isBuiltinLanguagePluginKey, type LanguageModelChatInput } from '../../../../../../packages/providers/src/index'
+import { canvasAgentRequestDigest, findProviderCredential } from '@musecanvas/database'
+import { decodeStoredCredential, decryptStoredCredential, hasStoredCredentialSecret, isBuiltinLanguagePluginKey, type LanguageModelChatInput } from '@musecanvas/providers'
 
 export class AgentError extends Error {
   constructor(readonly code: CanvasErrorCode, readonly status = 400) { super(code) }

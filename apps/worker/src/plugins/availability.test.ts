@@ -5,8 +5,8 @@ import {
   globalPluginRegistry,
   globalProviderRegistry,
   NormalizedProviderError,
-} from '../../../../packages/providers/src/index'
-import type { MediaProviderPlugin } from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
+import type { MediaProviderPlugin } from '@musecanvas/providers'
 import {
   assertBuiltinPluginsAvailable,
   builtinPluginKeys,

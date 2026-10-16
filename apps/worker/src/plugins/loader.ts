@@ -5,19 +5,19 @@ import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { GetObjectCommand } from '@aws-sdk/client-s3'
-import { db } from '../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import {
   formatPluginKey,
   globalPluginRegistry,
   PLUGIN_ARTIFACT_MAX_BYTES,
   scanPluginSource,
   validatePluginManifest,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import type {
   AnyProviderManifest,
   LanguageProviderPlugin,
   MediaProviderPlugin,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import { getStorageClient } from '../shared/storage'
 import { redactForLog } from '../provider-state'
 import {

@@ -1,6 +1,6 @@
 import { parseCanvasAgentMessageRequest, parseCanvasAgentEditMetadata, type CanvasAgentTurnRecoveryDto, type CanvasAgentStructuredContext, type AgentMessageDto, type CanvasAgentPendingJobDto, type CanvasOp } from '@musecanvas/contracts'
-import { canvasAgentGenerationRequest, type CanvasAgentTurn, type CanvasAgentPendingJob, type CanvasAgentStoredMessage } from '../../../../../../packages/database/src/index'
-import type { LanguageModelChatMessage, LanguageModelChatContentBlock } from '../../../../../../packages/providers/src/index'
+import { canvasAgentGenerationRequest, type CanvasAgentTurn, type CanvasAgentPendingJob, type CanvasAgentStoredMessage } from '@musecanvas/database'
+import type { LanguageModelChatMessage, LanguageModelChatContentBlock } from '@musecanvas/providers'
 
 /** Only our user-context block is public; provider blocks remain private. Re-parse
  * before exposure so legacy/unrecognized content blocks cannot become new DTO fields. */

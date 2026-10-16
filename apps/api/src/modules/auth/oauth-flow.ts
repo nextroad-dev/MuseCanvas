@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { hashToken, hashTokenCandidates, randomToken, shouldUseSecureCookie } from '../../auth/security'
 import { clientIpFromRequest, fail, ok } from '../../shared/http'
 import { writeAudit } from '../../shared/audit'

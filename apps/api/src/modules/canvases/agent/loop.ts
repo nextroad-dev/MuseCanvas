@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { CanvasErrorCode as C, applyCanvasOps, type AgentStreamEvent, type CanvasOp, type JsonObject, type JsonValue } from '@musecanvas/contracts'
-import type { callLanguageModelChat } from '../../../../../../packages/providers/src/index'
+import type { callLanguageModelChat } from '@musecanvas/providers'
 import type { Actor } from '../../../auth/security'
 import { AgentError, assertStorageStrings, raise, safeError } from './config'
 import type { AgentStore, RunContext } from './store'

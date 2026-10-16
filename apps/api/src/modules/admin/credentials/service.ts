@@ -1,5 +1,5 @@
-import { db, findProviderCredential, transaction } from '../../../../../../packages/database/src/index'
-import { decodeCredential, urlHostOf } from '../../../../../../packages/providers/src/index'
+import { db, findProviderCredential, transaction } from '@musecanvas/database'
+import { decodeCredential, urlHostOf } from '@musecanvas/providers'
 import { encryptProviderCredential, fingerprintApiKey } from '../../../auth/security'
 import { writeAudit } from '../../../shared/audit'
 import { providerCredentialDto } from '../../../shared/dto'

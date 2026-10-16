@@ -1,5 +1,5 @@
 import { parseUpdateCanvasAgentSettingsRequest, type CanvasAgentSettingsDto } from '@musecanvas/contracts'
-import { transaction, getCanvasAgentSettings, updateCanvasAgentSettings as persistSettings } from '../../../../../packages/database/src/index'
+import { transaction, getCanvasAgentSettings, updateCanvasAgentSettings as persistSettings } from '@musecanvas/database'
 import type { Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { writeAudit } from '../../shared/audit'

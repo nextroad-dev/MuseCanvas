@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import type {
   AdminPluginDocsDto,
   AdminPluginDto,
@@ -30,7 +30,7 @@ import {
   type AnyProviderManifest,
   type PluginPackageIconMimeType,
   type PluginScanFinding,
-} from '../../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import { type Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { writeAudit } from '../../shared/audit'

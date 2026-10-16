@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { db, requestProviderCredentialTest } from '../../../../../../packages/database/src/index'
+import { db, requestProviderCredentialTest } from '@musecanvas/database'
 import { fail, ok } from '../../../shared/http'
 
 /**

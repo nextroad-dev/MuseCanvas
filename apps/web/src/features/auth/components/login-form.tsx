@@ -1,14 +1,14 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createLoginRequestGate } from '../lib/login-request-state'
 import type { FormEvent } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { ArrowLeftIcon as ArrowLeft, EnvelopeSimpleIcon as Mail } from '@phosphor-icons/react'
 import { api, ApiError } from '@/shared/services/api'
-import { useAuthUiStore } from '@/shared/stores/auth-ui-store'
+import { ACCOUNT_QUERY_KEY } from '@/shared/hooks/useAccount'
 import type { User, OAuthProviderInfo } from '@/shared/types'
 import { safeRedirectPath } from '@/shared/lib/app-routes'
 import {
@@ -80,7 +80,7 @@ export function LoginForm() {
     if (first) inputRefs.current[first]?.focus()
   }, [])
 
-  const setUser = useAuthUiStore((s) => s.setUser)
+  const queryClient = useQueryClient()
   useEffect(() => { inputRefs.current[fieldOfStep[step]]?.focus() }, [step])
 
   /** Typing clears only the field's own error, so a hint never fights another. */
@@ -179,7 +179,9 @@ export function LoginForm() {
       setLoading(false)
 
       if (res.success && res.data?.user) {
-        setUser(res.data.user)
+        // Seed the session query so the signed-in user is the single source of
+        // truth the moment we navigate away from the login screen.
+        queryClient.setQueryData(ACCOUNT_QUERY_KEY, res.data.user)
         router.push(from)
         router.refresh()
         return

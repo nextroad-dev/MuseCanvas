@@ -1,5 +1,5 @@
 import { signedAssetUrl } from './services'
-import { hasStoredCredentialSecret, type StoredCredentialFields } from '../../../../packages/providers/src/index'
+import { hasStoredCredentialSecret, type StoredCredentialFields } from '@musecanvas/providers'
 import { enumOptionValues, validateModelCapabilities } from '@musecanvas/contracts'
 import type {
   GenerationMode,

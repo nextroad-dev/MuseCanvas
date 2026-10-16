@@ -1,3 +1,5 @@
+'use client'
+
 // Typed JSON helpers for the Canvas + Canvas Agent REST endpoints.
 //
 // Every call goes through `shared/services/client-api`, so the `/api` prefix,

@@ -59,6 +59,9 @@ jobs:
       - name: Typecheck workspaces (no external services)
         run: pnpm -r --if-present typecheck
 
+      - name: Lint workspaces (no external services)
+        run: pnpm -r --if-present lint
+
       - name: Test providers package incl. media contract (no external services)
         run: pnpm --filter @musecanvas/providers test
 

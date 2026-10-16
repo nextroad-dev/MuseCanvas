@@ -1,6 +1,6 @@
 import type pg from 'pg'
 import { createHash, randomUUID } from 'node:crypto'
-import { RUNTIME_SETTINGS_DEFAULTS } from '../../../../packages/contracts/src/index'
+import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -27,7 +27,7 @@ import {
   findProviderCredential,
   type ModelConfigRevisionEntity,
   type ProviderRunEntity,
-} from '../../../../packages/database/src/index'
+} from '@musecanvas/database'
 import {
   decodeStoredCredential,
   decryptStoredCredential,
@@ -42,7 +42,7 @@ import {
   NormalizedProviderError,
   buildDerivedPreview,
   type DerivedPreview,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import { createMediaExecutionContext, resolveMediaPlugin } from '../plugins/availability'
 import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
 import {
@@ -50,9 +50,9 @@ import {
   MAX_INPUT_IMAGES,
   MAX_UPLOAD_IMAGE_BYTES,
   MAX_UPLOAD_TOTAL_BYTES,
-} from '../../../../packages/providers/src/core/image-input'
-import type { InputLimits } from '../../../../packages/providers/src/core/image-input'
-import { preprocessPrompt } from '../preprocessing'
+} from '@musecanvas/providers/core/image-input'
+import type { InputLimits } from '@musecanvas/providers/core/image-input'
+import { preprocessPrompt, type PreprocessPromptJob } from '../preprocessing'
 import { getStorageClient, type StorageClientHandle } from '../shared/storage'
 import { resolveMaxOutputBytes as resolveRuntimeMaxOutputBytes, resolveProviderTimeoutMs, resolveRuntimeSettings } from '../shared/runtime'
 import {
@@ -486,9 +486,19 @@ export function buildMediaRequest(job: Record<string, unknown>, prompt: string, 
     : params.duration !== undefined ? Number(params.duration) : undefined
   const fps = params.fps !== undefined ? Number(params.fps) : undefined
   const extra: Record<string, unknown> = {}
-  // TODO(media-params): this mirror exists only so the two video adapters keep
-  // reading `extra` unchanged. Once they read `request.parameters` the loop goes
-  // away; until then the worker test asserts the two agree on these six keys.
+  // TODO(media-params): remove this mirror once the two video adapters
+  // (packages/providers/src/plugins/veo-video, .../seedance-video) read their
+  // controls from `request.parameters` instead of `request.extra`.
+  // Missing: that migration is a design change, not a rename. Each adapter owns a
+  // per-control source chain (provider-native spellings, credential/config `extra`
+  // fallbacks, grammar and range checks) and reads keys beyond these six
+  // (`imageRoles`, `storageUri`, `personGeneration`, `negativePrompt`,
+  // `enhancePrompt`, `resizeMode`, `compressionQuality`, ...); `parameters` only
+  // carries the six post-validation controls, so the adapters cannot switch
+  // without reworking those chains and their config-level overrides.
+  // Impact until then: the loop is load-bearing — dropping a key makes a video
+  // adapter silently submit its vendor default while `parameters` still holds the
+  // intended value. media-request.test.ts fences the two bags against divergence.
   for (const key of ['aspectRatio', 'resolution', 'audio', 'duration', 'seed', 'fps']) {
     if (params[key] !== undefined) extra[key] = params[key]
   }
@@ -693,7 +703,7 @@ async function uploadBufferToS3(key: string, data: Buffer, contentType: string):
     await storage.s3.send(new CompleteMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId, MultipartUpload: { Parts: parts } }))
     return uploadId
   } catch (error) {
-    try { await storage.s3.send(new AbortMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId })) } catch {}
+    try { await storage.s3.send(new AbortMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId })) } catch (abortError) { console.error('multipart upload abort failed', { key, code: abortError instanceof Error ? abortError.name : 'ABORT_FAILED' }) }
     throw error
   }
 }
@@ -1030,7 +1040,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
   }
   if ((claimed as Record<string, unknown>).canceledAtClaim) return true
   try {
-    const prompt = await preprocessPrompt(claimed)
+    const prompt = await preprocessPrompt(claimed as PreprocessPromptJob)
     const currentRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [claimed.id])
     const current = currentRes.rows[0] as Record<string, unknown> | undefined
     if (decideClaimedJob(current) === 'cancel') {

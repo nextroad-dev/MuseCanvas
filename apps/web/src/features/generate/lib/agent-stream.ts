@@ -1,3 +1,5 @@
+'use client'
+
 // Client for the Canvas Agent POST SSE endpoint.
 //
 // The JSON client in `shared/services/client-api` buffers the whole response and

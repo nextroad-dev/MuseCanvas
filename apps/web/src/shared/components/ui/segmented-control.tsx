@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { cn } from '@/shared/lib/cn'
 import { colourTransition } from './interaction'
@@ -63,7 +63,6 @@ export function SegmentedControl<T extends string = string>({
   labelledBy,
   className,
 }: SegmentedControlProps<T>) {
-  const uid = useId()
   const trackRef = useRef<HTMLDivElement | null>(null)
   const radioRefs = useRef(new Map<string, HTMLButtonElement | null>())
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null)

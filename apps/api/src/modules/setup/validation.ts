@@ -1,5 +1,6 @@
 import { emailValid } from '../../shared/http'
 import { PROMPT_TEMPLATE_VAR_LOOKUP } from '@musecanvas/contracts'
+import { isPrivateProviderHost } from '@musecanvas/providers'
 
 // Pure validators for the persisted onboarding endpoints. Every function is
 // synchronous and side-effect free: callers map failures to fail() responses
@@ -161,6 +162,15 @@ function validHttpUrl(raw: string, field: string): string | InputError {
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return INVALID_INPUT(`${field}必须使用 HTTP(S)`)
   if (url.username || url.password || url.search || url.hash) return INVALID_INPUT(`${field}不能包含认证信息或查询参数`)
+  // SSRF guard: the server fetches this endpoint, so a literal loopback /
+  // RFC1918 / link-local host would let the setup form reach the internal
+  // network. Reuses the single private-address predicate and override flag from
+  // `shared/model-helpers.ts` so "private" is defined in exactly one place; a
+  // DNS name (e.g. `minio`) still passes, only literal private addresses are
+  // refused.
+  if (isPrivateProviderHost(url.hostname) && process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL !== 'true') {
+    return INVALID_INPUT(`${field}不能指向内网或回环地址`)
+  }
   return url.toString().replace(/\/+$/, '')
 }
 

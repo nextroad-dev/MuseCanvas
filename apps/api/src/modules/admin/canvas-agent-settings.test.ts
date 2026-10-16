@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test, { mock } from 'node:test'
 import { CANVAS_AGENT_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import type { Actor } from '../../auth/security'
 import { readCanvasAgentSettings, updateCanvasAgentSettings } from './canvas-agent-settings'
 

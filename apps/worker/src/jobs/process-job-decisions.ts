@@ -1,4 +1,4 @@
-import type { OperationResult } from '../../../../packages/providers/src/index'
+import type { OperationResult } from '@musecanvas/providers'
 import { isCancelRequested } from '../provider-state'
 
 type ClaimDecision = 'ignore' | 'cancel' | 'claim'

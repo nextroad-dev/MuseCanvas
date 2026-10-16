@@ -159,7 +159,6 @@ export function MediaFrame({
   // all: keeping it would burn the one retry on a request that already failed.
   const preview = rawPreview && rawPreview !== src ? rawPreview : undefined
   const poster = isVideo ? preview : undefined
-  const decorated = layout === 'tile'
 
   const identity = `${kind}|${src}|${preview ?? ''}`
   const [state, setState] = useState<LoadState>({ identity, phase: 'loading' })

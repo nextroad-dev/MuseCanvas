@@ -1,5 +1,5 @@
 import { DeleteObjectCommand } from '@aws-sdk/client-s3'
-import { db, transaction } from '../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { dispatchOutbox } from '../queue'
 import { getStorageClient } from '../shared/storage'
 import { resolveUploadSignTtlSeconds } from '../shared/runtime'
@@ -97,13 +97,17 @@ export async function maintenance() {
       for (const img of inputImages.rows) {
         try {
           await deleteStorageObject(img.object_key)
-        } catch {}
+        } catch (error) {
+          console.error('input image object delete failed', { objectKey: img.object_key, code: error instanceof Error ? error.name : 'DELETE_FAILED' })
+        }
       }
       const mediaUploads = await db().query('SELECT id,object_key FROM media_uploads WHERE created_by=$1 AND object_deleted_at IS NULL', [deletion.user_id]).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
       for (const upload of mediaUploads.rows) {
         try {
           await deleteStorageObject(upload.object_key)
-        } catch {}
+        } catch (error) {
+          console.error('media upload object delete failed', { objectKey: upload.object_key, code: error instanceof Error ? error.name : 'DELETE_FAILED' })
+        }
       }
       await transaction(async client => {
         await purgeCanvasContentForActor(client, String(deletion.user_id))

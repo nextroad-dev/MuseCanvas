@@ -14,7 +14,7 @@ import {
   MAX_INPUT_IMAGES,
 } from './modules/generation-uploads'
 import { retryPreparation } from './generation/job-retry'
-import { globalProviderRegistry, resolveCredentialBaseUrl } from '../../../packages/providers/src/index'
+import { globalProviderRegistry, resolveCredentialBaseUrl } from '@musecanvas/providers'
 import { modelPresets, resolvePresetCapabilities, type VideoModelPreset } from './admin/model-presets'
 import { buildBuiltinProviderTemplates } from './admin/provider-templates'
 import { ACTIVE_IMAGE_PLUGIN_VERSION, isEmptyInputOverride, manifestSupportsVendorModel, presetMatchesPersistedModel, presetRevisionContract, manifestMediaSelection, validateImageModelContract } from './modules/models/handlers'
@@ -39,7 +39,7 @@ import {
   deletePromptTemplateEntry,
   deletePromptTemplateSet,
   updatePromptTemplateEntry,
-} from '../../../packages/database/src/repositories/prompt-templates'
+} from '@musecanvas/database/repositories/prompt-templates'
 import { validateTemplateImport as validateSetupTemplateImport } from './modules/setup/validation'
 
 process.env.SESSION_SECRET = 'test-session-secret-with-enough-entropy'

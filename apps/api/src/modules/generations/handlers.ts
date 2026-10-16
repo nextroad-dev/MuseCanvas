@@ -1,4 +1,4 @@
-import { transaction } from '../../../../../packages/database/src/index'
+import { transaction } from '@musecanvas/database'
 
 export async function deleteJobWithAssets(userId: string, jobId: string) {
   return transaction(async (client) => {

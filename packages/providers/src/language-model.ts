@@ -82,22 +82,47 @@ async function throwLanguageModelHttpError(response: Pick<SafeHttpResponse, 'sta
   throw new LanguageModelHttpError(response.status === 408 || response.status === 429 || response.status >= 500 ? 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR' : 'PROMPT_OPTIMIZATION_REJECTED', diagnostic)
 }
 
+type JsonObject = Record<string, unknown>
+
+function readObject(value: unknown): JsonObject | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined
+}
+function readArray(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) ? value : undefined
+}
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+function readNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined
+}
+
 export function parseLanguageModelResponse(protocol: LanguageProtocol, raw: unknown): LanguageModelResult {
-  if (!raw || typeof raw !== 'object') throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID')
-  const value = raw as any
+  const value = readObject(raw)
+  if (!value) throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID')
+  const usage = readObject(value.usage)
   if (protocol === 'openai_chat') {
-    const text = value.choices?.[0]?.message?.content
+    const message = readObject(readObject(readArray(value.choices)?.[0])?.message)
+    const text = message?.content
     if (typeof text !== 'string') throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID')
-    return { text, providerReferenceId: typeof value.id === 'string' ? value.id : undefined, inputTokens: value.usage?.prompt_tokens, outputTokens: value.usage?.completion_tokens }
+    return { text, providerReferenceId: readString(value.id), inputTokens: readNumber(usage?.prompt_tokens), outputTokens: readNumber(usage?.completion_tokens) }
   }
   if (protocol === 'openai_responses') {
-    const text = value.output?.flatMap((item: any) => item?.role === 'assistant' ? item.content || [] : []).find((item: any) => item?.type === 'output_text')?.text
+    const text = (readArray(value.output) ?? [])
+      .map(item => readObject(item))
+      .filter((item): item is JsonObject => item?.role === 'assistant')
+      .flatMap(item => readArray(item.content) ?? [])
+      .map(item => readObject(item))
+      .find(item => item?.type === 'output_text')?.text
     if (typeof text !== 'string') throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID')
-    return { text, providerReferenceId: typeof value.id === 'string' ? value.id : undefined, inputTokens: value.usage?.input_tokens, outputTokens: value.usage?.output_tokens }
+    return { text, providerReferenceId: readString(value.id), inputTokens: readNumber(usage?.input_tokens), outputTokens: readNumber(usage?.output_tokens) }
   }
-  const text = value.content?.find((item: any) => item?.type === 'text')?.text
-  if (typeof text !== 'string' || (value.stop_reason && !['end_turn', 'stop_sequence'].includes(value.stop_reason))) throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID')
-  return { text, providerReferenceId: typeof value.id === 'string' ? value.id : undefined, inputTokens: value.usage?.input_tokens, outputTokens: value.usage?.output_tokens }
+  const text = (readArray(value.content) ?? [])
+    .map(item => readObject(item))
+    .find(item => item?.type === 'text')?.text
+  const rejectedStopReason = value.stop_reason ? !['end_turn', 'stop_sequence'].includes(String(value.stop_reason)) : false
+  if (typeof text !== 'string' || rejectedStopReason) throw new Error('LANGUAGE_MODEL_RESPONSE_INVALID')
+  return { text, providerReferenceId: readString(value.id), inputTokens: readNumber(usage?.input_tokens), outputTokens: readNumber(usage?.output_tokens) }
 }
 
 const LANGUAGE_MODEL_MAX_RESPONSE_BYTES = 10_000_000

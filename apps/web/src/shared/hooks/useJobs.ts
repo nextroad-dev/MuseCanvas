@@ -108,5 +108,4 @@ export function useDeleteJobMutation() {
 export const useCreateJob = useCreateJobMutation
 export const useCancelJob = useCancelJobMutation
 export const useRetryJob = useRetryJobMutation
-export const useDeleteJob = useDeleteJobMutation
 

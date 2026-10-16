@@ -608,20 +608,6 @@ export async function getValidSetupSession(
   return toSetupSessionEntity(res.rows[0] as SetupSessionRow)
 }
 
-export async function consumeSetupSession(
-  client: pg.PoolClient | pg.Pool,
-  tokenHash: string,
-): Promise<SetupSessionEntity | null> {
-  const res = await client.query(
-    `UPDATE setup_sessions SET consumed_at = now()
-     WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
-     RETURNING *`,
-    [tokenHash],
-  )
-  if (!res.rows[0]) return null
-  return toSetupSessionEntity(res.rows[0] as SetupSessionRow)
-}
-
 // ---------------------------------------------------------------------------
 // One-time setup claim code. Only the hash is stored; plaintext is never
 // modeled. After the claim is consumed, the caller creates a separate

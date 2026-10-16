@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { parseCanvasAgentMessageRequest } from '@musecanvas/contracts'
 import { PgAgentStore } from './store'
 import { publicMessage, publicPending, publicTurn } from './history'
-import { canvasAgentPendingIdentity } from '../../../../../../packages/database/src/index'
+import { canvasAgentPendingIdentity } from '@musecanvas/database'
 
 const actorId = randomUUID(), canvasId = randomUUID(), sessionId = randomUUID(), turnId = randomUUID(), messageId = randomUUID()
 const raw = (object: object) => Object.fromEntries(Object.entries(object).map(([key, value]) => [key.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`), value]))

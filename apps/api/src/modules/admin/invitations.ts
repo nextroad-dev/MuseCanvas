@@ -1,5 +1,5 @@
-import { decryptForPurpose, encryptForPurpose } from '../../../../../packages/providers/src/index'
-import { db } from '../../../../../packages/database/src/index'
+import { decryptForPurpose, encryptForPurpose } from '@musecanvas/providers'
+import { db } from '@musecanvas/database'
 import { hashToken, randomToken } from '../../auth/security'
 import { writeAudit } from '../../shared/audit'
 import { fail, ok } from '../../shared/http'

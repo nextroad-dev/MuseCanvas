@@ -4,7 +4,7 @@ import {
   MAX_INPUT_IMAGE_ASPECT_RATIO,
   MAX_INPUT_IMAGE_DIMENSION,
   MIN_INPUT_IMAGE_DIMENSION,
-} from '../../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 
 export class GenerationInputError extends Error {
   code: string

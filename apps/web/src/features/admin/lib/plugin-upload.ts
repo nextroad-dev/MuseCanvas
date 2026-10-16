@@ -1,3 +1,5 @@
+'use client'
+
 // Multipart transport for the admin plugin upload/validate endpoints, plus the
 // small display helpers the plugin section needs.
 //

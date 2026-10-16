@@ -24,5 +24,12 @@ ENV PORT=3000
 COPY --from=build /app/apps/web/.next/standalone ./
 COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=build /app/apps/web/public ./apps/web/public
+
+# Drop to an unprivileged user. The standalone server.js reads its own bundle
+# but still writes the Next.js runtime cache under apps/web/.next, so the
+# copied tree (root-owned by default from COPY) is handed to `app`.
+RUN addgroup -S app && adduser -S -G app app \
+ && chown -R app:app /app
+USER app
 EXPOSE 3000
 CMD ["node", "apps/web/server.js"]

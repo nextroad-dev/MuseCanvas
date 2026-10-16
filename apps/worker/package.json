@@ -8,10 +8,15 @@
     "start": "tsx src/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\""
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1073.0",
+    "@musecanvas/config": "workspace:*",
+    "@musecanvas/contracts": "workspace:*",
+    "@musecanvas/database": "workspace:*",
+    "@musecanvas/providers": "workspace:*",
     "pg": "^8.22.0",
     "redis": "^5.12.1"
   },

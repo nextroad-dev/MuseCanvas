@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { NextResponse } from 'next/server'
-import { db, findProviderCredential, transaction } from '../../../../../packages/database/src/index'
-import { hasStoredCredentialSecret } from '../../../../../packages/providers/src/index'
+import { db, findProviderCredential, transaction } from '@musecanvas/database'
+import { hasStoredCredentialSecret } from '@musecanvas/providers'
 import { validateGenerationRequest, prepareRequestDigestInput, serializeCanonicalJson } from '@musecanvas/domain'
 import {
   RUNTIME_SETTINGS_DEFAULTS,

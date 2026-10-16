@@ -67,14 +67,12 @@ export interface Session {
 // rendered, which is the gate the mirror was silently defeating.
 import type {
   GenerationInputRole,
-  ImageSizeParameterDescriptor,
   InputSlotDescriptor,
   MediaParameterProvenance,
   ModelCapabilities,
   ModelCapabilityFlags,
   ParameterCrossFieldConstraint,
   ParameterDescriptor,
-  ParameterOption,
 } from '@musecanvas/contracts'
 
 export type {

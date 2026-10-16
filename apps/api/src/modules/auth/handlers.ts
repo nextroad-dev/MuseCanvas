@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto'
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { actorFrom, hashOtp, hashToken, randomToken, shouldUseSecureCookie, verifyOtpHash } from '../../auth/security'
 import { findActiveInvitationHash } from '../../auth/invitations'
 import { writeAudit } from '../../shared/audit'

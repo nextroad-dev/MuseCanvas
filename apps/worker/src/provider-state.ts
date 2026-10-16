@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { CURRENT_KEY_ID, decryptApiKey, decryptForPurpose, encryptForPurpose } from '../../../packages/providers/src/index'
-import type { OutputDescriptor } from '../../../packages/providers/src/index'
+import { CURRENT_KEY_ID, decryptApiKey, decryptForPurpose, encryptForPurpose } from '@musecanvas/providers'
+import type { OutputDescriptor } from '@musecanvas/providers'
 
 /** Key id stamped on new provider-run opaque state rows. */
 export const PROVIDER_RUN_STATE_KEY_ID = CURRENT_KEY_ID

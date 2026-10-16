@@ -1,4 +1,4 @@
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { type Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { writeAudit } from '../../shared/audit'

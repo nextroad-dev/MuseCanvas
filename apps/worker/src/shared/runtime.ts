@@ -13,14 +13,14 @@
 // internals: they are returned only to storage/credential call paths in this
 // process and are never logged (see provider-state redactForLog).
 
-import { db } from '../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import {
   getActivePromptTemplateSet,
   listPromptTemplateEntries,
-} from '../../../../packages/database/src/repositories/onboarding'
-import { decryptForPurpose } from '../../../../packages/providers/src/index'
-import { RUNTIME_SETTINGS_DEFAULTS } from '../../../../packages/contracts/src/index'
-import { loadPromptTemplateIndex } from '../../../../packages/providers/src/index'
+} from '@musecanvas/database/repositories/onboarding'
+import { decryptForPurpose } from '@musecanvas/providers'
+import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
+import { loadPromptTemplateIndex } from '@musecanvas/providers'
 
 export type SettingsSource = 'database' | 'environment'
 

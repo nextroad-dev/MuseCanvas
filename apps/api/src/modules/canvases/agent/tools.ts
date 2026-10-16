@@ -1,6 +1,6 @@
 import { buildInpaintPrompt, clampEditSelection, CanvasErrorCode as C, applyCanvasOps, parseCanvasOp, isCanvasUuid, type CanvasOp, type CanvasScene, type JsonObject, type JsonValue } from '@musecanvas/contracts'
-import { canvasAgentPendingIdentity } from '../../../../../../packages/database/src/index'
-import type { LanguageModelChatTool, LanguageModelChatToolCall } from '../../../../../../packages/providers/src/index'
+import { canvasAgentPendingIdentity } from '@musecanvas/database'
+import type { LanguageModelChatTool, LanguageModelChatToolCall } from '@musecanvas/providers'
 import type { Actor } from '../../../auth/security'
 import { raise } from './config'
 import { serializeCanonicalJson } from '@musecanvas/domain'
@@ -73,7 +73,7 @@ function assertExplicitParameters(parameters: JsonObject, explicit?: JsonObject,
     if (!derived.includes(key) && serializeCanonicalJson(parameters[key]) !== serializeCanonicalJson(value)) raise(C.INVALID_INPUT)
   }
 }
-export interface ToolOutcome { result: JsonValue; ops: CanvasOp[]; pending?: import('../../../../../../packages/database/src/index').CanvasAgentPendingJob }
+export interface ToolOutcome { result: JsonValue; ops: CanvasOp[]; pending?: import('@musecanvas/database').CanvasAgentPendingJob }
 export async function executeTool(input: { store: AgentStore; ctx: RunContext; actor: Actor; call: LanguageModelChatToolCall; scene: CanvasScene; signal: AbortSignal; create: GenerationCreate; prepare?: typeof prepareImageEdit }): Promise<ToolOutcome> {
   const { store, ctx, actor, call, scene, signal, create } = input
   if (signal.aborted) raise(C.CANVAS_AGENT_CANCELED, 409)

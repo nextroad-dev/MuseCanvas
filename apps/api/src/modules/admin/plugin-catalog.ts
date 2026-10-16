@@ -1,14 +1,14 @@
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import {
   globalPluginRegistry,
   hostMatchesAllowlist,
   pluginCredentialSpec,
   validatePluginManifest,
   type AnyProviderManifest,
-} from '../../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import { parseRevisionJsonField } from '../../shared/dto'
 import { presetById } from '../../shared/model-helpers'
-import { modelPresets, type ModelPreset } from '../../admin/model-presets'
+import { modelPresets, type ModelPreset } from '../../admin/model-preset-defs'
 
 export type CatalogPluginSource = 'builtin' | 'installed'
 

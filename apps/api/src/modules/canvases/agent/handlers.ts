@@ -1,5 +1,5 @@
 import { CanvasErrorCode as C, isCanvasUuid, parseCanvasAgentApplyRequest, parseCanvasAgentConfirmRequest, parseCanvasAgentMessageRequest, type CanvasAgentHistoryDto } from '@musecanvas/contracts'
-import { callLanguageModelChat } from '../../../../../../packages/providers/src/index'
+import { callLanguageModelChat } from '@musecanvas/providers'
 import type { AuthedContext } from '../../../router/types'
 import { mutationOriginValid, fail, ok } from '../../../shared/http'
 import { limited } from '../../../shared/redis'

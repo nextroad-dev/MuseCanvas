@@ -3,7 +3,7 @@ import test from 'node:test'
 
 process.env.APP_MASTER_KEY = process.env.APP_MASTER_KEY || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 
-import { globalProviderRegistry } from '../../../../../../packages/providers/src/index'
+import { globalProviderRegistry } from '@musecanvas/providers'
 import { credentialTestFailureMessage, settledOutcome } from './connectivity'
 import { parseCredentialInput } from './input'
 import { credentialRedirected } from './service'

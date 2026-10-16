@@ -1,4 +1,4 @@
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { fail, ok } from '../../shared/http'
 import { jobDto } from '../../shared/dto'
 import { limited } from '../../shared/redis'

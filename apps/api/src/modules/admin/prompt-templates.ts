@@ -13,7 +13,7 @@ import {
   updatePromptTemplateEntry as updatePromptTemplateEntryTx,
   PROMPT_TEMPLATE_MAX_SORT_ORDER,
   type PromptTemplateSetWithEntries,
-} from '../../../../../packages/database/src/index'
+} from '@musecanvas/database'
 import {
   PROMPT_TEMPLATE_VAR_LOOKUP,
   type ImportPromptTemplateSetResult,
@@ -22,7 +22,7 @@ import {
   type PromptTemplateSetSummaryDto,
   type RenderPromptTemplateResult,
 } from '@musecanvas/contracts'
-import type { PromptTemplateEntryEntity, PromptTemplateSetEntity } from '../../../../../packages/database/src/index'
+import type { PromptTemplateEntryEntity, PromptTemplateSetEntity } from '@musecanvas/database'
 import type { Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 

@@ -1,3 +1,5 @@
+'use client'
+
 // Multipart transport for 局部修改 (`POST /api/images/edit`).
 //
 // Why this is not `clientApi`: that client always pins `content-type:

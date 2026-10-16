@@ -1,4 +1,4 @@
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { decodeCursor, encodeCursor, boundedLimit } from '../../shared/pagination'
 import { fail, ok } from '../../shared/http'
 import { signedAssetUrl } from '../../shared/services'

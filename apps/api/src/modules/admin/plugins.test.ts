@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Actor } from '../../auth/security'
-import type { AnyProviderManifest, MediaProviderManifest } from '../../../../../packages/providers/src/index'
+import type { AnyProviderManifest, MediaProviderManifest } from '@musecanvas/providers'
 import {
   PLUGIN_PACKAGE_MAX_BYTES,
   PLUGIN_ARTIFACT_MAX_BYTES,
@@ -15,7 +15,7 @@ import {
   pluginPackageObjectKey,
   scanPluginSource,
   validatePluginManifest,
-} from '../../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import {
   LEGACY_UPLOAD_WARNING,
   analyzePluginPackage,

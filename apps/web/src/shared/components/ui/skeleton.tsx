@@ -1,5 +1,5 @@
 import { cn } from '@/shared/lib/cn'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties } from 'react'
 import { controlMinHeight } from './size'
 
 /**
@@ -83,42 +83,5 @@ export function SkeletonRow({ cells = 1, cellWidth, className }: SkeletonRowProp
         <span key={index} style={style} className="motion-shimmer block h-4 min-w-0 flex-1 rounded-pill" />
       ))}
     </span>
-  )
-}
-
-interface SkeletonRegionProps {
-  loading: boolean
-  /** Shape matched to the payload; defaults to three lines of text. */
-  fallback?: ReactNode
-  /** Announced while busy, so a region that swaps in content is not silent. */
-  label?: string
-  className?: string
-  children: ReactNode
-}
-
-/**
- * Busy region: `aria-busy` on the container while loading, and a cross-fade onto
- * the real content over `--motion-base` (180ms) once it arrives, per the
- * skeleton→content transition in the spec. The skeleton is replaced inside the
- * same box the content occupies, so nothing below it jumps.
- */
-export function SkeletonRegion({
-  loading,
-  fallback,
-  label = '加载中',
-  className,
-  children,
-}: SkeletonRegionProps) {
-  return (
-    <div aria-busy={loading} className={className}>
-      {loading ? (
-        <>
-          {fallback ?? <SkeletonText lines={3} />}
-          <span className="sr-only">{label}</span>
-        </>
-      ) : (
-        <div className="motion-fade-in">{children}</div>
-      )}
-    </div>
   )
 }

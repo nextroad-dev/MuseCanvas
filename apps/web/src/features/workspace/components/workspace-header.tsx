@@ -94,7 +94,6 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
   // is live — `mode` has to come in. See `resolveActiveNavKey`.
   const activeKey = resolveActiveNavKey(pathname, mode)
   const currentPageName = navLabelFor(activeKey)
-  const isGenerateRoute = pathname === GENERATE_ROUTE
 
   useEffect(() => {
     closeDrawer()

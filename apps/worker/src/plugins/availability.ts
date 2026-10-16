@@ -6,14 +6,14 @@ import {
   isBuiltinLanguagePluginKey,
   NormalizedProviderError,
   parsePluginKey,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import type {
   DecodedCredential,
   ExecutionContext,
   LanguageProviderPlugin,
   MediaProviderPlugin,
   ProviderConfig,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 
 /*
  * The gate between the append-only plugin registries and the mutable catalog.

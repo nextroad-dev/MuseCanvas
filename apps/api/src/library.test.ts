@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { db } from '../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import type { AuthedContext } from './router/types'
 import { listLibrary } from './modules/library/handlers'
 

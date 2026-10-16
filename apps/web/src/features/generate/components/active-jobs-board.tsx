@@ -5,7 +5,7 @@ import { CaretRightIcon as ChevronRight, ArrowClockwiseIcon as RefreshCw, XCircl
 import { JobStatusBadge } from '@/shared/components/job-status-badge'
 import { MediaFrame } from '@/shared/components/media-frame'
 import { Alert, Button, Progress, Skeleton, SkeletonRow, SkeletonTile } from '@/shared/components/ui'
-import { formatElapsed, isJobActive, jobStatusMeta, phaseLabel } from '@/shared/lib/job-status'
+import { formatElapsed, isJobActive, phaseLabel } from '@/shared/lib/job-status'
 import { cn } from '@/shared/lib/cn'
 import { isVideoOutput, outputUrl } from '@/shared/types'
 import type { GenerationJob } from '@/shared/types'

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { db, findProviderCredential, transaction } from '../../../../../packages/database/src/index'
+import { db, findProviderCredential, transaction } from '@musecanvas/database'
 import { createModelConfigRevision } from '@musecanvas/database'
 import type { JsonValue, ModelCapabilities } from '@musecanvas/contracts'
 import { enumOptionValues } from '@musecanvas/contracts'
@@ -9,9 +9,9 @@ import { capabilitiesFromRow, defaultsFromRow, legacyColumnsFromCapabilities, mo
 import { normalizedProviderBaseUrl, sanitizeReasoningEffort } from '../../shared/model-helpers'
 import { resolveCatalogPlugin, resolvePresetById } from '../admin/plugin-catalog'
 import { credentialBindingError } from '../admin/credentials/validate'
-import { globalProviderRegistry, MAX_INPUT_IMAGES, pluginCredentialSpec, resolveCredentialBaseUrl } from '../../../../../packages/providers/src/index'
-import type { AnyProviderManifest } from '../../../../../packages/providers/src/index'
-import type { MediaProviderPlugin } from '../../../../../packages/providers/src/index'
+import { globalProviderRegistry, MAX_INPUT_IMAGES, pluginCredentialSpec, resolveCredentialBaseUrl } from '@musecanvas/providers'
+import type { AnyProviderManifest } from '@musecanvas/providers'
+import type { MediaProviderPlugin } from '@musecanvas/providers'
 import { resolvePresetCapabilities, type ModelPreset } from '../../admin/model-presets'
 import { hasForbiddenManualModelFields, modelOverrideError, modelSavePath, presetRevisionOrRow } from './upsert-internal'
 
@@ -308,11 +308,34 @@ export async function upsertModel(
     : savePresetModel(actor, input, id, existing)
 }
 
+/**
+ * The `model_configs` columns the upsert paths read back from a `SELECT *`.
+ * The row arrives untyped from the raw pg driver, so only the columns these two
+ * functions consult are declared — a narrowed shape instead of an open record.
+ */
+type ModelConfigRow = {
+  adapter?: string | null
+  base_url?: string | null
+  concurrency_limit?: number | null
+  display_name?: string | null
+  enabled?: boolean | null
+  model_kind?: string | null
+  plugin_id?: string | null
+  plugin_version?: string | null
+  preset_id?: string | null
+  provider_credential_id?: string | null
+  provider_id?: string | null
+  reasoning_effort?: string | null
+  sort_order?: number | null
+  vendor_model_id?: string | null
+  watermark?: boolean | null
+}
+
 async function savePluginModel(
   actor: Actor,
   input: Record<string, unknown>,
   id: string | undefined,
-  existing: Record<string, any> | null | undefined,
+  existing: ModelConfigRow | null | undefined,
 ) {
   // Plugin-driven path: explicit provider/plugin identity (image or video).
   // The static registry plus the manifest modality is the only authority:
@@ -476,7 +499,7 @@ async function savePresetModel(
   actor: Actor,
   input: Record<string, unknown>,
   id: string | undefined,
-  existing: Record<string, any> | null | undefined,
+  existing: ModelConfigRow | null | undefined,
 ) {
   if (hasForbiddenManualModelFields(input))
     return fail('INVALID_INPUT', '模型参数只能通过预设选择')

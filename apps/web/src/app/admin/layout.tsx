@@ -26,7 +26,7 @@ export default async function AdminLayout({
   }
 
   if (user.role !== 'admin') {
-    redirect('/generate')
+    redirect('/')
   }
 
   return <AdminShell user={user}>{children}</AdminShell>

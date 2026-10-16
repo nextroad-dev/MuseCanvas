@@ -8,7 +8,6 @@ import {
   canvasDetailQueryKey,
   canvasListQueryKey,
 } from '@/features/generate/lib/canvas-query-keys'
-import { useAuthUiStore } from '@/shared/stores/auth-ui-store'
 import { useAccountQuery } from './useAccount'
 
 /** Every canvas query is scoped by the authenticated actor, so logging out and
@@ -18,15 +17,12 @@ export { CANVASES_QUERY_KEY, canvasDetailQueryKey, canvasListQueryKey }
 /**
  * The signed-in actor id for query keys.
  *
- * The UI store is only hydrated by the login form, so a hard reload of a workspace
- * route has an empty store while the shell is already authenticated. The session
- * query is the durable source, so it is the fallback — otherwise every actor-scoped
- * query would stay disabled after a reload.
+ * The session query (`useAccountQuery`) is the single source of truth for the
+ * signed-in user, so every actor-scoped query stays disabled until it resolves.
  */
 export function useCurrentActorId(): string {
-  const storeUserId = useAuthUiStore((state) => state.user?.id ?? '')
   const account = useAccountQuery()
-  return storeUserId || account.data?.id || ''
+  return account.data?.id ?? ''
 }
 
 /** Conversation list with cursor "load more". Disabled until an actor is known,

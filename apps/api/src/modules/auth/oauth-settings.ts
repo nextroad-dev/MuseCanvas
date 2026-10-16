@@ -1,5 +1,5 @@
 import { decryptOAuthSecret } from '../../auth/security'
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { envOAuthConfig, runtimeProviderConfigured, type OAuthProvider, type OAuthRuntimeConfig } from '../../auth/oauth'
 import { resolvePublicOrigin } from '../settings/runtime'
 

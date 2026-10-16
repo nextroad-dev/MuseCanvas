@@ -1,5 +1,5 @@
-import { db, findProviderCredential, transaction } from '../../../../packages/database/src/index'
-import { callLanguageModel, decryptStoredCredential, hasStoredCredentialSecret, loadPromptTemplateIndex, renderPromptTemplate, type LanguageModelResult, type LanguageProtocol, type ReasoningEffort } from '../../../../packages/providers/src/index'
+import { db, findProviderCredential, transaction } from '@musecanvas/database'
+import { callLanguageModel, decryptStoredCredential, hasStoredCredentialSecret, loadPromptTemplateIndex, renderPromptTemplate, type LanguageModelResult, type LanguageProtocol, type ReasoningEffort } from '@musecanvas/providers'
 import { resolvePromptTemplates } from '../shared/runtime'
 import { installedLanguagePluginBinding } from '../plugins/availability'
 
@@ -76,7 +76,9 @@ function parseTemplateSelection(text: string, allowedNames: string[]): string | 
       if (typeof value === 'string' && isNoTemplateSelection(value)) return null
       if (typeof value === 'string' && allowedNames.includes(value.trim())) return value.trim()
     }
-  } catch {}
+  } catch (error) {
+    console.error('template selection response not JSON', { code: error instanceof Error ? error.name : 'TEMPLATE_SELECTION_PARSE_FAILED' })
+  }
   const exact = allowedNames.find(name => trimmed === name)
   if (exact) return exact
   const contained = allowedNames.find(name => trimmed.includes(name))
@@ -124,7 +126,25 @@ export function buildPromptOptimizationRepairUserPrompt(input: { prompt: string;
 ${input.previousPrompt}`
 }
 
-export async function preprocessPrompt(job: any): Promise<string> {
+/**
+ * The subset of a claimed `generation_jobs` row this stage reads. Rows are handed
+ * to the worker as `Record<string, unknown>` (see `processJob` in jobs/index.ts),
+ * so the columns are spelled out here instead of flowing in as `any`.
+ */
+export type PreprocessPromptJob = {
+  id: string
+  prompt: string
+  optimization_mode: string
+  prompt_optimization_id: string | null
+  model_name: string
+  adapter: string
+  /** Nullable since migration 0015 relaxed the image-only required columns. */
+  size: string | null
+  quality: string | null
+  count: number | null
+}
+
+export async function preprocessPrompt(job: PreprocessPromptJob): Promise<string> {
   if (job.optimization_mode !== 'enabled') return job.prompt
   const result = await db().query('SELECT po.*,s.timeout_ms,mc.plugin_id AS language_model_plugin_id,mc.plugin_version AS language_model_plugin_version FROM prompt_optimizations po CROSS JOIN prompt_optimization_settings s LEFT JOIN model_configs mc ON mc.id=po.language_model_config_id WHERE po.id=$1 AND po.job_id=$2 AND po.deleted_at IS NULL', [job.prompt_optimization_id, job.id])
   const optimization = result.rows[0]
@@ -184,7 +204,7 @@ export async function preprocessPrompt(job: any): Promise<string> {
       }
     }
   }
-  const rendered = instruction ? renderPromptTemplate(instruction, { input_prompt: optimization.input_prompt, image_model_name: job.model_name, image_adapter: job.adapter, size: job.size, quality: job.quality || '', count: job.count, input_language: optimization.input_language }) : ''
+  const rendered = instruction ? renderPromptTemplate(instruction, { input_prompt: optimization.input_prompt, image_model_name: job.model_name, image_adapter: job.adapter, size: job.size ?? '', quality: job.quality || '', count: job.count ?? '', input_language: optimization.input_language }) : ''
   await db().query("UPDATE generation_jobs SET phase='prompt_optimizing',updated_at=now() WHERE id=$1", [job.id])
   const renderedTemplate = instruction ? rendered : null
   const optimized = await invokePromptOptimizer(buildPromptOptimizationSystemPrompt(), buildPromptOptimizationUserPrompt({ prompt: optimization.input_prompt, renderedTemplate }))

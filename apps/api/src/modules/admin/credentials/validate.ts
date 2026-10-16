@@ -6,7 +6,7 @@ import {
   resolveCredentialBaseUrl,
   type AnyProviderManifest,
   type DecodedCredential,
-} from '../../../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import { listCatalogManifests, resolveCatalogPlugin, type CatalogPlugin } from '../plugin-catalog'
 
 /**

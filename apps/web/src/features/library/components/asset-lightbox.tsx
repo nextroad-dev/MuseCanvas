@@ -31,7 +31,7 @@ const SCRIM_BACKGROUND = 'color-mix(in srgb, var(--color-overlay) calc(var(--opa
 
 /** The 44px round pager on the dark stage: a circular touch target by geometry. */
 const STAGE_PAGER_CLASS =
-  'motion-press absolute top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-pill bg-overlay/40 text-foreground-inverse disabled:cursor-not-allowed disabled:opacity-50'
+  'motion-press absolute top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-pill bg-overlay/40 text-foreground-inverse backdrop-blur-md border border-white/10 disabled:cursor-not-allowed disabled:opacity-50'
 
 /** A fixed header/action row surrounds one scroll body, including on short screens. */
 export function AssetLightbox({ assets, activeAssetId, onClose, onSelect }: AssetLightboxProps) {
@@ -81,9 +81,9 @@ export function AssetLightbox({ assets, activeAssetId, onClose, onSelect }: Asse
       {...rootProps}
       onClick={(event) => { if (event.target === event.currentTarget) onClose() }}
       style={{ backgroundColor: SCRIM_BACKGROUND }}
-      className={`fixed inset-0 z-modal flex items-center justify-center p-3 sm:p-6 ${closing ? 'motion-fade-out pointer-events-none' : 'motion-fade-in'}`}
+      className={`fixed inset-0 z-modal flex items-center justify-center p-4 backdrop-blur-sm sm:p-6 lg:p-8 ${closing ? 'motion-fade-out pointer-events-none' : 'motion-fade-in'}`}
     >
-      <div {...dialogProps} className={`flex max-h-[calc(100dvh-1.5rem)] w-full max-w-content flex-wrap overflow-hidden rounded-panel bg-surface text-foreground shadow-modal sm:max-h-[calc(100dvh-3rem)] ${closing ? 'motion-dialog-out' : 'motion-dialog-in'}`}>
+      <div {...dialogProps} className={`flex max-h-[calc(100dvh-1.5rem)] w-full max-w-content overflow-hidden rounded-panel border border-white/10 bg-overlay text-foreground shadow-modal sm:max-h-[calc(100dvh-3rem)] ${closing ? 'motion-dialog-out' : 'motion-dialog-in'}`}>
         <AssetPreview
           key={shown.id}
           asset={shown}
@@ -150,7 +150,7 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
 
   return (
     <>
-      <div className="relative flex min-h-[320px] min-w-0 flex-[999_1_560px] items-center justify-center overflow-hidden bg-foreground p-4 dark:bg-overlay sm:p-8">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-overlay p-4 sm:p-6 md:p-8">
         <MediaFrame
           key={`${url}|${attempt}`}
           src={url}
@@ -162,14 +162,14 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
           width={asset.width}
           height={asset.height}
           onMediaError={onMediaError}
-          className="h-auto max-h-[52dvh] w-auto max-w-full object-contain sm:max-h-[72dvh]"
+          className="h-auto w-auto max-h-full max-w-full object-contain"
         />
         <button
           type="button"
           aria-label="上一个作品"
           disabled={index <= 0}
           onClick={() => onNavigate('previous')}
-          className={`${STAGE_PAGER_CLASS} left-4`}
+          className={`${STAGE_PAGER_CLASS} left-6`}
         >
           <ChevronLeft weight="bold" aria-hidden="true" className={iconSize.md} />
         </button>
@@ -178,20 +178,20 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
           aria-label="下一个作品"
           disabled={index >= total - 1}
           onClick={() => onNavigate('next')}
-          className={`${STAGE_PAGER_CLASS} right-4`}
+          className={`${STAGE_PAGER_CLASS} right-6`}
         >
           <ChevronRight weight="bold" aria-hidden="true" className={iconSize.md} />
         </button>
       </div>
-      <aside className="flex min-w-0 flex-[1_1_320px] flex-col sm:max-w-[380px]">
-        <header className="flex shrink-0 items-start justify-between gap-3 px-5 pb-4 pt-5">
+      <aside className="flex min-h-0 w-80 shrink-0 flex-col bg-surface">
+        <header className="flex shrink-0 items-start justify-between gap-3 px-6 pb-4 pt-6">
           <div className="min-w-0">
-            <h2 id={labelId} className="text-module">{isVideo ? '视频作品' : '图像作品'}</h2>
-            <p role="status" aria-live="polite" className="font-mono text-xs tabular-nums text-muted-foreground">{Math.max(index + 1, 1)} / {total}</p>
+            <h2 id={labelId} className="text-module">{asset.prompt || (isVideo ? '视频作品' : '图像作品')}</h2>
+            <p role="status" aria-live="polite" className="font-mono text-xs tabular-nums text-muted-foreground">第 {Math.max(index + 1, 1)} 张，共 {total} 张</p>
           </div>
-          <IconButton variant="ghost" ref={closeButtonRef} aria-label="关闭预览" onClick={onClose} icon={<X weight="bold" aria-hidden="true" />} />
+          <IconButton variant="ghost" size="sm" ref={closeButtonRef} aria-label="关闭预览" onClick={onClose} icon={<X weight="bold" aria-hidden="true" />} />
         </header>
-        <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-5 pb-5">
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pb-5">
           {signing.isError ? (
             <Alert
               tone="danger"
@@ -201,29 +201,35 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
               {signing.error.message}。请使用重新加载操作。
             </Alert>
           ) : null}
-          <section className="flex flex-col gap-2">
-            <h3 className="text-sm font-medium text-muted-foreground">提示词</h3>
-            <p className="whitespace-pre-wrap break-words text-sm text-foreground [overflow-wrap:anywhere]">{asset.prompt || '此作品没有提示词。'}</p>
+          <section className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-medium text-foreground">提示词</h3>
+            <p className="whitespace-pre-wrap break-words rounded-card bg-tonal p-3 text-xs leading-relaxed text-foreground [overflow-wrap:anywhere]">{asset.prompt || '此作品没有提示词。'}</p>
           </section>
-          <dl className="grid grid-cols-[72px_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">类型</dt>
-            <dd className="m-0 text-foreground">{isVideo ? '视频' : '图像'}</dd>
-            <dt className="text-muted-foreground">尺寸</dt>
-            <dd className="m-0 font-mono tabular-nums text-foreground">
-              {asset.width && asset.height ? `${asset.width} × ${asset.height}` : '—'}
-            </dd>
-            <dt className="text-muted-foreground">创建于</dt>
-            <dd className="m-0 font-mono tabular-nums text-foreground">{formatDateTime(asset.createdAt)}</dd>
+          <dl className="flex flex-col gap-0 text-sm">
+            <div className="flex items-center justify-between border-b border-border py-2">
+              <dt className="text-muted-foreground">类型</dt>
+              <dd className="m-0 font-medium text-foreground">{isVideo ? '视频' : '图像'}</dd>
+            </div>
+            <div className="flex items-center justify-between border-b border-border py-2">
+              <dt className="text-muted-foreground">尺寸</dt>
+              <dd className="m-0 font-mono tabular-nums font-medium text-foreground">
+                {asset.width && asset.height ? `${asset.width} × ${asset.height}` : '—'}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between py-2">
+              <dt className="text-muted-foreground">创建于</dt>
+              <dd className="m-0 font-mono tabular-nums font-medium text-foreground">{formatDateTime(asset.createdAt)}</dd>
+            </div>
           </dl>
           {regionEditBlocked ? <p className="text-xs text-muted-foreground">局部修改：{regionEditBlocked}</p> : null}
         </div>
-        <footer className="flex shrink-0 flex-col gap-2 border-t border-border px-5 py-4">
+        <footer className="flex shrink-0 flex-col gap-2 border-t border-border px-6 py-4">
           <a href={signing.data?.downloadUrl ?? url} download target="_blank" rel="noreferrer" className={buttonVariants({ variant: 'primary', fullWidth: true })}>
             <Download weight="bold" aria-hidden="true" />下载原图
           </a>
-          <div className="flex gap-2">
-            <Button variant="secondary" className="flex-1" onClick={() => onEdit(asset, url)} disabled={Boolean(regionEditBlocked)} title={regionEditBlocked ?? '到创作台框选要修改的区域'}>局部修改</Button>
-            <Button variant="secondary" className="flex-1" onClick={() => onReuse(asset)}>复用参数</Button>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Button variant="secondary" className="text-xs" onClick={() => onEdit(asset, url)} disabled={Boolean(regionEditBlocked)} title={regionEditBlocked ?? '到创作台框选要修改的区域'}>局部修改</Button>
+            <Button variant="secondary" className="text-xs" onClick={() => onReuse(asset)}>用同样参数再画</Button>
           </div>
         </footer>
       </aside>

@@ -603,7 +603,7 @@ const slug = (route) => (route === '/' ? 'home' : route.slice(1).replace(/\//g, 
 // state): each probe must appear in the page text. Without this the geometry checks
 // could pass on a broken data path.
 const ROUTE_PROBES = {
-  '/': '把灵感整理成可生成的画面',
+  '/': '把灵感整理成',
   '/terms': '用户协议',
   '/privacy': '隐私政策',
   '/login': 'MuseCanvas',
@@ -913,7 +913,7 @@ try {
 
   // Generate task dialog + Escape
   await navigate({ route: '/generate', width: 1440, height: 900, theme: 'light', motion: 'no-preference' })
-  const tasksOpened = await evalJs(`(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes('既有任务')); if (!b) return false; b.click(); return true })()`)
+  const tasksOpened = await evalJs(`(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes('查看全部任务')); if (!b) return false; b.click(); return true })()`)
   await delay(500)
   const taskDialog = await evalJs(`document.querySelectorAll('[role="dialog"]').length`)
   interactions.taskDialogOpen = { clicked: tasksOpened, dialogs: taskDialog }

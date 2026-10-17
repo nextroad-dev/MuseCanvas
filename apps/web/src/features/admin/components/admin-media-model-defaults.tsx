@@ -22,8 +22,6 @@ import {
   Alert,
   Button,
   Card,
-  CardBody,
-  CardDescription,
   CardTitle,
   FormField,
   Select,
@@ -114,15 +112,10 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
       {defaults !== undefined && (
         <AdminQueryFeedback error={queryError} hasData label="默认模型" onRetry={() => refetch()} />
       )}
-      <Card>
-        <div className="flex min-w-0 flex-col gap-1">
-          <CardTitle level={2} id="media-defaults-heading">
-            默认模型
-          </CardTitle>
-          <CardDescription>
-            用户新建对话时预选这两个模型；用户手动切换后，那个对话以用户的选择为准。
-          </CardDescription>
-        </div>
+      <Card className="gap-5 p-6">
+        <CardTitle level={2} id="media-defaults-heading" className="text-base font-bold text-foreground">
+          默认模型
+        </CardTitle>
         {isLoading || defaults === undefined ? (
           isError && defaults === undefined ? (
             <Alert
@@ -134,7 +127,7 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
               {queryError instanceof Error ? queryError.message : '加载默认模型失败'}。请检查后端服务状态后重试。
             </Alert>
           ) : (
-            <div role="status" aria-busy="true" aria-label="正在加载默认模型" className="grid min-w-0 gap-4 @min-[640px]/admin:grid-cols-2">
+            <div role="status" aria-busy="true" aria-label="正在加载默认模型" className="grid min-w-0 gap-6 @min-[640px]/admin:grid-cols-2">
               <span className="sr-only">正在加载默认模型</span>
               <div className="flex flex-col gap-2" aria-hidden="true">
                 <SkeletonText width="8rem" />
@@ -147,49 +140,44 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
             </div>
           )
         ) : (
-          <CardBody>
-            <div className="grid min-w-0 gap-4 @min-[640px]/admin:grid-cols-2">
-              {KINDS.map((kind) => {
-                const options = enabledModelsByKind(models, kind)
-                const serverId = defaultIdForKind(defaults, kind)
-                const value = pending[kind] ?? serverId ?? ''
-                return (
-                  <FormField key={kind} label={KIND_SELECT_LABEL[kind]}>
-                    <Select
-                      value={value}
-                      disabled={busy || options.length === 0}
-                      aria-label={KIND_SELECT_LABEL[kind]}
-                      aria-busy={busy || undefined}
-                      onChange={(event) => handleChange(kind, event.target.value)}
-                    >
-                      <option value="">
-                        {options.length === 0
-                          ? `暂无已启用的${kind === 'image' ? '图像' : '视频'}模型`
-                          : '请选择默认模型'}
+          <div className="grid min-w-0 gap-6 @min-[640px]/admin:grid-cols-2">
+            {KINDS.map((kind) => {
+              const options = enabledModelsByKind(models, kind)
+              const serverId = defaultIdForKind(defaults, kind)
+              const value = pending[kind] ?? serverId ?? ''
+              return (
+                <FormField key={kind} label={KIND_SELECT_LABEL[kind]}>
+                  <Select
+                    value={value}
+                    disabled={busy || options.length === 0}
+                    aria-label={KIND_SELECT_LABEL[kind]}
+                    aria-busy={busy || undefined}
+                    onChange={(event) => handleChange(kind, event.target.value)}
+                  >
+                    <option value="">
+                      {options.length === 0
+                        ? `暂无已启用的${kind === 'image' ? '图像' : '视频'}模型`
+                        : '请选择默认模型'}
+                    </option>
+                    {options.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.displayName}
                       </option>
-                      {options.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                      {serverId && !options.some((model) => model.id === serverId) ? (
-                        <option value={serverId}>当前默认模型已停用（{serverId.slice(0, 8)}…），请选择其他模型</option>
-                      ) : null}
-                    </Select>
-                  </FormField>
-                )
-              })}
-            </div>
-            {error ? (
-              <Alert tone="danger" role="alert" title="无法保存默认模型">
-                {error}
-              </Alert>
-            ) : null}
-            <p role={busy ? 'status' : undefined} className="text-xs text-muted-foreground">
-              {busy ? '正在保存默认模型…' : '只能选择已启用的模型。停用默认模型前，需要先指定另一个默认模型。'}
-            </p>
-          </CardBody>
+                    ))}
+                    {serverId && !options.some((model) => model.id === serverId) ? (
+                      <option value={serverId}>当前默认模型已停用（{serverId.slice(0, 8)}…），请选择其他模型</option>
+                    ) : null}
+                  </Select>
+                </FormField>
+              )
+            })}
+          </div>
         )}
+        {error ? (
+          <Alert tone="danger" role="alert" title="无法保存默认模型">
+            {error}
+          </Alert>
+        ) : null}
       </Card>
     </section>
   )

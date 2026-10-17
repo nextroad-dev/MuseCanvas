@@ -28,7 +28,6 @@ import {
   EmptyState,
   IconButton,
   Input,
-  PageHeader,
   Select,
   Skeleton,
   SkeletonTile,
@@ -113,7 +112,6 @@ export function LibraryView() {
   const [appliedQuery, setAppliedQuery] = useState(() => searchParams.get('q')?.trim() ?? '')
   const [targetPages, setTargetPages] = useState(0)
   const gridRef = useRef<HTMLDivElement>(null)
-  const [actualColumns, setActualColumns] = useState<number | null>(null)
   const hydratedRef = useRef(false)
   const forwardFailedRef = useRef(false)
 
@@ -192,19 +190,6 @@ export function LibraryView() {
     filterKind === 'all'
       ? assets
       : assets.filter((asset) => isVideoAsset(asset) === (filterKind === 'video'))
-
-  useEffect(() => {
-    const grid = gridRef.current
-    if (!grid) {
-      setActualColumns(null)
-      return
-    }
-    const measure = () => setActualColumns(getComputedStyle(grid).gridTemplateColumns.split(/\s+/).length)
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(grid)
-    return () => observer.disconnect()
-  }, [columnCount, isLoading, visibleAssets.length])
 
   // Every filter change resets the keyset window, so a depth remembered from the
   // previous query must not be chased into the new one.
@@ -359,13 +344,12 @@ export function LibraryView() {
         <div ref={gridRef} className={`grid gap-4 sm:gap-5 ${gridClass(columnCount)}`} aria-busy>
           {Array.from({ length: SKELETON_TILES }, (_, index) => (
             <div key={index} className="overflow-hidden rounded-card bg-surface">
-              <SkeletonTile />
-              <div className="flex flex-col gap-3 p-3">
-                <Skeleton className="h-10 w-full" />
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Skeleton className="h-4 w-20" />
-                  <Skeleton className="h-10 w-32" />
-                </div>
+              <div className="aspect-[4/3]">
+                <SkeletonTile />
+              </div>
+              <div className="flex flex-col gap-2 p-3">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-3 w-20" />
               </div>
             </div>
           ))}
@@ -403,30 +387,33 @@ export function LibraryView() {
               <div
                 key={asset.id}
                 style={staged ? ({ '--stagger-index': String(index) } as CSSProperties) : undefined}
-                className={`group relative overflow-hidden rounded-card bg-surface ${
+                className={`group relative overflow-hidden rounded-card bg-surface shadow-soft transition-shadow hover:shadow-floating ${
                   staged ? 'motion-reveal motion-stagger' : ''
                 } ${
-                  selected ? 'ring-2 ring-primary' : 'ring-0'
+                  selected ? 'ring-2 ring-primary' : ''
                 }`}
               >
                 {/* `src` stays the original: it is what a failed preview retries
                     against and what the tile's download link serves. */}
-                <MediaFrame
-                  src={resignedUrls[asset.id] ?? assetPlaybackUrl(asset)}
-                  previewSrc={resignedUrls[asset.id] ? undefined : assetPreviewUrl(asset)}
-                  onMediaError={() => void resignPreview(asset.id)}
-                  kind={isVideoAsset(asset) ? 'video' : 'image'}
-                  alt={asset.prompt || 'Generated asset'}
-                  layout="tile"
-                  durationSeconds={asset.durationSeconds}
-                  width={asset.width}
-                  height={asset.height}
-                  hasAudio={asset.hasAudio}
-                  showControls={false}
-                />
+                <div className="aspect-[4/3] overflow-hidden bg-tonal">
+                  <MediaFrame
+                    src={resignedUrls[asset.id] ?? assetPlaybackUrl(asset)}
+                    previewSrc={resignedUrls[asset.id] ? undefined : assetPreviewUrl(asset)}
+                    onMediaError={() => void resignPreview(asset.id)}
+                    kind={isVideoAsset(asset) ? 'video' : 'image'}
+                    alt={asset.prompt || 'Generated asset'}
+                    layout="tile"
+                    durationSeconds={asset.durationSeconds}
+                    width={asset.width}
+                    height={asset.height}
+                    hasAudio={asset.hasAudio}
+                    showControls={false}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
 
                 {/* Top-right selection checkbox */}
-                <div className="absolute right-2 top-2 rounded-control bg-surface/95 p-2">
+                <div className="absolute right-2 top-2 rounded-control bg-surface/95 p-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                   <Checkbox
                     checked={selected}
                     disabled={batchDeleting}
@@ -435,8 +422,8 @@ export function LibraryView() {
                   />
                 </div>
 
-                <div className="flex flex-col gap-3 p-3">
-                  <p className="line-clamp-2 min-h-10 break-words text-sm text-foreground [overflow-wrap:anywhere]">
+                <div className="flex flex-col gap-1 p-3">
+                  <p className="line-clamp-1 min-h-5 break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">
                     {asset.prompt || '无提示词'}
                   </p>
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -446,7 +433,7 @@ export function LibraryView() {
                     <div className="flex items-center gap-1">
                       <IconButton
                         variant="ghost"
-                        size="md"
+                        size="sm"
                         onClick={() => openPreview(asset.id)}
                         aria-label="放大查看该作品"
                         icon={<ZoomIn weight="bold" aria-hidden="true" />}
@@ -459,13 +446,13 @@ export function LibraryView() {
                         target="_blank"
                         rel="noreferrer"
                         aria-label="下载该作品"
-                        className={buttonVariants({ variant: 'ghost', size: 'md', iconOnly: true })}
+                        className={buttonVariants({ variant: 'ghost', size: 'sm', iconOnly: true })}
                       >
                         <Download weight="bold" aria-hidden="true" className={iconSize.sm} />
                       </a>
                       <IconButton
                         variant="ghost"
-                        size="md"
+                        size="sm"
                         onClick={() => setDeleteTargetId(asset.id)}
                         aria-label="删除该作品"
                         disabled={batchDeleting}
@@ -530,114 +517,115 @@ export function LibraryView() {
   const filterTabs: TabItem[] = FILTER_TABS.map((tab) => ({ ...tab, content: results }))
 
   return (
-    <ContentFrame className="motion-page-enter flex flex-col gap-8 py-6 md:py-8">
+    <ContentFrame className="motion-page-enter flex min-h-0 flex-1 flex-col gap-6 py-6 md:py-8">
       <div className="flex min-w-0 flex-col gap-6">
-        <PageHeader
-          title="作品图库"
-          description="让每一次创作有迹可循。查看原图、下载作品，或继续探索。"
-          actions={
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={<RefreshCw weight="bold" aria-hidden="true" />}
-                loading={isFetching && !isFetchingNextPage}
-                onClick={() => void refetch()}
-              >
-                刷新
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<PlusIcon weight="bold" aria-hidden="true" />}
-                onClick={() => router.push(GENERATE_ROUTE)}
-              >
-                去创作
-              </Button>
-            </>
-          }
-        />
+        {/* Gallery header: title + count on the left, filter tabs on the right. */}
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 className="text-title font-normal text-foreground">作品图库</h1>
+            <p className="text-xs text-muted-foreground">
+              {isLoading ? '正在读取作品…' : !data ? '作品暂时无法读取' : `已加载 ${visibleAssets.length} / ${total} 个已生成作品`}
+            </p>
+          </div>
+          <Tabs
+            variant="segment"
+            tabs={filterTabs}
+            value={filterKind}
+            onValueChange={(id) => setFilterKind(id as LibraryFilterKind)}
+            lazy
+            className="flex-1"
+            aria-label="作品类型筛选"
+          />
+        </header>
 
-        {/* Search & Filter bar (components.md → 数据表格页): the 40px field with its
-            leading icon, the column preference and the live result count. The media
-            type filter sits directly above the grid because `Tabs` owns its panels,
-            and the removable tags belong under the field they came from. */}
-        <div className="flex flex-col gap-4 border-b border-border pb-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
-            <div className="relative w-full min-w-0 sm:flex-1 md:max-w-form">
-              <SearchIcon weight="bold"
-                aria-hidden="true"
-                className={`pointer-events-none absolute left-3 top-1/2 ${iconSize.sm} -translate-y-1/2 text-muted-foreground`}
-              />
-              <Input
-                type="search"
-                aria-label="按提示词搜索作品"
-                placeholder="搜索提示词"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                className="pl-10"
-              />
-            </div>
+        {/* Search & density toolbar */}
+        <div className="flex flex-col gap-3 border-b border-border pb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+          <div className="relative w-full min-w-0 sm:max-w-md">
+            <SearchIcon weight="bold"
+              aria-hidden="true"
+              className={`pointer-events-none absolute left-3 top-1/2 ${iconSize.sm} -translate-y-1/2 text-muted-foreground`}
+            />
+            <Input
+              type="search"
+              aria-label="按提示词搜索作品"
+              placeholder="搜索提示词"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              className="pl-10"
+            />
+          </div>
 
-            <label className="flex shrink-0 flex-col gap-2 text-xs text-muted-foreground">
-              桌面密度
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              网格密度
               <Select
                 aria-label="桌面网格密度"
-                className="w-full sm:w-36"
+                className="w-28"
                 value={String(columnCount)}
                 onChange={(event) => setColumnCount(Number(event.target.value) as 2 | 3 | 4 | 6)}
               >
                 {COLUMN_OPTIONS.map((cols) => (
-                  <option key={cols} value={String(cols)}>{cols} 列偏好</option>
+                  <option key={cols} value={String(cols)}>{cols} 列</option>
                 ))}
               </Select>
             </label>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<RefreshCw weight="bold" aria-hidden="true" />}
+              loading={isFetching && !isFetchingNextPage}
+              onClick={() => void refetch()}
+            >
+              刷新
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<PlusIcon weight="bold" aria-hidden="true" />}
+              onClick={() => router.push(GENERATE_ROUTE)}
+            >
+              去创作
+            </Button>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <p role="status" className="font-mono tabular-nums">
-              {isLoading ? '正在读取作品…' : !data ? '作品暂时无法读取' : `已加载 ${visibleAssets.length} / ${total} 个作品`}
-            </p>
-            <p>{actualColumns ? `当前 ${actualColumns} 列 · ` : ''}窄屏单列，随可用宽度调整</p>
-          </div>
-
-          {hasActiveFilter ? (
-            <div className="flex flex-wrap items-center gap-2">
-              {appliedQuery ? (
-                <span className="inline-flex min-w-0 max-w-full items-center gap-1 break-all">
-                  <Badge tone="neutral" className="min-w-0" icon={<SearchIcon weight="bold" aria-hidden="true" />}>
-                    关键词：{appliedQuery}
-                  </Badge>
-                  <IconButton
-                    variant="ghost"
-                    size="sm"
-                    aria-label="清除关键词筛选"
-                    onClick={clearQuery}
-                    className={`${controlSquare.md} min-h-[var(--control-md)]`}
-                    icon={<X weight="bold" aria-hidden="true" />}
-                  />
-                </span>
-              ) : null}
-              {filterKind !== 'all' ? (
-                <span className="inline-flex items-center gap-1">
-                  <Badge tone="neutral">
-                    类型：{FILTER_TABS.find((tab) => tab.id === filterKind)?.label ?? filterKind}
-                  </Badge>
-                  <IconButton
-                    variant="ghost"
-                    size="sm"
-                    aria-label="清除作品类型筛选"
-                    onClick={() => setFilterKind('all')}
-                    className={`${controlSquare.md} min-h-[var(--control-md)]`}
-                    icon={<X weight="bold" aria-hidden="true" />}
-                  />
-                </span>
-              ) : null}
-              <Button variant="ghost" size="sm" onClick={clearFilters}>
-                清除筛选
-              </Button>
-            </div>
-          ) : null}
         </div>
+
+        {hasActiveFilter ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {appliedQuery ? (
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1 break-all">
+                <Badge tone="neutral" className="min-w-0" icon={<SearchIcon weight="bold" aria-hidden="true" />}>
+                  关键词：{appliedQuery}
+                </Badge>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label="清除关键词筛选"
+                  onClick={clearQuery}
+                  className={`${controlSquare.md} min-h-[var(--control-md)]`}
+                  icon={<X weight="bold" aria-hidden="true" />}
+                />
+              </span>
+            ) : null}
+            {filterKind !== 'all' ? (
+              <span className="inline-flex items-center gap-1">
+                <Badge tone="neutral">
+                  类型：{FILTER_TABS.find((tab) => tab.id === filterKind)?.label ?? filterKind}
+                </Badge>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label="清除作品类型筛选"
+                  onClick={() => setFilterKind('all')}
+                  className={`${controlSquare.md} min-h-[var(--control-md)]`}
+                  icon={<X weight="bold" aria-hidden="true" />}
+                />
+              </span>
+            ) : null}
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              清除筛选
+            </Button>
+          </div>
+        ) : null}
 
         {visibleAssets.length > 0 ? (
           <div className="motion-reveal flex flex-wrap items-center justify-between gap-3 rounded-panel bg-tonal px-4 py-3">
@@ -683,19 +671,6 @@ export function LibraryView() {
             当前显示的是已加载内容：{error instanceof Error ? error.message : '网络或服务端错误'}。请稍后重试刷新。
           </Alert>
         ) : null}
-
-        {/* The media-type filter and the grid it filters are one `Tabs`: real
-            `tablist` / `tab` / `tabpanel` with arrow-key traversal, replacing the old
-            row of `aria-pressed` buttons. */}
-        <Tabs
-          variant="segment"
-          tabs={filterTabs}
-          value={filterKind}
-          onValueChange={(id) => setFilterKind(id as LibraryFilterKind)}
-          lazy
-          className="flex-1"
-          aria-label="作品类型筛选"
-        />
       </div>
 
       <Dialog

@@ -27,6 +27,7 @@ import {
   CaretDoubleLeftIcon as CollapseSidebar,
   CaretDoubleRightIcon as ExpandSidebar,
   ArrowLeftIcon as BackToConsole,
+  CaretUpDownIcon as ChevronUpDown,
 } from '@phosphor-icons/react'
 import { iconSize } from '@/shared/components/ui'
 import {
@@ -223,7 +224,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
         {navGroups.map((group, groupIndex) => (
           <div key={group.title ?? groupIndex} className="flex flex-col gap-1">
             {group.title && !isCollapsed && (
-              <h2 className="mb-2 px-3 text-xs font-medium text-muted-foreground">
+              <h2 className="mb-2 px-3 text-xs font-semibold text-foreground tracking-wide">
                 {group.title}
               </h2>
             )}
@@ -239,7 +240,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
                   aria-label={isCollapsed ? item.label : undefined}
                   title={isCollapsed ? item.label : undefined}
                   className={cn(
-                    'relative flex min-h-[var(--control-lg)] items-center gap-3 rounded-control md:min-h-[var(--control-md)]',
+                    'relative flex items-center gap-3 rounded-control py-1.5',
                     'text-sm font-medium transition-colors',
                     isCollapsed ? 'justify-center px-2' : 'px-3',
                     active
@@ -247,13 +248,6 @@ export function AdminShell({ user, children }: AdminShellProps) {
                       : 'text-muted-foreground hover:bg-tonal-hover hover:text-foreground',
                   )}
                 >
-                  {active ? (
-                    // Current page = tonal-selected + the 3px primary bar. Never brand green.
-                    <span
-                      aria-hidden="true"
-                      className="absolute inset-y-1.5 left-0 w-[3px] rounded-pill bg-primary"
-                    />
-                  ) : null}
                   <Icon weight="duotone" className={`${iconSize.sm} shrink-0`} aria-hidden="true" />
                   {isCollapsed ? null : <span className="truncate">{item.label}</span>}
                 </Link>
@@ -271,7 +265,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
       aria-label={isCollapsed ? '返回创作台' : undefined}
       title={isCollapsed ? '返回创作台' : undefined}
       className={cn(
-        'flex min-h-[var(--control-lg)] items-center gap-3 rounded-control text-sm font-medium text-muted-foreground transition-colors md:min-h-[var(--control-md)]',
+        'flex items-center gap-3 rounded-control py-2 text-sm font-medium text-muted-foreground transition-colors',
         'hover:bg-tonal-hover hover:text-foreground',
         isCollapsed ? 'justify-center px-2' : 'px-3',
       )}
@@ -281,10 +275,33 @@ export function AdminShell({ user, children }: AdminShellProps) {
     </Link>
   )
 
+  const renderUserFooter = (isCollapsed: boolean) => (
+    <div
+      className={cn(
+        'flex cursor-pointer items-center gap-2.5 rounded-control py-2 transition-colors',
+        'hover:bg-tonal-hover',
+        isCollapsed ? 'justify-center px-2' : 'px-3',
+      )}
+      aria-label={isCollapsed ? user.email : undefined}
+      title={isCollapsed ? user.email : undefined}
+    >
+      <Avatar size="sm" initial={userInitial} decorative />
+      {isCollapsed ? null : (
+        <>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-sm font-medium text-foreground">{user.email}</span>
+            <span className="truncate text-caption text-muted-foreground">{user.email}</span>
+          </div>
+          <ChevronUpDown weight="bold" className={`${iconSize.sm} shrink-0 text-muted-foreground`} aria-hidden="true" />
+        </>
+      )}
+    </div>
+  )
+
   return (
     <div className="flex h-dvh min-w-0 flex-col bg-canvas text-foreground">
       {/* Header — 56px (`--layout-header`), strictly aligned with workspace header */}
-      <header className="relative z-sticky flex h-[var(--layout-header)] shrink-0 items-center border-b border-border bg-surface">
+      <header className="relative z-sticky flex h-[var(--layout-header)] shrink-0 items-center border-b border-border bg-canvas">
         <ContentFrame className="flex min-w-0 items-center gap-2 sm:gap-4">
           <IconButton
             variant="ghost"
@@ -295,22 +312,10 @@ export function AdminShell({ user, children }: AdminShellProps) {
             icon={<Menu weight="bold" className={iconSize.md} aria-hidden="true" />}
           />
 
-          <Link
-            href="/generate"
-            aria-label="返回创作端"
-            className="inline-flex shrink-0 items-center rounded-control focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
-          >
-            <BrandMark priority className="max-sm:[&_img]:h-5 max-sm:[&_img]:max-w-24" />
-          </Link>
-
           <Breadcrumbs pathname={pathname} />
 
           <div className={cn('ml-auto flex shrink-0 items-center gap-2 sm:gap-3', adminTouchTargetsSquare)}>
             <ThemeToggle />
-            <span className="hidden max-w-48 truncate text-sm text-muted-foreground lg:inline">{user.email}</span>
-            {/* Decorative: the address next to it is the label, so the letter glyph
-                must not be announced a second time. */}
-            <span className="hidden sm:inline"><Avatar size="sm" initial={userInitial} decorative /></span>
           </div>
         </ContentFrame>
       </header>
@@ -324,10 +329,17 @@ export function AdminShell({ user, children }: AdminShellProps) {
               replaced by the overlay drawer, so the collapsed width can never
               cover content on a 375px viewport. */}
           <aside className={cn('hidden shrink-0 flex-col border-r border-border py-6 transition-[width] md:flex', collapsed ? 'w-sidebar-collapsed' : 'w-sidebar')}>
-            <div className={cn('mb-6 flex items-center gap-1', collapsed ? 'justify-center px-2' : 'px-3')}>
-              {collapsed ? null : (
-                <p className="min-w-0 flex-1 truncate text-module">管理后台</p>
-              )}
+            <div className={cn('mb-6 flex items-center justify-between gap-2', collapsed ? 'px-2' : 'px-3')}>
+              <Link
+                href="/admin"
+                className="inline-flex min-w-0 items-center gap-2.5 rounded-control focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
+                aria-label="管理后台首页"
+              >
+                <BrandMark variant="mark" className="h-5" />
+                {collapsed ? null : (
+                  <span className="truncate text-base font-medium text-foreground">管理后台</span>
+                )}
+              </Link>
               <IconButton
                 variant="ghost"
                 size="sm"
@@ -345,6 +357,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
               <div className="min-h-0 flex-1 overflow-y-auto">{renderNavLinks(collapsed)}</div>
             </nav>
             <div className={cn('mt-6 border-t border-border pt-3', collapsed ? 'px-2' : 'px-3')}>
+              {renderUserFooter(collapsed)}
               {renderBackToConsole(collapsed)}
             </div>
           </aside>
@@ -400,6 +413,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
               {renderNavLinks(false, { onNavigate: closeDrawer })}
             </nav>
             <div className="border-t border-border pt-3">
+              {renderUserFooter(false)}
               {renderBackToConsole(false)}
             </div>
           </div>

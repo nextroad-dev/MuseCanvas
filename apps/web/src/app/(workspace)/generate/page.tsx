@@ -5,7 +5,7 @@ import GenerateLoading from './loading'
 export const dynamic = 'force-dynamic'
 
 export const metadata = {
-  title: '创作工作台 - MuseCanvas',
+  title: 'AI 创作台 - MuseCanvas',
   description: 'AI 图像与视频生成工作室与控制台',
 }
 

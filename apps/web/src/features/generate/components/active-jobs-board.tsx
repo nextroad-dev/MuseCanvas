@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CaretRightIcon as ChevronRight, ArrowClockwiseIcon as RefreshCw, XCircleIcon as XCircle } from '@phosphor-icons/react'
+import { ArrowClockwiseIcon as RefreshCw, XCircleIcon as XCircle } from '@phosphor-icons/react'
 import { JobStatusBadge } from '@/shared/components/job-status-badge'
 import { MediaFrame } from '@/shared/components/media-frame'
 import { Alert, Button, Progress, Skeleton, SkeletonRow, SkeletonTile } from '@/shared/components/ui'
@@ -36,24 +36,24 @@ export interface ActiveJobsBoardProps {
   onToggle?: (open: boolean) => void
 }
 
-export function ActiveJobsBoard({
-  jobs,
-  isLoading,
-  isError,
-  onReload,
-  selectedJobId,
-  onSelectJob,
-  onCancel,
-  onRetry,
-  pendingCancelId,
-  pendingRetryId,
-  disabled = false,
-  actionErrors = {},
-  variant = 'rail',
-  hideWhenEmpty = false,
-  open = true,
-  onToggle,
-}: ActiveJobsBoardProps) {
+export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
+  const {
+    jobs,
+    isLoading,
+    isError,
+    onReload,
+    selectedJobId,
+    onSelectJob,
+    onCancel,
+    onRetry,
+    pendingCancelId,
+    pendingRetryId,
+    disabled = false,
+    actionErrors = {},
+    variant = 'rail',
+    hideWhenEmpty = false,
+    open = true,
+  } = props
   const [now, setNow] = useState(() => Date.now())
   const [lingering, setLingering] = useState<Record<string, number>>({})
   const [announcement, setAnnouncement] = useState('')
@@ -135,24 +135,12 @@ export function ActiveJobsBoard({
   if (hideWhenEmpty && rows.length === 0 && !isLoading && !isError) return null
 
   const heading = isRail ? (
-    <h2 id={headingId} className="shrink-0 text-sm">
-      <Button
-        ref={headingRef}
-        type="button"
-        variant="ghost"
-        size="sm"
-        aria-expanded={open}
-        aria-controls={listId}
-        onClick={() => onToggle?.(!open)}
-        className="w-full justify-start px-2 text-left"
-        icon={<ChevronRight weight="bold" aria-hidden="true" className={cn('motion-position', open && 'rotate-90')} />}
-      >
-        <span>进行中</span>
-        {count > 0 && (
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">{count}</span>
-        )}
-      </Button>
-    </h2>
+    <div className="mb-3 flex items-center gap-1.5 px-1">
+      <h2 id={headingId} className="text-sm font-semibold text-foreground">进行中</h2>
+      {count > 0 && (
+        <span className="text-caption text-muted-foreground font-medium">{count}</span>
+      )}
+    </div>
   ) : (
     <h2 id={headingId} className="flex shrink-0 items-center gap-2 text-sm text-foreground">
       进行中
@@ -217,22 +205,39 @@ export function ActiveJobsBoard({
             isRail && 'max-h-64',
           )}
         >
-          {rows.map((job) => (
-            <ActiveJobRow
-              key={job.id}
-              job={job}
-              now={now}
-              expiringAt={lingering[job.id]}
-              selected={job.id === selectedJobId}
-              onSelectJob={onSelectJob}
-              onCancel={onCancel}
-              onRetry={onRetry}
-              pendingCancelId={pendingCancelId}
-              pendingRetryId={pendingRetryId}
-              disabled={disabled}
-              actionError={actionErrors[job.id]}
-            />
-          ))}
+          {rows.map((job) =>
+            isRail ? (
+              <CompactActiveJobRow
+                key={job.id}
+                job={job}
+                now={now}
+                expiringAt={lingering[job.id]}
+                selected={job.id === selectedJobId}
+                onSelectJob={onSelectJob}
+                onCancel={onCancel}
+                onRetry={onRetry}
+                pendingCancelId={pendingCancelId}
+                pendingRetryId={pendingRetryId}
+                disabled={disabled}
+                actionError={actionErrors[job.id]}
+              />
+            ) : (
+              <ActiveJobRow
+                key={job.id}
+                job={job}
+                now={now}
+                expiringAt={lingering[job.id]}
+                selected={job.id === selectedJobId}
+                onSelectJob={onSelectJob}
+                onCancel={onCancel}
+                onRetry={onRetry}
+                pendingCancelId={pendingCancelId}
+                pendingRetryId={pendingRetryId}
+                disabled={disabled}
+                actionError={actionErrors[job.id]}
+              />
+            ),
+          )}
         </ul>
       )}
 
@@ -245,7 +250,7 @@ export function ActiveJobsBoard({
   // `rail` is a bare column in the sidebar; `inline` sits in the task dialog as a
   // plain section. Same children, no box on either side: layering comes from the rows.
   return isRail ? (
-    <section aria-labelledby={headingId} className="flex min-h-0 shrink-0 flex-col gap-1 px-2 pb-2">
+    <section aria-labelledby={headingId} className="flex min-h-0 shrink-0 flex-col gap-1 px-4 pb-2">
       {heading}
       {body}
     </section>
@@ -427,6 +432,116 @@ function ActiveJobRow({
         )}
         </div>
       </div>
+    </li>
+  )
+}
+
+function CompactActiveJobRow({
+  job,
+  now,
+  expiringAt,
+  selected,
+  onSelectJob,
+  onCancel,
+  onRetry,
+  pendingCancelId,
+  pendingRetryId,
+  disabled,
+  actionError,
+}: ActiveJobRowProps) {
+  const active = isJobActive(job)
+  const firstOutput = job.outputs?.[0]
+  const clockEnd = job.completedAt ? Date.parse(job.completedAt) : now
+  const statusText = active
+    ? job.status === 'queued'
+      ? '排队中'
+      : job.status === 'retry_wait'
+        ? '等待重试'
+        : '生成中'
+    : job.status === 'succeeded'
+      ? '已完成'
+      : job.status === 'failed'
+        ? '失败'
+        : '已取消'
+
+  return (
+    <li data-job-row={job.id} data-flip-key={job.id} className="relative">
+      <div
+        className={cn(
+          'flex items-center gap-2.5 rounded-card p-2 transition-colors',
+          expiringAt !== undefined && expiringAt - now <= exitDurationMs() && 'motion-fade-out',
+          selected ? 'bg-tonal-selected' : active ? 'bg-tonal' : 'bg-transparent hover:bg-tonal-hover',
+        )}
+      >
+        {firstOutput ? (
+          <button
+            type="button"
+            onClick={() => onSelectJob(job.id)}
+            disabled={disabled}
+            className="block h-11 w-9 shrink-0 overflow-hidden rounded-control bg-surface"
+            aria-label={`查看结果：${job.prompt.slice(0, 20)}`}
+          >
+            <MediaFrame
+              src={outputUrl(firstOutput)}
+              kind={firstOutput.mediaKind}
+              alt=""
+              layout="thumb"
+            />
+          </button>
+        ) : active ? (
+          <div aria-hidden="true" className="relative h-11 w-9 shrink-0 overflow-hidden rounded-control bg-surface">
+            <span className="motion-shimmer absolute inset-0" />
+          </div>
+        ) : (
+          <div aria-hidden="true" className="h-11 w-9 shrink-0 rounded-control bg-tonal" />
+        )}
+
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <button
+            type="button"
+            onClick={() => onSelectJob(job.id)}
+            disabled={disabled}
+            aria-current={selected ? 'true' : undefined}
+            className="min-w-0 truncate text-left text-xs font-medium text-foreground"
+          >
+            {job.prompt}
+          </button>
+          <div className="flex items-center gap-2 text-caption text-muted-foreground">
+            <span>{statusText}</span>
+            <span className="font-mono tabular-nums">{formatElapsed(job, clockEnd)}</span>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-col gap-1">
+          {active && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onCancel(job.id)}
+              disabled={disabled || Boolean(job.cancelRequested) || Boolean(pendingCancelId)}
+              loading={pendingCancelId === job.id}
+              aria-label={`取消任务：${job.prompt.slice(0, 20)}`}
+              className="h-6 px-1.5 text-xs text-muted-foreground hover:text-danger"
+              icon={<XCircle weight="bold" aria-hidden="true" className="h-3.5 w-3.5" />}
+            />
+          )}
+          {job.status === 'failed' && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onRetry(job.id)}
+              loading={pendingRetryId === job.id}
+              disabled={disabled || Boolean(pendingRetryId)}
+              aria-label={`重试任务：${job.prompt.slice(0, 20)}`}
+              className="h-6 px-1.5 text-xs"
+              icon={<RefreshCw weight="bold" aria-hidden="true" className="h-3.5 w-3.5" />}
+            />
+          )}
+        </div>
+      </div>
+      {actionError && <p role="alert" className="mt-1 text-xs text-danger">{actionError}</p>}
     </li>
   )
 }

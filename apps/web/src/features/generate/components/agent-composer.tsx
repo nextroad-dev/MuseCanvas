@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { SparkleIcon, StopCircleIcon, XIcon } from '@phosphor-icons/react'
-import { Alert, Button, IconButton, SegmentedControl, Textarea, iconSize } from '@/shared/components/ui'
+import { PaperPlaneRightIcon, StopCircleIcon } from '@phosphor-icons/react'
+import { Alert, Button, IconButton, Textarea, iconSize } from '@/shared/components/ui'
 import type { ImageInputPlan, ImageInputPlanModel } from '@/shared/lib/generation-params'
 import type { ParameterCarrier, ParameterState, ParameterValue } from '@/shared/lib/media-parameters'
 import type { DefaultAwareModel } from '@/shared/lib/model-capabilities'
@@ -11,6 +11,7 @@ import type { ComposerDraft, ComposerIntent } from '../lib/agent-composer'
 import { MediaParameterControls } from './media-parameter-controls'
 import { ModelPicker } from './model-picker'
 import { ReferenceImagesTrigger } from './reference-images-trigger'
+import { cn } from '@/shared/lib/cn'
 
 /** Long drafts scroll *inside* the textarea instead of stretching the composer. */
 const MAX_TEXTAREA_PX = 200
@@ -41,6 +42,7 @@ export interface AgentComposerProps {
   onSubmit: () => void
   onStop: () => void
   onRemoveEditSource: () => void
+  className?: string
 }
 
 /**
@@ -78,6 +80,7 @@ export function AgentComposer({
   onSubmit,
   onStop,
   onRemoveEditSource,
+  className,
 }: AgentComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -105,63 +108,73 @@ export function AgentComposer({
   }
 
   return (
-    <section aria-label="给 Agent 的创作请求" className="flex shrink-0 flex-col gap-3 rounded-panel bg-surface p-3 shadow-floating md:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-medium text-foreground">创作请求（Agent 上下文）</h2>
-        {sending ? (
-          <Button type="button" variant="secondary" size="sm" onClick={onStop} icon={<StopCircleIcon weight="bold" aria-hidden="true" />}>
-            停止本轮 Agent
-          </Button>
-        ) : null}
-      </div>
-
+    <section aria-label="给 Agent 的创作请求" className={cn('flex shrink-0 flex-col gap-2 rounded-panel border border-border bg-surface p-3 shadow-floating', className)}>
       <fieldset disabled={sending} className="m-0 flex min-w-0 flex-col gap-3 border-0 p-0">
-        <SegmentedControl
-          label="意图"
-          size="sm"
-          value={intent}
-          onChange={(value) => patch({ intent: value as ComposerIntent })}
-          items={[
-            { value: 'generate', label: '生成' },
-            { value: 'edit', label: '编辑' },
-          ]}
+        <Textarea
+          ref={textareaRef}
+          id="agent-message"
+          rows={2}
+          value={draft.text}
+          disabled={sending}
+          onChange={(event) => patch({ text: event.target.value })}
+          onKeyDown={onKeyDown}
+          placeholder={intent === 'edit' ? '例如：将框选区域改为红色风衣，其余保持不变…' : '描述你想要生成的画面，例如：清晨江边小镇，薄雾、木质渡船…'}
+          aria-describedby="agent-message-help"
+          className="min-h-[var(--control-md)] resize-none overflow-y-auto border-0 bg-transparent p-1 text-sm leading-relaxed focus-visible:ring-0"
         />
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="agent-message" className="text-xs text-muted-foreground">消息</label>
-          <Textarea
-            ref={textareaRef}
-            id="agent-message"
-            rows={2}
-            value={draft.text}
-            disabled={sending}
-            onChange={(event) => patch({ text: event.target.value })}
-            onKeyDown={onKeyDown}
-            placeholder={intent === 'edit' ? '例如：将框选区域改为红色风衣，其余保持不变…' : '描述你想创作的内容，Agent 会规划并在确认后执行。'}
-            aria-describedby="agent-message-help"
-            className="min-h-[var(--control-md)] resize-none overflow-y-auto text-sm leading-relaxed"
-          />
-          <p id="agent-message-help" className="text-xs text-muted-foreground">Ctrl/⌘ + Enter 发送 · 参数与参考图只作为 Agent 上下文，不会直接生成</p>
-        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 overflow-x-auto">
+            {modelsLoading && imageModels.length === 0 && videoModels.length === 0 ? (
+              <p role="status" className="truncate text-xs text-muted-foreground">加载模型中…</p>
+            ) : (
+              <ModelPicker
+                imageModels={imageModels}
+                videoModels={videoModels}
+                activeKind={activeKind}
+                selectedModelIdByKind={selectedModelIdByKind}
+                onSelect={onSelectModel}
+                disabled={sending}
+              />
+            )}
+            <MediaParameterControls
+              model={parameterModel}
+              values={values}
+              onChange={onParameterChange}
+              countUnit={countUnit}
+              disabled={sending}
+              showLabels={false}
+            />
+            <ReferenceImagesTrigger model={inputModel} plan={inputPlan} disabled={sending || inputsDisabled} />
+          </div>
 
-        <div className="flex flex-wrap items-end gap-3">
-          <ReferenceImagesTrigger model={inputModel} plan={inputPlan} disabled={sending || inputsDisabled} />
-          <MediaParameterControls
-            model={parameterModel}
-            values={values}
-            onChange={onParameterChange}
-            countUnit={countUnit}
-            disabled={sending}
-          />
+          <div className="flex shrink-0 items-center gap-2">
+            {sending ? (
+              <Button type="button" variant="secondary" size="sm" onClick={onStop} icon={<StopCircleIcon weight="bold" aria-hidden="true" />}>
+                停止
+              </Button>
+            ) : null}
+            <IconButton
+              type="button"
+              variant="primary"
+              size="md"
+              aria-label="发送生成任务"
+              onClick={onSubmit}
+              disabled={sending || !canGenerate || Boolean(blockedReason) || draft.text.trim().length === 0}
+              loading={sending}
+              className="rounded-pill"
+              icon={<PaperPlaneRightIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            />
+          </div>
         </div>
-
-        {editSource ? (
-          <p className="text-xs text-muted-foreground">
-            已附加选区草稿（{editSource.selection.width}×{editSource.selection.height} 像素），发送时随消息作为上下文提交，不会直接执行。
-            <Button type="button" variant="ghost" size="sm" className="ml-1 underline underline-offset-2" onClick={onRemoveEditSource}>移除</Button>
-          </p>
-        ) : null}
       </fieldset>
+
+      {editSource ? (
+        <p className="text-xs text-muted-foreground">
+          已附加选区草稿（{editSource.selection.width}×{editSource.selection.height} 像素），发送时随消息作为上下文提交，不会直接执行。
+          <Button type="button" variant="ghost" size="sm" className="ml-1 underline underline-offset-2" onClick={onRemoveEditSource}>移除</Button>
+        </p>
+      ) : null}
 
       {modelStatus ? (
         <p role={modelsFailed ? 'alert' : 'status'} className="text-xs text-muted-foreground">
@@ -176,43 +189,7 @@ export function AgentComposer({
         <Alert tone="info" role="status">{blockedReason}</Alert>
       ) : null}
 
-      <div className="flex items-end justify-between gap-2">
-        <div className="min-w-0">
-          {modelsLoading && imageModels.length === 0 && videoModels.length === 0 ? (
-            <p role="status" className="truncate text-xs text-muted-foreground">加载模型中…</p>
-          ) : (
-            <ModelPicker
-              imageModels={imageModels}
-              videoModels={videoModels}
-              activeKind={activeKind}
-              selectedModelIdByKind={selectedModelIdByKind}
-              onSelect={onSelectModel}
-              disabled={sending}
-            />
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <IconButton
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label="清空消息"
-            disabled={sending || draft.text.length === 0}
-            onClick={() => patch({ text: '' })}
-            icon={<XIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
-          />
-          <Button
-            type="button"
-            variant="primary"
-            onClick={onSubmit}
-            disabled={sending || !canGenerate || Boolean(blockedReason) || draft.text.trim().length === 0}
-            loading={sending}
-            icon={<SparkleIcon weight="bold" aria-hidden="true" />}
-          >
-            发送给 Agent
-          </Button>
-        </div>
-      </div>
+      <p id="agent-message-help" className="sr-only">Ctrl/⌘ + Enter 发送 · 参数与参考图只作为 Agent 上下文，不会直接生成</p>
     </section>
   )
 }

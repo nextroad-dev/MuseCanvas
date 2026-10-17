@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import Link from 'next/link'
 import { createLoginRequestGate } from '../lib/login-request-state'
 import { OtpInput } from './otp-input'
 import type { FormEvent } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
-import { ArrowLeftIcon as ArrowLeft, EnvelopeSimpleIcon as Mail } from '@phosphor-icons/react'
+import { ArrowLeftIcon as ArrowLeft } from '@phosphor-icons/react'
 import { api, ApiError } from '@/shared/services/api'
 import { ACCOUNT_QUERY_KEY } from '@/shared/hooks/useAccount'
 import type { User, OAuthProviderInfo } from '@/shared/types'
@@ -268,10 +269,10 @@ export function LoginForm() {
   }
 
   return (
-    <div className="flex flex-col gap-7">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-title text-foreground">
-          {step === 'otp' ? '输入验证码' : step === 'invitation' ? '需要邀请码' : '登录\u00A0MuseCanvas'}
+    <div className="flex flex-col">
+      <header className="mb-9 flex flex-col gap-2.5">
+        <h1 className="text-title font-semibold tracking-tight text-foreground">
+          {step === 'otp' ? '输入验证码' : step === 'invitation' ? '需要邀请码' : '登录 MuseCanvas'}
         </h1>
         <p
           className={`min-w-0 text-sm text-muted-foreground [text-wrap:pretty] ${
@@ -280,8 +281,8 @@ export function LoginForm() {
         >
           {step === 'otp' ? (
             <>
-              6\u00A0位验证码已发送到 <span className="font-medium text-foreground">{email}</span>
-              ，输满\u00A06\u00A0位自动提交。
+              6 位验证码已发送到 <span className="font-medium text-foreground">{email}</span>
+              ，输满 6 位自动提交。
             </>
           ) : step === 'invitation' ? (
             '当前平台处于邀请测试期，请填写有效邀请码。'
@@ -291,18 +292,16 @@ export function LoginForm() {
         </p>
       </header>
 
-      {oauthError && <Alert tone="warning" title="第三方登录未完成">授权可能已取消或暂不可用。请重试已启用的登录方式，或使用邮箱验证码；回调不会自动提交新请求。</Alert>}
+      {oauthError && (
+        <Alert tone="warning" title="第三方登录未完成" className="mb-4">
+          授权可能已取消或暂不可用。请重试已启用的登录方式，或使用邮箱验证码；回调不会自动提交新请求。
+        </Alert>
+      )}
 
       {step === 'email' && (
-        <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-6">
+        <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-4">
           <FieldGroup>
-            <FormField
-              id="email"
-              label="邮箱地址"
-              required
-              hint="邮箱只用于登录与作品找回。"
-              error={errors.email}
-            >
+            <FormField id="email" label="邮箱地址" required error={errors.email}>
               <Input
                 type="email"
                 autoComplete="email"
@@ -314,6 +313,7 @@ export function LoginForm() {
                   clearFieldError('email')
                 }}
                 placeholder="name@example.com"
+                className="rounded-xl px-4 py-3"
                 ref={(node) => {
                   inputRefs.current.email = node
                 }}
@@ -326,7 +326,7 @@ export function LoginForm() {
             size="lg"
             loading={loading}
             fullWidth
-            icon={<Mail weight="bold" aria-hidden="true" />}
+            className="rounded-xl"
           >
             发送验证码
           </Button>
@@ -334,15 +334,9 @@ export function LoginForm() {
       )}
 
       {step === 'invitation' && (
-        <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-6">
+        <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-4">
           <FieldGroup>
-            <FormField
-              id="invite"
-              label="邀请码"
-              required
-              hint="邀请码由发放方提供，可能只能使用一次。"
-              error={errors.invitation}
-            >
+            <FormField id="invite" label="邀请码" required error={errors.invitation}>
               <Input
                 type="text"
                 autoComplete="off"
@@ -354,6 +348,7 @@ export function LoginForm() {
                   clearFieldError('invitation')
                 }}
                 placeholder="请填写邀请码"
+                className="rounded-xl px-4 py-3"
                 ref={(node) => {
                   inputRefs.current.invitation = node
                 }}
@@ -368,8 +363,9 @@ export function LoginForm() {
               aria-label="返回上一步，检查邮箱地址"
               onClick={backToEmail}
               icon={<ArrowLeft weight="bold" aria-hidden="true" />}
+              className="rounded-xl"
             />
-            <Button type="submit" size="lg" loading={loading} className="flex-1">
+            <Button type="submit" size="lg" loading={loading} className="flex-1 rounded-xl">
               确认并发送验证码
             </Button>
           </div>
@@ -377,7 +373,7 @@ export function LoginForm() {
       )}
 
       {step === 'otp' && (
-        <form noValidate onSubmit={handleVerifyOtp} className="flex flex-col gap-6">
+        <form noValidate onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
           <button
             type="button"
             onClick={backToEmail}
@@ -389,7 +385,7 @@ export function LoginForm() {
           <FieldGroup>
             <FormField
               id="otp"
-              label={`6\u00A0位验证码`}
+              label="6 位验证码"
               required
               hint="支持直接粘贴整串验证码，输满 6 位自动提交。"
               error={errors.otp}
@@ -411,7 +407,7 @@ export function LoginForm() {
             </FormField>
           </FieldGroup>
 
-          <Button type="submit" size="lg" loading={loading} fullWidth>
+          <Button type="submit" size="lg" loading={loading} fullWidth className="rounded-xl">
             验证并登录
           </Button>
 
@@ -435,25 +431,37 @@ export function LoginForm() {
         </form>
       )}
 
-      <section className="flex flex-col gap-4" aria-label="第三方账号登录">
-        <Divider label="或使用第三方账号" />
-        {providers.isPending ? <p role="status" className="text-center text-xs text-muted-foreground">正在读取可用登录方式…</p> : null}
-        {providers.error && <Alert tone="warning" action={<Button variant="secondary" size="sm" loading={providers.isFetching} onClick={() => void providers.refetch()}>重试</Button>}>暂时无法读取第三方登录方式，请重试或使用邮箱验证码。</Alert>}
-        {providers.data && !providers.data.some(provider => provider.enabled) && <p className="text-center text-xs text-muted-foreground">当前没有启用第三方登录，请使用邮箱验证码。</p>}
+      <section className="flex flex-col" aria-label="第三方账号登录">
+        <Divider label="或使用第三方账号" labelClassName="bg-canvas" className="my-7" />
+        {providers.isPending ? <p role="status" className="mb-4 text-center text-xs text-muted-foreground">正在读取可用登录方式…</p> : null}
+        {providers.error && <div className="mb-4"><Alert tone="warning" action={<Button variant="secondary" size="sm" loading={providers.isFetching} onClick={() => void providers.refetch()}>重试</Button>}>暂时无法读取第三方登录方式，请重试或使用邮箱验证码。</Alert></div>}
+        {providers.data && !providers.data.some(provider => provider.enabled) && <p className="mb-4 text-center text-xs text-muted-foreground">当前没有启用第三方登录，请使用邮箱验证码。</p>}
         {providers.data?.some(provider => provider.enabled) && (
-          <div className="grid grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-2 gap-3.5">
             {providers.data.filter(provider => provider.enabled).map(provider => (
               <a key={provider.provider}
                 href={API_ENDPOINTS.auth.oauthStart(provider.provider)}
-                className={buttonVariants({ variant: 'secondary', size: 'lg', className: 'min-w-0 flex-1 gap-2' })}
+                className={buttonVariants({ variant: 'secondary', size: 'lg', className: 'min-w-0 flex-1 gap-2.5 rounded-xl' })}
               >
                 {provider.provider === 'github' ? <GithubIcon className={`${iconSize.md} shrink-0`} /> : <GoogleIcon className={`${iconSize.md} shrink-0`} />}
-                <span>使用 {provider.label} 登录</span>
+                <span>{provider.label}</span>
               </a>
             ))}
           </div>
         )}
       </section>
+
+      <p className="mt-8 text-center text-xs text-muted-foreground [text-wrap:pretty]">
+        登录即代表你已阅读并同意
+        <Link href="/terms" className="rounded-control underline underline-offset-2 hover:text-foreground">
+          用户协议
+        </Link>
+        与
+        <Link href="/privacy" className="rounded-control underline underline-offset-2 hover:text-foreground">
+          隐私政策
+        </Link>
+        。
+      </p>
     </div>
   )
 }

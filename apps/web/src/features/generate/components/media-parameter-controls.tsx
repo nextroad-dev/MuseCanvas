@@ -44,6 +44,8 @@ export interface MediaParameterControlsProps {
    */
   countUnit?: string
   disabled?: boolean
+  /** Render parameters as inline chips without field labels. */
+  showLabels?: boolean
 }
 
 /** Past this many options a segmented row stops fitting the control bar. */
@@ -60,11 +62,11 @@ function labelId(descriptor: ParameterDescriptor): string {
   return `gen-param-${descriptor.name}`
 }
 
-export function MediaParameterControls({ model, values, onChange, countUnit, disabled = false }: MediaParameterControlsProps) {
+export function MediaParameterControls({ model, values, onChange, countUnit, disabled = false, showLabels = true }: MediaParameterControlsProps) {
   // Visibility depends on the current values, because a `dependsOn` parameter is
   // only offered while its controlling parameter holds a matching value.
   const controls = mediaControlDescriptors(model, values)
-  const advancedControls = controls.filter((descriptor) => isAdvancedParameter(descriptor))
+  const advancedControls = showLabels ? controls.filter((descriptor) => isAdvancedParameter(descriptor)) : []
   const primaryControls = controls.filter((descriptor) => !isAdvancedParameter(descriptor))
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const advancedId = useId()
@@ -162,13 +164,14 @@ export function MediaParameterControls({ model, values, onChange, countUnit, dis
           key={descriptor.name}
           descriptor={descriptor}
           model={model}
+          showLabel={showLabels}
         >
           {renderControl(descriptor)}
         </ParameterField>
       ))}
 
       {countDescriptor && countOptions.length > 0 && (
-        <ParameterField descriptor={countDescriptor} model={model}>
+        <ParameterField descriptor={countDescriptor} model={model} showLabel={showLabels}>
           <ValueSegments
             descriptor={countDescriptor}
             model={model}
@@ -232,22 +235,24 @@ function ParameterField({
   descriptor,
   model,
   as = 'div',
+  showLabel = true,
   children,
 }: {
   descriptor: ParameterDescriptor
   model: ParameterCarrier | null | undefined
   as?: 'div' | 'span'
+  showLabel?: boolean
   children: React.ReactNode
 }) {
   const Tag = as
   const label = descriptorLabel(descriptor, model)
   return (
     <Tag className="flex max-w-full flex-col gap-1 [&>[role=radiogroup]]:max-w-full [&>[role=radiogroup]]:overflow-x-auto">
-      <span id={labelId(descriptor)} className="px-0.5 text-overline text-muted-foreground">
+      <span id={labelId(descriptor)} className={cn('px-0.5 text-overline text-muted-foreground', !showLabel && 'sr-only')}>
         {label}
       </span>
       {children}
-      {descriptor.description && (
+      {showLabel && descriptor.description && (
         <span className="px-0.5 text-xs leading-relaxed text-muted-foreground">
           {descriptor.description}
         </span>

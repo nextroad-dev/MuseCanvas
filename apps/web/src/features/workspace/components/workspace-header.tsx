@@ -107,7 +107,7 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
   return (
     <>
       <header className="relative z-sticky flex h-[var(--layout-header)] shrink-0 items-center border-b border-border bg-surface">
-        <ContentFrame className="flex items-center gap-3">
+        <ContentFrame className="flex items-center justify-between gap-3">
           <Link
             href={GENERATE_ROUTE}
             className="shrink-0 rounded-control flex items-center"
@@ -136,7 +136,7 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
           {/* Mobile: page name */}
           <span className="min-w-0 truncate text-sm font-medium text-foreground md:hidden">{currentPageName}</span>
 
-          <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <ThemeToggle />
 
             {isAdmin && (

@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
+import { MAX_MASK_BYTES } from '@musecanvas/contracts'
 import nodemailer from 'nodemailer'
 import {
   DeleteObjectCommand,
@@ -217,6 +218,38 @@ export async function putPrivateS3ObjectBytes(
   const cfg = await effectiveStorage(explicit)
   const client = storageClient(cfg.endpoint || cfg.publicEndpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
   await client.send(new PutObjectCommand({ Bucket: cfg.bucket, Key: objectKey, Body: bytes, ContentType: contentType }))
+}
+
+/** Reserved Agent masks are immutable, even when a stale preparation resumes.
+ * Only conditional conflicts may be read back. No unconditional retry or delete. */
+export async function putReservedImageMask(objectKey: string, bytes: Buffer, ports?: {
+  bucket: string; put: (command: PutObjectCommand) => Promise<unknown>; read: (maxBytes: number) => Promise<Buffer>
+}): Promise<void> {
+  if (!bytes.length || bytes.length > MAX_MASK_BYTES) throw new Error('MASK_BYTE_LIMIT_EXCEEDED')
+  if (!ports) {
+    const cfg = await effectiveStorage()
+    const client = storageClient(cfg.endpoint || cfg.publicEndpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
+    ports = { bucket: cfg.bucket, put: command => client.send(command), read: async maxBytes => {
+      const response = await client.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: objectKey }))
+      if (!response.Body || (response.ContentLength ?? 0) > maxBytes) throw new Error('MASK_BYTE_LIMIT_EXCEEDED')
+      const chunks: Buffer[] = []; let length = 0
+      for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+        const buffer = Buffer.from(chunk); length += buffer.length
+        if (length > maxBytes) throw new Error('MASK_BYTE_LIMIT_EXCEEDED')
+        chunks.push(buffer)
+      }
+      return Buffer.concat(chunks)
+    } }
+  }
+  try {
+    await ports.put(new PutObjectCommand({ Bucket: ports.bucket, Key: objectKey, Body: bytes, ContentType: 'image/png', IfNoneMatch: '*' }))
+  } catch (error) {
+    const status = (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode
+    if (status !== 409 && status !== 412) throw error
+    const existing = await ports.read(MAX_MASK_BYTES)
+    if (existing.length !== bytes.length || !existing.equals(bytes)
+      || createHash('sha256').update(existing).digest('hex') !== createHash('sha256').update(bytes).digest('hex')) throw new Error('PREPARATION_ARTIFACT_CONFLICT')
+  }
 }
 
 export async function getPrivateS3ObjectBytes(

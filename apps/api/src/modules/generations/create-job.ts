@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto'
 import type { NextResponse } from 'next/server'
-import { db, findProviderCredential, transaction } from '../../../../../packages/database/src/index'
-import { hasStoredCredentialSecret } from '../../../../../packages/providers/src/index'
-import { validateGenerationRequest, prepareRequestDigestInput } from '@musecanvas/domain'
+import { db, findProviderCredential, transaction } from '@musecanvas/database'
+import { hasStoredCredentialSecret } from '@musecanvas/providers'
+import { validateGenerationRequest, prepareRequestDigestInput, serializeCanonicalJson } from '@musecanvas/domain'
 import {
   RUNTIME_SETTINGS_DEFAULTS,
   GenerationErrorCode,
   type CreateGenerationRequest,
   type ModelCapabilities,
+  type GenerationMode,
 } from '@musecanvas/contracts'
 import type { Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
@@ -44,6 +45,8 @@ export interface CreateGenerationJobCommand {
   normalizedInputs: Array<{ uploadId?: string; assetId?: string; role: string; position: number }>
   idempotencyKey: string
   inputLanguage?: string
+  /** Internal frozen Agent intent. Absent for public/manual compatibility. */
+  intendedMode?: GenerationMode
 }
 
 /**
@@ -62,10 +65,18 @@ export interface CreateGenerationJobCommand {
  * the budget before it parses anything, and that position is part of the
  * behaviour. A check here would run second and count every request twice.
  */
-export async function createGenerationJob(cmd: CreateGenerationJobCommand): Promise<NextResponse> {
+export interface GenerationJobPorts {
+  database: typeof db
+  runTransaction: typeof transaction
+  runtimeLimits: () => Promise<{ maxImageBytes: number; maxTotalBytes: number; maxInputs: number }>
+  jobDto: typeof jobDto
+}
+const generationJobPorts: GenerationJobPorts = { database: db, runTransaction: transaction, runtimeLimits: resolveRuntimeSettings, jobDto }
+
+export async function createGenerationJob(cmd: CreateGenerationJobCommand, ports: GenerationJobPorts = generationJobPorts): Promise<NextResponse> {
   const { actor, modelId, normalizedInputs, idempotencyKey } = cmd
 
-  const modelResult = await db().query(
+  const modelResult = await ports.database().query(
     `SELECT m.*, rev.capabilities, rev.defaults, rev.revision FROM model_configs m
      LEFT JOIN model_config_revisions rev ON rev.id=m.latest_revision_id
      WHERE m.id=$1 AND m.model_kind IN ('image','video') AND m.enabled=true AND m.deleted_at IS NULL`,
@@ -96,7 +107,7 @@ export async function createGenerationJob(cmd: CreateGenerationJobCommand): Prom
     maxInputs: RUNTIME_SETTINGS_DEFAULTS.maxInputs,
   }
   try {
-    const resolved = await resolveRuntimeSettings()
+    const resolved = await ports.runtimeLimits()
     runtimeLimits = {
       maxImageBytes: resolved.maxImageBytes,
       maxTotalBytes: resolved.maxTotalBytes,
@@ -176,20 +187,38 @@ export async function createGenerationJob(cmd: CreateGenerationJobCommand): Prom
     return fail(domainValidation.errorCode, domainValidation.errorMessage, 400, domainValidation.errors[0]?.details)
   }
   const normalized = domainValidation.value
+  if (cmd.intendedMode !== undefined) {
+    const mode: GenerationMode = mediaKind === 'video' ? (normalizedInputs.length ? 'image_to_video' : 'text_to_video')
+      : normalizedInputs.some(item => item.role === 'mask') ? 'inpaint' : normalizedInputs.length ? 'image_to_image' : 'text_to_image'
+    const supported = mode === 'inpaint'
+      ? capabilities.flags?.inpainting !== false && capabilities.flags?.mask !== false
+        && capabilities.inputSlots.some(slot => slot.role === 'mask' && slot.maxCount > 0)
+        && (capabilities.modes.includes(mode) || (capabilities.modes.includes('image_to_image') && capabilities.flags?.inpainting === true))
+      : capabilities.modes.includes(mode)
+    if (cmd.intendedMode !== mode || !supported
+      || (mode === 'inpaint' && !normalizedInputs.some(item => item.role === 'reference_image'))) return fail('INVALID_INPUT', '模型不支持请求的生成模式', 400)
+    normalized.mode = mode
+  }
+  const frozenPayload = { modelId: normalized.modelId, prompt: normalized.prompt, parameters: normalized.parameters, inputs: normalized.inputs, mode: normalized.mode }
+  const matchingExisting = (existing: Record<string, unknown>): Record<string, unknown> => {
+    if (existing.model_id !== modelId || existing.media_kind !== mediaKind
+      || serializeCanonicalJson(existing.normalized_request) !== serializeCanonicalJson(frozenPayload)) throw new Error('IDEMPOTENCY_CONFLICT')
+    return existing
+  }
   const prompt = normalized.prompt
   const requestDigest = createHash('sha256').update(prepareRequestDigestInput(normalized)).digest('hex')
   const attachLimits = runtimeLimits
   let row: Record<string, unknown>
   try {
-    row = await transaction(async client => {
+    row = await ports.runTransaction(async client => {
       const existing = await client.query('SELECT * FROM generation_jobs WHERE created_by=$1 AND idempotency_key=$2', [actor.id, idempotencyKey])
-      if (existing.rows[0]) return existing.rows[0]
+      if (existing.rows[0]) return matchingExisting(existing.rows[0])
 
       // Lock model config and prompt optimization settings in generation transaction
       const lockedModelRes = await client.query(
         `SELECT m.*, rev.id AS revision_id, rev.capabilities AS revision_capabilities, rev.defaults AS revision_defaults, rev.revision AS revision_number FROM model_configs m
          LEFT JOIN model_config_revisions rev ON rev.id=m.latest_revision_id
-         WHERE m.id=$1 AND m.model_kind IN ('image','video') AND m.enabled=true AND m.deleted_at IS NULL FOR SHARE`,
+         WHERE m.id=$1 AND m.model_kind IN ('image','video') AND m.enabled=true AND m.deleted_at IS NULL FOR SHARE OF m`,
         [modelId]
       )
       const lockedModel = lockedModelRes.rows[0]
@@ -239,7 +268,7 @@ export async function createGenerationJob(cmd: CreateGenerationJobCommand): Prom
         // already committed the job, its input bindings and outbox event.
         // Return the existing row and skip every write.
         const replayed = await client.query('SELECT * FROM generation_jobs WHERE created_by=$1 AND idempotency_key=$2', [actor.id, idempotencyKey])
-        if (replayed.rows[0]) return replayed.rows[0]
+        if (replayed.rows[0]) return matchingExisting(replayed.rows[0])
         throw new Error('GENERATION_CREATE_FAILED')
       }
       await attachGenerationInputs(client, actor.id, inserted.rows[0].id, normalizedInputs, attachLimits)
@@ -253,13 +282,14 @@ export async function createGenerationJob(cmd: CreateGenerationJobCommand): Prom
     })
   } catch (error) {
     if (error instanceof GenerationInputError) return fail(error.code, error.message, error.status)
+    if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT') return fail('IDEMPOTENCY_CONFLICT', '同一请求标识不能用于不同的生成内容', 409)
     if (error instanceof Error && error.message === 'MODEL_NOT_AVAILABLE') {
       return fail('MODEL_NOT_AVAILABLE', '模型当前不可用', 409)
     }
     const code = error instanceof Error && ['PROVIDER_NOT_CONFIGURED', 'PROMPT_MODEL_NOT_CONFIGURED'].includes(error.message) ? error.message : 'GENERATION_CREATE_FAILED'
     return fail(code, code === 'PROMPT_MODEL_NOT_CONFIGURED' ? '提示词优化模型配置不完整' : code === 'PROVIDER_NOT_CONFIGURED' ? '生成供应商凭据未配置' : '创建生成任务失败', 503)
   }
-  const responseRow = await db().query(`${userJobSelect} WHERE j.id=$1 AND j.created_by=$2`, [row.id, actor.id])
-  const jobInputs = await loadSingleJobInputs(db(), row.id as string)
-  return ok(await jobDto(responseRow.rows[0] || row, [], jobInputs), { status: 202 })
+  const responseRow = await ports.database().query(`${userJobSelect} WHERE j.id=$1 AND j.created_by=$2`, [row.id, actor.id])
+  const jobInputs = await loadSingleJobInputs(ports.database(), row.id as string)
+  return ok(await ports.jobDto(responseRow.rows[0] || row, [], jobInputs), { status: 202 })
 }

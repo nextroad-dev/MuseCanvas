@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { type Actor } from '../../auth/security'
 import { encryptOAuthSecret } from '../../auth/security'
 import { fail, ok } from '../../shared/http'

@@ -1,4 +1,4 @@
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { writeAudit } from '../../shared/audit'
 import { oauthIdentityDto } from '../../shared/dto'
 import { fail, ok } from '../../shared/http'

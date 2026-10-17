@@ -50,6 +50,7 @@ jobs:
       - name: Rotate password without replacing persistent data
         env:
           COMPOSE_PROJECT_NAME: musecanvas-password-sync
+          # 此为 CI 一次性容器的非生产占位密钥，切勿用于任何真实环境。
           APP_MASTER_KEY: 0000000000000000000000000000000000000000000000000000000000000000
           MINIO_ROOT_PASSWORD: unused-by-password-sync-test
           OLD_PASSWORD: before-password-rotation
@@ -98,8 +99,8 @@ jobs:
             dockerfile: deploy/docker/worker.Dockerfile
             build_args: ""
 
-          - image: musecanvas-web-next
-            dockerfile: deploy/docker/web-next.Dockerfile
+          - image: musecanvas-web
+            dockerfile: deploy/docker/web.Dockerfile
             build_args: ""
 
           - image: musecanvas-nginx

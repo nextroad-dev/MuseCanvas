@@ -5,7 +5,7 @@ import {
   recordProviderCredentialTest,
   type ProviderCredentialRow,
   type ProviderCredentialTestResult,
-} from '../../../../packages/database/src/index'
+} from '@musecanvas/database'
 import {
   NormalizedProviderError,
   callLanguageModel,
@@ -17,7 +17,7 @@ import {
   resolveCredentialBaseUrl,
   type LanguageProtocol,
   type ReasoningEffort,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import { createMediaExecutionContext, installedLanguagePluginBinding, isPluginAvailable, resolveMediaPlugin } from '../plugins/availability'
 
 /**

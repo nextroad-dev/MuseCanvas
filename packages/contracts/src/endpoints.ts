@@ -38,9 +38,15 @@ export const API_ENDPOINTS = {
     remove: (id: string) => `${P}/canvases/${id}`,
     agent: {
       messages: (id: string) => `${P}/canvases/${id}/agent/messages`,
+      turn: (id: string, turnId: string) => `${P}/canvases/${id}/agent/turns/${turnId}`,
       history: (id: string) => `${P}/canvases/${id}/agent/history`,
       confirm: (id: string) => `${P}/canvases/${id}/agent/confirm`,
+      apply: (id: string) => `${P}/canvases/${id}/agent/apply`,
     },
+  },
+
+  canvasAgent: {
+    status: `${P}/canvas-agent/status`,
   },
 
   // 局部修改：multipart 图片编辑，成功时返回与 POST /generations 相同的 job DTO
@@ -124,5 +130,7 @@ export const API_ENDPOINTS = {
     promptTemplatesExport: `${P}/admin/prompt-templates/export`,
     promptOptimizationSettings: `${P}/admin/prompt-optimization-settings`,
     canvasAgentSettings: `${P}/admin/canvas-agent-settings`,
+    // GET reads both kind defaults; PATCH elects or clears them. Both admin-only.
+    mediaModelDefaults: `${P}/admin/media-model-defaults`,
   },
 } as const

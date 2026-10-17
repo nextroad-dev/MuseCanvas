@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
 import { NextResponse, type NextRequest } from 'next/server'
 import {
   db,
@@ -158,8 +159,8 @@ function pendingSections(): Record<OnboardingSectionKey, OnboardingSectionState>
 }
 
 // Single-flight claim install serialized by a row lock, so concurrent status
-// polls never orphan each other's codes. Only the HMAC is stored; the
-// plaintext is printed once to the server log and never returned.
+// polls never orphan each other's codes. Only the HMAC is stored; the plaintext
+// is delivered once (dev stdout or `SETUP_CLAIM_FILE`) and never returned.
 async function ensureSetupClaim(): Promise<void> {
   await transaction(async (client) => {
     const res = await client.query(
@@ -180,16 +181,37 @@ async function ensureSetupClaim(): Promise<void> {
       const sessions = await client.query('SELECT count(*)::int AS cnt FROM setup_sessions WHERE consumed_at IS NULL AND expires_at > now()')
       if (sessions.rows[0].cnt > 0) return
     }
+    // Sole channel for obtaining the claim code during bootstrap (no API ever
+    // returns it); regeneration is guarded above (a live claim, or any
+    // unconsumed setup session, suppresses a new code). The plaintext must not
+    // be broadcast through the server log in production: logs are shipped to
+    // aggregators and readable far beyond the operator. Production therefore
+    // writes it to `SETUP_CLAIM_FILE` (mode 0600) and never to stdout, while
+    // development keeps the one-time console line for convenience. Without a
+    // production delivery channel nothing is minted, so no unreadable claim can
+    // linger and block a later bootstrap. setupComplete sweeps all setup
+    // sessions on completion.
+    const claimFile = process.env.SETUP_CLAIM_FILE
+    if (process.env.NODE_ENV === 'production' && !claimFile) {
+      console.error('[setup] SETUP_CLAIM_FILE is not configured; refusing to mint a setup claim code whose plaintext cannot be delivered without logging it')
+      return
+    }
     const code = randomToken(24)
+    if (claimFile) {
+      try {
+        writeFileSync(claimFile, `${code}\n`, { mode: 0o600 })
+        console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes) written to ${claimFile}`)
+      } catch (error) {
+        console.error('[setup] failed to write the setup claim code file', error instanceof Error ? error.message : error)
+        return
+      }
+    } else {
+      console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes, printed once): ${code}`)
+    }
     await installSetupClaim(client, {
       tokenHash: hmacForPurpose(code, 'setup-session'),
       expiresInSeconds: CLAIM_TTL_SECONDS,
     })
-    // Sole channel for obtaining the claim code during bootstrap (no API ever
-    // returns it); regeneration is guarded above (a live claim, or any
-    // unconsumed setup session, suppresses a new code). Sensitive: readable
-    // only via server logs; setupComplete sweeps all setup sessions on completion.
-    console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes, printed once): ${code}`)
   })
 }
 

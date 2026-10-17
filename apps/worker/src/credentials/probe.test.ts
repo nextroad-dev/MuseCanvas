@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { NormalizedProviderError } from '../../../../packages/providers/src/index'
+import { NormalizedProviderError } from '@musecanvas/providers'
 import { credentialProbeErrorCode, probeCandidates, resolveCredentialPlugin } from './probe'
 
 test('connectivity probes use one complete plugin identity and never mix sources', () => {

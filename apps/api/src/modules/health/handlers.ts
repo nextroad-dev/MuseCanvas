@@ -1,5 +1,5 @@
-import { db, getOnboardingState } from '../../../../../packages/database/src/index'
-import { derivePurposeKey } from '../../../../../packages/providers/src/index'
+import { db, getOnboardingState } from '@musecanvas/database'
+import { derivePurposeKey } from '@musecanvas/providers'
 import { fail, ok } from '../../shared/http'
 
 /**

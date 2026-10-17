@@ -131,10 +131,6 @@ export function authorizeUrlWithConfig(provider: OAuthProvider, config: OAuthRun
 
 // ---- Token exchange ------------------------------------------------------
 
-export async function exchangeCode(provider: OAuthProvider, code: string, pkceVerifier: string): Promise<OAuthTokens> {
-  return exchangeCodeWithConfig(provider, envOAuthConfig(provider), code, pkceVerifier)
-}
-
 export async function exchangeCodeWithConfig(provider: OAuthProvider, config: OAuthRuntimeConfig, code: string, pkceVerifier: string): Promise<OAuthTokens> {
   if (provider === 'github') {
     const response = await fetch('https://github.com/login/oauth/access_token', {
@@ -196,10 +192,6 @@ export function googleProfileFromClaims(claims: Record<string, unknown>, expecte
   }
 }
 
-async function fetchGoogleProfile(tokens: OAuthTokens, expectedNonce: string): Promise<OAuthProfile> {
-  return fetchGoogleProfileWithConfig(tokens, expectedNonce, envOAuthConfig('google'))
-}
-
 async function fetchGoogleProfileWithConfig(tokens: OAuthTokens, expectedNonce: string, config: OAuthRuntimeConfig): Promise<OAuthProfile> {
   if (!tokens.idToken) throw new Error('OAUTH_PROFILE_FAILED')
   try {
@@ -242,10 +234,6 @@ async function fetchGitHubProfile(tokens: OAuthTokens): Promise<OAuthProfile> {
 export function selectGitHubEmail(emails: GitHubEmail[]): GitHubEmail | undefined {
   if (!Array.isArray(emails)) return undefined
   return emails.find((e) => e.primary && e.verified) || emails.find((e) => e.verified)
-}
-
-export async function fetchProfile(provider: OAuthProvider, tokens: OAuthTokens, expectedNonce: string): Promise<OAuthProfile> {
-  return provider === 'github' ? fetchGitHubProfile(tokens) : fetchGoogleProfile(tokens, expectedNonce)
 }
 
 export async function fetchProfileWithConfig(provider: OAuthProvider, config: OAuthRuntimeConfig, tokens: OAuthTokens, expectedNonce: string): Promise<OAuthProfile> {

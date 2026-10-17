@@ -1,35 +1,26 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type { NextResponse } from 'next/server'
-import {
-  buildInpaintPrompt,
-  clampEditSelection,
-  MASK_INPUT_ROLE,
-  MAX_MASK_BYTES,
-  MIN_EDIT_SELECTION_PX,
-  parseRectangleRegion,
-  RUNTIME_SETTINGS_DEFAULTS,
-  type EditSelection,
-  type GenerationInputItem,
-} from '@musecanvas/contracts'
-import {
-  createEditMask,
-  inspectInputImage,
-  normalizeAlphaMask,
-  pickClosestAllowedSize,
-} from '../../../../../packages/providers/src/index'
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { MASK_INPUT_ROLE } from '@musecanvas/contracts'
 import type { AuthedContext } from '../../router/types'
-import { capabilitiesFromRow, legacyColumnsFromCapabilities } from '../../shared/dto'
 import { fail } from '../../shared/http'
-import { limited } from '../../shared/redis'
-import {
-  deleteS3Object,
-  getPrivateS3ObjectBytes,
-  putPrivateS3ObjectBytes,
-} from '../../shared/services'
-import { ALLOWED_MIME_TYPES, GENERATION_UPLOAD_TTL_SECONDS } from '../generation-uploads'
-import { resolveRuntimeSettings } from '../settings/runtime'
-import { createGenerationJob, type CreateGenerationJobCommand } from '../generations/create-job'
+import { defaultImageEditPorts, type ImageEditPorts } from './input-rows'
+import { createStableUploadIds, prepareImageEdit, type PreparedImageEdit } from './prepare'
+
+// Row-store primitives and the collaborator bundle now live in `input-rows.ts`
+// (see the note there for the cycle this breaks). Re-exported so every existing
+// importer of `handlers.ts` keeps its public surface unchanged.
+export {
+  claimKeyedInputRow,
+  defaultImageEditPorts,
+  mirrorTableMissing,
+  promoteKeyedInputRow,
+  resolveImageEditUploadLimits,
+  storeReadyInputImage,
+  type ImageEditPorts,
+  type ImageEditUploadLimits,
+  type ReadyInputWrite,
+  type SqlClient,
+} from './input-rows'
 
 /**
  * `POST /api/images/edit` — 局部框选修改图片 (region-select inpainting).
@@ -94,128 +85,6 @@ const isFilePart = (value: unknown): value is File =>
   typeof (value as File).name === 'string' &&
   typeof (value as File).arrayBuffer === 'function'
 
-/** Minimal pg surface this route touches, so every branch is testable against a stub. */
-export interface SqlClient {
-  query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>
-}
-
-export interface ImageEditUploadLimits {
-  maxImageBytes: number
-  uploadTtlSeconds: number
-}
-
-/**
- * The collaborators `editImage` needs. Production wiring is `defaultImageEditPorts`;
- * a test passes stubs. The seam exists because the promises worth asserting here —
- * "no object was written", "the row says `ready` with *this* checksum", "the count
- * is 1" — are only observable against an injected boundary, and this repo's runner
- * has no module mocking.
- */
-export interface ImageEditPorts {
-  db: () => SqlClient
-  runTransaction: (fn: (client: SqlClient) => Promise<void>) => Promise<void>
-  limited: (key: string, max: number, seconds: number) => Promise<boolean>
-  readObjectBytes: (objectKey: string) => Promise<Buffer>
-  putObjectBytes: (objectKey: string, bytes: Buffer, contentType: string) => Promise<void>
-  deleteObject: (objectKey: string) => Promise<void>
-  uploadLimits: () => Promise<ImageEditUploadLimits>
-  createJob: (cmd: CreateGenerationJobCommand) => Promise<NextResponse>
-}
-
-/** Runtime settings first, canonical defaults last — the same resolution order the upload routes use. */
-export async function resolveImageEditUploadLimits(): Promise<ImageEditUploadLimits> {
-  try {
-    const runtime = await resolveRuntimeSettings()
-    return { maxImageBytes: runtime.maxImageBytes, uploadTtlSeconds: runtime.uploadTtlSeconds }
-  } catch {
-    return {
-      maxImageBytes: RUNTIME_SETTINGS_DEFAULTS.maxImageBytes,
-      uploadTtlSeconds: GENERATION_UPLOAD_TTL_SECONDS,
-    }
-  }
-}
-
-export const defaultImageEditPorts: ImageEditPorts = {
-  db: () => db(),
-  runTransaction: fn => transaction(async client => { await fn(client) }),
-  limited,
-  readObjectBytes: objectKey => getPrivateS3ObjectBytes(objectKey),
-  putObjectBytes: (objectKey, bytes, contentType) => putPrivateS3ObjectBytes(objectKey, bytes, contentType),
-  deleteObject: objectKey => deleteS3Object(objectKey),
-  uploadLimits: resolveImageEditUploadLimits,
-  createJob: cmd => createGenerationJob(cmd),
-}
-
-/** A row created already in `ready` state: geometry, digest and length of the exact bytes in the bucket. */
-export interface ReadyInputWrite {
-  uploadId: string
-  actorId: string
-  objectKey: string
-  mimeType: string
-  width: number
-  height: number
-  sizeBytes: number
-  checksum: string
-  ttlSeconds: number
-}
-
-/**
- * Write the dual input row (`generation_input_images` plus its `media_uploads`
- * mirror) for bytes that are already stored, straight into `ready`.
- *
- * The presigned flow creates `pending` first and completes it after the browser's
- * direct PUT; here the server holds the bytes itself, so there is no un-uploaded
- * window to model. `ready` is what `attachGenerationInputs` demands, and
- * `size_bytes`, `mime_type` and `checksum` must describe the exact stored object
- * because `apps/worker/src/jobs/index.ts` re-derives all three after fetching it
- * and fails the job when they disagree. The mirror keeps the same best-effort
- * `try` every other writer here uses, for databases that predate the table.
- */
-export async function storeReadyInputImage(client: SqlClient, row: ReadyInputWrite): Promise<void> {
-  await client.query(
-    `INSERT INTO generation_input_images(id, created_by, status, object_key, mime_type, width, height, size_bytes, checksum, expires_at)
-     VALUES($1, $2, 'ready', $3, $4, $5, $6, $7, $8, now() + ($9 * interval '1 second'))`,
-    [row.uploadId, row.actorId, row.objectKey, row.mimeType, row.width, row.height, row.sizeBytes, row.checksum, row.ttlSeconds]
-  )
-  try {
-    await client.query(
-      `INSERT INTO media_uploads(id, created_by, media_kind, status, object_key, mime_type, width, height, size_bytes, checksum, expires_at)
-       VALUES($1, $2, 'image', 'ready', $3, $4, $5, $6, $7, $8, now() + ($9 * interval '1 second')) ON CONFLICT (id) DO NOTHING`,
-      [row.uploadId, row.actorId, row.objectKey, row.mimeType, row.width, row.height, row.sizeBytes, row.checksum, row.ttlSeconds]
-    )
-  } catch {
-    // media_uploads table may not exist on older databases; the legacy row stays source of truth.
-  }
-}
-
-/** Object key for a server-staged input: the same `inputs/…` namespace the presigned path uses. */
-function stagedObjectKey(actorId: string, uploadId: string, mimeType: string): string {
-  return `inputs/${actorId}/${uploadId}.${mimeType === 'image/png' ? 'png' : 'jpg'}`
-}
-
-/** Byte-length and dimension failures from `inspectInputImage`, coded the way the upload route codes them. */
-function sourceImageFailure(error: unknown): NextResponse {
-  const message = error instanceof Error ? error.message : ''
-  if (message === 'INVALID_INPUT_IMAGE_SIZE') return fail('INVALID_INPUT_IMAGE_SIZE', '图片尺寸或大小超出限制', 400)
-  return fail('INVALID_INPUT_IMAGE', '源图无效或不受支持，仅支持 PNG 与 JPEG 图片', 400)
-}
-
-/** A mask failure from `normalizeAlphaMask` / `createEditMask`: readable and Chinese, never a raw vendor dump. */
-function maskFailure(error: unknown): NextResponse {
-  const message = error instanceof Error ? error.message : ''
-  const code = message.split(':')[0]
-  if (code === 'MASK_BYTE_LIMIT_EXCEEDED') {
-    return fail('INVALID_INPUT_IMAGE_SIZE', `遮罩文件过大，上限为 ${MAX_MASK_BYTES} 字节`, 400)
-  }
-  if (code === 'MASK_ALPHA_MISSING' || code === 'MASK_FORMAT_INVALID') {
-    return fail('INVALID_INPUT_IMAGE', '遮罩必须是带 alpha 通道的 PNG 图片（透明处即要修改的区域）', 400)
-  }
-  if (code === 'MASK_TARGET_DIMENSIONS_EXCEEDED') {
-    return fail('INVALID_INPUT_IMAGE_SIZE', '图片尺寸过大，无法生成遮罩', 400)
-  }
-  return fail('INVALID_INPUT_IMAGE', '遮罩无效，请重新框选或重新绘制选区', 400)
-}
-
 /** The body, read as exactly one value per allowed field — or the response that refused it. */
 type EditForm =
   | { ok: true; fields: Record<string, FormDataEntryValue | undefined> }
@@ -244,6 +113,78 @@ function readEditForm(form: FormData): EditForm {
 
 const textOf = (fields: Record<string, FormDataEntryValue | undefined>, name: string): string =>
   typeof fields[name] === 'string' ? (fields[name] as string).trim() : ''
+
+interface StoredInput { uploadId?: string; assetId?: string; role: string; position: number }
+
+function parseStoredInputs(value: unknown): StoredInput[] | null {
+  if (!Array.isArray(value)) return null
+  const inputs: StoredInput[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+    const record = raw as Record<string, unknown>
+    const role = typeof record.role === 'string' ? record.role : ''
+    const position = Number(record.position)
+    const uploadId = typeof record.uploadId === 'string' ? record.uploadId : undefined
+    const assetId = typeof record.assetId === 'string' ? record.assetId : undefined
+    if (!role || !Number.isInteger(position) || (uploadId ? Boolean(assetId) : !assetId)) return null
+    inputs.push({ ...(uploadId ? { uploadId } : { assetId: assetId as string }), role, position })
+  }
+  return inputs
+}
+
+async function readStoredArtifact(
+  ports: ImageEditPorts,
+  actorId: string,
+  uploadId: string,
+): Promise<{ checksum: string; width: number; height: number; sizeBytes: number } | null> {
+  const select = async (table: 'generation_input_images' | 'media_uploads') => {
+    try {
+      return await ports.db().query(`SELECT checksum, width, height, size_bytes FROM ${table} WHERE id=$1 AND created_by=$2`, [uploadId, actorId])
+    } catch {
+      return { rows: [] as Record<string, unknown>[] }
+    }
+  }
+  const row = (await select('generation_input_images')).rows[0] ?? (await select('media_uploads')).rows[0]
+  if (!row) return null
+  const checksum = String(row.checksum ?? '')
+  const width = Number(row.width)
+  const height = Number(row.height)
+  const sizeBytes = Number(row.size_bytes)
+  if (!/^[0-9a-f]{64}$/.test(checksum) || !Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(sizeBytes)) return null
+  return { checksum, width, height, sizeBytes }
+}
+
+/**
+ * Map a retry onto the frozen inputs of an existing job. Only identical bytes
+ * reuse a stored reference, so a pre-keyed job's random upload ids keep
+ * replaying; a changed source/selection stays a conflict decided by the shared
+ * creation command (which compares the full normalized payload), never a
+ * silent replay and never a rewrite of the job.
+ */
+async function reuseStoredInputs(
+  ports: ImageEditPorts,
+  actorId: string,
+  storedPayload: Record<string, unknown>,
+  computed: PreparedImageEdit,
+): Promise<StoredInput[] | null> {
+  const stored = parseStoredInputs(storedPayload.inputs)
+  if (!stored || stored.length !== computed.inputs.length) return null
+  const byKey = new Map(computed.inputs.map(input => [`${input.role}:${input.position}`, input]))
+  for (const item of stored) {
+    const match = byKey.get(`${item.role}:${item.position}`)
+    if (!match) return null
+    if (item.assetId || match.assetId) {
+      if (!item.assetId || !match.assetId || item.assetId !== match.assetId) return null
+      continue
+    }
+    if (!item.uploadId || !match.uploadId) return null
+    const artifact = item.role === MASK_INPUT_ROLE ? computed.artifacts.mask : computed.artifacts.source
+    if (!artifact) return null
+    const row = await readStoredArtifact(ports, actorId, item.uploadId)
+    if (!row || row.checksum !== artifact.checksum || row.width !== artifact.width || row.height !== artifact.height || row.sizeBytes !== artifact.sizeBytes) return null
+  }
+  return stored
+}
 
 export async function editImage(
   context: AuthedContext,
@@ -304,231 +245,69 @@ export async function editImage(
   }
   const imagePart = isFilePart(fields.image) ? fields.image : undefined
   const maskPart = isFilePart(fields.mask) ? fields.mask : undefined
-  if (assetId && imagePart) return fail('INVALID_INPUT', '源图只能提供 assetId 或 image 文件其中一种')
-  if (!assetId && !imagePart) return fail('INVALID_INPUT', '缺少源图：请提供 assetId 或 image 文件')
-  if (regionText && maskPart) return fail('INVALID_INPUT', '选区只能提供 region 矩形或 mask 遮罩文件其中一种')
-  if (!regionText && !maskPart) return fail('INVALID_INPUT', '缺少选区：请提供 region 矩形或 mask 遮罩文件')
-  if (assetId && !UUID_PATTERN.test(assetId)) return fail('INVALID_INPUT', 'assetId 格式无效')
 
-  // The model decides whether a mask is even accepted and which `size` is legal, so
-  // it is read ahead of any storage work: a refusal here must not leave an object
-  // in the bucket or an input row behind.
-  const modelResult = await ports.db().query(
-    `SELECT m.*, rev.capabilities, rev.defaults, rev.revision FROM model_configs m
-     LEFT JOIN model_config_revisions rev ON rev.id=m.latest_revision_id
-     WHERE m.id=$1 AND m.enabled=true AND m.deleted_at IS NULL`,
-    [modelId],
-  )
-  const model = modelResult.rows[0]
-  if (!model) return fail('MODEL_NOT_AVAILABLE', '模型当前不可用', 404)
-  if (String(model.model_kind || '') !== 'image') {
-    return fail('MODEL_NOT_AVAILABLE', '局部修改仅支持图片生成模型', 400)
-  }
-  const capabilities = capabilitiesFromRow(model)
-  // The server-side twin of a greyed-out button. An undeclared contract is not a
-  // permissive one, and a model with no `mask` slot has never been able to take an
-  // edit region — leaving it to `createGenerationJob` would answer minutes later
-  // with an opaque `UNKNOWN_INPUT_ROLE` on a job the user already trusted.
-  const maskCapable = capabilities.declaredBy !== 'undeclared'
-    && capabilities.inputSlots.some(slot => slot.role === MASK_INPUT_ROLE)
-  if (!maskCapable) {
-    return fail(
-      'MODEL_MASK_NOT_SUPPORTED',
-      '当前模型不支持局部修改（未声明选区遮罩输入），请更换支持局部修改的图片模型',
-      409,
-      { parameter: 'modelId', value: modelId },
-    )
-  }
-  // `size` is derived from the source image's geometry, so the declared options have
-  // to exist for the request to be answerable at all. The helper is the same one
-  // the model DTOs use: an `image-size` descriptor answers with its presets, an
-  // `enum` one with its option values, and both keep this route off the deprecated
-  // flat `model_configs.sizes` column.
-  const declaredSizes = legacyColumnsFromCapabilities(capabilities).sizes
-  const limits = await ports.uploadLimits()
+  const imageBytes = imagePart ? Buffer.from(await imagePart.arrayBuffer()) : undefined
+  const maskBytes = maskPart ? Buffer.from(await maskPart.arrayBuffer()) : undefined
 
-  // --- the source image -----------------------------------------------------
-  let source: { width: number; height: number }
-  let sourceInput: GenerationInputItem
-  if (assetId) {
-    // Ownership is the library predicate, so a picker can never hand over another
-    // user's image, and a soft-deleted one is no longer a source.
-    const owned = await ports.db().query(
-      `SELECT id,object_key,media_kind,mime_type,width,height FROM assets
-       WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL`,
-      [assetId, actor.id],
+  const explicitKey = request.headers.get('idempotency-key') || textOf(fields, 'idempotencyKey')
+  // The explicit key makes the staged artifacts deterministic; a keyless request
+  // keeps the old fresh-uuid behaviour and therefore the old "every call is a new
+  // generation" semantics.
+  const stableUploadIds = explicitKey ? createStableUploadIds(`${actor.id}:${explicitKey}`) : undefined
+  const prepareInput = {
+    actor,
+    modelId,
+    prompt,
+    parameters: clientParameters,
+    assetId: assetId || undefined,
+    imageBytes,
+    regionText: regionText || undefined,
+    maskBytes,
+    quality: quality || undefined,
+    ports,
+    stableUploadIds,
+  }
+
+  if (explicitKey) {
+    // A duplicate key is a retry, not a second generation. Resolve it through the
+    // same shared creation command so the frozen payload decides replay-vs-conflict;
+    // computing the retry's payload without writing also keeps a conflicting
+    // request from leaving an orphan mask behind. Jobs created before keyed
+    // staging existed carry random upload ids, so their frozen inputs are reused
+    // only after the retry's bytes have been verified against the stored ones.
+    const existing = await ports.db().query(
+      'SELECT id, normalized_request FROM generation_jobs WHERE created_by=$1 AND idempotency_key=$2',
+      [actor.id, explicitKey],
     )
-    const asset = owned.rows[0]
-    if (!asset) return fail('NOT_FOUND', '图库作品不存在或无权访问', 404)
-    // Only PNG and JPEG bytes survive the worker's `inspectInputImage`, so only
-    // those can be sent to a vendor at all — say it here, in a form error.
-    if (String(asset.media_kind || 'image') !== 'image' || !ALLOWED_MIME_TYPES[String(asset.mime_type || '')]) {
-      return fail('INVALID_INPUT_IMAGE', '局部修改仅支持 PNG 或 JPEG 图片', 400)
-    }
-    let assetBytes: Buffer
-    try {
-      assetBytes = await ports.readObjectBytes(String(asset.object_key))
-    } catch {
-      return fail('INPUT_IMAGE_UNAVAILABLE', '图库作品文件读取失败，请稍后重试', 400)
-    }
-    let inspectedSource: { width: number; height: number; mimeType: 'image/png' | 'image/jpeg' }
-    try {
-      // The *decoded* dimensions, not `assets.width`: the mask is built from these,
-      // and a stored value that ever disagreed with the bytes would produce a mask
-      // the vendor rejects — worse, one that edits the wrong pixels.
-      inspectedSource = inspectInputImage(assetBytes, { maxImageBytes: limits.maxImageBytes })
-    } catch (error) {
-      return sourceImageFailure(error)
-    }
-    // The worker re-checks the object it fetches against the row it joins on, so a
-    // mismatch here is a job that fails minutes later on a vendor error nobody read.
-    if (inspectedSource.mimeType !== String(asset.mime_type || '')) {
-      return fail('INVALID_INPUT_IMAGE', '图库作品的实际格式与其记录不符，无法用于局部修改', 400)
-    }
-    source = { width: inspectedSource.width, height: inspectedSource.height }
-    // Referenced, not mirrored: no upload row, and never the asset's object key in
-    // one — see the module comment.
-    sourceInput = { assetId: String(asset.id), role: 'reference_image', position: 0 }
-  } else {
-    const bytes = Buffer.from(await imagePart!.arrayBuffer())
-    if (bytes.length === 0) return fail('INVALID_INPUT_IMAGE', '源图内容为空', 400)
-    if (bytes.length > limits.maxImageBytes) {
-      return fail('INVALID_INPUT_IMAGE_SIZE', `源图不能超过 ${limits.maxImageBytes} 字节`, 400)
-    }
-    // The mime type is what the bytes decode as, not what the part declared: the
-    // row and the worker's re-check must agree, and the browser is not authoritative.
-    let inspectedUpload: { width: number; height: number; mimeType: 'image/png' | 'image/jpeg' }
-    try {
-      inspectedUpload = inspectInputImage(bytes, { maxImageBytes: limits.maxImageBytes })
-    } catch (error) {
-      return sourceImageFailure(error)
-    }
-    source = { width: inspectedUpload.width, height: inspectedUpload.height }
-    const uploadId = randomUUID()
-    const objectKey = stagedObjectKey(actor.id, uploadId, inspectedUpload.mimeType)
-    try {
-      await ports.putObjectBytes(objectKey, bytes, inspectedUpload.mimeType)
-      await ports.runTransaction(async client => {
-        await storeReadyInputImage(client, {
-          uploadId,
-          actorId: actor.id,
-          objectKey,
-          mimeType: inspectedUpload.mimeType,
-          width: inspectedUpload.width,
-          height: inspectedUpload.height,
-          sizeBytes: bytes.length,
-          checksum: createHash('sha256').update(bytes).digest('hex'),
-          ttlSeconds: limits.uploadTtlSeconds,
-        })
+    const existingRow = existing.rows[0]
+    if (existingRow) {
+      const computed = await prepareImageEdit({ ...prepareInput, dryRun: true })
+      if (!computed.success) return computed.response
+      const storedPayload = existingRow.normalized_request
+      const inputs = storedPayload && typeof storedPayload === 'object' && !Array.isArray(storedPayload)
+        ? await reuseStoredInputs(ports, actor.id, storedPayload as Record<string, unknown>, computed.data)
+        : null
+      if (!inputs) return fail('IDEMPOTENCY_CONFLICT', '同一请求标识不能用于不同的生成内容', 409)
+      return ports.createJob({
+        actor,
+        modelId,
+        prompt: computed.data.prompt,
+        parameters: computed.data.parameters,
+        normalizedInputs: inputs,
+        idempotencyKey: explicitKey,
       })
-    } catch {
-      // Chosen failure mode, same as the plugin install path: best-effort
-      // compensating delete. An orphaned key in a private bucket is an acceptable
-      // cost; a `ready` row pointing at bytes that never landed is not.
-      await ports.deleteObject(objectKey).catch(() => { /* orphan accepted */ })
-      return fail('GENERATION_CREATE_FAILED', '源图存储失败，请稍后重试', 503)
-    }
-    sourceInput = { uploadId, role: 'reference_image', position: 0 }
-  }
-
-  // An edit of a full-size photo almost never lands on one of the model's fixed
-  // sizes, so the declared option nearest the source's aspect ratio is chosen —
-  // instead of the model's default, and instead of an illegal literal. Derived
-  // before the mask is built: a model that offers nothing legal here is a refusal
-  // the user should get *before* the server paid for a rasterised mask.
-  const size = pickClosestAllowedSize(declaredSizes, source.width, source.height)
-  if (!size) {
-    return fail('INVALID_INPUT', '该模型未声明可用的输出尺寸，无法为局部修改确定尺寸', 400)
-  }
-
-  // --- the edit region ------------------------------------------------------
-  let maskBytes: Buffer
-  if (regionText) {
-    let regionJson: unknown
-    try {
-      regionJson = JSON.parse(regionText)
-    } catch {
-      return fail('INVALID_INPUT', 'region 必须是 {x,y,width,height} 形式的 JSON 对象')
-    }
-    const region = parseRectangleRegion(regionJson)
-    if (!region || region.type !== 'rectangle') {
-      return fail('INVALID_INPUT', 'region 必须是 {x,y,width,height} 形式的 JSON 对象')
-    }
-    // Clamped rather than trusted: a rectangle hanging off the edge is a visible
-    // mistake, and a sub-`MIN_EDIT_SELECTION_PX` slip of the mouse would otherwise
-    // quietly regenerate almost nothing while reporting a completed edit.
-    const selection: EditSelection | null = clampEditSelection(
-      { x: region.x, y: region.y, width: region.width, height: region.height },
-      source.width,
-      source.height,
-    )
-    if (!selection) {
-      return fail(
-        'INVALID_INPUT',
-        `框选区域无效：必须落在图片（${source.width}×${source.height} 像素）范围内，且不小于 ${MIN_EDIT_SELECTION_PX}×${MIN_EDIT_SELECTION_PX} 像素`,
-        400,
-        { parameter: 'region', value: regionText.slice(0, 200) },
-      )
-    }
-    try {
-      maskBytes = await createEditMask({ imageWidth: source.width, imageHeight: source.height, selection })
-    } catch (error) {
-      return maskFailure(error)
-    }
-  } else {
-    const bytes = Buffer.from(await maskPart!.arrayBuffer())
-    try {
-      // Enforces the alpha channel, resizes to exactly the source image's own
-      // dimensions, and caps at the vendor limit — so a brush mask drawn at display
-      // scale still lines up pixel for pixel.
-      maskBytes = await normalizeAlphaMask(bytes, source.width, source.height)
-    } catch (error) {
-      return maskFailure(error)
     }
   }
 
-  const maskUploadId = randomUUID()
-  const maskObjectKey = stagedObjectKey(actor.id, maskUploadId, 'image/png')
-  try {
-    await ports.putObjectBytes(maskObjectKey, maskBytes, 'image/png')
-    await ports.runTransaction(async client => {
-      await storeReadyInputImage(client, {
-        uploadId: maskUploadId,
-        actorId: actor.id,
-        objectKey: maskObjectKey,
-        mimeType: 'image/png',
-        width: source.width,
-        height: source.height,
-        sizeBytes: maskBytes.length,
-        checksum: createHash('sha256').update(maskBytes).digest('hex'),
-        ttlSeconds: limits.uploadTtlSeconds,
-      })
-    })
-  } catch {
-    await ports.deleteObject(maskObjectKey).catch(() => { /* orphan accepted */ })
-    return fail('GENERATION_CREATE_FAILED', '遮罩存储失败，请稍后重试', 503)
-  }
-  const maskInput: GenerationInputItem = { uploadId: maskUploadId, role: MASK_INPUT_ROLE, position: 1 }
-
-  // --- the job --------------------------------------------------------------
-  // Client-chosen parameters first, then the two this route owns: the output size
-  // follows the source image's geometry and one edit returns one picture, so a
-  // caller-supplied `size` or `count` is overridden rather than trusted.
-  const parameters: Record<string, unknown> = { ...clientParameters, size }
-  if (quality) parameters.quality = quality
-  // One edit, one picture: `count > 1` would spend the same mask several times over,
-  // which is not a choice this endpoint offers.
-  parameters.count = 1
+  const prepared = await prepareImageEdit(prepareInput)
+  if (!prepared.success) return prepared.response
 
   return ports.createJob({
     actor,
     modelId,
-    // The user's own words, wrapped by the shared standing instruction — the only
-    // place that composition happens, so the wording cannot drift from the contract.
-    prompt: buildInpaintPrompt(prompt),
-    parameters,
-    normalizedInputs: [sourceInput, maskInput],
-    idempotencyKey: request.headers.get('idempotency-key')
-      || (textOf(fields, 'idempotencyKey') || randomUUID()),
+    prompt: prepared.data.prompt,
+    parameters: prepared.data.parameters,
+    normalizedInputs: prepared.data.inputs,
+    idempotencyKey: explicitKey || randomUUID(),
   })
 }

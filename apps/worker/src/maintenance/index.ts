@@ -1,5 +1,5 @@
 import { DeleteObjectCommand } from '@aws-sdk/client-s3'
-import { db, transaction } from '../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { dispatchOutbox } from '../queue'
 import { getStorageClient } from '../shared/storage'
 import { resolveUploadSignTtlSeconds } from '../shared/runtime'
@@ -97,13 +97,17 @@ export async function maintenance() {
       for (const img of inputImages.rows) {
         try {
           await deleteStorageObject(img.object_key)
-        } catch {}
+        } catch (error) {
+          console.error('input image object delete failed', { objectKey: img.object_key, code: error instanceof Error ? error.name : 'DELETE_FAILED' })
+        }
       }
       const mediaUploads = await db().query('SELECT id,object_key FROM media_uploads WHERE created_by=$1 AND object_deleted_at IS NULL', [deletion.user_id]).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
       for (const upload of mediaUploads.rows) {
         try {
           await deleteStorageObject(upload.object_key)
-        } catch {}
+        } catch (error) {
+          console.error('media upload object delete failed', { objectKey: upload.object_key, code: error instanceof Error ? error.name : 'DELETE_FAILED' })
+        }
       }
       await transaction(async client => {
         await purgeCanvasContentForActor(client, String(deletion.user_id))
@@ -111,7 +115,7 @@ export async function maintenance() {
         await client.query('UPDATE generation_jobs SET deleted_at=COALESCE(deleted_at,now()),prompt=NULL WHERE created_by=$1', [deletion.user_id])
         await client.query("UPDATE prompt_optimizations SET deleted_at=COALESCE(deleted_at,now()),input_prompt='',final_prompt=NULL,template_instruction_snapshot=NULL WHERE created_by=$1", [deletion.user_id])
         await client.query("UPDATE generation_input_images SET status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE created_by=$1", [deletion.user_id])
-        await client.query("UPDATE media_uploads SET status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE created_by=$1").catch(() => {})
+        await client.query("UPDATE media_uploads SET status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE created_by=$1", [deletion.user_id])
         await client.query("UPDATE users SET email=concat('deleted-',id,'@invalid.local') WHERE id=$1", [deletion.user_id])
         await client.query('UPDATE deletion_jobs SET completed_at=now(),last_error_code=NULL WHERE id=$1', [deletion.id])
       })

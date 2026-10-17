@@ -1,4 +1,4 @@
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { ok } from '../../shared/http'
 
 /** GET /api/admin/dashboard — four aggregates, one round-trip. */

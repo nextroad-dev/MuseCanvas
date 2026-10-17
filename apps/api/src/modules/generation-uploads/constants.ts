@@ -2,7 +2,7 @@ export {
   MAX_UPLOAD_IMAGE_BYTES,
   MAX_UPLOAD_TOTAL_BYTES,
   MAX_INPUT_IMAGES,
-} from '../../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 
 // Synchronous safe hard defaults for pure validation paths. Request-scoped
 // handlers resolve the live values from runtime settings (DB first, legacy

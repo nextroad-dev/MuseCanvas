@@ -13,7 +13,7 @@ import {
   findCanvasForActor,
   listCanvasDocuments,
   updateCanvasDocument,
-} from '../../../../../packages/database/src/index'
+} from '@musecanvas/database'
 import type { AuthedContext } from '../../router/types'
 import { fail, ok } from '../../shared/http'
 import { limited } from '../../shared/redis'

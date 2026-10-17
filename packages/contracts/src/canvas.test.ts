@@ -1,3 +1,4 @@
+import { parseCanvasAgentEditMetadata } from './canvas'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
@@ -13,6 +14,7 @@ import {
   CanvasErrorCode,
   applyCanvasOps,
   isCanvasUuid,
+  parseCanvasAgentApplyRequest,
   parseCanvasAgentConfirmRequest,
   parseCanvasAgentMessageRequest,
   parseCanvasNode,
@@ -278,12 +280,82 @@ test('applyCanvasOps validates operations in context and never silently loses ed
 
 test('user message defaults to confirmation; auto events cannot claim server state or override confirmation', () => {
   const user = { kind: 'user', messageId: id(1), text: ' draw cat ', baseRevision: 1 }
-  assert.deepEqual(valid(parseCanvasAgentMessageRequest(user)), { ...user, requireConfirmation: true })
-  assert.deepEqual(valid(parseCanvasAgentMessageRequest({ ...user, requireConfirmation: false })), { ...user, requireConfirmation: false })
+  assert.deepEqual(valid(parseCanvasAgentMessageRequest(user)), { ...user, requireConfirmation: true, sceneCommitMode: 'client-managed' })
+  assert.deepEqual(valid(parseCanvasAgentMessageRequest({ ...user, requireConfirmation: false })), { ...user, requireConfirmation: false, sceneCommitMode: 'client-managed' })
   const auto = { kind: 'job_event', messageId: id(2), jobId: id(3), baseRevision: 2 }
-  assert.deepEqual(valid(parseCanvasAgentMessageRequest(auto)), auto)
+  assert.deepEqual(valid(parseCanvasAgentMessageRequest(auto)), { ...auto, sceneCommitMode: 'client-managed' })
+  assert.deepEqual(valid(parseCanvasAgentMessageRequest({ ...auto, sceneCommitMode: 'agent-managed' })), { ...auto, sceneCommitMode: 'agent-managed' })
   for (const field of ['role', 'status', 'assetId', 'system', 'text', 'requireConfirmation', 'commands']) invalid(parseCanvasAgentMessageRequest({ ...auto, [field]: 'spoof' }))
   for (const value of [{ ...user, text: ' ' }, { ...user, text: 'x'.repeat(CANVAS_MAX_TEXT_LENGTH + 1) }, { ...user, role: 'system' }, { ...user, messageId: 'bad' }, { ...auto, jobId: 'bad' }, { ...user, baseRevision: 0 }, { ...user, requireConfirmation: 'false' }, { ...user, kind: 'assistant' }]) invalid(parseCanvasAgentMessageRequest(value))
+})
+
+test('user message parses structured context, inputs, edit source and scene commit mode', () => {
+  const base = { kind: 'user' as const, messageId: id(1), text: 'draw', baseRevision: 1 }
+  const full = {
+    ...base,
+    sceneCommitMode: 'agent-managed' as const,
+    context: {
+      intent: 'generate' as const,
+      modelId: id(2),
+      parameters: { size: '1024x1024', count: 1 },
+      inputs: [{ uploadId: id(3), role: 'reference_image', position: 0 }],
+      editSource: { assetId: id(4), selection: { x: 10, y: 20, width: 100, height: 200 } },
+    },
+  }
+  const parsed = valid(parseCanvasAgentMessageRequest(full))
+  assert.equal(parsed.kind, 'user')
+  if (parsed.kind === 'user') {
+    assert.equal(parsed.sceneCommitMode, 'agent-managed')
+    assert.equal(parsed.context?.intent, 'generate')
+    assert.equal(parsed.context?.modelId, id(2))
+    assert.deepEqual(parsed.context?.parameters, { size: '1024x1024', count: 1 })
+    assert.deepEqual(parsed.context?.inputs, [{ uploadId: id(3), role: 'reference_image', position: 0 }])
+    assert.deepEqual(parsed.context?.editSource, { assetId: id(4), selection: { x: 10, y: 20, width: 100, height: 200 } })
+  }
+
+  // Asset input instead of upload input
+  const assetCtx = { ...base, context: { inputs: [{ assetId: id(5), role: 'first_frame', position: 0 }] } }
+  const parsedAsset = valid(parseCanvasAgentMessageRequest(assetCtx))
+  assert.equal(parsedAsset.kind, 'user')
+  if (parsedAsset.kind === 'user') {
+    assert.deepEqual(parsedAsset.context?.inputs, [{ assetId: id(5), role: 'first_frame', position: 0 }])
+  }
+
+  // Edit source with nodeId
+  const nodeCtx = { ...base, context: { editSource: { nodeId: id(6), selection: { x: 0, y: 0, width: 50, height: 50 } } } }
+  const parsedNode = valid(parseCanvasAgentMessageRequest(nodeCtx))
+  assert.equal(parsedNode.kind, 'user')
+  if (parsedNode.kind === 'user') {
+    assert.deepEqual(parsedNode.context?.editSource, { nodeId: id(6), selection: { x: 0, y: 0, width: 50, height: 50 } })
+  }
+
+  // Rejections on invalid context
+  invalid(parseCanvasAgentMessageRequest({ ...base, sceneCommitMode: 'invalid' }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { intent: 'invalid' } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { modelId: 'not-uuid' } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { parameters: 'not-obj' } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { unknownField: 1 } }))
+  // Invalid inputs
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { inputs: [{ uploadId: id(1), assetId: id(2), role: 'ref', position: 0 }] } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { inputs: [{ role: 'ref', position: 0 }] } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { inputs: [{ uploadId: id(1), role: '', position: 0 }] } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { inputs: [{ uploadId: id(1), role: 'x'.repeat(65), position: 0 }] } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { inputs: [{ uploadId: id(1), role: 'ref', position: -1 }] } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { inputs: [{ uploadId: id(1), role: 'ref', position: 16 }] } }))
+  // Invalid edit source
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { editSource: { selection: { x: 0, y: 0, width: 10, height: 10 } } } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { editSource: { assetId: id(1), selection: { x: -1, y: 0, width: 10, height: 10 } } } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { editSource: { assetId: id(1), selection: { x: 0, y: 0, width: 0, height: 10 } } } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { editSource: { assetId: id(1), selection: { x: 0, y: 0, width: 10, height: -5 } } } }))
+  invalid(parseCanvasAgentMessageRequest({ ...base, context: { editSource: { assetId: id(1), selection: { x: NaN, y: 0, width: 10, height: 10 } } } }))
+})
+
+test('apply request only accepts a valid turn ID', () => {
+  assert.deepEqual(valid(parseCanvasAgentApplyRequest({ turnId: id(1) })), { turnId: id(1) })
+  invalid(parseCanvasAgentApplyRequest({ turnId: 'bad' }))
+  invalid(parseCanvasAgentApplyRequest({ turnId: id(1), extra: true }))
+  invalid(parseCanvasAgentApplyRequest({}))
+  invalid(parseCanvasAgentApplyRequest(null))
 })
 
 test('confirm request only accepts the pending ID and approval decision', () => {
@@ -303,4 +375,10 @@ test('settings partial updates are strict, bounded and do not reset omitted fiel
     for (const value of [min - 1, max + 1, min + 0.5, String(min), null, Infinity]) invalid(parseUpdateCanvasAgentSettingsRequest({ [key]: value }))
   }
   for (const value of [{}, { enabled: 1 }, { languageModelConfigId: 'bad' }, { updatedAt: 'x' }, { maxJobsPerTurn: undefined }, JSON.parse('{"__proto__":{}}')]) invalid(parseUpdateCanvasAgentSettingsRequest(value))
+})
+
+test('prepared edit metadata preserves clamped original pixels and rejects unsafe/out-of-bounds summaries', () => {
+  const valid = { selection: { x: 2, y: 3, width: 4, height: 5 }, sourceWidth: 10, sourceHeight: 12 }
+  assert.deepEqual(parseCanvasAgentEditMetadata(valid), { success: true, data: valid })
+  for (const changed of [{ ...valid, sourceWidth: 1 }, { ...valid, sourceHeight: 0 }, { ...valid, sourceWidth: 12.5 }, { ...valid, selection: { ...valid.selection, x: -1 } }, { ...valid, credential: 'not-allowed' }]) assert.equal(parseCanvasAgentEditMetadata(changed).success, false)
 })

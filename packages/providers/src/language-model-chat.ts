@@ -164,7 +164,8 @@ export function buildLanguageModelChatRequest(input: LanguageModelChatInput): { 
   for (const message of input.messages) {
     if (message.role === 'tool') {
       const block = { type: 'tool_result', tool_use_id: message.toolCallId, content: message.content, ...(message.isError ? { is_error: true } : {}) }
-      if (messages.at(-1)?.role === 'user') messages.at(-1)!.content.push(block)
+      const previous = messages.at(-1)
+      if (previous?.role === 'user') previous.content.push(block)
       else messages.push({ role: 'user', content: [block] })
     } else if (message.role === 'user') messages.push({ role: 'user', content: [{ type: 'text', text: message.content }] })
     else {

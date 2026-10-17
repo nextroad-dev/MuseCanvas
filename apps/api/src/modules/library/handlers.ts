@@ -41,7 +41,8 @@ export async function listLibrary(context: AuthedContext) {
   const totalValues = values.slice(0, cursor ? -2 : undefined)
   const totalWhere = cursor ? conditions.slice(0, -1).join(' AND ') : where
   values.push(limit + 1)
-  const page = await db().query(`${LIBRARY_SELECT_COLUMNS}
+  const page = await db().query(`${LIBRARY_SELECT_COLUMNS},
+      to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
       ${LIBRARY_FROM_CLAUSE} WHERE ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $${values.length}`, values)
   const total = await db().query(`SELECT count(*)::int total ${LIBRARY_FROM_CLAUSE} WHERE ${totalWhere}`, totalValues)
   const hasMore = page.rows.length > limit

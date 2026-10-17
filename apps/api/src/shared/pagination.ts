@@ -16,8 +16,10 @@ export function decodeCursor(value: string | null): Cursor | null {
   }
 }
 
-export const encodeCursor = (row: { created_at: Date; id: string }) =>
-  Buffer.from(JSON.stringify({ createdAt: row.created_at.toISOString(), id: row.id })).toString('base64url')
+// Keep PostgreSQL's microseconds: pg's Date parser truncates them to milliseconds,
+// which moves the tuple boundary past rows that still belong to the next page.
+export const encodeCursor = (row: { cursor_created_at: string; id: string }) =>
+  Buffer.from(JSON.stringify({ createdAt: row.cursor_created_at, id: row.id })).toString('base64url')
 
 export const boundedLimit = (request: NextRequest) =>
   Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get('limit') || 50) || 50))

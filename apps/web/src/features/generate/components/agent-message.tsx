@@ -128,6 +128,7 @@ export function AgentMessage({ item }: AgentMessageProps) {
   // the timeline reads as one conversation instead of a stack of cards.
   return (
     <article className="flex max-w-[92%] flex-col gap-1" aria-label="Agent 回复">
+      <p className="text-caption text-muted-foreground">MuseCanvas Bot</p>
       <div className={cn('text-sm leading-relaxed text-foreground', item.provisional && 'opacity-90')}>
         <p className="whitespace-pre-wrap break-words">{item.text}</p>
       </div>

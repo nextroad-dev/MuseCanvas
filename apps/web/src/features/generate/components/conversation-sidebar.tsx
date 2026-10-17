@@ -4,7 +4,9 @@ import { useCallback, useEffect, useId } from 'react'
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { PlusIcon, XIcon } from '@phosphor-icons/react'
+
 import type { CanvasListItemDto } from '@musecanvas/contracts'
+import type { UserProfile } from '@/shared/types'
 import { Alert, Button, IconButton, iconSize } from '@/shared/components/ui'
 import { useDialog } from '@/shared/hooks/useDialog'
 import { cn } from '@/shared/lib/cn'
@@ -22,6 +24,8 @@ export interface ConversationSidebarProps {
   /** Mobile drawer (small screens). On large screens the rail is always docked. */
   open: boolean
   onClose: () => void
+  /** Current user profile rendered in the rail footer. */
+  user: UserProfile | null
 }
 
 /** Cells past this index share one delay, matching the library grid's clamp. */
@@ -35,6 +39,18 @@ const DESKTOP_BREAKPOINT_QUERY = '(min-width: 64rem)'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '对话列表加载失败'
+}
+
+function formatConversationTime(updatedAt: string | undefined): string {
+  if (!updatedAt) return ''
+  const date = new Date(updatedAt)
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  if (isToday) return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (date.toDateString() === yesterday.toDateString()) return '昨天'
+  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
 /**
@@ -55,8 +71,8 @@ export function ConversationSidebar({
   creating,
   open,
   onClose,
+  user,
 }: ConversationSidebarProps) {
-  const current = items.find((item) => item.id === currentCanvasId) ?? null
   const headingId = useId()
   const closeDrawer = useCallback(() => onClose(), [onClose])
   const {
@@ -79,10 +95,12 @@ export function ConversationSidebar({
     return () => breakpoint.removeEventListener('change', closeOnDesktop)
   }, [closeDrawer])
 
+  const userInitial = user?.email?.charAt(0).toUpperCase() || 'U'
+
   const content = (
-    <nav aria-label="对话列表" className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id={headingId} className="text-module text-foreground">对话</h2>
+    <nav aria-label="对话列表" className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-between gap-2 px-1 pb-3 pt-1">
+        <h2 id={headingId} className="text-sm font-semibold text-foreground">对话</h2>
         <div className="flex items-center gap-1">
           <IconButton
             variant="ghost"
@@ -103,12 +121,12 @@ export function ConversationSidebar({
           />
         </div>
       </div>
-      {error ? <Alert tone="warning" title="对话列表刷新失败">{errorMessage(error)}</Alert> : null}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {error ? <Alert tone="warning" title="对话列表刷新失败" className="mb-3">{errorMessage(error)}</Alert> : null}
+      <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
         {items.length === 0 ? (
           <p className="px-2 py-2 text-sm text-muted-foreground">{loading ? '正在加载对话…' : '还没有对话，新建一个开始创作。'}</p>
         ) : (
-          <ul className="flex flex-col gap-0.5">
+          <ul className="flex flex-col gap-1.5">
             {items.map((item, index) => {
               const active = item.id === currentCanvasId
               return (
@@ -117,20 +135,18 @@ export function ConversationSidebar({
                   className="motion-reveal motion-stagger"
                   style={{ '--stagger-index': String(Math.min(index, STAGGER_CLAMP)) } as CSSProperties}
                 >
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    fullWidth
+                  <button
+                    type="button"
                     aria-current={active ? 'true' : undefined}
                     onClick={() => onSelect(item.id)}
                     className={cn(
-                      'justify-start px-2 font-normal',
-                      active ? 'bg-tonal-selected text-foreground' : 'text-muted-foreground hover:text-foreground',
+                      'flex w-full flex-col gap-0.5 rounded-card p-2.5 text-left transition-colors',
+                      active ? 'bg-tonal-selected text-foreground' : 'text-muted-foreground hover:bg-tonal-hover hover:text-foreground',
                     )}
                   >
-                    {active ? <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-[3px] rounded-pill bg-primary" /> : null}
-                    <span className="min-w-0 flex-1 truncate text-left">{item.title || '未命名画布'}</span>
-                  </Button>
+                    <span className="min-w-0 truncate text-sm leading-snug">{item.title || '未命名画布'}</span>
+                    <span className="text-caption text-muted-foreground">{formatConversationTime(item.updatedAt)}</span>
+                  </button>
                 </li>
               )
             })}
@@ -142,17 +158,21 @@ export function ConversationSidebar({
           </Button>
         ) : null}
       </div>
-      {current ? (
-        <p className="shrink-0 truncate border-t border-border pt-3 text-xs text-muted-foreground" title={current.title}>
-          当前：{current.title || '未命名画布'}
-        </p>
-      ) : null}
+      <div className="flex items-center border-t border-border pt-3 px-1">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-pill bg-tonal text-xs font-semibold text-foreground">
+          {userInitial}
+        </div>
+        <div className="ml-2.5 min-w-0">
+          <p className="truncate text-xs font-medium text-foreground leading-tight">{user?.email?.split('@')[0] || '用户'}</p>
+          <p className="truncate text-caption text-muted-foreground leading-tight">{user?.email || ''}</p>
+        </div>
+      </div>
     </nav>
   )
 
   return (
     <>
-      <aside className="hidden lg:flex lg:w-[var(--container-settings-nav)] lg:shrink-0 lg:flex-col lg:border-r lg:border-border lg:pr-6">
+      <aside className="hidden min-h-0 w-[var(--layout-sidebar)] shrink-0 flex-col border-r border-border bg-surface p-4 lg:flex">
         {content}
       </aside>
       {drawerMounted && drawerPortalTarget ? createPortal(

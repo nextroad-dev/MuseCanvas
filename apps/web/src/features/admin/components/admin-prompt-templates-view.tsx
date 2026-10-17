@@ -100,8 +100,8 @@ export function AdminPromptTemplatesView() {
       toast.push({ variant: 'success', title: '模板已创建' })
       await queryClient.invalidateQueries({ queryKey: ['admin', 'prompt-templates'] })
     },
-    onError: (err: any) => {
-      setActionError(err.message || '创建模板失败')
+    onError: (err: unknown) => {
+      setActionError(err instanceof Error ? err.message : '创建模板失败')
     },
   })
 

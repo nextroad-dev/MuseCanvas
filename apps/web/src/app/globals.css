@@ -56,7 +56,7 @@
 
   /* --- Text --- */
   --color-foreground: #1a1a18;
-  --color-muted-foreground: #666660;
+  --color-muted-foreground: #62625c;
   --color-decorative-muted: #999993;
   --color-foreground-inverse: #f7f7f3;
   /* Legible text on a solid semantic fill (WCAG-checked pairings). */
@@ -116,6 +116,12 @@
   --color-neutral-soft: #e9e9e1;
   --color-positive: #166534;
   --color-negative: #b91c1c;
+
+  /* Data visualization: bar/pie chart series. Kept distinct from semantic
+     status so a chart can use neutral ink for the positive series and a
+     reserved coral for the negative/failure series without implying UI state. */
+  --color-chart-positive: #1a1a18;
+  --color-chart-negative: #e06c53;
 
   /* Scrim / media backdrop (combine with --opacity-overlay) */
   --color-overlay: #1a1a18;
@@ -362,7 +368,7 @@ body {
 
     /* Text */
     --color-foreground: #e5e5dd;
-    --color-muted-foreground: #a0a098;
+    --color-muted-foreground: #adada5;
     --color-decorative-muted: #6a6a62;
     --color-foreground-inverse: #1a1a18;
     --color-on-primary: #1a1a18;
@@ -421,6 +427,10 @@ body {
     --color-neutral-soft: #2e2e2a;
     --color-positive: #4ade80;
     --color-negative: #f87171;
+
+    /* Data visualization dark variants: brighter so they read on dark surfaces. */
+    --color-chart-positive: #e5e5dd;
+    --color-chart-negative: #ff8a70;
 
     --color-overlay: #0c0c0b;
 

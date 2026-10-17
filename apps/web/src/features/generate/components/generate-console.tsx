@@ -7,7 +7,6 @@ import {
   useState } from 'react'
 import { useRouter,
   useSearchParams } from 'next/navigation'
-import { ClockIcon, PlusIcon } from '@phosphor-icons/react'
 import { isCanvasUuid } from '@musecanvas/contracts'
 import type { CanvasAgentPendingJobDto } from '@musecanvas/contracts'
 import { useGenerateUiStore } from '@/shared/stores/generate-ui-store'
@@ -16,6 +15,7 @@ import { useModelsQuery } from '@/shared/hooks/useModels'
 import { useJobsQuery,
   useCancelJob,
   useRetryJob } from '@/shared/hooks/useJobs'
+import { useAccountQuery } from '@/shared/hooks/useAccount'
 import {
   buildGenerationInputs,
   inputPlanViolations,
@@ -28,8 +28,7 @@ import {
 import { clearReferenceImages,
   reconcileStagedRoles } from '@/shared/lib/reference-upload'
 import { GENERATE_ROUTE } from '@/shared/lib/app-routes'
-import { Alert, Button, Dialog, PageHeader } from '@/shared/components/ui'
-import { ContentFrame } from '@/shared/components/content-frame'
+import { Alert, Button, Dialog } from '@/shared/components/ui'
 import { MediaFrame } from '@/shared/components/media-frame'
 import { isJobActive } from '@/shared/lib/job-status'
 import { resolveActiveModel } from '@/shared/lib/model-capabilities'
@@ -134,6 +133,7 @@ export function GenerateConsole() {
 
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { data: currentUser } = useAccountQuery()
 
   const {
     data: models,
@@ -523,56 +523,39 @@ export function GenerateConsole() {
     if (editTarget) setEditTarget(null)
   }
 
+  const conversationTitle = canvasDetail.data?.title || '未命名画布'
+
   return (
-    <ContentFrame role="region" aria-label="创作台" className="motion-page-enter flex min-h-0 flex-1 flex-col gap-6 py-6 md:py-8">
-      <PageHeader
-        title="创作工作台"
-        description="与 Agent 对话规划创作，确认后执行；既有任务可查看与复用。"
-        className="shrink-0"
-        actions={
-          <>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setTasksOpen(true)}
-              icon={<ClockIcon weight="bold" aria-hidden="true" />}
-            >
-              既有任务{activeJobCount > 0 ? ` · ${activeJobCount} 运行中` : ''}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              loading={createCanvas.isPending}
-              onClick={() => void handleNewConversation()}
-              icon={<PlusIcon weight="bold" aria-hidden="true" />}
-            >
-              新建对话
-            </Button>
-          </>
-        }
+    <div role="region" aria-label="创作台" className="motion-page-enter flex h-full min-h-0 flex-1 overflow-hidden">
+      <ConversationSidebar
+        items={flattenCanvasPages(canvasesQuery.data?.pages)}
+        currentCanvasId={agentCanvasId}
+        loading={canvasesQuery.isLoading}
+        error={canvasesQuery.error}
+        hasMore={Boolean(canvasesQuery.hasNextPage)}
+        onLoadMore={() => void canvasesQuery.fetchNextPage()}
+        onSelect={handleSelectConversation}
+        onCreate={() => void handleNewConversation()}
+        creating={createCanvas.isPending}
+        open={agentDrawerOpen}
+        onClose={() => setAgentDrawerOpen(false)}
+        user={currentUser ?? null}
       />
-      <section aria-label="Agent 创作对话" className="flex min-h-0 flex-1 flex-col gap-6 lg:flex-row lg:gap-0">
-        <ConversationSidebar
-          items={flattenCanvasPages(canvasesQuery.data?.pages)}
-          currentCanvasId={agentCanvasId}
-          loading={canvasesQuery.isLoading}
-          error={canvasesQuery.error}
-          hasMore={Boolean(canvasesQuery.hasNextPage)}
-          onLoadMore={() => void canvasesQuery.fetchNextPage()}
-          onSelect={handleSelectConversation}
-          onCreate={() => void handleNewConversation()}
-          creating={createCanvas.isPending}
-          open={agentDrawerOpen}
-          onClose={() => setAgentDrawerOpen(false)}
-        />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:pl-6">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <h2 className="text-module text-foreground">Agent 创作</h2>
-            <Button variant="secondary" size="sm" className="lg:hidden" onClick={() => setAgentDrawerOpen(true)}>对话列表</Button>
-            {agentCanvasId
-              ? <span className="min-w-0 truncate text-xs text-muted-foreground">{canvasDetail.data?.title ?? '未命名画布'}</span>
-              : <span className="text-xs text-muted-foreground">首次发送消息时会创建对话</span>}
-          </div>
+
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
+        <header className="flex shrink-0 items-baseline justify-between gap-3 px-8 pt-6 pb-2">
+          <h1 className="text-subtitle font-medium text-foreground">{conversationTitle}</h1>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="lg:hidden"
+            onClick={() => setTasksOpen(true)}
+          >
+            任务{activeJobCount > 0 ? ` · ${activeJobCount}` : ''}
+          </Button>
+        </header>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-8 pb-80">
           {agent.status.isError ? (
             <Alert tone="warning" title="无法获取 Agent 状态">历史、图库与下载仍可使用；请稍后重试。</Alert>
           ) : agent.availability.notice ? (
@@ -618,7 +601,11 @@ export function GenerateConsole() {
             结果完成后继续规划（再次调用语言模型）
           </label>
           {agentNotice ? <Alert tone="warning">{agentNotice}</Alert> : null}
+        </div>
+
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-8 pb-6">
           <AgentComposer
+            className="pointer-events-auto w-full max-w-2xl"
             draft={agentDraft}
             onDraftChange={setAgentDraft}
             imageModels={sortedImageModels}
@@ -645,14 +632,17 @@ export function GenerateConsole() {
             onRemoveEditSource={() => setAgentDraft((previous) => ({ ...previous, editSource: null, intent: 'generate' }))}
           />
         </div>
-        <aside aria-label="任务" className="flex min-h-0 w-full shrink-0 flex-col gap-4 lg:w-80 lg:border-l lg:border-border lg:pl-6">
+      </main>
+
+      <aside aria-label="任务" className="hidden min-h-0 w-[var(--layout-sidebar)] shrink-0 flex-col border-l border-border bg-surface lg:flex">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-4">
           <ActiveJobsBoard
             {...boardProps}
             variant="rail"
             open={activeBoardOpen}
             onToggle={setActiveBoardOpen}
           />
-          <section aria-label="最近完成" className="flex min-h-0 flex-col gap-2 px-2 pb-2">
+          <section aria-label="最近完成" className="flex min-h-0 flex-col gap-2 px-4 pb-2 pt-4">
             <h2 className="text-sm font-medium text-foreground">最近完成</h2>
             {recentCompleted.length === 0 ? (
               <p className="py-2 text-xs text-muted-foreground">
@@ -686,8 +676,18 @@ export function GenerateConsole() {
               </ul>
             )}
           </section>
-        </aside>
-      </section>
+        </div>
+        <div className="border-t border-border px-4 py-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            fullWidth
+            onClick={() => setTasksOpen(true)}
+          >
+            查看全部任务{activeJobCount > 0 ? ` · ${activeJobCount} 运行中` : ''}
+          </Button>
+        </div>
+      </aside>
 
       {/* 既有任务: the unique list of persisted jobs. Old rows are never dressed up as
           Agent history; they can be viewed or reused into the draft, never re-run. */}
@@ -729,6 +729,6 @@ export function GenerateConsole() {
           closeResult()
         }}
       />
-    </ContentFrame>
+    </div>
   )
 }

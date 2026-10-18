@@ -161,12 +161,24 @@ function withTimeout<T>(work: Promise<T>, timeoutMs: number, code: string): Prom
   })
 }
 
+export type AssetSigner = (objectKey: string) => Promise<string>
+
+/** Request-local only: settings and SDK client are shared, signed URLs are not
+ * cached across requests, users, or a credential/configuration change. */
+export function createAssetSigner(explicit?: StorageExplicitConfig): AssetSigner {
+  let initialized: Promise<{ cfg: StorageEffective; client: S3Client }> | undefined
+  return async objectKey => {
+    initialized ??= effectiveStorage(explicit).then(cfg => ({
+      cfg,
+      client: storageClient(cfg.publicEndpoint || cfg.endpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey),
+    }))
+    const { cfg, client } = await initialized
+    return getSignedUrl(client, new GetObjectCommand({ Bucket: cfg.bucket, Key: objectKey }), { expiresIn: cfg.signedUrlTtlSeconds })
+  }
+}
+
 export async function signedAssetUrl(objectKey: string, explicit?: StorageExplicitConfig): Promise<string> {
-  const cfg = await effectiveStorage(explicit)
-  const client = storageClient(cfg.publicEndpoint || cfg.endpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
-  return getSignedUrl(client, new GetObjectCommand({ Bucket: cfg.bucket, Key: objectKey }), {
-    expiresIn: cfg.signedUrlTtlSeconds,
-  })
+  return createAssetSigner(explicit)(objectKey)
 }
 
 export async function createUploadPresignedPost(

@@ -1,8 +1,34 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import test from 'node:test'
+import { mock, test } from 'node:test'
 import { S3Client } from '@aws-sdk/client-s3'
-import { putReservedImageMask } from './services'
+import { db } from '@musecanvas/database'
+import { createAssetSigner, putReservedImageMask } from './services'
+import { invalidateRuntimeSettings } from '../modules/settings/runtime'
+
+test('request-local signer loads settings once and retains only its own configuration snapshot', async () => {
+  const saved = process.env.S3_PUBLIC_ENDPOINT
+  const query = mock.method(db(), 'query', async (sql: string) => ({ rows: sql.includes('SELECT config_revision') ? [{ config_revision: 1 }] : [] }))
+  invalidateRuntimeSettings()
+  process.env.S3_PUBLIC_ENDPOINT = 'https://old.example.invalid'
+  const explicit = { bucket: 'synthetic', region: 'synthetic', accessKeyId: 'synthetic', secretAccessKey: 'synthetic' }
+  try {
+    const first = createAssetSigner(explicit)
+    assert.equal(query.mock.callCount(), 0, 'an unused signer performs no work')
+    const urls = await Promise.all(Array.from({ length: 30 }, (_, index) => first(`object-${index}`)))
+    assert.equal(query.mock.callCount(), 5)
+    assert.ok(urls.every(url => new URL(url).hostname === 'old.example.invalid'))
+    process.env.S3_PUBLIC_ENDPOINT = 'https://new.example.invalid'
+    invalidateRuntimeSettings()
+    assert.equal(new URL(await first('same-request')).hostname, 'old.example.invalid')
+    assert.equal(new URL(await createAssetSigner(explicit)('next-request')).hostname, 'new.example.invalid')
+    assert.equal(query.mock.callCount(), 10)
+  } finally {
+    query.mock.restore(); invalidateRuntimeSettings()
+    if (saved === undefined) delete process.env.S3_PUBLIC_ENDPOINT
+    else process.env.S3_PUBLIC_ENDPOINT = saved
+  }
+})
 
 test('reserved mask SDK request sends If-None-Match star to a local fake S3 only', async () => {
   let conditional: string | undefined

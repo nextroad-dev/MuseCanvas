@@ -1,4 +1,4 @@
-import { signedAssetUrl } from '../../shared/services'
+import { createAssetSigner, type AssetSigner } from '../../shared/services'
 
 /**
  * Gallery row → the shape `apps/web` renders.
@@ -7,15 +7,15 @@ import { signedAssetUrl } from '../../shared/services'
  * the only place that presigns three objects per row, and the reuse below is a
  * cost decision, not an aesthetic one.
  */
-export async function libraryAssetDto(row: Record<string, unknown>) {
+export async function libraryAssetDto(row: Record<string, unknown>, sign: AssetSigner = createAssetSigner()) {
   const mediaKind = (row.media_kind as string) || 'image'
-  const url = await signedAssetUrl(row.object_key as string)
+  const url = await sign(row.object_key as string)
   const thumbnailKey = (row.thumbnail_object_key as string) || undefined
   const posterKey = (row.poster_object_key as string) || undefined
-  const thumbnailUrl = thumbnailKey ? await signedAssetUrl(thumbnailKey) : undefined
+  const thumbnailUrl = thumbnailKey ? await sign(thumbnailKey) : undefined
   // A video's poster and its gallery preview ARE the same object, so reuse
   // the signature instead of presigning a second time.
-  const posterUrl = posterKey ? (posterKey === thumbnailKey ? thumbnailUrl : await signedAssetUrl(posterKey)) : undefined
+  const posterUrl = posterKey ? (posterKey === thumbnailKey ? thumbnailUrl : await sign(posterKey)) : undefined
   return {
     id: row.id,
     mediaKind,

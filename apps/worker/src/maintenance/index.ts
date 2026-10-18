@@ -15,7 +15,7 @@ const CANCEL_SCAN_LIMIT = 50
  */
 async function deleteStorageObject(objectKey: string): Promise<void> {
   const { s3, bucket } = await getStorageClient()
-  await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }))
+  await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }), { abortSignal: AbortSignal.timeout(10_000) })
 }
 
 async function recoverExpiredLeases() {
@@ -83,32 +83,51 @@ async function handleCancellations() {
   }
 }
 
-export async function maintenance() {
+export async function scheduleMaintenance() {
   await dispatchOutbox()
   await recoverExpiredLeases()
   await dispatchDueProviderRuns()
   await handleCancellations()
+}
+
+/** Cleanup has a separate cadence and a bounded storage budget. It never gates dispatch. */
+export async function cleanupMaintenance(options: { deleteObject?: (key: string) => Promise<void>; now?: () => number; budgetMs?: number } = {}) {
+  const now = options.now ?? Date.now
+  const deleteObject = options.deleteObject ?? deleteStorageObject
+  const deadline = now() + (options.budgetMs ?? 15_000)
+  const exhausted = () => now() >= deadline
   const deletions = await db().query('SELECT id,user_id FROM deletion_jobs WHERE completed_at IS NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED')
   for (const deletion of deletions.rows) {
+    if (exhausted()) return
     try {
-      const assets = await db().query('SELECT id,object_key FROM assets WHERE created_by=$1 AND deleted_at IS NULL', [deletion.user_id])
-      for (const asset of assets.rows) await deleteStorageObject(asset.object_key)
-      const inputImages = await db().query('SELECT id,object_key FROM generation_input_images WHERE created_by=$1 AND object_deleted_at IS NULL', [deletion.user_id])
+      const assets = await db().query('SELECT id,object_key,thumbnail_object_key,poster_object_key FROM assets WHERE created_by=$1 AND deleted_at IS NULL ORDER BY id LIMIT 50', [deletion.user_id])
+      for (const asset of assets.rows) {
+        if (exhausted()) return
+        for (const key of new Set([asset.object_key, asset.thumbnail_object_key, asset.poster_object_key].filter(Boolean))) {
+          await deleteObject(String(key))
+        }
+        await db().query('UPDATE assets SET deleted_at=COALESCE(deleted_at,now()),prompt=NULL WHERE id=$1 AND created_by=$2', [asset.id, deletion.user_id])
+      }
+      const inputImages = await db().query('SELECT id,object_key FROM generation_input_images WHERE created_by=$1 AND object_deleted_at IS NULL ORDER BY id LIMIT 50', [deletion.user_id])
       for (const img of inputImages.rows) {
-        try {
-          await deleteStorageObject(img.object_key)
-        } catch (error) {
-          console.error('input image object delete failed', { objectKey: img.object_key, code: error instanceof Error ? error.name : 'DELETE_FAILED' })
-        }
+        if (exhausted()) return
+        await deleteObject(img.object_key)
+        await db().query("UPDATE generation_input_images SET object_deleted_at=now(),status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE id=$1 AND created_by=$2", [img.id, deletion.user_id])
       }
-      const mediaUploads = await db().query('SELECT id,object_key FROM media_uploads WHERE created_by=$1 AND object_deleted_at IS NULL', [deletion.user_id]).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
+      const mediaUploads = await db().query('SELECT id,object_key FROM media_uploads WHERE created_by=$1 AND object_deleted_at IS NULL ORDER BY id LIMIT 50', [deletion.user_id])
       for (const upload of mediaUploads.rows) {
-        try {
-          await deleteStorageObject(upload.object_key)
-        } catch (error) {
-          console.error('media upload object delete failed', { objectKey: upload.object_key, code: error instanceof Error ? error.name : 'DELETE_FAILED' })
-        }
+        if (exhausted()) return
+        await deleteObject(upload.object_key)
+        await db().query("UPDATE media_uploads SET object_deleted_at=now(),status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE id=$1 AND created_by=$2", [upload.id, deletion.user_id])
       }
+      // Confirm an empty sweep before marking the account complete. Each object
+      // marker above survives a restart, so large accounts make bounded progress.
+      if (assets.rows.length || inputImages.rows.length || mediaUploads.rows.length) continue
+      const pendingObjects = await db().query(
+        'SELECT 1 FROM asset_deletion_jobs d JOIN assets a ON a.id=d.asset_id WHERE a.created_by=$1 AND d.completed_at IS NULL LIMIT 1',
+        [deletion.user_id],
+      )
+      if (pendingObjects.rows.length) continue
       await transaction(async client => {
         await purgeCanvasContentForActor(client, String(deletion.user_id))
         await client.query('UPDATE assets SET deleted_at=COALESCE(deleted_at,now()),prompt=NULL WHERE created_by=$1', [deletion.user_id])
@@ -125,8 +144,9 @@ export async function maintenance() {
   }
   const assetDeletions = await db().query('SELECT id,object_key FROM asset_deletion_jobs WHERE completed_at IS NULL ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED')
   for (const deletion of assetDeletions.rows) {
+    if (exhausted()) return
     try {
-      await deleteStorageObject(deletion.object_key)
+      await deleteObject(deletion.object_key)
       await db().query('UPDATE asset_deletion_jobs SET completed_at=now(),last_error_code=NULL WHERE id=$1', [deletion.id])
     } catch {
       await db().query("UPDATE asset_deletion_jobs SET attempts=attempts+1,last_error_code='CLEANUP_FAILED' WHERE id=$1", [deletion.id])
@@ -138,8 +158,9 @@ export async function maintenance() {
     "SELECT id,object_key FROM generation_input_images WHERE status IN ('pending','ready') AND expires_at < now() AND object_deleted_at IS NULL LIMIT 50",
   )
   for (const item of expiredInputs.rows) {
+    if (exhausted()) return
     try {
-      await deleteStorageObject(item.object_key)
+      await deleteObject(item.object_key)
       await db().query(
         "UPDATE generation_input_images SET status='deleted',deleted_at=COALESCE(deleted_at,now()),object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],
@@ -153,8 +174,9 @@ export async function maintenance() {
     "SELECT id,object_key FROM media_uploads WHERE status IN ('pending','ready') AND expires_at < now() AND object_deleted_at IS NULL LIMIT 50",
   ).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
   for (const item of expiredUploads.rows) {
+    if (exhausted()) return
     try {
-      await deleteStorageObject(String(item.object_key))
+      await deleteObject(String(item.object_key))
       await db().query(
         "UPDATE media_uploads SET status='deleted',deleted_at=COALESCE(deleted_at,now()),object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],
@@ -178,8 +200,9 @@ export async function maintenance() {
     [uploadSignTtlSeconds],
   )
   for (const item of softDeletedInputs.rows) {
+    if (exhausted()) return
     try {
-      await deleteStorageObject(item.object_key)
+      await deleteObject(item.object_key)
       await db().query(
         "UPDATE generation_input_images SET object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],
@@ -199,8 +222,9 @@ export async function maintenance() {
     [uploadSignTtlSeconds],
   ).catch(() => ({ rows: [] as Array<{ id: string; object_key: string }> }))
   for (const item of softDeletedUploads.rows) {
+    if (exhausted()) return
     try {
-      await deleteStorageObject(String(item.object_key))
+      await deleteObject(String(item.object_key))
       await db().query(
         "UPDATE media_uploads SET object_deleted_at=now(),updated_at=now() WHERE id=$1",
         [item.id],
@@ -209,4 +233,10 @@ export async function maintenance() {
       // retried on next maintenance run
     }
   }
+}
+
+/** Compatibility entry for callers that explicitly request one complete sweep. */
+export async function maintenance() {
+  await scheduleMaintenance()
+  await cleanupMaintenance()
 }

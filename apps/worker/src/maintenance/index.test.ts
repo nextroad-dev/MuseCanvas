@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import type pg from 'pg'
 import { db } from '@musecanvas/database'
-import { maintenance } from './index'
+import { cleanupMaintenance, maintenance, scheduleMaintenance } from './index'
 
 const actorId = '11111111-1111-4111-8111-111111111111'
 const deletionId = '22222222-2222-4222-8222-222222222222'
@@ -94,4 +94,55 @@ test('media cleanup failure rolls back, records retry, and completes on a later 
   assert.equal(state.attempts, 1)
   assert.equal(state.releases, 2)
   assert.equal(state.calls.filter(call => call.sql === 'COMMIT').length, 1)
+})
+
+test('bounded account cleanup persists progress and does not block the dispatch scheduler', async t => {
+  const calls: string[] = []
+  t.mock.method(db(), 'query', async (sql: string) => {
+    calls.push(sql)
+    if (sql.startsWith('SELECT id,user_id FROM deletion_jobs')) return { rows: [{ id: deletionId, user_id: actorId }] }
+    if (sql.startsWith('SELECT id,object_key,thumbnail_object_key')) {
+      assert.match(sql, /LIMIT 50/)
+      return { rows: [
+        { id: 'asset-1', object_key: 'original', thumbnail_object_key: 'preview', poster_object_key: 'preview' },
+        { id: 'asset-2', object_key: 'later' },
+      ] }
+    }
+    return { rows: [] }
+  })
+  let release!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  let time = 0
+  const removed: string[] = []
+  const cleanup = cleanupMaintenance({ now: () => time, budgetMs: 10, deleteObject: async key => {
+    removed.push(key)
+    if (key === 'original') await blocked
+    if (key === 'preview') time = 10
+  } })
+  // A hung S3 request must not prevent an independent scheduling tick.
+  await scheduleMaintenance()
+  assert.ok(calls.some(sql => sql.includes('WITH ready')))
+  release()
+  await cleanup
+  assert.deepEqual(removed, ['original', 'preview'], 'poster/thumbnail aliases are deleted only once')
+  assert.equal(calls.filter(sql => sql.startsWith('UPDATE assets SET deleted_at')).length, 1)
+  assert.equal(calls.some(sql => sql.startsWith('UPDATE deletion_jobs SET completed_at')), false)
+})
+
+test('account completion waits for object deletion jobs of already soft-deleted assets', async t => {
+  const calls: string[] = []
+  t.mock.method(db(), 'connect', async () => assert.fail('account completion transaction must wait'))
+  t.mock.method(db(), 'query', async (sql: string, values: unknown[]) => {
+    calls.push(sql)
+    if (sql.startsWith('SELECT id,user_id FROM deletion_jobs')) return { rows: [{ id: deletionId, user_id: actorId }] }
+    if (sql.startsWith('SELECT 1 FROM asset_deletion_jobs')) {
+      assert.deepEqual(values, [actorId])
+      assert.doesNotMatch(sql, /a.deleted_at IS NULL/)
+      return { rows: [{ pending: 1 }] }
+    }
+    return { rows: [] }
+  })
+  await cleanupMaintenance()
+  assert.ok(calls.some(sql => sql.startsWith('SELECT 1 FROM asset_deletion_jobs')))
+  assert.equal(calls.some(sql => sql.startsWith('UPDATE deletion_jobs SET completed_at')), false)
 })

@@ -7,6 +7,7 @@ name: musecanvas
 
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: musecanvas
@@ -15,11 +16,13 @@ services:
     volumes: [postgres_data:/var/lib/postgresql/data, postgres_socket:/var/run/postgresql]
     healthcheck: { test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U musecanvas -d musecanvas"], interval: 3s, timeout: 3s, retries: 20 }
   redis:
+    restart: unless-stopped
     image: redis:7.4-alpine
     command: [redis-server, --appendonly, "yes"]
     volumes: [redis_data:/data]
     healthcheck: { test: [CMD, redis-cli, ping], interval: 3s, timeout: 3s, retries: 20 }
   minio:
+    restart: unless-stopped
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address :9001
     environment:
@@ -34,9 +37,11 @@ services:
     entrypoint: [sh, -c, "until mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do sleep 2; done; mc mb --ignore-existing local/musecanvas"]
     environment: { MINIO_ROOT_USER: "${MINIO_ROOT_USER:-musecanvas}", MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}" }
   mailpit:
+    restart: unless-stopped
     image: axllent/mailpit:v1.27
     ports: ["8025:8025"]
   api:
+    restart: unless-stopped
     build: { context: ., dockerfile: deploy/docker/api.Dockerfile }
     # Published for local `web dev` rewrites (API_ORIGIN=http://localhost:3001).
     ports: ["127.0.0.1:3001:3001"]
@@ -47,6 +52,19 @@ services:
       db-migrate: { condition: service_completed_successfully }
     environment: &backend-env
       NODE_ENV: production
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-12}
+      DATABASE_CONNECTION_TIMEOUT_MS: ${DATABASE_CONNECTION_TIMEOUT_MS:-5000}
+      DATABASE_IDLE_TIMEOUT_MS: ${DATABASE_IDLE_TIMEOUT_MS:-30000}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_LOCK_TIMEOUT_MS: ${DATABASE_LOCK_TIMEOUT_MS:-5000}
+      DATABASE_IDLE_TRANSACTION_TIMEOUT_MS: ${DATABASE_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
+      REDIS_CONNECT_TIMEOUT_MS: ${REDIS_CONNECT_TIMEOUT_MS:-1000}
+      REDIS_COMMAND_TIMEOUT_MS: ${REDIS_COMMAND_TIMEOUT_MS:-1000}
+      WORKER_REDIS_COMMAND_TIMEOUT_MS: ${WORKER_REDIS_COMMAND_TIMEOUT_MS:-5000}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      WORKER_STORAGE_TIMEOUT_MS: ${WORKER_STORAGE_TIMEOUT_MS:-60000}
+      STREAM_RETENTION_SECONDS: ${STREAM_RETENTION_SECONDS:-604800}
+      STREAM_TRIM_BATCH_SIZE: ${STREAM_TRIM_BATCH_SIZE:-1000}
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
       REDIS_URL: redis://redis:6379
       APP_MASTER_KEY: ${APP_MASTER_KEY}
@@ -89,15 +107,25 @@ services:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER:-musecanvas}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
   worker:
+    restart: unless-stopped
     build: { context: ., dockerfile: deploy/docker/worker.Dockerfile }
     depends_on: { api: { condition: service_healthy }, db-migrate: { condition: service_completed_successfully } }
     environment: *backend-env
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3010/health', {signal: AbortSignal.timeout(2000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 120s
+    stop_grace_period: 30s
   web:
+    restart: unless-stopped
     build: { context: ., dockerfile: deploy/docker/web.Dockerfile }
     depends_on: { api: { condition: service_healthy } }
     environment: { INTERNAL_API_BASE_URL: http://api:3001 }
     healthcheck: { test: [CMD, wget, -qO-, http://127.0.0.1:3000/], interval: 10s, timeout: 3s, retries: 30, start_period: 20s }
   nginx:
+    restart: unless-stopped
     build: { context: ., dockerfile: deploy/docker/nginx.Dockerfile }
     depends_on: { api: { condition: service_healthy }, web: { condition: service_healthy } }
     ports: ["8080:80"]

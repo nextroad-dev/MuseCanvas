@@ -181,7 +181,15 @@ for (const [name, id] of [['admin-users-view', 'admin-create-invitation-form'], 
 
 test('media models surface existing descriptor validation without changing model enablement', () => {
   const text = read('admin-media-models-view')
-  assert.match(text, /validateModelCapabilities\(model.capabilities/)
+  const root = source('admin-media-models-view')
+  const validation = matching(root, (node) => ts.isCallExpression(node) && node.expression.getText() === 'validateModelCapabilities')
+  assert.equal(validation.length, 1)
+  const descriptor = validation[0].arguments[0]
+  assert.ok(ts.isBinaryExpression(descriptor) && descriptor.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+  assert.equal(descriptor.left.getText(), 'model.capabilities')
+  assert.deepEqual(descriptor.right.properties.map((prop) => prop.name.getText()), [
+    'modes', 'parameters', 'inputSlots', 'defaults', 'flags', 'crossFieldConstraints',
+  ])
   assert.match(text, /参数契约异常/)
   assert.match(text, /此页不自动修复或停用模型/)
   assert.match(text, /finding.message/)
@@ -189,6 +197,7 @@ test('media models surface existing descriptor validation without changing model
 
 test('panel tables and card grids use the admin track, not sidebar viewport breakpoints', () => {
   for (const name of ['admin-dashboard-view', 'admin-jobs-view', 'admin-users-view', 'admin-language-models-view', 'admin-media-models-view', 'admin-credential-table']) {
+    assert.ok(tags(source(name), 'AdminMobileRecords').length > 0, `${name} must keep a narrow-track presentation`)
     for (const table of tags(source(name), 'DataTable')) {
       assert.equal(attribute(table, 'cardClassName').initializer.text, 'hidden @min-[800px]/admin:block')
     }

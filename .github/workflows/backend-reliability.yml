@@ -1,0 +1,58 @@
+name: Backend reliability fixtures
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['apps/api/**', 'apps/worker/**', 'packages/database/**', 'tests/integration/backend-reliability*', 'deploy/**', '.github/workflows/backend-reliability.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U fixture -d postgres" --health-interval 3s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate all Compose variants with synthetic configuration
+        env:
+          POSTGRES_PASSWORD: fixture-only
+          APP_MASTER_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          MINIO_ROOT_PASSWORD: fixture-only-password
+        run: |
+          for file in deploy/compose.yaml deploy/compose.dev.yaml deploy/compose.prod.yaml deploy/compose.images.yaml; do
+            docker compose --project-directory . -f "$file" config --quiet
+          done
+      - name: Test real PostgreSQL and Redis behavior in disposable fixtures
+        env:
+          MUSECANVAS_OPTIMIZATION_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
+          MUSECANVAS_OPTIMIZATION_REDIS_URL: redis://127.0.0.1:6379/15
+        run: pnpm --filter @musecanvas/providers exec tsx --test "../../tests/integration/backend-reliability*.test.ts"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-backend-query-plans
+          path: .runtime/backend-benchmark.json
+          if-no-files-found: ignore

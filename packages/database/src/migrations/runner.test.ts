@@ -26,7 +26,7 @@ import {
 type HistoryRow = { version: string; name: string; checksum: string; kind: string }
 type Call = { sql: string; params?: unknown[] }
 
-function createFakeDb(init: { history?: HistoryRow[]; tables?: string[] } = {}) {
+function createFakeDb(init: { history?: HistoryRow[]; tables?: string[]; invalidIndex?: string } = {}) {
   const history: HistoryRow[] = (init.history ?? []).map(row => ({ ...row }))
   const tables = new Set<string>(init.tables ?? [])
   const markers: string[] = []
@@ -62,6 +62,9 @@ function createFakeDb(init: { history?: HistoryRow[]; tables?: string[] } = {}) 
       if (/CREATE TABLE IF NOT EXISTS schema_migrations/i.test(text)) return { rows: [] }
       if (/^SELECT version, checksum, kind FROM schema_migrations/i.test(text)) {
         return { rows: history.map(row => ({ ...row })) }
+      }
+      if (/FROM pg_index/i.test(text)) {
+        return { rows: [{ indisvalid: params?.[0] !== init.invalidIndex, indisready: true }] }
       }
       if (/to_regclass/i.test(text)) {
         const name = String(params?.[0] ?? '').replace(/^public\./, '')
@@ -109,6 +112,16 @@ function collect() {
 }
 
 const FIXTURE_DIR = new URL('../../testdata/migrations/', import.meta.url)
+
+test('an invalid concurrent index stops the run before IF NOT EXISTS can skip it', async () => {
+  const db = createFakeDb({ invalidIndex: 'public.assets_owner_active_created_idx' })
+  await assert.rejects(runMigrations({ pool: db.pool }), /concurrent index assets_owner_active_created_idx.*INVALID/)
+  assert.equal(db.history.some(row => row.version === '0036'), false)
+  assert.equal(db.calls.some(call => /CREATE INDEX CONCURRENTLY IF NOT EXISTS assets_owner_active_created_idx/.test(call.sql)), false)
+  assert.ok(db.calls.some(call => call.sql === 'SET statement_timeout = 0'))
+  assert.ok(db.calls.some(call => call.sql === 'SET idle_in_transaction_session_timeout = 0'))
+  assert.equal(db.released(), 1)
+})
 
 test('a fresh database applies every migration in order and records each one', async () => {
   const db = createFakeDb()

@@ -88,6 +88,7 @@ export async function runMigrations(options: MigrateOptions): Promise<MigrateRes
     await client.query(`SET application_name = '${APPLICATION_NAME}'`)
     // 0014's cursor over model_configs must not be killed by a server default.
     await client.query('SET statement_timeout = 0')
+    await client.query('SET idle_in_transaction_session_timeout = 0')
     await client.query(`SET lock_timeout = '${LOCK_TIMEOUT}'`)
 
     emit({ type: 'waiting' })
@@ -159,7 +160,9 @@ export async function runMigrations(options: MigrateOptions): Promise<MigrateRes
     } catch {
       /* the session ends with the connection, which releases the lock */
     }
-    client.release()
+    // Migration timeouts are deliberately broader than request budgets. Discard
+    // this dedicated session rather than returning its SET overrides to callers.
+    client.release(true)
   }
 }
 
@@ -217,10 +220,13 @@ async function apply(
   const elapsed = () => Date.now() - started
 
   if (!migration.transactional) {
+    const concurrentIndex = /CREATE\s+INDEX\s+CONCURRENTLY\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)/i.exec(migration.sql)?.[1]
+    if (concurrentIndex) await assertConcurrentIndexValid(client, concurrentIndex, false)
     // Its own implicit transaction, matching the historical standalone ALTER TYPE.
     // A crash between applying and recording is self-healing: the statement is
     // `IF NOT EXISTS`, so the retry re-runs it (a notice) and records it.
     await client.query(migration.sql)
+    if (concurrentIndex) await assertConcurrentIndexValid(client, concurrentIndex, true)
     await record(client, migration, kind, elapsed())
     return elapsed()
   }
@@ -243,6 +249,18 @@ async function apply(
     throw new Error(`migration ${migration.filename} failed${detail.code ? ` [${detail.code}]` : ''}: ${detail.message ?? String(error)}`)
   }
   return elapsed()
+}
+
+/** A cancelled concurrent build leaves an invalid index that IF NOT EXISTS skips. */
+async function assertConcurrentIndexValid(client: pg.PoolClient, name: string, required: boolean) {
+  const result = await client.query(
+    'SELECT i.indisvalid, i.indisready FROM pg_index i WHERE i.indexrelid = to_regclass($1)',
+    [`public.${name}`],
+  )
+  const index = result.rows[0]
+  if ((!index && required) || (index && (!index.indisvalid || !index.indisready))) {
+    throw new MigrationValidationError(`concurrent index ${name} is missing or INVALID; inspect it, then run DROP INDEX CONCURRENTLY IF EXISTS ${name} outside a transaction and retry the migration`)
+  }
 }
 
 async function record(

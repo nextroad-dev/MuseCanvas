@@ -27,6 +27,14 @@ interface CachedStorageClient {
 
 let cached: CachedStorageClient | null = null
 
+/** A storage outage must not hold a job slot forever while its lease renews. */
+export function storageOperationSignal(parent?: AbortSignal): AbortSignal {
+  const timeout = Number(process.env.WORKER_STORAGE_TIMEOUT_MS || 60_000)
+  if (!Number.isSafeInteger(timeout) || timeout < 1000 || timeout > 600_000) throw new Error('INVALID_STORAGE_TIMEOUT')
+  const deadline = AbortSignal.timeout(timeout)
+  return parent ? AbortSignal.any([parent, deadline]) : deadline
+}
+
 function destroy(client: S3Client): void {
   try {
     client.destroy()
@@ -84,23 +92,29 @@ export async function getStorageClient(): Promise<StorageClientHandle> {
  */
 export async function getStorageObject(key: string, maxBytes: number): Promise<Buffer> {
   const { s3, bucket } = await getStorageClient()
-  const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+  const signal = storageOperationSignal()
+  const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: signal })
   const body = response.Body
   if (!body) return Buffer.alloc(0)
   const chunks: Buffer[] = []
   let total = 0
-  for await (const chunk of body as AsyncIterable<Uint8Array>) {
-    total += chunk.byteLength
-    if (total > maxBytes) {
-      // Stop the transfer instead of buffering an oversized object, then let the
-      // caller decide: the backfill marks the row and moves on.
-      const stream = body as { destroy?: () => void }
-      if (typeof stream.destroy === 'function') stream.destroy()
-      throw new Error(`STORAGE_OBJECT_TOO_LARGE:${String(total)}`)
+  const stop = () => { (body as { destroy?: (error?: Error) => void }).destroy?.(new Error('STORAGE_TIMEOUT')) }
+  signal.addEventListener('abort', stop, { once: true })
+  try {
+    signal.throwIfAborted()
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
+      signal.throwIfAborted()
+      total += chunk.byteLength
+      if (total > maxBytes) {
+        // Stop the transfer instead of buffering an oversized object.
+        const stream = body as { destroy?: () => void }
+        stream.destroy?.()
+        throw new Error(`STORAGE_OBJECT_TOO_LARGE:${String(total)}`)
+      }
+      chunks.push(Buffer.from(chunk))
     }
-    chunks.push(Buffer.from(chunk))
-  }
-  return Buffer.concat(chunks)
+    return Buffer.concat(chunks)
+  } finally { signal.removeEventListener('abort', stop) }
 }
 
 /** Write one small object, mirroring the worker's checksum metadata convention. */
@@ -112,5 +126,5 @@ export async function putStorageObject(key: string, data: Buffer, contentType: s
     Body: data,
     ContentType: contentType,
     Metadata: { checksum: createHash('sha256').update(data).digest('hex') },
-  }))
+  }), { abortSignal: storageOperationSignal() })
 }

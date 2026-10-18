@@ -185,6 +185,8 @@ export async function getLatestProviderRunForJob(
 
 export interface UpdateProviderRunStateInput {
   runId: string
+  /** Worker writes must also fence against a replaced or expired lease. */
+  leaseToken?: string
   expectedStateRevision: number
   operationState?: ProviderRunOperationState
   remoteId?: string | null
@@ -265,10 +267,15 @@ export async function updateProviderRunState(
     }
   }
 
+  let leaseCondition = ''
+  if (input.leaseToken !== undefined) {
+    values.push(input.leaseToken)
+    leaseCondition = ` AND worker_lease_token = $${values.length} AND worker_lease_expires_at > now()`
+  }
   const query = `
     UPDATE provider_runs
     SET ${updates.join(', ')}
-    WHERE id = $1 AND state_revision = $2
+    WHERE id = $1 AND state_revision = $2${leaseCondition}
     RETURNING *
   `
   const res = await client.query(query, values)
@@ -316,6 +323,19 @@ export async function releaseWorkerLease(
     [runId, leaseToken],
   )
   return Boolean(res.rows[0])
+}
+
+/** Renewal cannot revive an expired lease, even when nobody has reclaimed it yet. */
+export async function renewWorkerLease(
+  client: pg.PoolClient | pg.Pool,
+  input: AcquireWorkerLeaseInput,
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE provider_runs SET worker_lease_expires_at=now()+($3*interval '1 second'),updated_at=now()
+     WHERE id=$1 AND worker_lease_token=$2 AND worker_lease_expires_at>now() RETURNING id`,
+    [input.runId, input.leaseToken, input.leaseDurationSeconds || 30],
+  )
+  return Boolean(result.rows[0])
 }
 
 export async function countActiveReservedRuns(

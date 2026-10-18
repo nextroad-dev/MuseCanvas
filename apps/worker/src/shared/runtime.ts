@@ -79,9 +79,13 @@ interface CacheEntry {
 const CACHE_TTL_MS = 5000
 
 let cache: CacheEntry | null = null
+let pending: Promise<CacheEntry> | null = null
+let cacheEpoch = 0
 
 export function invalidateRuntimeSettings(): void {
   cache = null
+  pending = null
+  cacheEpoch++
 }
 
 async function readConfigRevision(): Promise<number | null> {
@@ -281,26 +285,24 @@ async function loadPromptTemplates(): Promise<ResolvedPromptTemplates> {
 }
 
 async function ensureCache(): Promise<CacheEntry> {
-  const now = Date.now()
-  const revision = await readConfigRevision()
-  if (cache && now - cache.at < CACHE_TTL_MS) {
-    // Within TTL: serve unless a newer config revision is observable.
-    if (revision === null || revision === cache.configRevision) return cache
+  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache
+  if (pending) return pending
+  const epoch = cacheEpoch
+  const refresh = async (): Promise<CacheEntry> => {
+    const revision = await readConfigRevision()
+    const [storage, runtime, templates] = await Promise.all([
+      loadStorageSettings(), loadRuntimeSettings(), loadPromptTemplates(),
+    ])
+    const next = { configRevision: revision ?? -1, at: Date.now(), storage, runtime, templates }
+    // A local invalidate must not be undone by a refresh that started earlier.
+    if (epoch !== cacheEpoch) return ensureCache()
+    cache = next
+    return next
   }
-  const [storage, runtime, templates] = await Promise.all([
-    loadStorageSettings(),
-    loadRuntimeSettings(),
-    loadPromptTemplates(),
-  ])
-  const next: CacheEntry = {
-    configRevision: revision ?? cache?.configRevision ?? -1,
-    at: now,
-    storage,
-    runtime,
-    templates,
-  }
-  cache = next
-  return next
+  const work = refresh()
+  pending = work
+  try { return await work }
+  finally { if (pending === work) pending = null }
 }
 
 export async function resolveStorageSettings(): Promise<ResolvedStorageSettings> {

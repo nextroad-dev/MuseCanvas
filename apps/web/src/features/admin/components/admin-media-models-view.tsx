@@ -1,7 +1,7 @@
 'use client'
 
 import { adminPageActions, adminPageHeader, adminPageRoot } from '../lib/admin-layout'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { API_ENDPOINTS, validateModelCapabilities } from '@musecanvas/contracts'
 import type { MediaModelDefaultsDto } from '@musecanvas/contracts'
@@ -20,7 +20,7 @@ import { AdminMediaModelDefaults } from './admin-media-model-defaults'
 import { AdminQueryFeedback } from './admin-query-feedback'
 import { AdminActionErrors } from './admin-confirm-dialog'
 import { useAdminActions } from '../lib/use-admin-actions'
-import { AdminRecordDetailDialog, AdminRecordFields } from './admin-record-detail-dialog'
+import { AdminMobileRecords, AdminRecordDetailDialog, AdminRecordFields } from './admin-record-detail-dialog'
 import { PlusIcon as Plus, ArrowClockwiseIcon as RefreshCw, TrashIcon as Trash2 } from '@phosphor-icons/react'
 import {
   Alert,
@@ -62,6 +62,7 @@ const TAB_ITEMS = [
 
 export function AdminMediaModelsView() {
   const queryClient = useQueryClient()
+  const recordListRef = useRef<HTMLElement | null>(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [selectedPresetId, setSelectedPresetId] = useState('')
   const [selectedCredentialId, setSelectedCredentialId] = useState('')
@@ -349,7 +350,7 @@ export function AdminMediaModelsView() {
 
       <AdminMediaModelDefaults models={models} />
 
-      <section className="flex min-w-0 flex-col gap-4" aria-labelledby="media-models-heading">
+      <section ref={recordListRef} tabIndex={-1} className="flex min-w-0 flex-col gap-4" aria-labelledby="media-models-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <h2 id="media-models-heading" className="text-base font-bold text-foreground">
@@ -370,7 +371,24 @@ export function AdminMediaModelsView() {
           />
         </div>
 
-        <DataTable cardClassName="block" caption="图像与视频模型列表" columns={6}>
+        <AdminMobileRecords
+          records={visibleModels}
+          loading={modelsLoading}
+          error={modelsError && modelsData === undefined ? modelsQueryError?.message || '加载模型列表失败' : null}
+          onRetry={() => { void refetchModels() }}
+          emptyVariant={models.length === 0 ? 'first-use' : 'no-results'}
+          emptyTitle={models.length === 0 ? '还没有配置媒体模型' : `暂无${kindFilter === 'image' ? '图像' : '视频'}模型`}
+          empty={models.length === 0 ? '点击「创建媒体模型」开始配置。' : '切换到其他类型或创建新模型。'}
+          title={(model) => <>{model.displayName}{isModelDefault(model.id, defaultsData) && <Badge tone="neutral">默认</Badge>}</>}
+          status={(model) => <Badge tone={model.enabled ? 'success' : 'neutral'}>{model.enabled ? '已启用' : '已停用'}</Badge>}
+          summary={(model) => <>
+            <span className="font-mono">{model.vendorModelId || model.name || '—'}</span> · {MEDIA_KIND_LABEL[mediaKind(model)]} · 并发 {model.concurrencyLimit}
+            {(modelContractFindings.get(model.id)?.length ?? 0) > 0 && <Badge tone="danger">参数契约异常</Badge>}
+          </>}
+          onDetails={setDetailModel}
+        />
+
+        <DataTable cardClassName="hidden @min-[800px]/admin:block" caption="图像与视频模型列表" columns={6}>
           <TableHead>
             <TableHeadCell>模型</TableHeadCell>
             <TableHeadCell>类型</TableHeadCell>
@@ -608,6 +626,7 @@ export function AdminMediaModelsView() {
 
       <AdminRecordDetailDialog
         open={currentDetailModel !== null || deleteTarget !== null}
+        listFocusRef={recordListRef}
         onClose={() => {
           setDetailModel(null)
           setDeleteTarget(null)
@@ -629,8 +648,8 @@ export function AdminMediaModelsView() {
                   void actions
                     .run(target.id, target.displayName, () => deleteMutation.mutateAsync(target.id), '模型已删除', 'delete')
                     .then(() => {
-                      setDeleteTarget((current) => (current?.id === target.id ? null : current))
-                      setDetailModel((current) => (current?.id === target.id ? null : current))
+                      setDeleteTarget((current) => current?.id === target.id ? null : current)
+                      setDetailModel((current) => current?.id === target.id ? null : current)
                     })
                     .catch(() => {})
                 },

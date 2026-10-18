@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import Link from 'next/link'
@@ -10,7 +10,7 @@ import { requireAdminData } from '../lib/admin-query'
 import { AdminQueryFeedback } from './admin-query-feedback'
 import { AdminDefaultModelsCard } from './admin-default-models-card'
 import { AdminJobDetail } from './admin-job-detail'
-import { AdminRecordDetailDialog } from './admin-record-detail-dialog'
+import { AdminMobileRecords, AdminRecordDetailDialog } from './admin-record-detail-dialog'
 import { formatLocalizedDateTime } from '@/shared/lib/format'
 import { JobStatusBadge } from '@/shared/components/job-status-badge'
 import { adminPageActions, adminPageHeader, adminPageRoot } from '../lib/admin-layout'
@@ -135,6 +135,7 @@ function buildSevenDayPoints(metrics: DashboardMetrics | null | undefined): Dail
 }
 
 export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDashboardViewProps) {
+  const recordListRef = useRef<HTMLElement | null>(null)
   const [detailJob, setDetailJob] = useState<AdminJob | null>(null)
   const {
     data: metrics,
@@ -342,7 +343,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
       <AdminDefaultModelsCard />
 
       {/* Recent jobs */}
-      <section className="flex flex-col gap-4">
+      <section ref={recordListRef} tabIndex={-1} aria-label="最近任务列表" className="flex flex-col gap-4">
         <div className="flex items-center justify-between px-1">
           <h2 className="text-base font-bold text-foreground">最近任务</h2>
           <Link href="/admin/jobs" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
@@ -354,7 +355,21 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
           <AdminQueryFeedback error={jobsError} hasData label="最近任务" onRetry={() => refetchJobs()} />
         )}
 
-        <DataTable cardClassName="block" caption={`最近 ${RECENT_JOB_LIMIT} 条生成任务`} columns={5}>
+        <AdminMobileRecords
+          records={jobs ?? []}
+          loading={jobsPending}
+          error={isJobsError && jobs === undefined ? jobsError?.message || '加载最近任务失败' : null}
+          onRetry={() => { void refetchJobs() }}
+          emptyTitle="还没有生成任务"
+          empty="用户开始创作后，最近的任务会出现在这里。"
+          emptyAction={<Link href="/admin/jobs" className={buttonVariants({ variant: 'secondary' })}>查看全部任务</Link>}
+          title={(job) => job.modelName || '未知模型'}
+          status={(job) => <JobStatusBadge status={job.status} />}
+          summary={(job) => <><span className="font-mono">{job.id}</span> · {MEDIA_KIND_LABEL[adminJobMediaKind(job)]} · {formatLocalizedDateTime(job.createdAt)}</>}
+          onDetails={setDetailJob}
+        />
+
+        <DataTable cardClassName="hidden @min-[800px]/admin:block" caption={`最近 ${RECENT_JOB_LIMIT} 条生成任务`} columns={5}>
           <TableHead>
             <TableHeadCell>任务 ID</TableHeadCell>
             <TableHeadCell>类型</TableHeadCell>
@@ -422,7 +437,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
             )}
           </TableBody>
         </DataTable>
-        <AdminRecordDetailDialog open={detailJob !== null} onClose={() => setDetailJob(null)} title="最近任务详情">
+        <AdminRecordDetailDialog open={detailJob !== null} onClose={() => setDetailJob(null)} title="最近任务详情" listFocusRef={recordListRef}>
           {detailJob && <AdminJobDetail job={detailJob} />}
         </AdminRecordDetailDialog>
       </section>

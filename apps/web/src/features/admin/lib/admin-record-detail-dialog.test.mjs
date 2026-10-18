@@ -23,7 +23,7 @@ function attribute(node, name) {
   return node.attributes.properties.find((prop) => ts.isJsxAttribute(prop) && prop.name.getText() === name)
 }
 function calls(root, name) {
-  return matching(root, (node) => ts.isCallExpression(node) && node.expression.getText() === name)
+  return matching(root, (node) => ts.isCallExpression(node) && node.expression.getText().replace(/\s/g, '') === name)
 }
 function clears(root, setter) {
   return calls(root, setter).some((call) => call.arguments[0]?.kind === ts.SyntaxKind.NullKeyword)

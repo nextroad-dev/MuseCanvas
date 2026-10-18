@@ -10,6 +10,17 @@ import { limited } from '../../shared/redis'
 import { resolvePublicOrigin } from '../settings/runtime'
 import type { PublicContext } from '../../router/types'
 
+/** Independent budgets stop address rotation on one IP and IP rotation against
+ * one mailbox. Keep the original pair budget for compatibility. */
+export async function otpRequestLimited(email: string, ip: string, check = limited): Promise<boolean> {
+  const results = await Promise.all([
+    check(`otp:${email}:${ip}`, 5, 600),
+    check(`otp:email:${email}`, 5, 600),
+    check(`otp:ip:${ip}`, 30, 600),
+  ])
+  return results.some(Boolean)
+}
+
 /**
  * POST /api/auth/otp/request.
  *
@@ -21,7 +32,7 @@ export async function requestOtp(context: PublicContext) {
   if (!emailValid(input.email)) return fail('INVALID_INPUT', '邮箱格式不正确')
   const email = input.email.trim().toLowerCase()
   const ip = clientIpFromRequest(context.request)
-  if (await limited(`otp:${email}:${ip}`, 5, 600)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
+  if (await otpRequestLimited(email, ip)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
   const existing = await db().query('SELECT id,status,deleted_at FROM users WHERE lower(email)=$1 ORDER BY deleted_at NULLS FIRST LIMIT 1', [email])
   const account = existing.rows[0]
   if (account && (account.deleted_at || account.status !== 'active')) return fail('ACCOUNT_UNAVAILABLE', '账户当前不可用', 403)

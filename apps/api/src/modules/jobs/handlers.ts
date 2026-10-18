@@ -2,6 +2,7 @@ import { db, transaction } from '@musecanvas/database'
 import { fail, ok } from '../../shared/http'
 import { jobDto } from '../../shared/dto'
 import { limited } from '../../shared/redis'
+import { createAssetSigner } from '../../shared/services'
 import { loadJobInputs, loadSingleJobInputs, userJobSelect } from '../../shared/pagination'
 import { retryPreparation } from '../../generation/job-retry'
 import { validateRetryRequest, type RetryRejection } from '../../generation/retry-validation'
@@ -22,8 +23,9 @@ export async function listJobs(context: AuthedContext) {
     group.push(output)
     outputsByJobId.set(jobId, group)
   }
+  const sign = createAssetSigner()
   return ok({
-    items: await Promise.all(result.rows.map(row => jobDto(row, outputsByJobId.get(row.id as string) || [], inputsByJobId[row.id as string] || []))),
+    items: await Promise.all(result.rows.map(row => jobDto(row, outputsByJobId.get(row.id as string) || [], inputsByJobId[row.id as string] || [], sign))),
     total: result.rowCount,
     hasMore: false,
   })

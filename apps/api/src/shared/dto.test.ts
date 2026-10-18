@@ -6,7 +6,7 @@ import { invalidateRuntimeSettings, resolveStorageSettings } from '../modules/se
 
 const job = { id: 'job-fixture', created_at: new Date('2026-10-18T00:00:00Z') }
 
-test('job input aliases share one signature and one revision query per stored input', async () => {
+test('job input aliases share one signature without per-input revision queries on a warm cache', async () => {
   const environment = {
     S3_ENDPOINT: 'https://storage.example.invalid',
     S3_PUBLIC_ENDPOINT: 'https://media.example.invalid',
@@ -35,7 +35,7 @@ test('job input aliases share one signature and one revision query per stored in
       { id: 'asset', asset_id: 'asset', object_key: 'private/asset.png', mime_type: 'image/png', width: 60, height: 40, size_bytes: 21, position: 1 },
     ]
     const result = await jobDto(job, [], inputs)
-    assert.equal(revisionQueries, inputs.length, 'previously each input resolved settings three times')
+    assert.equal(revisionQueries, 0, 'request-local signing reuses the warm configuration snapshot')
     assert.equal(result.inputs.length, 2)
     for (const [index, input] of result.inputs.entries()) {
       assert.equal(input.imageUrl, input.url)

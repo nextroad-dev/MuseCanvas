@@ -88,11 +88,20 @@ interface SettingsCache {
 }
 
 const CACHE_TTL_MS = 30_000
+// Other API instances observe saved settings within five seconds; local writes
+// call invalidateRuntimeSettings and refresh immediately.
+const REVISION_POLL_MS = 5000
 const SYNTHETIC_UPDATED_AT = new Date(0).toISOString()
 let cache: SettingsCache | null = null
+let revisionCheckedAt = 0
+let pending: Promise<SettingsCache> | null = null
+let epoch = 0
 
 export function invalidateRuntimeSettings(): void {
   cache = null
+  revisionCheckedAt = 0
+  pending = null
+  epoch++
 }
 
 function env(name: string): string | undefined {
@@ -266,11 +275,27 @@ async function loadRuntime(): Promise<ResolvedRuntimeSettings> {
 }
 
 async function cached(): Promise<SettingsCache> {
-  const revision = await currentRevision()
-  if (cache && cache.revision === revision && Date.now() - cache.loadedAt < CACHE_TTL_MS) return cache
-  const [site, smtp, storage, runtime] = await Promise.all([loadSite(), loadSmtp(), loadStorage(), loadRuntime()])
-  cache = { revision, loadedAt: Date.now(), site, smtp, storage, runtime }
-  return cache
+  if (cache && Date.now() - revisionCheckedAt < REVISION_POLL_MS && Date.now() - cache.loadedAt < CACHE_TTL_MS) return cache
+  if (pending) return pending
+  const generation = epoch
+  const refresh = async (): Promise<SettingsCache> => {
+    const revision = await currentRevision()
+    let result = cache
+    if (!result || result.revision !== revision || Date.now() - result.loadedAt >= CACHE_TTL_MS) {
+      const [site, smtp, storage, runtime] = await Promise.all([loadSite(), loadSmtp(), loadStorage(), loadRuntime()])
+      result = { revision, loadedAt: Date.now(), site, smtp, storage, runtime }
+    }
+    // A write can invalidate while an earlier read is in flight. Its old
+    // result must neither overwrite the cache nor escape to waiting readers.
+    if (generation !== epoch) return cached()
+    cache = result
+    revisionCheckedAt = Date.now()
+    return result
+  }
+  const work = refresh()
+  pending = work
+  try { return await work }
+  finally { if (pending === work) pending = null }
 }
 
 export async function resolveSiteSettings(): Promise<ResolvedSiteSettings> {

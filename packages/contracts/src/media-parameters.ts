@@ -376,13 +376,13 @@ export interface MediaModelDefaultsDto {
 
 /**
  * Patch for `PATCH admin/media-model-defaults`. An absent key leaves that kind
- * untouched; an explicit `null` clears it; a UUID elects a new default after
- * the API verifies the row exists, is not deleted, is enabled and matches the
- * kind.
+ * untouched; a UUID elects a new default after the API verifies the row exists,
+ * is not deleted, is enabled and matches the kind. There is no clear: a kind's
+ * default is replaced, never unset, so `null` is rejected.
  */
 export interface UpdateMediaModelDefaultsRequest {
-  imageModelId?: string | null
-  videoModelId?: string | null
+  imageModelId?: string
+  videoModelId?: string
 }
 
 /**
@@ -429,12 +429,8 @@ export function parseUpdateMediaModelDefaultsRequest(value: unknown): MediaModel
     for (const key of ['imageModelId', 'videoModelId'] as const) {
       if (!(key in obj)) continue
       const entry = obj[key]
-      if (entry === null) {
-        output[key] = null
-        continue
-      }
       if (typeof entry !== 'string' || !MEDIA_DEFAULTS_UUID_PATTERN.test(entry)) {
-        throw { path: `$.${key}`, message: 'Expected UUID or null' }
+        throw { path: `$.${key}`, message: 'Expected UUID' }
       }
       output[key] = entry.toLowerCase()
     }

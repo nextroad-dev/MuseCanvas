@@ -131,22 +131,13 @@ test('update elects a new default, clears the old one and audits in one transact
   } finally { f.restore() }
 })
 
-test('update accepts explicit null as a clear', async () => {
-  const f = poolClient((sql) => {
-    if (sql.startsWith('SELECT id, model_kind, updated_at FROM model_configs')) {
-      return { rows: [{ id: IMAGE_ID, model_kind: 'image', updated_at: new Date('2026-10-16T00:00:00Z') }] }
-    }
-    if (sql.startsWith('UPDATE model_configs') || sql.startsWith('INSERT INTO audit_logs')) return { rows: [] }
-    throw new Error(`unexpected query: ${sql}`)
-  })
+test('update rejects explicit null, since a kind default is replaced and never cleared', async () => {
+  const f = poolClient(() => { throw new Error('must not query') })
   try {
-    const response = await updateMediaModelDefaults(admin, { videoModelId: null })
-    assert.equal(response.status, 200)
-    const data = (await response.json()).data
-    assert.equal(data.imageModelId, IMAGE_ID)
-    assert.equal(data.videoModelId, null)
-    const clear = f.calls.find(call => call.sql.startsWith('UPDATE model_configs SET is_default=false'))
-    assert.deepEqual(clear?.args, ['video'])
+    const [status, code] = await codeOf(await updateMediaModelDefaults(admin, { videoModelId: null }))
+    assert.equal(status, 400)
+    assert.equal(code, 'INVALID_INPUT')
+    assert.equal(f.calls.length, 0)
   } finally { f.restore() }
 })
 

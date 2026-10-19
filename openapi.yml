@@ -2412,6 +2412,233 @@
         }
       }
     },
+    "/api/admin/media-model-defaults": {
+      "get": {
+        "operationId": "readMediaModelDefaults",
+        "summary": "Read default media models",
+        "description": "Admin only. Returns the elected default image and video model ids; a kind with no live default is null.",
+        "tags": [
+          "Media model defaults"
+        ],
+        "x-access": "admin",
+        "security": [
+          {
+            "museSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaModelDefaultsDtoEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED",
+            "x-error-codes": [
+              "UNAUTHORIZED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "UNAUTHORIZED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "UNAUTHORIZED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "x-error-codes": [
+              "FORBIDDEN"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "FORBIDDEN": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "FORBIDDEN"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateMediaModelDefaults",
+        "summary": "Elect default media models",
+        "description": "Admin only. Elects an enabled, non-deleted model of the matching kind as that kind default inside one transaction, clearing the previous default. A kind is replaced, never cleared; an absent key leaves that kind untouched. Language models cannot be elected.",
+        "tags": [
+          "Media model defaults"
+        ],
+        "x-access": "admin",
+        "security": [
+          {
+            "museSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMediaModelDefaultsRequest"
+              },
+              "examples": {
+                "example1": {
+                  "value": {
+                    "imageModelId": "123e4567-e89b-12d3-a456-426614174000",
+                    "videoModelId": "223e4567-e89b-12d3-a456-426614174001"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaModelDefaultsDtoEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT; DEFAULT_MODEL_INVALID",
+            "x-error-codes": [
+              "INVALID_INPUT",
+              "DEFAULT_MODEL_INVALID"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "INVALID_INPUT": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_INPUT",
+                        "message": "INVALID_INPUT"
+                      }
+                    }
+                  },
+                  "DEFAULT_MODEL_INVALID": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "DEFAULT_MODEL_INVALID",
+                        "message": "DEFAULT_MODEL_INVALID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED",
+            "x-error-codes": [
+              "UNAUTHORIZED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "UNAUTHORIZED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "UNAUTHORIZED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN; CSRF_REJECTED",
+            "x-error-codes": [
+              "FORBIDDEN",
+              "CSRF_REJECTED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "FORBIDDEN": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "FORBIDDEN",
+                        "message": "FORBIDDEN"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SETTINGS_UPDATE_FAILED",
+            "x-error-codes": [
+              "SETTINGS_UPDATE_FAILED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "SETTINGS_UPDATE_FAILED": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "SETTINGS_UPDATE_FAILED",
+                        "message": "SETTINGS_UPDATE_FAILED"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/canvases/{id}/agent/turns/{turnId}": {
       "get": {
         "operationId": "getCanvasAgentTurn",
@@ -5181,6 +5408,100 @@
               "maxAutoContinuations": 3,
               "updatedAt": "2026-10-05T12:00:00.000Z"
             }
+          }
+        ]
+      },
+      "MediaModelDefaultsDto": {
+        "type": "object",
+        "properties": {
+          "imageModelId": {
+            "$ref": "#/components/schemas/NullableUuid"
+          },
+          "videoModelId": {
+            "$ref": "#/components/schemas/NullableUuid"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "imageModelId",
+          "videoModelId",
+          "updatedAt"
+        ],
+        "additionalProperties": false,
+        "description": "Admin-elected default per media kind. Null when the kind has no live default (video may stay null until a video model is configured).",
+        "examples": [
+          {
+            "imageModelId": "123e4567-e89b-12d3-a456-426614174000",
+            "videoModelId": null,
+            "updatedAt": "2026-10-16T12:00:00.000Z"
+          }
+        ]
+      },
+      "MediaModelDefaultsDtoEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/MediaModelDefaultsDto"
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "success": true,
+            "data": {
+              "imageModelId": "123e4567-e89b-12d3-a456-426614174000",
+              "videoModelId": null,
+              "updatedAt": "2026-10-16T12:00:00.000Z"
+            }
+          }
+        ]
+      },
+      "UpdateMediaModelDefaultsRequest": {
+        "type": "object",
+        "properties": {
+          "imageModelId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "videoModelId": {
+            "$ref": "#/components/schemas/Uuid"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1,
+        "description": "Admin partial election of default media models. Each id must be an enabled, non-deleted model of the matching kind. null is not accepted: a default is replaced, not cleared.",
+        "examples": [
+          {
+            "imageModelId": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          {
+            "imageModelId": "123e4567-e89b-12d3-a456-426614174000",
+            "videoModelId": "223e4567-e89b-12d3-a456-426614174001"
+          }
+        ],
+        "x-runtime-invalid-examples": [
+          {},
+          {
+            "videoModelId": null
+          },
+          {
+            "imageModelId": "not-a-uuid"
+          },
+          {
+            "videoModelId": 42
+          },
+          {
+            "role": "admin"
           }
         ]
       },

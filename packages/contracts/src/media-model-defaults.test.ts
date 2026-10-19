@@ -25,12 +25,8 @@ test('parser accepts single-kind patches and normalizes UUID case', () => {
   if (both.success) assert.deepEqual(both.data, { imageModelId: IMAGE_ID, videoModelId: VIDEO_ID })
 })
 
-test('parser accepts explicit null as a clear and rejects empty or unknown patches', () => {
-  const clear = parseUpdateMediaModelDefaultsRequest({ videoModelId: null })
-  assert.equal(clear.success, true)
-  if (clear.success) assert.deepEqual(clear.data, { videoModelId: null })
-
-  for (const input of [{}, [], null, 'x', { imageModelId: IMAGE_ID, role: 'admin' }, { videoModelId: 42 }]) {
+test('parser rejects null, empty and unknown patches', () => {
+  for (const input of [{}, [], null, 'x', { imageModelId: IMAGE_ID, role: 'admin' }, { videoModelId: 42 }, { videoModelId: null }]) {
     const parsed = parseUpdateMediaModelDefaultsRequest(input)
     assert.equal(parsed.success, false, JSON.stringify(input))
     if (!parsed.success) assert.equal(parsed.error.code, 'INVALID_INPUT')

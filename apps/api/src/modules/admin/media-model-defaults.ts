@@ -50,17 +50,8 @@ export async function updateMediaModelDefaults(actor: Actor, input: unknown) {
   try {
     const dto = await transaction(async (client) => {
       for (const kind of KINDS) {
-        const key = KEY_BY_KIND[kind]
-        if (!(key in parsed.data)) continue
-        const elected: string | null | undefined = parsed.data[key]
+        const elected = parsed.data[KEY_BY_KIND[kind]]
         if (elected === undefined) continue
-        if (elected === null) {
-          await client.query(
-            'UPDATE model_configs SET is_default=false,updated_at=now() WHERE model_kind=$1 AND is_default AND deleted_at IS NULL',
-            [kind],
-          )
-          continue
-        }
         const found = (await client.query(
           'SELECT id, model_kind, enabled, deleted_at FROM model_configs WHERE id=$1 FOR UPDATE',
           [elected],

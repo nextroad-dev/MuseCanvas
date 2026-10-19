@@ -21,8 +21,9 @@ const landingNav: { href: string; label: string; className: string }[] = [
 
 const desktopNavLink =
   'rounded-control px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground'
-const headerLogin = buttonVariants({ variant: 'ghost', size: 'md' })
-const headerPrimary = buttonVariants({ variant: 'primary', size: 'md' })
+// Header buttons sit at 36px on desktop (local override of the md 40px control).
+const headerLogin = cn(buttonVariants({ variant: 'ghost', size: 'md' }), 'hidden min-h-9 px-3.5 sm:inline-flex')
+const headerPrimary = cn(buttonVariants({ variant: 'primary', size: 'md' }), 'hidden min-h-9 sm:inline-flex')
 
 /** Legal switcher: one tonal track holding both documents, the current one selected. */
 const legalTrack = 'hidden items-center gap-1 rounded-pill bg-tonal p-1 sm:flex'
@@ -34,30 +35,34 @@ const legalItem = 'rounded-pill px-3 py-1 text-sm transition-colors hover:text-f
  * Sizing & Layout Contract:
  * - Height is fixed to `h-[var(--layout-header)]` (56px) so every public page
  *   anchors its content to the same line.
- * - Sits in the shared `ContentFrame` gutters, on an opaque `bg-surface` band
- *   with a single rule (`border-b`): the header is a page edge, not a card.
- * - Brand mark is `h-5` (20px) plus the wordmark text; the sticky layer is `z-sticky`.
- * - Desktop navigation only. The mobile (<640px) menu button + drop-down panel
- *   belong to F2: render `<PublicMobileNav />` at the marked slot below
- *   (a `'use client'` island; this file stays a server component).
+ * - Sits in the shared `ContentFrame` gutters, on a 92% canvas band with a
+ *   backdrop blur and a single rule (`border-b`): the header is a page edge, not a card.
+ * - Brand mark is 17px (mobile) / 21px (desktop) plus the wordmark text; the sticky layer is `z-sticky`.
+ * - Below 640px the header keeps only the brand and the menu button: login and
+ *   the theme toggle are desktop affordances (login also lives in the menu panel).
  */
 export function PublicHeader({ current = 'landing', className }: PublicHeaderProps) {
   const isLegal = current === 'terms' || current === 'privacy'
 
   return (
     <header
-      className={cn('sticky top-0 z-sticky border-b border-border bg-surface', className)}
+      className={cn(
+        'sticky top-0 z-sticky border-b border-border bg-canvas/[0.92] backdrop-blur-sm backdrop-saturate-[1.2]',
+        className,
+      )}
       aria-label="主导航"
     >
       <ContentFrame className="flex h-[var(--layout-header)] items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
           <Link
             href="/"
-            className="flex min-w-0 shrink items-center gap-2.5 rounded-control"
+            className="flex min-w-0 shrink items-center gap-2 rounded-control sm:gap-2.5"
             aria-label="MuseCanvas 首页"
           >
-            <BrandMark variant="mark" priority className="h-5" />
-            <span className="whitespace-nowrap text-base font-medium text-foreground">MuseCanvas</span>
+            <BrandMark variant="mark" priority className="h-[17px] sm:h-[21px]" />
+            <span className="whitespace-nowrap text-[15px] font-medium tracking-[-0.01em] text-foreground sm:text-base">
+              MuseCanvas
+            </span>
           </Link>
 
           {/* On the legal pages the header carries the switch between the two documents. */}
@@ -108,12 +113,12 @@ export function PublicHeader({ current = 'landing', className }: PublicHeaderPro
 
           <PublicMobileNav />
 
-          <ThemeToggle />
+          <ThemeToggle className="hidden sm:inline-flex" />
 
           <Link href="/login" className={headerLogin}>
             登录
           </Link>
-          <Link href="/login" className={cn(headerPrimary, 'hidden sm:inline-flex')}>
+          <Link href="/login" className={headerPrimary}>
             开始创作
           </Link>
         </div>

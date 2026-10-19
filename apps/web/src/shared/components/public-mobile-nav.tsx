@@ -111,12 +111,12 @@ export function PublicMobileNav() {
                 {...dialogProps}
                 id={panelId}
                 className={cn(
-                  'fixed inset-x-0 top-0 rounded-b-panel bg-surface px-4 pb-5 shadow-modal',
+                  'fixed inset-x-0 top-0 rounded-b-panel bg-canvas px-4 pb-5 shadow-modal',
                   phase === 'close' ? 'motion-toast-out' : 'motion-toast-in',
                 )}
               >
                 <div className="flex h-[var(--layout-header)] items-center justify-between">
-                  <h2 id={labelId} className="text-base font-medium text-foreground">
+                  <h2 id={labelId} className="text-[15px] font-medium text-foreground">
                     菜单
                   </h2>
                   <button

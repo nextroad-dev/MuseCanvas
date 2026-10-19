@@ -7,7 +7,7 @@ export interface SiteFooterProps {
   className?: string
 }
 
-const footerLink = 'rounded-control px-2 py-1 text-sm transition-colors hover:text-foreground'
+const footerLink = 'rounded-control px-0 py-1 text-[13px] transition-colors hover:text-foreground'
 
 /**
  * Footer shared by the landing and legal pages.
@@ -21,9 +21,9 @@ export function SiteFooter({ current, className }: SiteFooterProps) {
   return (
     <footer className={cn('border-t border-border', className)}>
       <ContentFrame className="flex flex-col gap-4 py-8 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-muted-foreground">&copy; 2026 MuseCanvas</p>
+        <p className="text-[13px] text-muted-foreground">&copy; MuseCanvas</p>
 
-        <nav aria-label="页脚导航" className="flex flex-wrap items-center gap-x-2 gap-y-2">
+        <nav aria-label="页脚导航" className="flex flex-wrap items-center gap-x-5 gap-y-2">
           {current !== 'landing' && (
             <Link href="/" className={cn(footerLink, 'text-muted-foreground')}>
               首页

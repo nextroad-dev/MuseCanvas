@@ -108,7 +108,7 @@ export function AgentComposer({
   }
 
   return (
-    <section aria-label="给 Agent 的创作请求" className={cn('flex shrink-0 flex-col gap-2 rounded-panel border border-border bg-surface p-3 shadow-floating', className)}>
+    <section aria-label="给 Agent 的创作请求" className={cn('flex shrink-0 flex-col gap-2 rounded-panel bg-surface p-3.5 shadow-floating', className)}>
       <fieldset disabled={sending} className="m-0 flex min-w-0 flex-col gap-3 border-0 p-0">
         <Textarea
           ref={textareaRef}
@@ -118,12 +118,12 @@ export function AgentComposer({
           disabled={sending}
           onChange={(event) => patch({ text: event.target.value })}
           onKeyDown={onKeyDown}
-          placeholder={intent === 'edit' ? '例如：将框选区域改为红色风衣，其余保持不变…' : '描述你想要生成的画面，例如：清晨江边小镇，薄雾、木质渡船…'}
+          placeholder={intent === 'edit' ? '例如：将框选区域改为红色风衣，其余保持不变…' : '描述你想创作的内容，Agent 会规划并在确认后生成…'}
           aria-describedby="agent-message-help"
-          className="min-h-[var(--control-md)] resize-none overflow-y-auto border-0 bg-transparent p-1 text-sm leading-relaxed focus-visible:ring-0"
+          className="min-h-[var(--control-md)] resize-none overflow-y-auto border-0 bg-transparent p-1 text-[15px] leading-relaxed focus-visible:ring-0"
         />
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 overflow-x-auto">
             {modelsLoading && imageModels.length === 0 && videoModels.length === 0 ? (
               <p role="status" className="truncate text-xs text-muted-foreground">加载模型中…</p>

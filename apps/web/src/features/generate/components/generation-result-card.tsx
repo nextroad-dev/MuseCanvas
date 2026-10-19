@@ -24,7 +24,7 @@ export interface GenerationResultCardProps {
   canContinue: boolean
 }
 
-const STEPS = ['排队等待', '模型生成', '保存结果'] as const
+const STEPS = ['排队中', '生成中', '保存结果'] as const
 
 /** Step cursor: which of the three stages is current, or 3 when all are done. */
 function stepCursor(job: GenerationJob): number {
@@ -114,13 +114,13 @@ export function GenerationResultCard({ jobId, onOpenResult, onContinuePlanning, 
                 const done = index < cursor
                 const current = index === cursor
                 return (
-                  <li key={label} className="flex items-center gap-2.5 text-sm">
+                  <li key={label} className="flex items-center gap-2.5 text-[13px]">
                     <span
                       aria-hidden="true"
                       className={cn(
                         'h-2 w-2 shrink-0 rounded-pill',
                         done && 'bg-accent',
-                        current && 'bg-primary ring-2 ring-tonal',
+                        current && 'bg-primary ring-[3px] ring-foreground/12',
                         !done && !current && 'bg-border',
                       )}
                     />

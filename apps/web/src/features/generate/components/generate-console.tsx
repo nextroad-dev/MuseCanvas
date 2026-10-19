@@ -462,7 +462,7 @@ export function GenerateConsole() {
   // Right rail "最近完成": the newest succeeded jobs that actually produced
   // media. Read straight from the existing jobs query — no new endpoint.
   const recentCompleted = useMemo(
-    () => jobs.filter((job) => job.status === 'succeeded' && (job.outputs?.length ?? 0) > 0).slice(0, 6),
+    () => jobs.filter((job) => job.status === 'succeeded' && (job.outputs?.length ?? 0) > 0).slice(0, 4),
     [jobs],
   )
 
@@ -524,6 +524,12 @@ export function GenerateConsole() {
   }
 
   const conversationTitle = canvasDetail.data?.title || '未命名画布'
+  // Proposal cards show the catalogue's display name; an id missing from the
+  // catalogue falls back to the raw modelId inside the card.
+  const modelNameById = useMemo(
+    () => new Map((models ?? []).map((model) => [model.id, model.displayName])),
+    [models],
+  )
 
   return (
     <div role="region" aria-label="创作台" className="motion-page-enter flex h-full min-h-0 flex-1 overflow-hidden">
@@ -544,7 +550,10 @@ export function GenerateConsole() {
 
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
         <header className="flex shrink-0 items-baseline justify-between gap-3 px-8 pt-6 pb-2">
-          <h1 className="text-subtitle font-medium text-foreground">{conversationTitle}</h1>
+          <div className="flex min-w-0 items-baseline gap-3">
+            <h1 className="text-module text-foreground">{conversationTitle}</h1>
+            <span className="text-xs text-muted-foreground">Agent 创作</span>
+          </div>
           <Button
             variant="ghost"
             size="sm"
@@ -556,51 +565,54 @@ export function GenerateConsole() {
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-8 pb-80">
-          {agent.status.isError ? (
-            <Alert tone="warning" title="无法获取 Agent 状态">历史、图库与下载仍可使用；请稍后重试。</Alert>
-          ) : agent.availability.notice ? (
-            <Alert tone="info" title="Agent 不可用">{agent.availability.notice}</Alert>
-          ) : null}
-          <ConversationTimeline
-            items={agentItems}
-            streaming={agent.streaming}
-            disconnected={agent.disconnected}
-            streamError={agent.streamError}
-            className="min-h-[40vh]"
-            renderPending={(item) => (
-              <PendingGenerationCard
-                pending={item.pending}
-                now={Date.now()}
-                confirmation={agent.confirmations[item.pending.id]}
-                onConfirm={handleConfirmPending}
-                onReject={handleRejectPending}
-                onRequestNewProposal={handleRequestNewProposal}
-              />
-            )}
-          />
-          {agent.applyFeedback ? (
-            <Alert tone={agent.applyFeedback.applied ? 'success' : 'warning'} role="status">{agent.applyFeedback.message}</Alert>
-          ) : null}
-          {submittedAgentJobIds.length > 0 ? (
-            <div className="flex flex-col gap-3">
-              {submittedAgentJobIds.map((jobId) => (
-                <GenerationResultCard
-                  key={jobId}
-                  jobId={jobId}
-                  streaming={agent.streaming}
-                  onOpenResult={(job) => setResultJobId(job.id)}
-                  onContinuePlanning={handleContinuePlanning}
-                  onStopAgentTurn={agent.stop}
-                  canContinue={agent.availability.canGenerate}
+          <div className="mx-auto flex w-full max-w-[760px] flex-col gap-5">
+            {agent.status.isError ? (
+              <Alert tone="warning" title="无法获取 Agent 状态">历史、图库与下载仍可使用；请稍后重试。</Alert>
+            ) : agent.availability.notice ? (
+              <Alert tone="info" title="Agent 不可用">{agent.availability.notice}</Alert>
+            ) : null}
+            <ConversationTimeline
+              items={agentItems}
+              streaming={agent.streaming}
+              disconnected={agent.disconnected}
+              streamError={agent.streamError}
+              className="min-h-[40vh]"
+              renderPending={(item) => (
+                <PendingGenerationCard
+                  pending={item.pending}
+                  modelName={modelNameById.get(item.pending.modelId)}
+                  now={Date.now()}
+                  confirmation={agent.confirmations[item.pending.id]}
+                  onConfirm={handleConfirmPending}
+                  onReject={handleRejectPending}
+                  onRequestNewProposal={handleRequestNewProposal}
                 />
-              ))}
-            </div>
-          ) : null}
-          <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
-            <Switch checked={continueOnResult} onCheckedChange={setContinueOnResult} aria-label="结果完成后继续规划（再次调用语言模型）" />
-            结果完成后继续规划（再次调用语言模型）
-          </label>
-          {agentNotice ? <Alert tone="warning">{agentNotice}</Alert> : null}
+              )}
+            />
+            {agent.applyFeedback ? (
+              <Alert tone={agent.applyFeedback.applied ? 'success' : 'warning'} role="status">{agent.applyFeedback.message}</Alert>
+            ) : null}
+            {submittedAgentJobIds.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {submittedAgentJobIds.map((jobId) => (
+                  <GenerationResultCard
+                    key={jobId}
+                    jobId={jobId}
+                    streaming={agent.streaming}
+                    onOpenResult={(job) => setResultJobId(job.id)}
+                    onContinuePlanning={handleContinuePlanning}
+                    onStopAgentTurn={agent.stop}
+                    canContinue={agent.availability.canGenerate}
+                  />
+                ))}
+              </div>
+            ) : null}
+            <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
+              <Switch checked={continueOnResult} onCheckedChange={setContinueOnResult} aria-label="结果完成后继续规划（再次调用语言模型）" />
+              结果完成后继续规划（再次调用语言模型）
+            </label>
+            {agentNotice ? <Alert tone="warning">{agentNotice}</Alert> : null}
+          </div>
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-8 pb-6">
@@ -634,7 +646,7 @@ export function GenerateConsole() {
         </div>
       </main>
 
-      <aside aria-label="任务" className="hidden min-h-0 w-[var(--layout-sidebar)] shrink-0 flex-col border-l border-border bg-surface lg:flex">
+      <aside aria-label="任务" className="hidden min-h-0 w-[280px] shrink-0 flex-col border-l border-border bg-canvas lg:flex xl:w-[300px]">
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-4">
           <ActiveJobsBoard
             {...boardProps}

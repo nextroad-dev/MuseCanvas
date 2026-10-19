@@ -136,9 +136,9 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
 
   const heading = isRail ? (
     <div className="mb-3 flex items-center gap-1.5 px-1">
-      <h2 id={headingId} className="text-sm font-semibold text-foreground">进行中</h2>
+      <h2 id={headingId} className="text-sm font-medium text-foreground">进行中</h2>
       {count > 0 && (
-        <span className="text-caption text-muted-foreground font-medium">{count}</span>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground">{count}</span>
       )}
     </div>
   ) : (
@@ -463,14 +463,17 @@ function CompactActiveJobRow({
       : job.status === 'failed'
         ? '失败'
         : '已取消'
+  // Queued rows carry a landscape 48×27 slot; running and finished rows a 36×48 portrait one.
+  const thumbSize = job.status === 'queued' ? 'h-[27px] w-12' : 'h-12 w-9'
+  const highlighted = selected || (active && job.status !== 'queued')
 
   return (
     <li data-job-row={job.id} data-flip-key={job.id} className="relative">
       <div
         className={cn(
-          'flex items-center gap-2.5 rounded-card p-2 transition-colors',
+          'flex items-center gap-2.5 rounded-control p-2.5 transition-colors',
           expiringAt !== undefined && expiringAt - now <= exitDurationMs() && 'motion-fade-out',
-          selected ? 'bg-tonal-selected' : active ? 'bg-tonal' : 'bg-transparent hover:bg-tonal-hover',
+          highlighted ? 'bg-tonal-selected' : 'bg-transparent hover:bg-tonal-hover',
         )}
       >
         {firstOutput ? (
@@ -478,7 +481,7 @@ function CompactActiveJobRow({
             type="button"
             onClick={() => onSelectJob(job.id)}
             disabled={disabled}
-            className="block h-11 w-9 shrink-0 overflow-hidden rounded-control bg-surface"
+            className={cn('block shrink-0 overflow-hidden rounded-control bg-surface', thumbSize)}
             aria-label={`查看结果：${job.prompt.slice(0, 20)}`}
           >
             <MediaFrame
@@ -489,11 +492,11 @@ function CompactActiveJobRow({
             />
           </button>
         ) : active ? (
-          <div aria-hidden="true" className="relative h-11 w-9 shrink-0 overflow-hidden rounded-control bg-surface">
+          <div aria-hidden="true" className={cn('relative shrink-0 overflow-hidden rounded-control bg-tonal', thumbSize)}>
             <span className="motion-shimmer absolute inset-0" />
           </div>
         ) : (
-          <div aria-hidden="true" className="h-11 w-9 shrink-0 rounded-control bg-tonal" />
+          <div aria-hidden="true" className={cn('shrink-0 rounded-control bg-tonal', thumbSize)} />
         )}
 
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -502,11 +505,11 @@ function CompactActiveJobRow({
             onClick={() => onSelectJob(job.id)}
             disabled={disabled}
             aria-current={selected ? 'true' : undefined}
-            className="min-w-0 truncate text-left text-xs font-medium text-foreground"
+            className="min-w-0 truncate text-left text-[13px] font-normal text-foreground"
           >
             {job.prompt}
           </button>
-          <div className="flex items-center gap-2 text-caption text-muted-foreground">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>{statusText}</span>
             <span className="font-mono tabular-nums">{formatElapsed(job, clockEnd)}</span>
           </div>

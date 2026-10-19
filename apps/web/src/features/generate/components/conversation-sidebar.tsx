@@ -46,7 +46,7 @@ function formatConversationTime(updatedAt: string | undefined): string {
   const date = new Date(updatedAt)
   const now = new Date()
   const isToday = date.toDateString() === now.toDateString()
-  if (isToday) return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  if (isToday) return `今天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
   if (date.toDateString() === yesterday.toDateString()) return '昨天'
@@ -100,7 +100,7 @@ export function ConversationSidebar({
   const content = (
     <nav aria-label="对话列表" className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between gap-2 px-1 pb-3 pt-1">
-        <h2 id={headingId} className="text-sm font-semibold text-foreground">对话</h2>
+        <h2 id={headingId} className="text-[15px] font-medium text-foreground">对话</h2>
         <div className="flex items-center gap-1">
           <IconButton
             variant="ghost"
@@ -140,12 +140,15 @@ export function ConversationSidebar({
                     aria-current={active ? 'true' : undefined}
                     onClick={() => onSelect(item.id)}
                     className={cn(
-                      'flex w-full flex-col gap-0.5 rounded-card p-2.5 text-left transition-colors',
-                      active ? 'bg-tonal-selected text-foreground' : 'text-muted-foreground hover:bg-tonal-hover hover:text-foreground',
+                      'relative flex w-full flex-col gap-0.5 rounded-control py-2 pr-2.5 pl-3.5 text-left transition-colors',
+                      active ? 'bg-tonal-selected text-foreground' : 'text-foreground hover:bg-tonal-hover',
                     )}
                   >
-                    <span className="min-w-0 truncate text-sm leading-snug">{item.title || '未命名画布'}</span>
-                    <span className="text-caption text-muted-foreground">{formatConversationTime(item.updatedAt)}</span>
+                    {active ? (
+                      <span aria-hidden="true" className="absolute top-2.5 bottom-2.5 left-0 w-[3px] rounded-pill bg-foreground" />
+                    ) : null}
+                    <span className={cn('min-w-0 truncate text-sm leading-snug', active && 'font-medium')}>{item.title || '未命名画布'}</span>
+                    <span className="text-xs text-muted-foreground">{formatConversationTime(item.updatedAt)}</span>
                   </button>
                 </li>
               )
@@ -172,7 +175,7 @@ export function ConversationSidebar({
 
   return (
     <>
-      <aside className="hidden min-h-0 w-[var(--layout-sidebar)] shrink-0 flex-col border-r border-border bg-surface p-4 lg:flex">
+      <aside className="hidden min-h-0 w-[var(--layout-sidebar)] shrink-0 flex-col border-r border-border bg-canvas px-3 py-5 lg:flex">
         {content}
       </aside>
       {drawerMounted && drawerPortalTarget ? createPortal(

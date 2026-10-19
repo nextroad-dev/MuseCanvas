@@ -54,9 +54,13 @@ interface NavGroup {
 }
 
 interface Crumb {
-  href: string
+  /** `null` marks a non-link segment (a navigation group heading, not a page). */
+  href: string | null
   label: string
 }
+
+/** Non-link group segment inserted before a page that sits under a titled nav group. */
+const CRUMB_GROUP_BEFORE: Record<string, string> = { '/admin/media-models': '生成资源' }
 
 /**
  * Jude-Frontweb admin layout (foundations.md 管理后台布局): sidebar 260px
@@ -110,7 +114,10 @@ function buildCrumbs(pathname: string): Crumb[] {
   let href = ''
   for (const segment of rest) {
     href = `${href}/${segment}`
-    crumbs.push({ href: `/admin${href}`, label: NAV_LABELS[`/admin${href}`] ?? segment })
+    const path = `/admin${href}`
+    const group = CRUMB_GROUP_BEFORE[path]
+    if (group) crumbs.push({ href: null, label: group })
+    crumbs.push({ href: path, label: NAV_LABELS[path] ?? segment })
   }
   return crumbs
 }
@@ -128,7 +135,7 @@ function Breadcrumbs({ pathname }: { pathname: string }) {
           const isMiddle = index > 0 && !isLast
           return (
             <li
-              key={crumb.href}
+              key={crumb.href ?? `group-${crumb.label}`}
               className={cn('flex min-w-0 items-center gap-1.5', isMiddle && 'hidden md:flex')}
             >
               {index > 0 ? (
@@ -140,6 +147,8 @@ function Breadcrumbs({ pathname }: { pathname: string }) {
                 <span aria-current="page" className="truncate font-medium text-foreground">
                   {crumb.label}
                 </span>
+              ) : crumb.href === null ? (
+                <span className="truncate text-muted-foreground">{crumb.label}</span>
               ) : (
                 <Link
                   href={crumb.href}
@@ -220,11 +229,11 @@ export function AdminShell({ user, children }: AdminShellProps) {
   const renderNavLinks = (isCollapsed: boolean, options?: { onNavigate?: () => void }) => {
     const { onNavigate } = options ?? {}
     return (
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2.5">
         {navGroups.map((group, groupIndex) => (
-          <div key={group.title ?? groupIndex} className="flex flex-col gap-1">
+          <div key={group.title ?? groupIndex} className="flex flex-col gap-0.5">
             {group.title && !isCollapsed && (
-              <h2 className="mb-2 px-3 text-xs font-semibold text-foreground tracking-wide">
+              <h2 className="px-3 py-1 text-overline text-muted-foreground">
                 {group.title}
               </h2>
             )}
@@ -240,14 +249,19 @@ export function AdminShell({ user, children }: AdminShellProps) {
                   aria-label={isCollapsed ? item.label : undefined}
                   title={isCollapsed ? item.label : undefined}
                   className={cn(
-                    'relative flex items-center gap-3 rounded-control py-1.5',
-                    'text-sm font-medium transition-colors',
+                    'relative flex min-h-10 items-center gap-3 rounded-control py-1.5',
+                    'text-sm transition-colors',
+                    active && 'font-medium',
                     isCollapsed ? 'justify-center px-2' : 'px-3',
                     active
                       ? 'bg-tonal-selected text-foreground'
                       : 'text-muted-foreground hover:bg-tonal-hover hover:text-foreground',
                   )}
                 >
+                  {active ? (
+                    // Active marker: a 3px rule on the leading edge, inset from the corners.
+                    <span aria-hidden="true" className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-pill bg-foreground" />
+                  ) : null}
                   <Icon weight="duotone" className={`${iconSize.sm} shrink-0`} aria-hidden="true" />
                   {isCollapsed ? null : <span className="truncate">{item.label}</span>}
                 </Link>
@@ -290,7 +304,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
         <>
           <div className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-sm font-medium text-foreground">{user.email}</span>
-            <span className="truncate text-caption text-muted-foreground">{user.email}</span>
+            <span className="truncate text-caption text-muted-foreground">管理员</span>
           </div>
           <ChevronUpDown weight="bold" className={`${iconSize.sm} shrink-0 text-muted-foreground`} aria-hidden="true" />
         </>
@@ -329,17 +343,18 @@ export function AdminShell({ user, children }: AdminShellProps) {
               replaced by the overlay drawer, so the collapsed width can never
               cover content on a 375px viewport. */}
           <aside className={cn('hidden shrink-0 flex-col border-r border-border py-6 transition-[width] md:flex', collapsed ? 'w-sidebar-collapsed' : 'w-sidebar')}>
-            <div className={cn('mb-6 flex items-center justify-between gap-2', collapsed ? 'px-2' : 'px-3')}>
-              <Link
-                href="/admin"
-                className="inline-flex min-w-0 items-center gap-2.5 rounded-control focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
-                aria-label="管理后台首页"
-              >
-                <BrandMark variant="mark" className="h-5" />
-                {collapsed ? null : (
+            <div className={cn('mb-6 flex items-center gap-2', collapsed ? 'justify-center px-2' : 'justify-between px-3')}>
+              {/* Collapsed rail keeps only the toggle: the brand link would be an unlabelled glyph. */}
+              {collapsed ? null : (
+                <Link
+                  href="/admin"
+                  className="inline-flex min-w-0 items-center gap-2.5 rounded-control focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
+                  aria-label="管理后台首页"
+                >
+                  <BrandMark variant="mark" className="h-5" />
                   <span className="truncate text-base font-medium text-foreground">管理后台</span>
-                )}
-              </Link>
+                </Link>
+              )}
               <IconButton
                 variant="ghost"
                 size="sm"

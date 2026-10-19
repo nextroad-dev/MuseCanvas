@@ -16,12 +16,12 @@ import {
   rewriteDefaultInUseError,
   type MediaDefaultKind,
 } from '../lib/admin-media-model-defaults'
-import { AdminMediaModelDefaults } from './admin-media-model-defaults'
+import { AdminMediaModelDefaults, useMediaModelDefaultSave } from './admin-media-model-defaults'
 import { AdminQueryFeedback } from './admin-query-feedback'
 import { AdminActionErrors } from './admin-confirm-dialog'
 import { useAdminActions } from '../lib/use-admin-actions'
 import { AdminMobileRecords, AdminRecordDetailDialog, AdminRecordFields } from './admin-record-detail-dialog'
-import { PlusIcon as Plus, ArrowClockwiseIcon as RefreshCw, TrashIcon as Trash2 } from '@phosphor-icons/react'
+import { ArrowClockwiseIcon as RefreshCw, TrashIcon as Trash2 } from '@phosphor-icons/react'
 import {
   Alert,
   Badge,
@@ -46,6 +46,7 @@ import {
   TableRow,
   TableSkeletonRow,
   TableStateRow,
+  Tabs,
 } from '@/shared/components/ui'
 
 const MEDIA_KIND_LABEL: Record<'image' | 'video', string> = {
@@ -53,12 +54,12 @@ const MEDIA_KIND_LABEL: Record<'image' | 'video', string> = {
   video: '视频',
 }
 
-const TAB_ITEMS = [
-  { value: 'media-models', label: '媒体模型' },
-  { value: 'model-presets', label: '模型预设' },
-  { value: 'media-credentials', label: '媒体凭据' },
-  { value: 'provider-plugins', label: '供应商插件' },
-]
+/**
+ * Only the 媒体模型 section has a real panel on this page. The other design-sheet
+ * sections (模型预设, 媒体凭据, 供应商插件) are not wired here yet, so they are not
+ * offered as tabs: a tab that changes nothing reads as broken.
+ */
+const SECTION_TABS = [{ id: 'media-models', label: '媒体模型' }]
 
 export function AdminMediaModelsView() {
   const queryClient = useQueryClient()
@@ -72,6 +73,7 @@ export function AdminMediaModelsView() {
   const [deleteTarget, setDeleteTarget] = useState<AdminModel | null>(null)
   const [kindFilter, setKindFilter] = useState<'all' | 'image' | 'video'>('all')
   const actions = useAdminActions()
+  const saveDefault = useMediaModelDefaultSave()
 
   const {
     data: modelsData,
@@ -278,6 +280,18 @@ export function AdminMediaModelsView() {
       'toggle',
     )
   }
+  // Same PATCH as the defaults card; the row action only picks this model for its own kind.
+  function makeModelDefault(model: AdminModel) {
+    const kind = mediaDefaultKindOf(model)
+    return actions
+      .run(
+        model.id,
+        model.displayName,
+        () => saveDefault.mutateAsync({ kind, id: model.id }),
+        '默认模型已更新',
+      )
+      .catch(() => {})
+  }
 
   return (
     <div className={adminPageRoot}>
@@ -285,6 +299,7 @@ export function AdminMediaModelsView() {
         className={adminPageHeader}
         actionsClassName={adminPageActions}
         title="媒体模型"
+        description="配置可用的图像与视频模型，并指定创作台默认使用哪一个。"
         actions={
           <>
             <Button
@@ -292,7 +307,6 @@ export function AdminMediaModelsView() {
                 setActionError('')
                 setCreateModalOpen(true)
               }}
-              icon={<Plus weight="bold" aria-hidden="true" />}
             >
               创建媒体模型
             </Button>
@@ -340,24 +354,22 @@ export function AdminMediaModelsView() {
         </Alert>
       )}
 
-      <SegmentedControl
-        size="sm"
-        label="资源分区"
+      <Tabs
+        variant="underline"
+        aria-label="资源分区"
+        tabs={SECTION_TABS}
         value="media-models"
-        onChange={() => {}}
-        items={TAB_ITEMS}
+        onValueChange={() => {}}
       />
 
       <AdminMediaModelDefaults models={models} />
 
       <section ref={recordListRef} tabIndex={-1} className="flex min-w-0 flex-col gap-4" aria-labelledby="media-models-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <h2 id="media-models-heading" className="text-base font-bold text-foreground">
-              已配置模型
-            </h2>
-            <span className="text-sm text-muted-foreground">{models.length}</span>
-          </div>
+          <h2 id="media-models-heading" className="text-module text-foreground">
+            已配置模型{' '}
+            <span className="font-mono text-[13px] text-muted-foreground">{models.length}</span>
+          </h2>
           <SegmentedControl
             size="sm"
             label="按类型筛选模型"
@@ -462,6 +474,16 @@ export function AdminMediaModelsView() {
                   </TableCell>
                   <TableCell align="right">
                     <div className="flex items-center justify-end gap-2">
+                      {m.enabled && !isModelDefault(m.id, defaultsData) ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={actions.isPending(m.id)}
+                          onClick={() => void makeModelDefault(m)}
+                        >
+                          设为默认
+                        </Button>
+                      ) : null}
                       <Button variant="secondary" size="sm" onClick={() => setDetailModel(m)}>
                         详情
                       </Button>

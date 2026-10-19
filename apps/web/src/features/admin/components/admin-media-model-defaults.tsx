@@ -41,11 +41,35 @@ interface AdminMediaModelDefaultsProps {
 }
 
 /**
+ * The one PATCH path for 默认模型, shared by the defaults card and the table's「设为默认」.
+ * Refreshes the public model list and the defaults; toast and error copy stay with each caller.
+ * Errors are re-thrown with the mapped copy and the server code kept on the Error.
+ */
+export function useMediaModelDefaultSave() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ kind, id }: { kind: MediaDefaultKind; id: string }) => {
+      try {
+        return await patchMediaModelDefaults(api, API_ENDPOINTS.admin.mediaModelDefaults, defaultsPatchForKind(kind, id))
+      } catch (err) {
+        const failure = err as { code?: string; message?: string }
+        throw Object.assign(new Error(defaultsSaveError(failure)), { code: failure.code })
+      }
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: PUBLIC_MODELS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: MEDIA_MODEL_DEFAULTS_QUERY_KEY }),
+      ])
+    },
+  })
+}
+
+/**
  * 默认模型卡（设计稿 08 首模块）。两列 Select 只列启用对应类型，改动即时 PATCH；
  * 成功 toast「默认模型已更新」并刷新创作台与本卡，失败回滚选择并显示错误。
  */
 export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps) {
-  const queryClient = useQueryClient()
   const toast = useToast()
   const [error, setError] = useState('')
   // Optimistic selection while the PATCH is in flight; cleared on settle so the
@@ -67,23 +91,7 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
       ),
   })
 
-  const save = useMutation({
-    mutationFn: async ({ kind, id }: { kind: MediaDefaultKind; id: string }) =>
-      patchMediaModelDefaults(api, API_ENDPOINTS.admin.mediaModelDefaults, defaultsPatchForKind(kind, id)),
-    onSuccess: async () => {
-      setPending({})
-      setError('')
-      toast.push({ variant: 'success', title: '默认模型已更新' })
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: PUBLIC_MODELS_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: MEDIA_MODEL_DEFAULTS_QUERY_KEY }),
-      ])
-    },
-    onError: (err: Error) => {
-      setPending({})
-      setError(defaultsSaveError(err as { code?: string; message?: string }))
-    },
-  })
+  const save = useMediaModelDefaultSave()
 
   function handleChange(kind: MediaDefaultKind, id: string) {
     if (!id || save.isPending) return
@@ -93,13 +101,15 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
     save.mutate(
       { kind, id },
       {
-        onError: () => {
-          // Roll back the optimistic selection; onSuccess clears it to the server row.
-          setPending((previous) => {
-            const next = { ...previous }
-            delete next[kind]
-            return next
-          })
+        onSuccess: () => {
+          setPending({})
+          setError('')
+          toast.push({ variant: 'success', title: '默认模型已更新' })
+        },
+        onError: (err) => {
+          // Roll back the optimistic selection to the server row.
+          setPending({})
+          setError(err.message)
         },
       },
     )
@@ -113,9 +123,14 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
         <AdminQueryFeedback error={queryError} hasData label="默认模型" onRetry={() => refetch()} />
       )}
       <Card className="gap-5 p-6">
-        <CardTitle level={2} id="media-defaults-heading" className="text-base font-bold text-foreground">
-          默认模型
-        </CardTitle>
+        <div className="flex flex-col gap-1">
+          <CardTitle level={2} id="media-defaults-heading" className="text-foreground">
+            默认模型
+          </CardTitle>
+          <p className="text-[13px] text-muted-foreground">
+            用户新建对话时预选这两个模型；用户手动切换后，那个对话以用户的选择为准。
+          </p>
+        </div>
         {isLoading || defaults === undefined ? (
           isError && defaults === undefined ? (
             <Alert
@@ -173,6 +188,11 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
             })}
           </div>
         )}
+        {defaults !== undefined ? (
+          <p className="text-xs text-muted-foreground">
+            只能选择已启用的模型。停用默认模型前，需要先指定另一个默认模型。
+          </p>
+        ) : null}
         {error ? (
           <Alert tone="danger" role="alert" title="无法保存默认模型">
             {error}

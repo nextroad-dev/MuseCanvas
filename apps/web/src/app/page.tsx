@@ -24,6 +24,12 @@ const heroPrimary = buttonVariants({ variant: 'primary', size: 'lg' })
 const heroSecondary = buttonVariants({ variant: 'secondary', size: 'lg' })
 const ctaGhost = buttonVariants({ variant: 'ghost', size: 'lg' })
 
+/**
+ * Landing-only button metrics (design: 48px high, 16px label, 18px icon, 22px inset).
+ * Local to this page on purpose: the shared button recipe stays untouched.
+ */
+const landingButtonMetrics = 'justify-center px-[22px] text-base [&>svg]:size-[18px]'
+
 const consoleSpecs: { label: string; value: string }[] = [
   { label: '生成模型', value: 'GPT Image 2.5 / Seedream 4.5' },
   { label: '画幅', value: '1:1 · 16:9 · 9:16 · 4:3 · 3:4' },
@@ -36,37 +42,37 @@ const capabilities = [
     no: '01',
     title: '提示词不需要套模板',
     description:
-      '写下主体、场景、材质、光线，以及想避开的元素就够了。风格模板由系统侧统一维护，提交前不必手动挑选。',
+      '写下主体、场景、材质、光线，以及想避开的元素就够了。风格模板由系统侧统一维护。',
   },
   {
     no: '02',
     title: '模型、画幅与参考图',
     description:
-      '在同一个面板里切换模型、5 种画幅和单次张数，并上传 PNG 或 JPEG 参考图作为构图与风格依据。',
+      '在同一个面板里切换模型、5 种画幅和单次张数，并上传 PNG 或 JPEG 参考图。',
   },
   {
     no: '03',
     title: '排队、重试与取消',
     description:
-      '任务提交后进入队列按序执行，失败会自动重试；也可以只对失败的任务手动重跑，或在结束前取消。',
+      '任务按序执行，失败会自动重试；也可以只重跑失败的任务，或在结束前取消。',
   },
   {
     no: '04',
     title: '作品自动沉淀',
     description:
-      '生成结果自动进入图库。调整网格密度、放大比对细节、下载原图，或者单张、批量删除不要的版本。',
+      '结果自动进入图库。调整网格密度、放大比对、下载原图，或批量删除。',
   },
   {
     no: '05',
     title: '验证码登录',
     description:
-      '用邮箱接收 6 位验证码直接进入，不需要再记一个密码；也支持 GitHub 与 Google 账号。部署方可切换为邀请码注册。',
+      '邮箱 6 位验证码直接进入，也支持 GitHub 与 Google。部署方可切换为邀请码注册。',
   },
   {
     no: '06',
     title: '自托管与后台',
     description:
-      '通过初始化向导完成部署配置，任务、用户、模型与提供商、提示词模板、OAuth 都有各自的管理页面。',
+      '初始化向导完成部署；任务、用户、模型、提示词模板、OAuth 各有管理页。',
   },
 ]
 
@@ -104,13 +110,13 @@ function SectionIntro({
   description?: string
 }) {
   return (
-    <header className="flex max-w-[var(--content-medium)] flex-col gap-3">
+    <header className="flex max-w-[760px] flex-col gap-3">
       <p className="text-sm font-medium text-muted-foreground">{eyebrow}</p>
       <h2 id={titleId} className="text-title text-foreground [line-break:strict] [text-wrap:balance]">
         {title}
       </h2>
       {description ? (
-        <p className="max-w-reading text-base text-muted-foreground [text-wrap:pretty]">{description}</p>
+        <p className="max-w-[620px] text-base text-muted-foreground [text-wrap:pretty]">{description}</p>
       ) : null}
     </header>
   )
@@ -187,33 +193,33 @@ export default function HomePage() {
       <PublicHeader current="landing" />
 
       <main id="main" className="motion-page-enter">
-        {/* Hero: 左标题区、右 CTA，底对齐。 */}
+        {/* Hero: 左标题区、右 CTA，底对齐。桌面标题 64px，移动 36px。 */}
         <section aria-labelledby="hero-title" className="scroll-mt-16">
-          <ContentFrame className="flex flex-wrap items-end justify-between gap-x-16 gap-y-10 pb-14 pt-12 md:pt-16 lg:pb-24 lg:pt-24">
-            <div className="flex min-w-0 max-w-2xl flex-1 basis-[560px] flex-col gap-6">
-              <p className="inline-flex w-fit items-center gap-2 rounded-pill bg-tonal px-3 py-1 text-sm font-medium text-foreground">
+          <ContentFrame className="flex flex-wrap items-end justify-between gap-x-16 gap-y-10 pb-14 pt-8 md:pt-16 lg:pt-24">
+            <div className="flex min-w-0 max-w-[780px] flex-1 basis-[560px] flex-col gap-6">
+              <p className="inline-flex w-fit items-center gap-2 rounded-pill bg-tonal px-3 py-1 text-[13px] font-medium text-foreground">
                 <span aria-hidden="true" className="size-1.5 rounded-pill bg-accent" />
                 自托管 AI 图像工作台
               </p>
               <h1
                 id="hero-title"
-                className="text-display text-foreground [line-break:strict] [text-wrap:balance]"
+                className="text-display leading-[1.1] text-foreground [line-break:strict] [text-wrap:balance] lg:text-[64px] lg:leading-[1.05]"
               >
                 把灵感整理成
                 <br />
                 可生成的画面
               </h1>
-              <p className="max-w-xl text-base text-muted-foreground [text-wrap:pretty]">
+              <p className="max-w-[560px] text-[15px] text-muted-foreground [text-wrap:pretty] sm:text-[17px]">
                 提示词、模型与画幅、参考图、任务队列和作品图库，留在同一条创作路径上。写下画面，剩下的交给工作台。
               </p>
             </div>
 
-            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-              <Link href="/login" className={cn(heroPrimary, 'justify-center')}>
+            <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center sm:gap-3">
+              <Link href="/login" className={cn(heroPrimary, landingButtonMetrics)}>
                 开始创作
                 <ArrowRight weight="bold" aria-hidden="true" />
               </Link>
-              <Link href="#workflow" className={cn(heroSecondary, 'justify-center')}>
+              <Link href="#workflow" className={cn(heroSecondary, landingButtonMetrics)}>
                 看看创作流程
               </Link>
             </div>
@@ -224,11 +230,11 @@ export default function HomePage() {
 
         {/* 规格横条：4 列 dl，上下 1px border。 */}
         <section aria-label="创作台速览">
-          <ContentFrame className="pb-4 pt-12 md:pt-16">
+          <ContentFrame className="pb-0 pt-12">
             <dl className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] border-y border-border">
               {consoleSpecs.map((spec) => (
                 <div key={spec.label} className="flex flex-col gap-1 py-5 pr-6">
-                  <dt className="text-sm text-muted-foreground">{spec.label}</dt>
+                  <dt className="text-[13px] text-muted-foreground">{spec.label}</dt>
                   {/* 断行策略：数字与单位之间用不断行空格绑定；` / ` 与 ` · ` 两侧留普通空格，允许在分隔符处换行 */}
                   <dd className="m-0 font-mono text-sm tabular-nums text-foreground">{spec.value}</dd>
                 </div>
@@ -237,7 +243,7 @@ export default function HomePage() {
           </ContentFrame>
         </section>
 
-        {/* 产品能力：6 项编号 01–06，三列，hairline 分隔。条目无入场动画（§3.4：加载动画滚到时已播完）。 */}
+        {/* 产品能力：6 项编号 01–06，三列（~1050px 起），hairline 分隔。条目无入场动画（§3.4：加载动画滚到时已播完）。 */}
         <section id="capabilities" aria-labelledby="capabilities-title" className="scroll-mt-16">
           <Reveal>
             <ContentFrame className="py-16 md:py-24 lg:py-32">
@@ -247,14 +253,14 @@ export default function HomePage() {
                 titleId="capabilities-title"
               />
 
-              <ul className="mt-14 grid grid-cols-[minmax(0,1fr)] gap-x-10 gap-y-12 sm:grid-cols-2 lg:grid-cols-3">
+              <ul className="mt-14 grid grid-cols-[repeat(auto-fit,minmax(min(300px,100%),1fr))] gap-x-10 gap-y-12">
                 {capabilities.map((capability) => (
                   <li key={capability.title} className="flex min-w-0 flex-col gap-2.5 border-t border-border pt-6">
-                    <span className="font-mono text-sm tabular-nums text-muted-foreground">
+                    <span className="font-mono text-[13px] tabular-nums text-muted-foreground">
                       {capability.no}
                     </span>
                     <h3 className="text-module text-foreground [text-wrap:balance]">{capability.title}</h3>
-                    <p className="text-sm text-muted-foreground [text-wrap:pretty]">
+                    <p className="text-sm leading-[1.6] text-muted-foreground [text-wrap:pretty]">
                       {capability.description}
                     </p>
                   </li>
@@ -275,7 +281,7 @@ export default function HomePage() {
                 description="描述画面、确定输出、回看结果，三步之间没有需要来回搬运的中间状态。"
               />
 
-              <ol className="grid grid-cols-[minmax(0,1fr)] gap-8 sm:grid-cols-2 lg:grid-cols-3">
+              <ol className="grid grid-cols-[repeat(auto-fit,minmax(min(300px,100%),1fr))] gap-8">
                 {workflowSteps.map((step, index) => (
                   <li key={step.title} className="flex min-w-0 flex-col gap-5">
                     <WorkflowFigure index={index} />
@@ -301,7 +307,7 @@ export default function HomePage() {
               <div className="flex min-w-0 flex-wrap items-center gap-7">
                 <BrandMark variant="mark" className="h-14" />
                 <div className="flex min-w-0 flex-col gap-2">
-                  <h2 id="cta-title" className="text-section text-foreground [text-wrap:balance]">
+                  <h2 id="cta-title" className="text-title text-foreground [text-wrap:balance]">
                     准备好让第一段描述成形了吗？
                   </h2>
                   <p className="max-w-xl text-base text-muted-foreground [text-wrap:pretty]">
@@ -309,12 +315,11 @@ export default function HomePage() {
                   </p>
                 </div>
               </div>
-              <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-                <Link href="/login" className={cn(heroPrimary, 'justify-center')}>
+              <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center sm:gap-3">
+                <Link href="/login" className={cn(heroPrimary, landingButtonMetrics)}>
                   进入 MuseCanvas
-                  <ArrowRight weight="bold" aria-hidden="true" />
                 </Link>
-                <Link href="/terms" className={cn(ctaGhost, 'justify-center')}>
+                <Link href="/terms" className={cn(ctaGhost, landingButtonMetrics)}>
                   先看用户协议
                 </Link>
               </div>

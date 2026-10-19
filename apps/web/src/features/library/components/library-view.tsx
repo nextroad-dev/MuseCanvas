@@ -344,7 +344,7 @@ export function LibraryView() {
         <div ref={gridRef} className={`grid gap-4 sm:gap-5 ${gridClass(columnCount)}`} aria-busy>
           {Array.from({ length: SKELETON_TILES }, (_, index) => (
             <div key={index} className="overflow-hidden rounded-card bg-surface">
-              <div className="aspect-[4/3]">
+              <div className="aspect-square">
                 <SkeletonTile />
               </div>
               <div className="flex flex-col gap-2 p-3">
@@ -387,7 +387,7 @@ export function LibraryView() {
               <div
                 key={asset.id}
                 style={staged ? ({ '--stagger-index': String(index) } as CSSProperties) : undefined}
-                className={`group relative overflow-hidden rounded-card bg-surface shadow-soft transition-shadow hover:shadow-floating ${
+                className={`group relative overflow-hidden rounded-card bg-surface ${
                   staged ? 'motion-reveal motion-stagger' : ''
                 } ${
                   selected ? 'ring-2 ring-primary' : ''
@@ -395,7 +395,7 @@ export function LibraryView() {
               >
                 {/* `src` stays the original: it is what a failed preview retries
                     against and what the tile's download link serves. */}
-                <div className="aspect-[4/3] overflow-hidden bg-tonal">
+                <div className="aspect-square overflow-hidden bg-tonal">
                   <MediaFrame
                     src={resignedUrls[asset.id] ?? assetPlaybackUrl(asset)}
                     previewSrc={resignedUrls[asset.id] ? undefined : assetPreviewUrl(asset)}
@@ -412,8 +412,8 @@ export function LibraryView() {
                   />
                 </div>
 
-                {/* Top-right selection checkbox */}
-                <div className="absolute right-2 top-2 rounded-control bg-surface/95 p-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                {/* Top-right selection checkbox; touch screens have no hover, so it stays visible there */}
+                <div className="absolute right-2 top-2 rounded-control bg-surface/95 p-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
                   <Checkbox
                     checked={selected}
                     disabled={batchDeleting}
@@ -430,7 +430,9 @@ export function LibraryView() {
                     <span className="font-mono text-xs tabular-nums text-muted-foreground">
                       {formatDate(asset.createdAt)}
                     </span>
-                    <div className="flex items-center gap-1">
+                    {/* Hidden until the tile is hovered or any control inside it has keyboard focus;
+                        touch screens always show them. */}
+                    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
                       <IconButton
                         variant="ghost"
                         size="sm"
@@ -516,6 +518,18 @@ export function LibraryView() {
 
   const filterTabs: TabItem[] = FILTER_TABS.map((tab) => ({ ...tab, content: results }))
 
+  const selectAllCheckbox = (
+    <Checkbox
+      checked={isAllSelected}
+      indeterminate={isAnySelected && !isAllSelected}
+      disabled={batchDeleting}
+      label={isAllSelected ? '取消选择已加载作品' : '选择已加载作品'}
+      onCheckedChange={(checked) => checked
+        ? selectAllAssets(visibleAssets.map((asset) => asset.id))
+        : clearSelectedAssets()}
+    />
+  )
+
   return (
     <ContentFrame className="motion-page-enter flex min-h-0 flex-1 flex-col gap-6 py-6 md:py-8">
       <div className="flex min-w-0 flex-col gap-6">
@@ -523,7 +537,7 @@ export function LibraryView() {
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div className="flex min-w-0 flex-col gap-1">
             <h1 className="text-title font-normal text-foreground">作品图库</h1>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               {isLoading ? '正在读取作品…' : !data ? '作品暂时无法读取' : `已加载 ${visibleAssets.length} / ${total} 个已生成作品`}
             </p>
           </div>
@@ -533,7 +547,7 @@ export function LibraryView() {
             value={filterKind}
             onValueChange={(id) => setFilterKind(id as LibraryFilterKind)}
             lazy
-            className="flex-1"
+            className="ml-auto"
             aria-label="作品类型筛选"
           />
         </header>
@@ -627,27 +641,19 @@ export function LibraryView() {
           </div>
         ) : null}
 
-        {visibleAssets.length > 0 ? (
+        {/* Batch bar only exists once something is selected. Select-all stays reachable
+            before that as a bare checkbox, so the bar is not the only way in. */}
+        {isAnySelected ? (
           <div className="motion-reveal flex flex-wrap items-center justify-between gap-3 rounded-panel bg-tonal px-4 py-3">
-            <Checkbox
-              checked={isAllSelected}
-              indeterminate={isAnySelected && !isAllSelected}
-              disabled={batchDeleting}
-              label={isAllSelected ? '取消选择已加载作品' : '选择已加载作品'}
-              onCheckedChange={(checked) => checked
-                ? selectAllAssets(visibleAssets.map((asset) => asset.id))
-                : clearSelectedAssets()}
-            />
+            {selectAllCheckbox}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm text-muted-foreground">已选 {selectedAssetIds.length} 个 · 不包含未加载作品</span>
-              {isAnySelected ? (
-                <>
-                  <Button variant="ghost" disabled={batchDeleting} onClick={clearSelectedAssets}>取消选择</Button>
-                  <Button variant="danger-ghost" loading={batchDeleting} icon={<Trash2 weight="bold" aria-hidden="true" />} onClick={() => setBatchDeleteOpen(true)}>删除选中</Button>
-                </>
-              ) : null}
+              <Button variant="ghost" disabled={batchDeleting} onClick={clearSelectedAssets}>取消选择</Button>
+              <Button variant="danger-ghost" loading={batchDeleting} icon={<Trash2 weight="bold" aria-hidden="true" />} onClick={() => setBatchDeleteOpen(true)}>删除选中</Button>
             </div>
           </div>
+        ) : visibleAssets.length > 0 ? (
+          <div className="flex">{selectAllCheckbox}</div>
         ) : null}
 
         {deleteFeedback ? (

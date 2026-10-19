@@ -195,6 +195,18 @@ test('media models surface existing descriptor validation without changing model
   assert.match(text, /finding.message/)
 })
 
+test('media models: row 设为默认 reuses the shared defaults PATCH for enabled non-default rows; no fake section tabs', () => {
+  const text = read('admin-media-models-view')
+  assert.match(text, /设为默认/)
+  assert.match(text, /m\.enabled && !isModelDefault\(m\.id, defaultsData\)/)
+  assert.match(text, /useMediaModelDefaultSave\(\)/)
+  assert.doesNotMatch(text, /onChange=\{\(\) => \{\}\}/)
+  // The save path is the contract endpoint via PATCH, never a hard-coded literal.
+  assert.match(read('admin-media-model-defaults'), /API_ENDPOINTS\.admin\.mediaModelDefaults/)
+  assert.doesNotMatch(read('admin-media-model-defaults'), /['"`]\/api\/admin\/media-model-defaults/)
+  assert.match(read('admin-media-model-defaults'), /method: 'PATCH'|patchMediaModelDefaults/)
+})
+
 test('panel tables and card grids use the admin track, not sidebar viewport breakpoints', () => {
   for (const name of ['admin-dashboard-view', 'admin-jobs-view', 'admin-users-view', 'admin-language-models-view', 'admin-media-models-view', 'admin-credential-table']) {
     assert.ok(tags(source(name), 'AdminMobileRecords').length > 0, `${name} must keep a narrow-track presentation`)

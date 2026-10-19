@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import Link from 'next/link'
@@ -12,6 +13,7 @@ import { AdminDefaultModelsCard } from './admin-default-models-card'
 import { AdminJobDetail } from './admin-job-detail'
 import { AdminMobileRecords, AdminRecordDetailDialog } from './admin-record-detail-dialog'
 import { formatLocalizedDateTime } from '@/shared/lib/format'
+import { cn } from '@/shared/lib/cn'
 import { JobStatusBadge } from '@/shared/components/job-status-badge'
 import { adminPageActions, adminPageHeader, adminPageRoot } from '../lib/admin-layout'
 import { ArrowClockwiseIcon as RefreshCw } from '@phosphor-icons/react'
@@ -19,7 +21,6 @@ import {
   Alert,
   Button,
   Card,
-  CardHeader,
   DataTable,
   EmptyState,
   PageHeader,
@@ -68,10 +69,48 @@ function formatUpdatedAt(value: number): string {
   return `更新于 ${hours}:${minutes}`
 }
 
+/** Table time column: local `HH:mm` only; the full timestamp stays in the job detail. */
+function formatTimeOfDay(value: string | number | Date | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
 /** Format a number with locale separators, e.g. 3416 -> "3,416". */
 function formatCount(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
   return value.toLocaleString('zh-CN')
+}
+
+interface MetricTileProps {
+  label: string
+  /** `null` while the first load is in flight: a skeleton stands in for the figure. */
+  value: string | null
+  valueClassName?: string
+  /** 0–100; draws the 4px bar under the figure. */
+  progress?: number
+  footer?: ReactNode
+}
+
+/** Overview KPI tile: caption, mono figure, then an optional bar or link. */
+function MetricTile({ label, value, valueClassName, progress, footer }: MetricTileProps) {
+  return (
+    <Card className="gap-1.5 p-5">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      {value === null ? (
+        <Skeleton className="my-1 h-8 w-24" />
+      ) : (
+        <p className={cn('font-mono text-title tabular-nums text-foreground', valueClassName)}>{value}</p>
+      )}
+      {progress !== undefined ? (
+        <div className="h-1 overflow-hidden rounded-pill bg-border" aria-hidden="true">
+          <div className="h-full rounded-pill bg-success" style={{ width: `${progress}%` }} />
+        </div>
+      ) : null}
+      {footer}
+    </Card>
+  )
 }
 
 interface DailyPoint {
@@ -181,6 +220,9 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
   const maxTotal = useMemo(() => Math.max(1, ...points.map((p) => p.total)), [points])
   const successRate = metrics?.successRate7d
   const failedCount = metrics?.failedJobs7d ?? 0
+  const successBarWidth = typeof successRate === 'number' && Number.isFinite(successRate)
+    ? Math.min(100, Math.max(0, successRate))
+    : 0
 
   function handleRefresh() {
     refetchMetrics()
@@ -193,6 +235,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
         className={adminPageHeader}
         actionsClassName={adminPageActions}
         title="系统概览"
+        description="累计规模与近 7 天的生成结果，刷新失败时保留最近一次成功的数据。"
         actions={
           <>
             {updatedLabel ? (
@@ -225,50 +268,40 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
         </Alert>
       ) : null}
 
-      {/* Top metric cards: users, total jobs, 7-day chart */}
-      <section aria-labelledby="dashboard-metrics-heading" className="grid grid-cols-1 gap-5 md:grid-cols-12">
+      {/* Headline KPIs as four equal tiles, with the 7-day breakdown below at full width. */}
+      <section aria-labelledby="dashboard-metrics-heading" className="flex min-w-0 flex-col gap-4">
         <h2 id="dashboard-metrics-heading" className="sr-only">
           汇总指标
         </h2>
 
-        {/* 用户总数 */}
-        <Card className="h-64 justify-between p-6 md:col-span-3" aria-busy={metricsPending || undefined}>
-          <CardHeader>
-            <p className="text-sm font-semibold text-foreground">用户总数</p>
-          </CardHeader>
-          {metricsPending ? (
-            <div className="flex flex-1 items-center justify-center" aria-hidden="true">
-              <Skeleton className="h-12 w-28" />
-            </div>
-          ) : (
-            <div className="flex flex-1 items-center justify-center">
-              <span className="text-5xl font-normal tabular-nums tracking-tight text-foreground">
-                {formatCount(metrics?.totalUsers)}
-              </span>
-            </div>
-          )}
-        </Card>
+        <div
+          className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4"
+          aria-busy={metricsPending || undefined}
+        >
+          <MetricTile label="用户总数" value={metricsPending ? null : formatCount(metrics?.totalUsers)} />
+          <MetricTile label="累计生成任务" value={metricsPending ? null : formatCount(metrics?.totalJobs)} />
+          <MetricTile
+            label="7 天成功率"
+            value={metricsPending ? null : typeof successRate === 'number' ? `${successRate}%` : '—'}
+            progress={successBarWidth}
+          />
+          <MetricTile
+            label="7 天失败任务"
+            value={metricsPending ? null : formatCount(metrics?.failedJobs7d)}
+            valueClassName="text-danger"
+            footer={
+              <Link
+                href="/admin/jobs?status=failed"
+                className="self-start text-xs text-foreground underline underline-offset-2"
+              >
+                查看失败任务
+              </Link>
+            }
+          />
+        </div>
 
-        {/* 累计生成任务 */}
-        <Card className="h-64 justify-between p-6 md:col-span-3" aria-busy={metricsPending || undefined}>
-          <CardHeader>
-            <p className="text-sm font-semibold text-foreground">累计生成任务</p>
-          </CardHeader>
-          {metricsPending ? (
-            <div className="flex flex-1 items-center justify-center" aria-hidden="true">
-              <Skeleton className="h-12 w-28" />
-            </div>
-          ) : (
-            <div className="flex flex-1 items-center justify-center">
-              <span className="text-5xl font-normal tabular-nums tracking-tight text-foreground">
-                {formatCount(metrics?.totalJobs)}
-              </span>
-            </div>
-          )}
-        </Card>
-
-        {/* 近 7 天生成 — stacked bar chart */}
-        <Card className="h-64 justify-between p-6 md:col-span-6" aria-busy={metricsPending || undefined}>
+        {/* 近 7 天生成 — stacked bar chart (kept deliberately, below the tiles) */}
+        <Card className="gap-5 p-6" aria-busy={metricsPending || undefined}>
           <div className="flex flex-col gap-1">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -299,7 +332,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
           </div>
 
           {metricsPending ? (
-            <div className="flex flex-1 items-end justify-between gap-3 px-1" aria-hidden="true">
+            <div className="flex items-end justify-between gap-3 px-1" aria-hidden="true">
               {Array.from({ length: 7 }, (_, i) => (
                 <div key={i} className="flex flex-1 flex-col items-center">
                   <Skeleton className="mb-1.5 h-3 w-5" />
@@ -345,8 +378,8 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
       {/* Recent jobs */}
       <section ref={recordListRef} tabIndex={-1} aria-label="最近任务列表" className="flex flex-col gap-4">
         <div className="flex items-center justify-between px-1">
-          <h2 className="text-base font-bold text-foreground">最近任务</h2>
-          <Link href="/admin/jobs" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+          <h2 className="text-module text-foreground">最近任务</h2>
+          <Link href="/admin/jobs" className="text-sm font-medium text-foreground underline-offset-4 hover:underline">
             进入任务监控
           </Link>
         </div>
@@ -404,9 +437,15 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
             ) : jobs && jobs.length > 0 ? (
               jobs.map((job) => (
                 <TableRow key={job.id} hover>
-                  <TableCell mono textSize="sm" tone="muted">
-                    <Button variant="ghost" size="sm" onClick={() => setDetailJob(job)} aria-label={`查看任务 ${job.id} 详情`}>
-                      {job.id.slice(0, 8)}
+                  <TableCell mono textSize="xs" tone="muted">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="font-mono text-xs font-normal"
+                      onClick={() => setDetailJob(job)}
+                      aria-label={`查看任务 ${job.id} 详情`}
+                    >
+                      {job.id}
                     </Button>
                   </TableCell>
                   <TableCell tone="foreground">{MEDIA_KIND_LABEL[adminJobMediaKind(job)]}</TableCell>
@@ -415,7 +454,7 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
                     <JobStatusBadge status={job.status} />
                   </TableCell>
                   <TableCell align="right" mono tabular tone="muted">
-                    {formatLocalizedDateTime(job.createdAt)}
+                    {formatTimeOfDay(job.createdAt)}
                   </TableCell>
                 </TableRow>
               ))

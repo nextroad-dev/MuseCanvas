@@ -10,6 +10,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { ArrowLeftIcon as ArrowLeft } from '@phosphor-icons/react'
 import { api, ApiError } from '@/shared/services/api'
+import { cn } from '@/shared/lib/cn'
 import { ACCOUNT_QUERY_KEY } from '@/shared/hooks/useAccount'
 import type { User, OAuthProviderInfo } from '@/shared/types'
 import { safeRedirectPath } from '@/shared/lib/app-routes'
@@ -46,6 +47,12 @@ const OTP_SEND_FAILED = '验证码发送失败。请确认邮箱地址填写无�
 
 /** 纯样式倒计时：冷却结束前禁用重发，到零即恢复调用既有 otp/request（后端无冷却状态）。 */
 const RESEND_COOLDOWN_SECONDS = 60
+
+/** Both OAuth slots always render (disabled until enabled), so the row never jumps when providers load. */
+const OAUTH_SLOTS = [
+  { provider: 'github', label: 'GitHub', Icon: GithubIcon },
+  { provider: 'google', label: 'Google', Icon: GoogleIcon },
+] as const
 
 function formatCountdown(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60)
@@ -270,20 +277,27 @@ export function LoginForm() {
 
   return (
     <div className="flex flex-col">
-      <header className="mb-9 flex flex-col gap-2.5">
-        <h1 className="text-title font-semibold tracking-tight text-foreground">
+      <header className="mb-7 flex flex-col gap-2">
+        {step === 'otp' ? (
+          <button
+            type="button"
+            onClick={backToEmail}
+            className="-ml-1 inline-flex min-h-[var(--control-sm)] items-center gap-1.5 self-start rounded-control px-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft weight="bold" aria-hidden="true" className={iconSize.sm} />
+            修改邮箱
+          </button>
+        ) : null}
+        <h1 className="text-title tracking-tight text-foreground">
           {step === 'otp' ? '输入验证码' : step === 'invitation' ? '需要邀请码' : '登录 MuseCanvas'}
         </h1>
         <p
-          className={`min-w-0 text-sm text-muted-foreground [text-wrap:pretty] ${
+          className={`min-w-0 text-[15px] text-muted-foreground [text-wrap:pretty] ${
             step === 'otp' ? '[overflow-wrap:anywhere]' : ''
           }`}
         >
           {step === 'otp' ? (
-            <>
-              6 位验证码已发送到 <span className="font-medium text-foreground">{email}</span>
-              ，输满 6 位自动提交。
-            </>
+            <>6 位验证码已发送到 <span className="font-medium text-foreground">{email}</span></>
           ) : step === 'invitation' ? (
             '当前平台处于邀请测试期，请填写有效邀请码。'
           ) : (
@@ -301,7 +315,7 @@ export function LoginForm() {
       {step === 'email' && (
         <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-4">
           <FieldGroup>
-            <FormField id="email" label="邮箱地址" required error={errors.email}>
+            <FormField id="email" label="邮箱地址" required error={errors.email} hint="邮箱只用于登录与作品找回。">
               <Input
                 type="email"
                 autoComplete="email"
@@ -313,7 +327,7 @@ export function LoginForm() {
                   clearFieldError('email')
                 }}
                 placeholder="name@example.com"
-                className="rounded-xl px-4 py-3"
+                className="rounded-control px-4 py-3"
                 ref={(node) => {
                   inputRefs.current.email = node
                 }}
@@ -326,7 +340,7 @@ export function LoginForm() {
             size="lg"
             loading={loading}
             fullWidth
-            className="rounded-xl"
+            className="rounded-control"
           >
             发送验证码
           </Button>
@@ -348,7 +362,7 @@ export function LoginForm() {
                   clearFieldError('invitation')
                 }}
                 placeholder="请填写邀请码"
-                className="rounded-xl px-4 py-3"
+                className="rounded-control px-4 py-3"
                 ref={(node) => {
                   inputRefs.current.invitation = node
                 }}
@@ -363,9 +377,9 @@ export function LoginForm() {
               aria-label="返回上一步，检查邮箱地址"
               onClick={backToEmail}
               icon={<ArrowLeft weight="bold" aria-hidden="true" />}
-              className="rounded-xl"
+              className="rounded-control"
             />
-            <Button type="submit" size="lg" loading={loading} className="flex-1 rounded-xl">
+            <Button type="submit" size="lg" loading={loading} className="flex-1 rounded-control">
               确认并发送验证码
             </Button>
           </div>
@@ -374,19 +388,11 @@ export function LoginForm() {
 
       {step === 'otp' && (
         <form noValidate onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
-          <button
-            type="button"
-            onClick={backToEmail}
-            className="inline-flex min-h-11 items-center gap-1.5 self-start rounded-control px-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft weight="bold" aria-hidden="true" className={iconSize.sm} />
-            修改邮箱
-          </button>
           <FieldGroup>
+            {/* No required star on this step: the six cells and their hint already say what is needed. */}
             <FormField
               id="otp"
-              label="6 位验证码"
-              required
+              label="验证码"
               hint="支持直接粘贴整串验证码，输满 6 位自动提交。"
               error={errors.otp}
             >
@@ -407,26 +413,21 @@ export function LoginForm() {
             </FormField>
           </FieldGroup>
 
-          <Button type="submit" size="lg" loading={loading} fullWidth className="rounded-xl">
+          <Button type="submit" size="lg" loading={loading} fullWidth className="rounded-control">
             验证并登录
           </Button>
 
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-muted-foreground">没收到？检查垃圾邮件</span>
-            {resendIn > 0 ? (
-              <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                重新发送 · {formatCountdown(resendIn)}
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void handleResendOtp()}
-                disabled={loading}
-                className={`min-h-11 rounded-control px-2 font-mono text-xs tabular-nums text-foreground transition-colors hover:bg-tonal ${loading ? 'is-disabled' : ''}`}
-              >
-                重新发送
-              </button>
-            )}
+            {/* Cooling down is a disabled button, not a label, so the control keeps its place and state. */}
+            <button
+              type="button"
+              onClick={() => void handleResendOtp()}
+              disabled={loading || resendIn > 0}
+              className="inline-flex min-h-[var(--control-sm)] items-center rounded-control px-3 font-mono text-xs tabular-nums text-foreground transition-colors hover:bg-tonal disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent"
+            >
+              {resendIn > 0 ? `重新发送 · ${formatCountdown(resendIn)}` : '重新发送'}
+            </button>
           </div>
         </form>
       )}
@@ -435,29 +436,41 @@ export function LoginForm() {
         <Divider label="或使用第三方账号" labelClassName="bg-canvas" className="my-7" />
         {providers.isPending ? <p role="status" className="mb-4 text-center text-xs text-muted-foreground">正在读取可用登录方式…</p> : null}
         {providers.error && <div className="mb-4"><Alert tone="warning" action={<Button variant="secondary" size="sm" loading={providers.isFetching} onClick={() => void providers.refetch()}>重试</Button>}>暂时无法读取第三方登录方式，请重试或使用邮箱验证码。</Alert></div>}
-        {providers.data && !providers.data.some(provider => provider.enabled) && <p className="mb-4 text-center text-xs text-muted-foreground">当前没有启用第三方登录，请使用邮箱验证码。</p>}
-        {providers.data?.some(provider => provider.enabled) && (
-          <div className="grid grid-cols-2 gap-3.5">
-            {providers.data.filter(provider => provider.enabled).map(provider => (
-              <a key={provider.provider}
-                href={API_ENDPOINTS.auth.oauthStart(provider.provider)}
-                className={buttonVariants({ variant: 'secondary', size: 'lg', className: 'min-w-0 flex-1 gap-2.5 rounded-xl' })}
-              >
-                {provider.provider === 'github' ? <GithubIcon className={`${iconSize.md} shrink-0`} /> : <GoogleIcon className={`${iconSize.md} shrink-0`} />}
-                <span>{provider.label}</span>
+        <div className="grid grid-cols-2 gap-2.5">
+          {OAUTH_SLOTS.map(({ provider, label, Icon }) => {
+            const info = providers.data?.find((entry) => entry.provider === provider)
+            const enabled = info?.enabled === true
+            const className = cn(
+              buttonVariants({ variant: 'secondary', size: 'md' }),
+              'h-11 min-w-0 gap-2.5 disabled:cursor-not-allowed disabled:opacity-[var(--opacity-disabled)]',
+            )
+            const content = (
+              <>
+                <Icon className={`${iconSize.md} shrink-0`} aria-hidden="true" />
+                <span>{info?.label ?? label}</span>
+              </>
+            )
+            return enabled ? (
+              <a key={provider} href={API_ENDPOINTS.auth.oauthStart(provider)} className={className}>
+                {content}
               </a>
-            ))}
-          </div>
-        )}
+            ) : (
+              <button key={provider} type="button" disabled className={className}>
+                {content}
+              </button>
+            )
+          })}
+        </div>
+        {providers.data && !providers.data.some(provider => provider.enabled) && <p className="mt-4 text-center text-xs text-muted-foreground">当前没有启用第三方登录，请使用邮箱验证码。</p>}
       </section>
 
-      <p className="mt-8 text-center text-xs text-muted-foreground [text-wrap:pretty]">
+      <p className="mt-8 text-left text-xs text-muted-foreground [text-wrap:pretty]">
         登录即代表你已阅读并同意
-        <Link href="/terms" className="rounded-control underline underline-offset-2 hover:text-foreground">
+        <Link href="/terms" className="rounded-control text-foreground">
           用户协议
         </Link>
         与
-        <Link href="/privacy" className="rounded-control underline underline-offset-2 hover:text-foreground">
+        <Link href="/privacy" className="rounded-control text-foreground">
           隐私政策
         </Link>
         。

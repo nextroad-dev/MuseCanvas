@@ -18,7 +18,7 @@ function LoginFormFallback() {
   return (
     <div aria-busy="true" className="flex flex-col gap-8">
       <span className="sr-only">正在加载登录表单</span>
-      <header className="flex flex-col items-center gap-3" aria-hidden="true">
+      <header className="flex flex-col items-start gap-3" aria-hidden="true">
         <Skeleton className="h-8 w-48" />
         <SkeletonText lines={1} width="16rem" />
       </header>

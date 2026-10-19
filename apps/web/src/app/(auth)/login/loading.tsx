@@ -8,7 +8,7 @@ export default function LoginLoading() {
   return (
     <div aria-busy="true" className="flex flex-col gap-8">
       <span className="sr-only">正在加载登录页面</span>
-      <div className="flex flex-col items-center gap-3" aria-hidden="true">
+      <div className="flex flex-col items-start gap-3" aria-hidden="true">
         <Skeleton className="h-8 w-48" />
         <SkeletonText lines={1} width="16rem" />
       </div>

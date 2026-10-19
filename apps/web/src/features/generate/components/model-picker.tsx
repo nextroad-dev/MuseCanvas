@@ -181,7 +181,7 @@ export function ModelPicker({
             close(true)
           }
         }}
-        className="inline-flex max-w-full items-center gap-2 rounded-control bg-tonal px-2 py-1 text-sm text-foreground transition-colors hover:bg-tonal-hover active:bg-tonal-active disabled:cursor-not-allowed disabled:opacity-[var(--opacity-disabled)]"
+        className="inline-flex min-h-[var(--control-sm)] max-w-full items-center gap-2 rounded-control bg-tonal px-2 py-1 text-sm text-foreground transition-colors hover:bg-tonal-hover active:bg-tonal-active disabled:cursor-not-allowed disabled:opacity-[var(--opacity-disabled)]"
       >
         <span className="shrink-0 rounded-control bg-surface px-1.5 py-px text-caption font-medium">{KIND_LABEL[activeKind]}</span>
         <span className="min-w-0 truncate">{activeModel?.displayName ?? '选择模型'}</span>
@@ -195,9 +195,11 @@ export function ModelPicker({
           aria-label="选择模型"
           className="motion-menu absolute bottom-full left-0 z-dropdown mb-2 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-popover border border-border bg-surface p-2 shadow-dropdown"
         >
+          {/* Local override only: the shared control keeps its tonal thumb and 12px labels. */}
           <SegmentedControl
             label="输出类型"
             size="sm"
+            className="[&>button]:text-[13px] [&>span]:bg-surface"
             value={viewTab}
             onChange={(value) => setViewTab(value as GenerateModeTab)}
             items={[
@@ -218,7 +220,7 @@ export function ModelPicker({
               onOptionKeyDown={onOptionKeyDown}
             />
           )}
-          <p className="border-t border-border px-2 pb-1 pt-2 text-caption text-muted-foreground">
+          <p className="border-t border-border px-2.5 pb-1 pt-1.5 text-xs text-muted-foreground">
             新对话默认使用管理员设置的模型，切换后本对话保持你的选择。
           </p>
         </div>
@@ -275,7 +277,7 @@ function OptionsList({
                   <span className="shrink-0 rounded-pill bg-tonal px-1.5 text-caption font-medium text-muted-foreground">默认</span>
                 ) : null}
               </span>
-              {note ? <span className="truncate text-caption text-muted-foreground">{note}</span> : null}
+              {note ? <span className="truncate text-xs text-muted-foreground">{note}</span> : null}
             </span>
             {selected ? <Check weight="bold" aria-hidden="true" className="h-4 w-4 shrink-0 text-foreground" /> : null}
           </li>

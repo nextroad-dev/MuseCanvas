@@ -84,7 +84,7 @@ export function ConversationTimeline({
           : ''
 
   return (
-    <section aria-label="对话" className={cn('relative flex min-h-0 min-w-0 flex-1 flex-col', className)}>
+    <section aria-label="对话" className={cn('relative mx-auto flex min-h-0 w-full max-w-[760px] min-w-0 flex-1 flex-col', className)}>
       <p role="status" aria-live="polite" className="sr-only">{announcement}</p>
       {disconnected ? (
         <Alert tone="warning" title="连接已中断" className="mb-3">

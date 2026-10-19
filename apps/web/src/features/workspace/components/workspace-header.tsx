@@ -106,32 +106,35 @@ export function WorkspaceHeader({ initialUser }: WorkspaceHeaderProps) {
 
   return (
     <>
-      <header className="relative z-sticky flex h-[var(--layout-header)] shrink-0 items-center border-b border-border bg-surface">
+      <header className="relative z-sticky flex h-[var(--layout-header)] shrink-0 items-center border-b border-border bg-canvas">
         <ContentFrame className="flex items-center justify-between gap-3">
-          <Link
-            href={GENERATE_ROUTE}
-            className="shrink-0 rounded-control flex items-center"
-            aria-label="MuseCanvas 创作台"
-          >
-            <BrandMark variant="wordmark" priority className="h-6 w-auto" />
-          </Link>
+          <div className="flex min-w-0 items-center gap-6">
+            <Link
+              href={GENERATE_ROUTE}
+              className="flex shrink-0 items-center gap-2 rounded-control"
+              aria-label="MuseCanvas 创作台"
+            >
+              <BrandMark variant="mark" priority className="h-[19px]" />
+              <span className="text-[15px] font-medium text-foreground">MuseCanvas</span>
+            </Link>
 
-          {/* Desktop nav: 创作 / 图库 segmented control */}
-          <nav className="hidden items-center gap-1 rounded-control bg-tonal p-1 md:flex" aria-label="主导航">
-            {workspaceNavItems.map((item) => {
-              const isActive = item.key === activeKey
-              return (
-                <Link
-                  key={item.key}
-                  href={item.href}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={segmentedItemClass(isActive)}
-                >
-                  {item.label}
-                </Link>
-              )
-            })}
-          </nav>
+            {/* Desktop nav: 创作 / 图库 segmented control, set right after the brand */}
+            <nav className="hidden items-center gap-1 rounded-control bg-tonal p-1 md:flex" aria-label="主导航">
+              {workspaceNavItems.map((item) => {
+                const isActive = item.key === activeKey
+                return (
+                  <Link
+                    key={item.key}
+                    href={item.href}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cn(segmentedItemClass(isActive), 'min-h-[var(--control-sm)] px-3')}
+                  >
+                    {item.label}
+                  </Link>
+                )
+              })}
+            </nav>
+          </div>
 
           {/* Mobile: page name */}
           <span className="min-w-0 truncate text-sm font-medium text-foreground md:hidden">{currentPageName}</span>

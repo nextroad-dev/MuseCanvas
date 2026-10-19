@@ -112,11 +112,11 @@ export function AgentMessage({ item }: AgentMessageProps) {
     const lines = contextSummaryLines(item.contextSummary)
     return (
       <article className="flex flex-col items-end gap-1" aria-label="你的消息">
-        <div className="max-w-[92%] rounded-panel bg-tonal px-4 py-2.5 text-sm text-foreground">
+        <div className="max-w-[520px] rounded-card bg-tonal px-4 py-3 text-sm text-foreground">
           <p className="whitespace-pre-wrap break-words">{item.text}</p>
         </div>
         {lines.length > 0 ? (
-          <ul className="flex max-w-[92%] flex-col gap-0.5 text-right text-caption text-muted-foreground">
+          <ul className="flex max-w-[520px] flex-col gap-0.5 text-right text-caption text-muted-foreground">
             {lines.map((line) => <li key={line}>{line}</li>)}
           </ul>
         ) : null}
@@ -127,8 +127,8 @@ export function AgentMessage({ item }: AgentMessageProps) {
   // The agent speaks as open text, not a bubble: only the user's turns are boxed, so
   // the timeline reads as one conversation instead of a stack of cards.
   return (
-    <article className="flex max-w-[92%] flex-col gap-1" aria-label="Agent 回复">
-      <p className="text-caption text-muted-foreground">MuseCanvas Bot</p>
+    <article className="flex max-w-[620px] flex-col gap-1" aria-label="Agent 回复">
+      <p className="text-xs font-medium text-muted-foreground">Agent</p>
       <div className={cn('text-sm leading-relaxed text-foreground', item.provisional && 'opacity-90')}>
         <p className="whitespace-pre-wrap break-words">{item.text}</p>
       </div>

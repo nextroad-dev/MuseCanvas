@@ -267,7 +267,7 @@ function fixtureRespond(method, pathname, search, cookie) {
     return { status: 200, body: { success: true, data: { url: MEDIA_URL, downloadUrl: MEDIA_URL, mediaKind: 'image', mimeType: 'image/png' } } }
   }
   if (pathname === '/api/account/oauth') return { status: 200, body: { success: true, data: [] } }
-  if (pathname === '/api/auth/oauth/providers') return { status: 200, body: { success: true, data: [{ provider: 'github', label: 'GitHub', enabled: true }, { provider: 'google', label: 'Google', enabled: false }] } }
+  if (pathname === '/api/auth/oauth/providers') return { status: 200, body: { success: true, data: { providers: [{ provider: 'github', label: 'GitHub', enabled: true }, { provider: 'google', label: 'Google', enabled: false }] } } }
   if (pathname === '/api/canvas-agent/status') {
     return { status: 200, body: { success: true, data: { enabled: true, available: true, reason: 'ready', maxToolCallsPerTurn: 12, maxJobsPerTurn: 4, timeoutMs: 120000, maxAutoContinuations: 3 } } }
   }

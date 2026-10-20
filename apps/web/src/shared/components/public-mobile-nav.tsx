@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useDialog } from '@/shared/hooks/useDialog'
 import { buttonVariants } from '@/shared/components/ui/button-variants'
 import { iconSize } from '@/shared/components/ui/size'
+import { GENERATE_ROUTE } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 
 /**
@@ -31,8 +32,8 @@ const panelId = 'public-mobile-nav-panel'
 /** Anchors use `/#…` so they work from `/terms` and `/privacy` too, not just `/`. */
 const mobileNavItems: { href: string; label: string }[] = [
   { href: '/#works', label: '作品' },
-  { href: '/#capabilities', label: '产品能力' },
-  { href: '/#workflow', label: '创作流程' },
+  { href: '/#capabilities', label: '能力' },
+  { href: '/#workflow', label: '流程' },
   { href: '/terms', label: '用户协议' },
   { href: '/privacy', label: '隐私政策' },
 ]
@@ -116,7 +117,7 @@ export function PublicMobileNav() {
                 )}
               >
                 <div className="flex h-[var(--layout-header)] items-center justify-between">
-                  <h2 id={labelId} className="text-[15px] font-medium text-foreground">
+                  <h2 id={labelId} className="text-base font-medium text-foreground">
                     菜单
                   </h2>
                   <button
@@ -137,7 +138,7 @@ export function PublicMobileNav() {
                         <Link
                           href={item.href}
                           onClick={close}
-                          className="motion-press flex min-h-[var(--control-lg)] items-center text-[17px] text-foreground"
+                          className="motion-press flex min-h-[var(--control-lg)] items-center text-lg text-foreground"
                         >
                           {item.label}
                         </Link>
@@ -155,7 +156,7 @@ export function PublicMobileNav() {
                     登录
                   </Link>
                   <Link
-                    href="/login"
+                    href={GENERATE_ROUTE}
                     onClick={close}
                     className={cn(buttonVariants({ variant: 'primary', size: 'lg' }), 'flex-1')}
                   >

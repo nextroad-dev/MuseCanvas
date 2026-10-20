@@ -115,16 +115,17 @@ export function GenerationResultCard({ jobId, onOpenResult, onContinuePlanning, 
                 const current = index === cursor
                 return (
                   <li key={label} className="flex items-center gap-2.5 text-[13px]">
+                    {/* Stage change is a colour/weight swap at the fast token, never a move. */}
                     <span
                       aria-hidden="true"
                       className={cn(
-                        'h-2 w-2 shrink-0 rounded-pill',
+                        'h-2 w-2 shrink-0 rounded-pill transition-[background-color,box-shadow]',
                         done && 'bg-accent',
                         current && 'bg-primary ring-[3px] ring-foreground/12',
                         !done && !current && 'bg-border',
                       )}
                     />
-                    <span className={done || current ? 'font-medium text-foreground' : 'text-muted-foreground'}>{label}</span>
+                    <span className={cn('transition-colors', done || current ? 'font-medium text-foreground' : 'text-muted-foreground')}>{label}</span>
                   </li>
                 )
               })}

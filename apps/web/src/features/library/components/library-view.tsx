@@ -50,9 +50,9 @@ import {
 } from '@/shared/hooks/useLibrary'
 import { assetPlaybackUrl, assetPreviewUrl, isVideoAsset } from '@/shared/types'
 import { GENERATE_ROUTE } from '@/shared/lib/app-routes'
-import { formatDate } from '@/shared/lib/format'
+import { formatMonthDay } from '@/shared/lib/format'
 import { AssetLightbox } from './asset-lightbox'
-import { deleteSelectedAssets, libraryGridClass as gridClass } from './workspace-page-state'
+import { assetTitle, deleteSelectedAssets, libraryGridClass as gridClass } from './workspace-page-state'
 
 /** Segmented control values, mirroring `LibraryFilterKind`. Fed to `Tabs`, whose
  *  `tablist` / `tab` / `tabpanel` semantics replace the old `aria-pressed` row. */
@@ -422,13 +422,14 @@ export function LibraryView() {
                   />
                 </div>
 
-                <div className="flex flex-col gap-1 p-3">
-                  <p className="line-clamp-1 min-h-5 break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">
-                    {asset.prompt || '无提示词'}
+                <div className="flex flex-col gap-2 p-3">
+                  {/* The full prompt stays one hover away (title) and one click away (lightbox). */}
+                  <p className="truncate text-sm font-normal text-foreground" title={asset.prompt || undefined}>
+                    {assetTitle(asset.prompt) ?? '无提示词'}
                   </p>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                      {formatDate(asset.createdAt)}
+                      {formatMonthDay(asset.createdAt)}
                     </span>
                     {/* Hidden until the tile is hovered or any control inside it has keyboard focus;
                         touch screens always show them. */}
@@ -538,7 +539,7 @@ export function LibraryView() {
           <div className="flex min-w-0 flex-col gap-1">
             <h1 className="text-title font-normal text-foreground">作品图库</h1>
             <p className="text-sm text-muted-foreground">
-              {isLoading ? '正在读取作品…' : !data ? '作品暂时无法读取' : `已加载 ${visibleAssets.length} / ${total} 个已生成作品`}
+              {isLoading ? '正在读取作品…' : !data ? '作品暂时无法读取' : `${visibleAssets.length} 个已加载作品`}
             </p>
           </div>
           <Tabs

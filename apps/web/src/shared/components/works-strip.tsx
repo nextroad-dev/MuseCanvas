@@ -1,95 +1,100 @@
-import type { CSSProperties } from 'react'
-import Image from 'next/image'
-import { ContentFrame } from '@/shared/components/content-frame'
-import { SHOWCASE_WORKS, showcasePrompt, showcaseSrc } from '@/shared/lib/showcase'
+import { LandingFrame } from '@/features/landing/components/landing-frame'
+import { SectionHeading } from '@/features/landing/components/section-heading'
+import { ShowcaseFrame } from '@/features/landing/components/showcase-frame'
+import { Reveal } from '@/shared/components/reveal'
+import { SHOWCASE_WORKS } from '@/shared/lib/showcase'
+
+/** Declared pixel size of the 4:3 showcase file, shown in the prompt card. */
+const LANDSCAPE_43 = SHOWCASE_WORKS.find((work) => work.file === 'ratio-4x3.webp')
+
+/** Prompt shown on the prompt card (mock copy). */
+const PROMPT_CARD_TEXT =
+  '等距视角的微缩独立书店，黏土质感，木书架摆满书籍，窗台上有绿植和一只熟睡的橘猫，暖色台灯。'
 
 /**
- * 作品条：5 种画幅等高不等宽（flex 比例 + aspect-ratio）。
- * <640px 改为固定 200px 高、按画幅定宽的横向滚动条（`--work-ratio` 即宽高比），
- * 首屏约 3 张；>=640px 保持等高不等宽的桌面布局。
- * 素材由仓库所有者提供（plan §7.1）：`public/showcase/` 与 `showcase.json`
- * 缺失时渲染 `bg-tonal` 占位块，构建与渲染都不报错。
- * 图注只显示提示词，不显示画幅比例。
+ * 作品 section from the design mock: a mosaic of showcase images with short
+ * titles as captions, and a prompt card. Two rows; the second row is 420px tall
+ * from `md` and stacks at its own ratios below it. Images come only from the
+ * showcase files, and a missing asset renders a placeholder.
  */
-const WORKS = SHOWCASE_WORKS
-
-/** Mobile (<640px) card height; each card's width is this height times its ratio. */
-const MOBILE_WORK_HEIGHT = 200
-
-/** 落地页作品条（server component：无 Query、无 store，保持 `force-static`）。 */
 export function WorksStrip() {
   return (
     <section id="works" aria-labelledby="works-title" className="scroll-mt-16">
-      <ContentFrame className="pb-6">
-        <h2 id="works-title" className="sr-only">
-          作品示例
-        </h2>
-        <div className="overflow-x-auto pb-2">
-          <ul className="flex min-w-0 items-start gap-3 sm:min-w-[1080px] sm:gap-4">
-            {WORKS.map((work) => {
-              const src = showcaseSrc(work.file)
-              const prompt = showcasePrompt(work.file, work.label)
-              return (
-                <li
-                  key={work.file}
-                  style={
-                    {
-                      '--work-ratio': work.grow,
-                      '--work-width': `${MOBILE_WORK_HEIGHT * work.grow}px`,
-                    } as CSSProperties
-                  }
-                  className="flex min-w-0 w-(--work-width) flex-none flex-col sm:w-auto sm:flex-1 sm:grow-(--work-ratio)"
-                >
-                  <figure className="m-0 flex min-w-0 flex-col gap-2.5">
-                    <div
-                      style={{ aspectRatio: work.ratio }}
-                      className="relative flex h-[200px] items-center justify-center overflow-hidden rounded-card bg-tonal sm:h-auto"
-                    >
-                      {src ? (
-                        <Image
-                          src={src}
-                          alt={prompt}
-                          width={work.width}
-                          height={work.height}
-                          sizes="(max-width: 640px) 360px, (max-width: 1280px) 28vw, 320px"
-                          loading="lazy"
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <span
-                          aria-hidden="true"
-                          className="flex flex-col items-center gap-2 text-decorative-muted"
-                        >
-                          <svg
-                            width="28"
-                            height="28"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <rect x="3" y="4" width="18" height="16" rx="2" />
-                            <circle cx="9" cy="10" r="2" />
-                            <path d="M21 16l-5-5-9 9" />
-                          </svg>
-                          <span className="font-mono text-xs tabular-nums">[作品图]</span>
-                        </span>
-                      )}
-                    </div>
-                    <figcaption className="truncate text-[13px] text-muted-foreground">{prompt}</figcaption>
-                  </figure>
-                </li>
-              )
-            })}
-          </ul>
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground sm:hidden">← 横向滑动查看示例作品</p>
-        <p className="mt-2 text-[13px] text-muted-foreground">
-          五种画幅，同一个面板里切换。示例作品均由 MuseCanvas 生成。
-        </p>
-      </ContentFrame>
+      <Reveal>
+        <LandingFrame className="pb-24 md:pb-32">
+          <div className="border-t border-foreground pt-8 md:pt-10">
+            <SectionHeading
+              id="works-title"
+              title="作品"
+              lede="这些都是在这里画的"
+              className="mb-12 md:mb-14"
+            />
+          </div>
+
+          <div className="flex flex-col gap-10">
+            <div className="flex flex-col gap-6 md:flex-row md:flex-wrap md:items-start">
+              <figure className="m-0 flex min-w-0 flex-col gap-3 md:flex-[1.778_1_480px]">
+                <ShowcaseFrame
+                  file="ratio-16x9.webp"
+                  label="16:9"
+                  className="aspect-video w-full rounded-control"
+                  sizes="(max-width: 768px) 100vw, 60vw"
+                />
+                <figcaption className="text-center text-sm text-muted-foreground">茶山云海</figcaption>
+              </figure>
+              <figure className="m-0 flex min-w-0 flex-col gap-3 md:flex-[1_1_280px]">
+                <ShowcaseFrame
+                  file="ratio-1x1.webp"
+                  label="1:1"
+                  className="aspect-square w-full rounded-control"
+                  sizes="(max-width: 768px) 100vw, 40vw"
+                />
+                <figcaption className="text-center text-sm text-muted-foreground">粗陶与橄榄枝</figcaption>
+              </figure>
+            </div>
+
+            <div className="flex flex-col gap-6 md:flex-row md:flex-wrap md:items-stretch">
+              <figure className="m-0 flex min-w-0 flex-col gap-3 md:flex-[0_1_260px]">
+                <ShowcaseFrame
+                  file="ratio-9x16.webp"
+                  label="9:16"
+                  className="aspect-[9/16] w-full rounded-control md:aspect-auto md:h-[420px]"
+                  sizes="(max-width: 768px) 100vw, 22vw"
+                />
+                <figcaption className="text-center text-sm text-muted-foreground">荷塘白鹭</figcaption>
+              </figure>
+              <figure className="m-0 flex min-w-0 flex-col gap-3 md:flex-[1.333_1_400px]">
+                <ShowcaseFrame
+                  file="ratio-4x3.webp"
+                  label="4:3"
+                  className="aspect-[4/3] w-full rounded-control md:aspect-auto md:h-[420px]"
+                  sizes="(max-width: 768px) 100vw, 34vw"
+                />
+                <figcaption className="text-center text-sm text-muted-foreground">微缩书店</figcaption>
+              </figure>
+              <aside
+                aria-label="作品提示词"
+                className="flex min-w-0 flex-col items-center justify-center gap-8 rounded-control bg-surface p-8 text-center md:flex-[1_1_300px] md:h-[420px]"
+              >
+                <div className="flex flex-col gap-4">
+                  <p className="text-sm font-medium text-muted-foreground">这张图的提示词</p>
+                  <p className="text-2xl font-medium leading-[1.6] text-foreground [text-wrap:balance]">
+                    {PROMPT_CARD_TEXT}
+                  </p>
+                </div>
+                <dl className="grid grid-cols-[auto_auto] justify-center gap-x-5 gap-y-2 text-left text-sm">
+                  <dt className="text-muted-foreground">模型</dt>
+                  <dd className="m-0 font-mono text-foreground">图像 · 默认模型</dd>
+                  <dt className="text-muted-foreground">尺寸</dt>
+                  <dd className="m-0 font-mono tabular-nums text-foreground">
+                    {LANDSCAPE_43 ? `${LANDSCAPE_43.width} × ${LANDSCAPE_43.height}` : '4:3'}
+                  </dd>
+                </dl>
+              </aside>
+            </div>
+          </div>
+        </LandingFrame>
+      </Reveal>
     </section>
   )
 }

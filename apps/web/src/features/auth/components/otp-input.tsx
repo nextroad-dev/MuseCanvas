@@ -3,7 +3,6 @@
 import { useRef } from 'react'
 import type { ClipboardEvent, KeyboardEvent, Ref } from 'react'
 import { cn } from '@/shared/lib/cn'
-import { useFormFieldContext } from '@/shared/components/ui'
 
 /** The backend issues 6-digit numeric codes; the grid is fixed at six cells. */
 export const OTP_LENGTH = 6
@@ -22,24 +21,38 @@ export interface OtpInputProps {
   autoFocus?: boolean
   /** Receives the first cell so a failed submit can move focus to the group. */
   firstInputRef?: Ref<HTMLInputElement>
+  /** Id for the first cell, so an external label or `htmlFor` can still target the code. */
+  id?: string
+  /** Mirrors the parent's error state: red cells and `aria-invalid` on every cell. */
+  invalid?: boolean
+  /** Space-separated ids of the parent's hint or error node, for `aria-describedby`. */
+  describedBy?: string
 }
 
 /**
  * Six-cell verification code input (login design board 06).
  *
- * Each cell carries `aria-label` 第 n 位 so a screen reader names every stop.
- * Typing the sixth digit (or pasting a full code) calls `onComplete`; Backspace
- * on an empty cell steps back and clears the previous one. The grid itself is a
- * plain group of inputs inside the parent form, so Enter still submits and the
- * surrounding `FormField` keeps owning the label, hint and error wiring.
+ * The cells sit in a `fieldset` whose visible legend names the code, so the group
+ * is announced by its legend rather than a separate label. Each cell carries
+ * `aria-label` 第 n 位 so a screen reader names every stop. Typing the sixth digit
+ * (or pasting a full code) calls `onComplete`; Backspace on an empty cell steps back
+ * and clears the previous one. Enter still submits the surrounding form. The parent
+ * owns the hint and error text and passes their id in as `describedBy`.
  */
-export function OtpInput({ value, onChange, onComplete, disabled, autoFocus, firstInputRef }: OtpInputProps) {
-  const field = useFormFieldContext()
+export function OtpInput({
+  value,
+  onChange,
+  onComplete,
+  disabled,
+  autoFocus,
+  firstInputRef,
+  id,
+  invalid = false,
+  describedBy,
+}: OtpInputProps) {
   const cellsRef = useRef<Array<HTMLInputElement | null>>([])
   const completedRef = useRef<string | null>(null)
   const digits = sanitizeOtpChunk(value)
-  const invalid = field?.invalid ?? false
-  const describedBy = field?.describedBy || undefined
 
   function focusCell(index: number) {
     const clamped = Math.max(0, Math.min(OTP_LENGTH - 1, index))
@@ -160,42 +173,45 @@ export function OtpInput({ value, onChange, onComplete, disabled, autoFocus, fir
   const activeIndex = firstEmpty === -1 ? OTP_LENGTH - 1 : firstEmpty
 
   return (
-    <div role="group" aria-label="6 位验证码" className="grid grid-cols-6 gap-2">
-      {Array.from({ length: OTP_LENGTH }, (_, index) => {
-        const isActive = index === activeIndex
-        return (
-          <input
-            key={index}
-            ref={setCellRef(index)}
-            id={index === 0 ? field?.id : undefined}
-            type="text"
-            inputMode="numeric"
-            autoComplete={index === 0 ? 'one-time-code' : 'off'}
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            maxLength={OTP_LENGTH}
-            value={digits[index] ?? ''}
-            disabled={disabled}
-            aria-label={`第 ${index + 1} 位`}
-            aria-invalid={invalid ? true : undefined}
-            aria-describedby={describedBy}
-            onChange={(event) => handleCellChange(index, event.target.value)}
-            onKeyDown={(event) => handleCellKeyDown(index, event)}
-            onPaste={(event) => handlePaste(event, index)}
-            onFocus={(event) => event.target.select()}
-            className={cn(
-              'h-[var(--control-xl)] min-w-0 rounded-control border bg-surface text-center font-mono text-[22px] tabular-nums text-foreground transition-colors placeholder:text-muted-foreground',
-              invalid
-                ? 'border-danger bg-danger-soft'
-                : isActive
-                  ? 'border-2 border-border-focus'
-                  : 'border-border-control',
-              disabled && 'is-disabled',
-            )}
-          />
-        )
-      })}
-    </div>
+    <fieldset className="m-0 min-w-0 border-0 p-0">
+      <legend className="mb-2 text-sm font-medium text-foreground">验证码</legend>
+      <div className="grid grid-cols-6 gap-2">
+        {Array.from({ length: OTP_LENGTH }, (_, index) => {
+          const isActive = index === activeIndex
+          return (
+            <input
+              key={index}
+              ref={setCellRef(index)}
+              id={index === 0 ? id : undefined}
+              type="text"
+              inputMode="numeric"
+              autoComplete={index === 0 ? 'one-time-code' : 'off'}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              maxLength={OTP_LENGTH}
+              value={digits[index] ?? ''}
+              disabled={disabled}
+              aria-label={`第 ${index + 1} 位`}
+              aria-invalid={invalid ? true : undefined}
+              aria-describedby={describedBy}
+              onChange={(event) => handleCellChange(index, event.target.value)}
+              onKeyDown={(event) => handleCellKeyDown(index, event)}
+              onPaste={(event) => handlePaste(event, index)}
+              onFocus={(event) => event.target.select()}
+              className={cn(
+                'h-[var(--control-xl)] min-w-0 rounded-control border bg-surface text-center font-mono text-[22px] tabular-nums text-foreground transition-colors placeholder:text-muted-foreground',
+                invalid
+                  ? 'border-danger bg-danger-soft'
+                  : isActive
+                    ? 'border-2 border-border-focus'
+                    : 'border-border-control',
+                disabled && 'is-disabled',
+              )}
+            />
+          )
+        })}
+      </div>
+    </fieldset>
   )
 }

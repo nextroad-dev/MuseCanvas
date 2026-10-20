@@ -5,6 +5,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { CaretDownIcon as ChevronDown, CheckIcon as Check } from '@phosphor-icons/react'
 import { SegmentedControl } from '@/shared/components/ui'
 import { cn } from '@/shared/lib/cn'
+import { exitDurationMs } from '@/shared/lib/motion'
 import { modelCapabilityNote, resolveActiveModel } from '@/shared/lib/model-capabilities'
 import type { DefaultAwareModel } from '@/shared/lib/model-capabilities'
 import type { GenerateModeTab } from '@/shared/types'
@@ -39,8 +40,9 @@ const KIND_LABEL: Record<GenerateModeTab, string> = { image: '图像', video: '�
  *
  * Positioning and motion copy the dropdown rung: a `relative` wrapper, an
  * `absolute` `rounded-popover` + `shadow-dropdown` panel, `motion-menu` on
- * enter. The panel opens upward because the composer sits at the bottom of
- * the conversation column.
+ * enter and `motion-fade-out` on exit (kept mounted for the exit token). The
+ * panel opens upward because the composer sits at the bottom of the
+ * conversation column.
  */
 export function ModelPicker({
   imageModels,
@@ -56,6 +58,10 @@ export function ModelPicker({
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const optionRefs = useRef(new Map<string, HTMLLIElement | null>())
   const [open, setOpen] = useState(false)
+  // `mounted` trails `open` by the exit token, so the panel fades out instead of
+  // vanishing; `closing` drives the exit class and the inert state while it leaves.
+  const [mounted, setMounted] = useState(false)
+  const [closing, setClosing] = useState(false)
   // The viewed tab starts on the composer's kind and roams freely until a pick
   // (or close) — it is a view, never a submit.
   const [viewTab, setViewTab] = useState<GenerateModeTab>(activeKind)
@@ -66,6 +72,25 @@ export function ModelPicker({
   useEffect(() => {
     if (disabled) setOpen(false)
   }, [disabled])
+
+  useEffect(() => {
+    if (open) {
+      setClosing(false)
+      setMounted(true)
+      return
+    }
+    if (mounted) setClosing(true)
+  }, [open, mounted])
+
+  // Teardown after the exit token's duration (`--motion-exit`), read at runtime.
+  useEffect(() => {
+    if (!closing) return
+    const timer = window.setTimeout(() => {
+      setClosing(false)
+      setMounted(false)
+    }, exitDurationMs())
+    return () => window.clearTimeout(timer)
+  }, [closing])
 
   // Opening always re-anchors the viewed tab on the composer's kind, so a
   // reopened panel never shows the stale tab of a previous visit.
@@ -188,18 +213,22 @@ export function ModelPicker({
         <ChevronDown weight="bold" aria-hidden="true" className="h-3 w-3 shrink-0 text-muted-foreground" />
       </button>
 
-      {open ? (
+      {open || mounted ? (
         <div
           id={panelId}
           role="dialog"
           aria-label="选择模型"
-          className="motion-menu absolute bottom-full left-0 z-dropdown mb-2 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-popover border border-border bg-surface p-2 shadow-dropdown"
+          inert={closing}
+          className={cn(
+            'absolute bottom-full left-0 z-dropdown mb-2 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-popover border border-border bg-surface p-2 shadow-dropdown',
+            closing ? 'pointer-events-none motion-fade-out' : 'motion-menu',
+          )}
         >
-          {/* Local override only: the shared control keeps its tonal thumb and 12px labels. */}
+          {/* Local override only: the shared control keeps its surface thumb and 12px labels. */}
           <SegmentedControl
             label="输出类型"
             size="sm"
-            className="[&>button]:text-[13px] [&>span]:bg-surface"
+            className="[&>button]:text-[13px]"
             value={viewTab}
             onChange={(value) => setViewTab(value as GenerateModeTab)}
             items={[

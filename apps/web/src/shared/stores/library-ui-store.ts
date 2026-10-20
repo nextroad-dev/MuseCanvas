@@ -32,7 +32,8 @@ export const useLibraryUiStore = create<LibraryUiState>((set) => ({
   searchQuery: '',
   sortOrder: 'desc',
   viewMode: 'grid',
-  columnCount: 4,
+  // Six columns at 1440 matches the design mock's auto-fill(200px) grid.
+  columnCount: 6,
   selectedAssetIds: [],
   previewAssetId: null,
 

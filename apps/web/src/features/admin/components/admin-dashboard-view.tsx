@@ -1,7 +1,6 @@
 'use client'
 
 import { useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import Link from 'next/link'
@@ -13,7 +12,6 @@ import { AdminDefaultModelsCard } from './admin-default-models-card'
 import { AdminJobDetail } from './admin-job-detail'
 import { AdminMobileRecords, AdminRecordDetailDialog } from './admin-record-detail-dialog'
 import { formatLocalizedDateTime } from '@/shared/lib/format'
-import { cn } from '@/shared/lib/cn'
 import { JobStatusBadge } from '@/shared/components/job-status-badge'
 import { adminPageActions, adminPageHeader, adminPageRoot } from '../lib/admin-layout'
 import { ArrowClockwiseIcon as RefreshCw } from '@phosphor-icons/react'
@@ -87,28 +85,18 @@ interface MetricTileProps {
   label: string
   /** `null` while the first load is in flight: a skeleton stands in for the figure. */
   value: string | null
-  valueClassName?: string
-  /** 0–100; draws the 4px bar under the figure. */
-  progress?: number
-  footer?: ReactNode
 }
 
-/** Overview KPI tile: caption, mono figure, then an optional bar or link. */
-function MetricTile({ label, value, valueClassName, progress, footer }: MetricTileProps) {
+/** Overview KPI tile: caption over a mono figure. */
+function MetricTile({ label, value }: MetricTileProps) {
   return (
     <Card className="gap-1.5 p-5">
       <p className="text-sm text-muted-foreground">{label}</p>
       {value === null ? (
         <Skeleton className="my-1 h-8 w-24" />
       ) : (
-        <p className={cn('font-mono text-title tabular-nums text-foreground', valueClassName)}>{value}</p>
+        <p className="font-mono text-title tabular-nums text-foreground">{value}</p>
       )}
-      {progress !== undefined ? (
-        <div className="h-1 overflow-hidden rounded-pill bg-border" aria-hidden="true">
-          <div className="h-full rounded-pill bg-success" style={{ width: `${progress}%` }} />
-        </div>
-      ) : null}
-      {footer}
     </Card>
   )
 }
@@ -220,9 +208,8 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
   const maxTotal = useMemo(() => Math.max(1, ...points.map((p) => p.total)), [points])
   const successRate = metrics?.successRate7d
   const failedCount = metrics?.failedJobs7d ?? 0
-  const successBarWidth = typeof successRate === 'number' && Number.isFinite(successRate)
-    ? Math.min(100, Math.max(0, successRate))
-    : 0
+  const successRateText = typeof successRate === 'number' ? `${successRate}%` : '—'
+  const chartLabel = `近 7 天成功率 ${successRateText}，失败 ${failedCount} 个`
 
   function handleRefresh() {
     refetchMetrics()
@@ -268,109 +255,98 @@ export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDa
         </Alert>
       ) : null}
 
-      {/* Headline KPIs as four equal tiles, with the 7-day breakdown below at full width. */}
+      {/* Overview row as in the design mock: two KPI tiles and the 近 7 天 chart at 1fr / 1fr / 2fr. Stacks in a narrow track. */}
       <section aria-labelledby="dashboard-metrics-heading" className="flex min-w-0 flex-col gap-4">
         <h2 id="dashboard-metrics-heading" className="sr-only">
           汇总指标
         </h2>
 
         <div
-          className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4"
+          className="grid grid-cols-1 gap-4 @min-[800px]/admin:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)]"
           aria-busy={metricsPending || undefined}
         >
           <MetricTile label="用户总数" value={metricsPending ? null : formatCount(metrics?.totalUsers)} />
           <MetricTile label="累计生成任务" value={metricsPending ? null : formatCount(metrics?.totalJobs)} />
-          <MetricTile
-            label="7 天成功率"
-            value={metricsPending ? null : typeof successRate === 'number' ? `${successRate}%` : '—'}
-            progress={successBarWidth}
-          />
-          <MetricTile
-            label="7 天失败任务"
-            value={metricsPending ? null : formatCount(metrics?.failedJobs7d)}
-            valueClassName="text-danger"
-            footer={
-              <Link
-                href="/admin/jobs?status=failed"
-                className="self-start text-xs text-foreground underline underline-offset-2"
-              >
-                查看失败任务
-              </Link>
-            }
-          />
-        </div>
 
-        {/* 近 7 天生成 — stacked bar chart (kept deliberately, below the tiles) */}
-        <Card className="gap-5 p-6" aria-busy={metricsPending || undefined}>
-          <div className="flex flex-col gap-1">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-3 text-sm">
-                <span className="font-semibold text-foreground">近 7 天生成</span>
-                <span className="text-muted-foreground">
-                  成功率 {typeof successRate === 'number' ? `${successRate}%` : '—'}
-                </span>
-                {failedCount > 0 ? (
-                  <Link
-                    href="/admin/jobs?status=failed"
-                    className="text-danger hover:underline"
-                  >
-                    失败 {failedCount} 个，查看
-                  </Link>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-3 text-caption text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-sm bg-chart-positive" aria-hidden="true" />
-                  成功
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-sm bg-chart-negative" aria-hidden="true" />
-                  失败
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {metricsPending ? (
-            <div className="flex items-end justify-between gap-3 px-1" aria-hidden="true">
-              {Array.from({ length: 7 }, (_, i) => (
-                <div key={i} className="flex flex-1 flex-col items-center">
-                  <Skeleton className="mb-1.5 h-3 w-5" />
-                  <div className="mb-2 w-full max-w-[34px]" style={{ height: `${40 + (i % 3) * 20}px` }}>
-                    <Skeleton className="h-full w-full" />
-                  </div>
-                  <Skeleton className="h-3 w-8" />
+          {/* 近 7 天生成 — stacked bar chart, the third cell of the overview row */}
+          <Card className="gap-4 p-5" aria-busy={metricsPending || undefined}>
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-3 text-sm">
+                  <span className="font-semibold text-foreground">近 7 天生成</span>
+                  <span className="text-muted-foreground">成功率 {successRateText}</span>
+                  {failedCount > 0 ? (
+                    <Link
+                      href="/admin/jobs?status=failed"
+                      className="text-danger hover:underline"
+                    >
+                      失败 {failedCount} 个，查看
+                    </Link>
+                  ) : null}
                 </div>
-              ))}
+                <div className="flex items-center gap-3 text-caption text-muted-foreground">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-chart-positive" aria-hidden="true" />
+                    成功
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-chart-negative" aria-hidden="true" />
+                    失败
+                  </span>
+                </div>
+              </div>
             </div>
-          ) : (
-            <div className="flex items-end justify-between gap-3 px-1">
-              {points.map((point) => (
-                <div key={point.label} className="flex flex-1 flex-col items-center">
-                  <span className="mb-1.5 text-xs text-muted-foreground">{point.total}</span>
-                  <div
-                    className="flex w-full max-w-[34px] flex-col items-center justify-end rounded-t-sm"
-                    style={{ height: '84px' }}
-                  >
-                    {point.failed > 0 ? (
+
+            {metricsPending ? (
+              <div className="flex items-end justify-between gap-3 px-1" aria-hidden="true">
+                {Array.from({ length: 7 }, (_, i) => (
+                  <div key={i} className="flex flex-1 flex-col items-center">
+                    <Skeleton className="mb-1.5 h-3 w-5" />
+                    <div className="mb-2 w-full max-w-[34px]" style={{ height: `${40 + (i % 3) * 20}px` }}>
+                      <Skeleton className="h-full w-full" />
+                    </div>
+                    <Skeleton className="h-3 w-8" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {/* The summary stands in for the bars, which are hidden from assistive tech. */}
+                <div role="img" aria-label={chartLabel} className="flex items-end justify-between gap-3 px-1">
+                  {points.map((point) => (
+                    <div key={point.label} className="flex flex-1 flex-col items-center">
+                      <span aria-hidden="true" className="mb-1.5 text-xs text-muted-foreground">{point.total}</span>
                       <div
-                        className="w-full rounded-t-sm bg-chart-negative"
-                        style={{ height: `${(point.failed / maxTotal) * 84}px` }}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                    <div
-                      className="w-full bg-chart-positive"
-                      style={{ height: `${(point.success / maxTotal) * 84}px` }}
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <span className="mt-2 text-caption text-muted-foreground">{point.label}</span>
+                        className="flex w-full max-w-[34px] flex-col items-center justify-end rounded-t-sm"
+                        style={{ height: '84px' }}
+                      >
+                        {point.failed > 0 ? (
+                          <div
+                            className="w-full rounded-t-sm bg-chart-negative"
+                            style={{ height: `${Math.max(3, (point.failed / maxTotal) * 84)}px` }}
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                        <div
+                          className="w-full bg-chart-positive"
+                          style={{ height: `${(point.success / maxTotal) * 84}px` }}
+                          aria-hidden="true"
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </Card>
+                <div className="flex justify-between gap-3 px-1">
+                  {points.map((point) => (
+                    <span key={point.label} className="flex-1 text-center text-caption text-muted-foreground">
+                      {point.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
       </section>
 
       <AdminDefaultModelsCard />

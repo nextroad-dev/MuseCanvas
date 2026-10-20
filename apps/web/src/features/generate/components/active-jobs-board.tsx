@@ -13,6 +13,7 @@ import { isVideoOutput, outputUrl } from '@/shared/types'
 import type { GenerationJob } from '@/shared/types'
 
 const LINGER_MS = 6000
+/** Elapsed-clock refresh. Lives in `ElapsedClock`, so only the clock text re-renders. */
 const TICK_MS = 500
 
 export interface ActiveJobsBoardProps {
@@ -54,8 +55,10 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
     hideWhenEmpty = false,
     open = true,
   } = props
-  const [now, setNow] = useState(() => Date.now())
-  const [lingering, setLingering] = useState<Record<string, number>>({})
+  // Finished rows linger for LINGER_MS, then fade (`exit`) and leave. Each row's exit
+  // is a pair of timers scheduled once, when the row finishes: nothing here ticks.
+  const [lingering, setLingering] = useState<Record<string, 'linger' | 'exit'>>({})
+  const exitTimers = useRef(new Map<string, number[]>())
   const [announcement, setAnnouncement] = useState('')
   const previousActiveIds = useRef<Set<string> | null>(null)
   const headingRef = useRef<HTMLButtonElement>(null)
@@ -70,14 +73,13 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
   const headingId = `${variant}-active-jobs-heading`
   const count = activeJobs.length
 
-  const alive = count > 0 || lingeringIds.length > 0
-
   useEffect(() => {
-    if (!alive) return
-    setNow(Date.now())
-    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS)
-    return () => window.clearInterval(timer)
-  }, [alive])
+    const timers = exitTimers.current
+    return () => {
+      for (const pair of timers.values()) pair.forEach((timer) => window.clearTimeout(timer))
+      timers.clear()
+    }
+  }, [])
 
   useEffect(() => {
     const ids = new Set(activeSignature ? activeSignature.split(',') : [])
@@ -85,11 +87,43 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
       ? [...previousActiveIds.current].filter((id) => !ids.has(id))
       : []
 
+    // A job that is active again (a retry) leaves the linger list at once.
+    for (const id of ids) {
+      exitTimers.current.get(id)?.forEach((timer) => window.clearTimeout(timer))
+      exitTimers.current.delete(id)
+    }
+    setLingering((current) => {
+      const revived = [...ids].filter((id) => id in current)
+      if (revived.length === 0) return current
+      const next = { ...current }
+      for (const id of revived) delete next[id]
+      return next
+    })
+
     if (finished.length > 0) {
-      const expireAt = Date.now() + LINGER_MS
+      for (const id of finished) {
+        exitTimers.current.get(id)?.forEach((timer) => window.clearTimeout(timer))
+        const fade = window.setTimeout(() => {
+          setLingering((current) => (current[id] === 'linger' ? { ...current, [id]: 'exit' } : current))
+        }, LINGER_MS)
+        // Removal waits out the exit fade, so a row is never cut off mid-fade. Focus
+        // moves to the heading first if the row is being removed while focused.
+        const remove = window.setTimeout(() => {
+          exitTimers.current.delete(id)
+          const holdsFocus = document.querySelector(`[data-job-row="${id}"]:focus-within`)
+          setLingering((current) => {
+            if (!(id in current)) return current
+            const next = { ...current }
+            delete next[id]
+            return next
+          })
+          if (holdsFocus) headingRef.current?.focus()
+        }, LINGER_MS + exitDurationMs())
+        exitTimers.current.set(id, [fade, remove])
+      }
       setLingering((current) => {
         const next = { ...current }
-        for (const id of finished) next[id] = expireAt
+        for (const id of finished) next[id] = 'linger'
         return next
       })
       if (ids.size === 0) {
@@ -110,26 +144,14 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
     previousActiveIds.current = ids
   }, [activeSignature])
 
-  useEffect(() => {
-    const expired = lingeringIds.filter((id) => lingering[id] <= now)
-    if (expired.length === 0) return
-    const holdsFocus = expired.some((id) => document.querySelector(`[data-job-row="${id}"]:focus-within`))
-    setLingering((current) => {
-      const next = { ...current }
-      for (const id of expired) delete next[id]
-      return next
-    })
-    if (holdsFocus) headingRef.current?.focus()
-  }, [now, lingering])
-
   const jobsById = new Map(jobs.map((job) => [job.id, job]))
   const finishedRows = lingeringIds
     .map((id) => jobsById.get(id))
     .filter((job): job is GenerationJob => Boolean(job) && !isJobActive(job!))
   const rows = [...activeJobs, ...finishedRows]
   const listRef = useRef<HTMLUListElement>(null)
-  // Order-only trigger: the 500ms `now` tick re-renders every row clock, but the
-  // ids join only changes on add / settle / expiry, so ticks never re-measure.
+  // Order-only trigger: only the ids join (add / settle / expiry) re-measures. Clock
+  // ticks live in `ElapsedClock` and never reach this effect.
   useFlipList(listRef, rows.map((job) => job.id).join(','))
 
   if (hideWhenEmpty && rows.length === 0 && !isLoading && !isError) return null
@@ -210,8 +232,7 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
               <CompactActiveJobRow
                 key={job.id}
                 job={job}
-                now={now}
-                expiringAt={lingering[job.id]}
+                exiting={lingering[job.id] === 'exit'}
                 selected={job.id === selectedJobId}
                 onSelectJob={onSelectJob}
                 onCancel={onCancel}
@@ -225,8 +246,7 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
               <ActiveJobRow
                 key={job.id}
                 job={job}
-                now={now}
-                expiringAt={lingering[job.id]}
+                exiting={lingering[job.id] === 'exit'}
                 selected={job.id === selectedJobId}
                 onSelectJob={onSelectJob}
                 onCancel={onCancel}
@@ -262,10 +282,28 @@ export function ActiveJobsBoard(props: ActiveJobsBoardProps) {
   )
 }
 
+/**
+ * Elapsed `MM:SS`. The clock owns its 500ms tick, so a tick re-renders this text
+ * node only, never the row, the list or the FLIP-measured order. It freezes at
+ * `completedAt`, which the worker writes once the job settles.
+ */
+function ElapsedClock({ job, className }: { job: GenerationJob; className?: string }) {
+  const settled = Boolean(job.completedAt)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (settled) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [settled])
+  const end = job.completedAt ? Date.parse(job.completedAt) : now
+  return <span className={className}>{formatElapsed(job, end)}</span>
+}
+
 interface ActiveJobRowProps {
   job: GenerationJob
-  now: number
-  expiringAt?: number
+  /** The row is fading out after its linger; set by the board's exit timer. */
+  exiting: boolean
   selected: boolean
   onSelectJob: (jobId: string) => void
   onCancel: (jobId: string) => void
@@ -278,8 +316,7 @@ interface ActiveJobRowProps {
 
 function ActiveJobRow({
   job,
-  now,
-  expiringAt,
+  exiting,
   selected,
   onSelectJob,
   onCancel,
@@ -291,9 +328,6 @@ function ActiveJobRow({
 }: ActiveJobRowProps) {
   const active = isJobActive(job)
   const firstOutput = job.outputs?.[0]
-  // `progress` is binary in the worker, so the ticking clock is the only liveness
-  // signal between 2.5s polls; it stops at `completedAt` once the job settles.
-  const clockEnd = job.completedAt ? Date.parse(job.completedAt) : now
   const unit = job.mediaKind === 'video' ? '段' : '张'
 
   const stage = active
@@ -330,10 +364,9 @@ function ActiveJobRow({
       <div
         className={cn(
           'flex gap-3 rounded-control p-3',
-          // The row leaves the list on a token exit, not a hand-set opacity: the
-          // `--motion-exit` duration read at render time (SSR-safe: falls back to
-          // 120ms without a document), so retuning the token retunes this fade.
-          expiringAt !== undefined && expiringAt - now <= exitDurationMs() && 'motion-fade-out',
+          // The row leaves on the `--motion-exit` token once its linger ends. The
+          // board's exit timer sets `exiting`, so the fade never depends on a tick.
+          exiting && 'motion-fade-out',
           selected ? 'bg-tonal-selected' : active ? 'bg-tonal' : 'bg-neutral-soft',
         )}
       >
@@ -366,9 +399,7 @@ function ActiveJobRow({
           {stage ? (
             <span className="min-w-0 truncate text-xs text-muted-foreground">{stage}</span>
           ) : null}
-          <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-            {formatElapsed(job, clockEnd)}
-          </span>
+          <ElapsedClock job={job} className="ml-auto shrink-0 font-mono text-xs tabular-nums text-muted-foreground" />
         </div>
 
         {active && (
@@ -438,8 +469,7 @@ function ActiveJobRow({
 
 function CompactActiveJobRow({
   job,
-  now,
-  expiringAt,
+  exiting,
   selected,
   onSelectJob,
   onCancel,
@@ -451,7 +481,6 @@ function CompactActiveJobRow({
 }: ActiveJobRowProps) {
   const active = isJobActive(job)
   const firstOutput = job.outputs?.[0]
-  const clockEnd = job.completedAt ? Date.parse(job.completedAt) : now
   const statusText = active
     ? job.status === 'queued'
       ? '排队中'
@@ -472,7 +501,7 @@ function CompactActiveJobRow({
       <div
         className={cn(
           'flex items-center gap-2.5 rounded-control p-2.5 transition-colors',
-          expiringAt !== undefined && expiringAt - now <= exitDurationMs() && 'motion-fade-out',
+          exiting && 'motion-fade-out',
           highlighted ? 'bg-tonal-selected' : 'bg-transparent hover:bg-tonal-hover',
         )}
       >
@@ -511,7 +540,7 @@ function CompactActiveJobRow({
           </button>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>{statusText}</span>
-            <span className="font-mono tabular-nums">{formatElapsed(job, clockEnd)}</span>
+            <ElapsedClock job={job} className="font-mono tabular-nums" />
           </div>
         </div>
 

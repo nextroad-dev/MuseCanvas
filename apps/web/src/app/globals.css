@@ -703,6 +703,17 @@ body {
     animation-fill-mode: backwards;
   }
 
+  /* Generated-image reveal into its reserved frame: slow (240ms) emphasized fade.
+     Used only where a result image lands in its frame. The base state is visible,
+     and reduced motion zeroes the duration through the global rule, so the image
+     is never left hidden. */
+  .motion-fade-in-slow {
+    animation-name: mc-fade-in;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: var(--ease-emphasized);
+    animation-fill-mode: backwards;
+  }
+
   /* Component-level list/grid entrance: 180ms fade. */
   .motion-reveal {
     animation-name: mc-reveal-up;
@@ -833,6 +844,16 @@ body {
     animation-duration: var(--motion-shimmer);
     animation-timing-function: linear;
     animation-iteration-count: infinite;
+  }
+
+  /* Reduced motion: the skeleton is a static tonal box. The highlight band goes too,
+     because the finished `mc-shimmer` would otherwise leave it parked at the
+     background origin as a permanent band. */
+  @media (prefers-reduced-motion: reduce) {
+    .motion-shimmer {
+      animation: none;
+      background-image: none;
+    }
   }
 
   /* Spinner: 600ms linear, and only while something is actually pending. */

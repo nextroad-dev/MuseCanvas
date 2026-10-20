@@ -465,6 +465,13 @@ export function GenerateConsole() {
     () => jobs.filter((job) => job.status === 'succeeded' && (job.outputs?.length ?? 0) > 0).slice(0, 4),
     [jobs],
   )
+  // Jobs already completed when the list first loads are the baseline and appear
+  // as-is. A job that completes later eases into the rail once, at the base duration.
+  const [settledCompletedIds, setSettledCompletedIds] = useState<ReadonlySet<string> | null>(null)
+  useEffect(() => {
+    if (settledCompletedIds !== null || jobsLoading) return
+    setSettledCompletedIds(new Set(jobs.filter((job) => job.status === 'succeeded').map((job) => job.id)))
+  }, [jobs, jobsLoading, settledCompletedIds])
 
   const reuseConfig = useMemo(() => reuseJob ? buildJobConfigReuse(reuseJob, models ?? []) : null, [reuseJob, models])
   const reuseBlocked = isPreparingReferences || isReferenceUploadBusy
@@ -572,6 +579,9 @@ export function GenerateConsole() {
               <Alert tone="info" title="Agent 不可用">{agent.availability.notice}</Alert>
             ) : null}
             <ConversationTimeline
+              // Keyed per conversation: each session starts with its own baseline, so
+              // history folded in on load or on a switch never replays the entrance.
+              key={agentCanvasId ?? 'new-conversation'}
               items={agentItems}
               streaming={agent.streaming}
               disconnected={agent.disconnected}
@@ -666,7 +676,10 @@ export function GenerateConsole() {
                   const first = job.outputs[0]
                   if (!first) return null
                   return (
-                    <li key={job.id}>
+                    <li
+                      key={job.id}
+                      className={settledCompletedIds !== null && !settledCompletedIds.has(job.id) ? 'motion-reveal' : undefined}
+                    >
                       <button
                         type="button"
                         onClick={() => selectJob(job.id)}

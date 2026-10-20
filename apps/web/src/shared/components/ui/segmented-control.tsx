@@ -46,9 +46,9 @@ const RADIO_BASE = [
  * Tonal segmented control — the choice of a *value*, not of a panel. It is
  * therefore a `radiogroup` of `radio`s (aria-checked + arrow keys), never a
  * `tablist`: `Tabs` answers "which panel am I looking at", this answers "what
- * does the request say". Components.md Tabs row keeps the shared track look;
- * states.md §6 keeps the current segment on `tonal-selected` — the brand green is
- * reserved for the logo and for status graphics.
+ * does the request say". Components.md Tabs row keeps the shared track look; the
+ * current segment is a white `surface` thumb on the tonal track (design mock). The
+ * brand green is reserved for the logo and for status graphics.
  *
  * The selected surface is a single measured element that travels on
  * `.motion-position`, so changing a value glides instead of teleporting, and the
@@ -160,7 +160,7 @@ export function SegmentedControl<T extends string = string>({
         // the same arithmetic `Tabs` uses for its underline.
         <span
           aria-hidden="true"
-          className="motion-position pointer-events-none absolute inset-y-1 rounded-control bg-tonal-selected shadow-soft"
+          className="motion-position pointer-events-none absolute inset-y-1 rounded-control bg-surface shadow-soft"
           style={{ transform: `translateX(${thumb.left}px)`, width: thumb.width }}
         />
       ) : null}

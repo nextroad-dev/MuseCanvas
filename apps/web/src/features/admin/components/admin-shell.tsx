@@ -98,7 +98,7 @@ const navGroups: NavGroup[] = [
 ]
 
 /** path → visible label, shared by the nav and the breadcrumb. */
-const NAV_LABELS: Record<string, string> = { '/admin': '管理后台' }
+const NAV_LABELS: Record<string, string> = {}
 for (const group of navGroups) {
   for (const item of group.items) NAV_LABELS[item.path] = item.label
 }
@@ -106,11 +106,18 @@ for (const group of navGroups) {
 /**
  * Pathname-driven breadcrumb. The root crumb is always 管理后台; each further
  * segment resolves through `NAV_LABELS` and falls back to the raw segment, so a
- * route the nav does not list is still described truthfully.
+ * route the nav does not list is still described truthfully. The overview is the
+ * one page whose own label is 概览, so its trail is 管理后台 / 概览.
  */
 function buildCrumbs(pathname: string): Crumb[] {
-  const crumbs: Crumb[] = [{ href: '/admin', label: NAV_LABELS['/admin'] }]
   const [, ...rest] = pathname.split('/').filter(Boolean)
+  if (rest.length === 0) {
+    return [
+      { href: null, label: '管理后台' },
+      { href: '/admin', label: NAV_LABELS['/admin'] },
+    ]
+  }
+  const crumbs: Crumb[] = [{ href: '/admin', label: '管理后台' }]
   let href = ''
   for (const segment of rest) {
     href = `${href}/${segment}`

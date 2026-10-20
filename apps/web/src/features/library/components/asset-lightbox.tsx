@@ -18,6 +18,7 @@ import { assetPlaybackUrl, assetPreviewUrl, isVideoAsset } from '@/shared/types'
 import type { Asset } from '@/shared/types'
 import { Alert, Button, IconButton, buttonVariants } from '@/shared/components/ui'
 import { iconSize } from '@/shared/components/ui/size'
+import { assetTitle } from './workspace-page-state'
 
 export interface AssetLightboxProps {
   /** Navigation is limited to the currently filtered, loaded grid. */
@@ -83,7 +84,7 @@ export function AssetLightbox({ assets, activeAssetId, onClose, onSelect }: Asse
       style={{ backgroundColor: SCRIM_BACKGROUND }}
       className={`fixed inset-0 z-modal flex items-center justify-center p-4 backdrop-blur-sm sm:p-6 lg:p-8 ${closing ? 'motion-fade-out pointer-events-none' : 'motion-fade-in'}`}
     >
-      <div {...dialogProps} className={`flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[1280px] flex-col overflow-hidden rounded-panel border border-white/10 bg-overlay text-foreground shadow-modal sm:max-h-[calc(100dvh-3rem)] lg:flex-row ${closing ? 'motion-dialog-out' : 'motion-dialog-in'}`}>
+      <div {...dialogProps} className={`flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[1280px] flex-col overflow-hidden rounded-panel border border-white/10 bg-overlay text-foreground shadow-modal sm:max-h-[calc(100dvh-3rem)] lg:h-[min(740px,calc(100dvh-4rem))] lg:flex-row ${closing ? 'motion-dialog-out' : 'motion-dialog-in'}`}>
         <AssetPreview
           key={shown.id}
           asset={shown}
@@ -128,6 +129,16 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
   const url = signing.data?.url ?? assetPlaybackUrl(asset)
   const preview = assetPreviewUrl(asset)
   const isVideo = isVideoAsset(asset)
+  const title = assetTitle(asset.prompt) ?? (isVideo ? '视频作品' : '图像作品')
+  // Only a still image with no recorded size gets the mock's fixed 3:4 cover box. Anything
+  // with real dimensions (and every video) keeps its own ratio, so a user's image is never cropped.
+  const coverBox = !isVideo && !(asset.width && asset.height)
+  const frameClass = coverBox
+    ? 'aspect-[3/4] w-full max-h-[60dvh] lg:h-full lg:max-h-full lg:w-auto [&>div]:h-full'
+    : 'w-full lg:h-full lg:max-h-full lg:[&>div]:h-full'
+  const mediaClass = coverBox
+    ? 'h-full w-full object-cover'
+    : 'h-auto w-auto max-h-[60dvh] max-w-full object-contain lg:max-h-full'
 
   async function retry() {
     if (signingRef.current) return
@@ -151,25 +162,27 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
   return (
     <>
       <div className="relative flex min-h-[360px] min-w-0 flex-1 items-center justify-center overflow-hidden bg-overlay p-4 sm:p-6 md:p-8 lg:flex-[999_1_560px]">
-        <MediaFrame
-          key={`${url}|${attempt}`}
-          src={url}
-          previewSrc={preview}
-          kind={isVideo ? 'video' : 'image'}
-          alt={asset.prompt || (isVideo ? '视频作品' : '图像作品')}
-          layout="stage"
-          showControls={isVideo}
-          width={asset.width}
-          height={asset.height}
-          onMediaError={onMediaError}
-          className="h-auto w-auto max-h-full max-w-full object-contain"
-        />
+        <div className={`flex min-h-0 min-w-0 items-center justify-center ${frameClass}`}>
+          <MediaFrame
+            key={`${url}|${attempt}`}
+            src={url}
+            previewSrc={preview}
+            kind={isVideo ? 'video' : 'image'}
+            alt={asset.prompt || (isVideo ? '视频作品' : '图像作品')}
+            layout="stage"
+            showControls={isVideo}
+            width={asset.width}
+            height={asset.height}
+            onMediaError={onMediaError}
+            className={mediaClass}
+          />
+        </div>
         <button
           type="button"
           aria-label="上一个作品"
           disabled={index <= 0}
           onClick={() => onNavigate('previous')}
-          className={`${STAGE_PAGER_CLASS} left-6`}
+          className={`${STAGE_PAGER_CLASS} left-4`}
         >
           <ChevronLeft weight="bold" aria-hidden="true" className={iconSize.md} />
         </button>
@@ -178,20 +191,20 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
           aria-label="下一个作品"
           disabled={index >= total - 1}
           onClick={() => onNavigate('next')}
-          className={`${STAGE_PAGER_CLASS} right-6`}
+          className={`${STAGE_PAGER_CLASS} right-4`}
         >
           <ChevronRight weight="bold" aria-hidden="true" className={iconSize.md} />
         </button>
       </div>
       <aside className="flex min-h-0 w-full min-w-0 shrink flex-col bg-surface lg:w-auto lg:min-w-[320px] lg:max-w-[380px] lg:flex-[1_1_320px]">
-        <header className="flex shrink-0 items-start justify-between gap-3 px-6 pb-4 pt-6">
+        <header className="flex shrink-0 items-start justify-between gap-3 px-5 pb-5 pt-5">
           <div className="min-w-0">
-            <h2 id={labelId} className="text-module">{isVideo ? '视频作品' : '图像作品'}</h2>
-            <p role="status" aria-live="polite" className="font-mono text-xs tabular-nums text-muted-foreground">{Math.max(index + 1, 1)} / {total}</p>
+            <h2 id={labelId} className="break-words text-module">{title}</h2>
+            <p role="status" aria-live="polite" className="text-sm tabular-nums text-muted-foreground">第 {Math.max(index + 1, 1)} 张，共 {total} 张</p>
           </div>
-          <IconButton variant="ghost" size="sm" ref={closeButtonRef} aria-label="关闭预览" onClick={onClose} icon={<X weight="bold" aria-hidden="true" />} />
+          <IconButton variant="ghost" size="sm" ref={closeButtonRef} aria-label="关闭" onClick={onClose} icon={<X weight="bold" aria-hidden="true" />} />
         </header>
-        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pb-5">
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 pb-5">
           {signing.isError ? (
             <Alert
               tone="danger"
@@ -217,7 +230,7 @@ function AssetPreview({ asset, index, total, labelId, closeButtonRef, regionEdit
           </dl>
           {regionEditBlocked ? <p className="text-xs text-muted-foreground">局部修改：{regionEditBlocked}</p> : null}
         </div>
-        <footer className="flex shrink-0 flex-col gap-2 border-t border-border px-6 py-4">
+        <footer className="flex shrink-0 flex-col gap-2 border-t border-border px-5 py-5">
           <a href={signing.data?.downloadUrl ?? url} download target="_blank" rel="noreferrer" className={`${buttonVariants({ variant: 'primary', fullWidth: true })} text-sm font-medium`}>
             <Download weight="bold" aria-hidden="true" />下载原图
           </a>

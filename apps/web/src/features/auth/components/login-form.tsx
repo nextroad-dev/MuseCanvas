@@ -31,6 +31,8 @@ type Step = 'email' | 'invitation' | 'otp'
 /** Every step owns exactly one field, so a failed request has a home to report in. */
 type FieldKey = 'email' | 'invitation' | 'otp'
 type FieldErrors = Partial<Record<FieldKey, string>>
+/** `GET auth/oauth/providers` wraps the list: `data` is `{ providers }`, not a bare array. */
+type OAuthProvidersResponse = { providers: OAuthProviderInfo[] }
 
 const fieldOfStep: Record<Step, FieldKey> = {
   email: 'email',
@@ -88,9 +90,9 @@ export function LoginForm() {
   const providers = useQuery({
     queryKey: ['auth', 'oauth-providers'],
     queryFn: async ({ signal }) => {
-      const res = await api<OAuthProviderInfo[]>(API_ENDPOINTS.auth.oauthProviders, { signal })
-      if (!res.success || !Array.isArray(res.data)) throw new ApiError('PROVIDERS_UNAVAILABLE', '暂时无法读取第三方登录方式。请重试或使用邮箱验证码。')
-      return res.data
+      const res = await api<OAuthProvidersResponse>(API_ENDPOINTS.auth.oauthProviders, { signal })
+      if (!res.success || !Array.isArray(res.data?.providers)) throw new ApiError('PROVIDERS_UNAVAILABLE', '暂时无法读取第三方登录方式。请重试或使用邮箱验证码。')
+      return res.data.providers
     },
     retry: false,
     staleTime: 60_000,

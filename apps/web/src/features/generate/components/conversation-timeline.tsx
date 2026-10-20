@@ -46,6 +46,17 @@ export function ConversationTimeline({
 
   const pendingCount = useMemo(() => items.filter((item) => item.kind === 'pending').length, [items])
 
+  // Only entries that arrive while the Agent is streaming ease in. History folded in
+  // on first load or on a session switch is present from the first frame, so it never
+  // replays. The parent keys this component per conversation, which resets both sets.
+  const [known, setKnown] = useState<ReadonlySet<string>>(() => new Set(items.map((item) => item.id)))
+  const [entering, setEntering] = useState<ReadonlySet<string>>(() => new Set())
+  const freshIds = items.filter((item) => !known.has(item.id)).map((item) => item.id)
+  if (freshIds.length > 0) {
+    setKnown(new Set([...known, ...freshIds]))
+    if (streaming) setEntering(new Set([...entering, ...freshIds]))
+  }
+
   function measure() {
     const el = scrollRef.current
     if (!el) return
@@ -103,9 +114,9 @@ export function ConversationTimeline({
           <p className="m-auto max-w-reading text-center text-sm text-muted-foreground">{emptyHint}</p>
         ) : (
           items.map((item) => (
-            // Each entry eases in once, when it first arrives; existing entries keep
-            // their keys and never replay the entrance during streaming.
-            <div key={item.id} className="motion-reveal">
+            // A streamed entry eases in once, when it first arrives. Its class never
+            // changes afterwards, so it does not replay during streaming.
+            <div key={item.id} className={entering.has(item.id) ? 'motion-reveal' : undefined}>
               {item.kind === 'pending' ? renderPending(item) : <AgentMessage item={item} />}
             </div>
           ))

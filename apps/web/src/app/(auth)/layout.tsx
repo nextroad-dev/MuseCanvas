@@ -45,7 +45,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
             </Link>
           </header>
 
-          <main className="motion-page-enter mx-auto my-auto flex w-full max-w-[430px] flex-col py-12 lg:py-0">
+          <main className="motion-page-enter mx-auto my-auto flex w-full max-w-[400px] flex-col py-12 lg:py-0">
             {children}
           </main>
 

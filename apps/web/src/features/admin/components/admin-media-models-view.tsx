@@ -368,7 +368,7 @@ export function AdminMediaModelsView() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 id="media-models-heading" className="text-module text-foreground">
             已配置模型{' '}
-            <span className="font-mono text-[13px] text-muted-foreground">{models.length}</span>
+            <span className="font-mono text-sm text-muted-foreground">{models.length}</span>
           </h2>
           <SegmentedControl
             size="sm"
@@ -407,7 +407,9 @@ export function AdminMediaModelsView() {
             <TableHeadCell>凭据</TableHeadCell>
             <TableHeadCell align="right">并发</TableHeadCell>
             <TableHeadCell>状态</TableHeadCell>
-            <TableHeadCell align="right"></TableHeadCell>
+            <TableHeadCell align="right">
+              <span className="sr-only">操作</span>
+            </TableHeadCell>
           </TableHead>
           <TableBody busy={modelsLoading}>
             {modelsLoading ? (

@@ -8,7 +8,7 @@ import { OtpInput } from './otp-input'
 import type { FormEvent } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
-import { ArrowLeftIcon as ArrowLeft } from '@phosphor-icons/react'
+import { ArrowLeftIcon as ArrowLeft, WarningCircleIcon as CircleAlert } from '@phosphor-icons/react'
 import { api, ApiError } from '@/shared/services/api'
 import { cn } from '@/shared/lib/cn'
 import { ACCOUNT_QUERY_KEY } from '@/shared/hooks/useAccount'
@@ -301,7 +301,7 @@ export function LoginForm() {
           ) : step === 'invitation' ? (
             '当前平台处于邀请测试期，请填写有效邀请码。'
           ) : (
-            '无需密码，用邮箱验证码进入。首次登录会自动创建账户。'
+            '开始你的创意'
           )}
         </p>
       </header>
@@ -388,30 +388,37 @@ export function LoginForm() {
 
       {step === 'otp' && (
         <form noValidate onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
-          <FieldGroup>
-            {/* No required star on this step: the six cells and their hint already say what is needed. */}
-            <FormField
+          {/* The cells sit in their own fieldset with a visible 验证码 legend, so no separate
+              FormField label is rendered. The hint and error text follow the cells here. */}
+          <div className="flex flex-col">
+            <OtpInput
               id="otp"
-              label="验证码"
-              hint="支持直接粘贴整串验证码，输满 6 位自动提交。"
-              error={errors.otp}
-            >
-              <OtpInput
-                value={otpCode}
-                onChange={(next) => {
-                  invalidateRequest()
-                  setOtpCode(next)
-                  clearFieldError('otp')
-                }}
-                onComplete={handleOtpComplete}
-                disabled={loading}
-                autoFocus
-                firstInputRef={(node) => {
-                  inputRefs.current.otp = node
-                }}
-              />
-            </FormField>
-          </FieldGroup>
+              value={otpCode}
+              onChange={(next) => {
+                invalidateRequest()
+                setOtpCode(next)
+                clearFieldError('otp')
+              }}
+              onComplete={handleOtpComplete}
+              disabled={loading}
+              autoFocus
+              invalid={Boolean(errors.otp)}
+              describedBy={errors.otp ? 'otp-error' : 'otp-hint'}
+              firstInputRef={(node) => {
+                inputRefs.current.otp = node
+              }}
+            />
+            {errors.otp ? (
+              <p id="otp-error" className="mt-1 flex items-start gap-1 text-xs text-danger">
+                <CircleAlert weight="fill" aria-hidden="true" className={`mt-0.5 ${iconSize.xs} shrink-0`} />
+                <span>{errors.otp}</span>
+              </p>
+            ) : (
+              <p id="otp-hint" className="mt-1 text-xs text-muted-foreground">
+                支持直接粘贴整串验证码，输满 6 位自动提交。
+              </p>
+            )}
+          </div>
 
           <Button type="submit" size="lg" loading={loading} fullWidth className="rounded-control">
             验证并登录
@@ -432,39 +439,41 @@ export function LoginForm() {
         </form>
       )}
 
-      <section className="flex flex-col" aria-label="第三方账号登录">
-        <Divider label="或使用第三方账号" labelClassName="bg-canvas" className="my-7" />
-        {providers.isPending ? <p role="status" className="mb-4 text-center text-xs text-muted-foreground">正在读取可用登录方式…</p> : null}
-        {providers.error && <div className="mb-4"><Alert tone="warning" action={<Button variant="secondary" size="sm" loading={providers.isFetching} onClick={() => void providers.refetch()}>重试</Button>}>暂时无法读取第三方登录方式，请重试或使用邮箱验证码。</Alert></div>}
-        <div className="grid grid-cols-2 gap-2.5">
-          {OAUTH_SLOTS.map(({ provider, label, Icon }) => {
-            const info = providers.data?.find((entry) => entry.provider === provider)
-            const enabled = info?.enabled === true
-            const className = cn(
-              buttonVariants({ variant: 'secondary', size: 'md' }),
-              'h-11 min-w-0 gap-2.5 disabled:cursor-not-allowed disabled:opacity-[var(--opacity-disabled)]',
-            )
-            const content = (
-              <>
-                <Icon className={`${iconSize.md} shrink-0`} aria-hidden="true" />
-                <span>{info?.label ?? label}</span>
-              </>
-            )
-            return enabled ? (
-              <a key={provider} href={API_ENDPOINTS.auth.oauthStart(provider)} className={className}>
-                {content}
-              </a>
-            ) : (
-              <button key={provider} type="button" disabled className={className}>
-                {content}
-              </button>
-            )
-          })}
-        </div>
-        {providers.data && !providers.data.some(provider => provider.enabled) && <p className="mt-4 text-center text-xs text-muted-foreground">当前没有启用第三方登录，请使用邮箱验证码。</p>}
-      </section>
+      {step === 'email' && (
+        <section className="flex flex-col" aria-label="第三方账号登录">
+          <Divider label="或使用第三方账号" labelClassName="bg-canvas" className="my-7" />
+          {providers.isPending ? <p role="status" className="mb-4 text-center text-xs text-muted-foreground">正在读取可用登录方式…</p> : null}
+          {providers.error && <div className="mb-4"><Alert tone="warning" action={<Button variant="secondary" size="sm" loading={providers.isFetching} onClick={() => void providers.refetch()}>重试</Button>}>暂时无法读取第三方登录方式，请重试或使用邮箱验证码。</Alert></div>}
+          <div className="grid grid-cols-2 gap-2.5">
+            {OAUTH_SLOTS.map(({ provider, label, Icon }) => {
+              const info = providers.data?.find((entry) => entry.provider === provider)
+              const enabled = info?.enabled === true
+              const className = cn(
+                buttonVariants({ variant: 'secondary', size: 'md' }),
+                'h-11 min-w-0 gap-2.5 disabled:cursor-not-allowed disabled:opacity-[var(--opacity-disabled)]',
+              )
+              const content = (
+                <>
+                  <Icon className={`${iconSize.md} shrink-0`} aria-hidden="true" />
+                  <span>{info?.label ?? label}</span>
+                </>
+              )
+              return enabled ? (
+                <a key={provider} href={API_ENDPOINTS.auth.oauthStart(provider)} className={className}>
+                  {content}
+                </a>
+              ) : (
+                <button key={provider} type="button" disabled className={className}>
+                  {content}
+                </button>
+              )
+            })}
+          </div>
+          {providers.data && !providers.data.some(provider => provider.enabled) && <p className="mt-4 text-center text-xs text-muted-foreground">当前没有启用第三方登录，请使用邮箱验证码。</p>}
+        </section>
+      )}
 
-      <p className="mt-8 text-left text-xs text-muted-foreground [text-wrap:pretty]">
+      <p className="mt-8 text-center text-xs text-muted-foreground [text-wrap:pretty]">
         登录即代表你已阅读并同意
         <Link href="/terms" className="rounded-control text-foreground">
           用户协议

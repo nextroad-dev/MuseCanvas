@@ -56,7 +56,7 @@ export function GenerationFrame({
       className="relative w-full max-w-[300px] overflow-hidden rounded-card bg-tonal"
     >
       {settled ? (
-        <div key={src} className="motion-fade-in absolute inset-0 [&>div]:h-full">
+        <div key={src} className="motion-fade-in-slow absolute inset-0 [&>div]:h-full">
           <MediaFrame
             src={src}
             kind={video ? 'video' : 'image'}

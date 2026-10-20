@@ -15,7 +15,8 @@ export interface JobStatusMeta {
    *  green. Every pair clears 4.5:1 at 12px in *both* themes — light e.g.
    *  `text-info` #1e40af on `bg-info-soft` #eff6ff (~8:1), dark e.g. `text-info`
    *  #60a5fa on `bg-info-soft` #172554 (~6:1), because the tokens invert together.
-   *  `running` uses `text-accent-strong` rather than `text-accent` (3.94:1). */
+   *  `running` shares the info pair with `queued` (the design mock's in-progress
+   *  pill), so brand green stays off the in-flight state. */
   badge: string
   /** The 8px status dot: a graphic, so it only needs 3:1 against the badge's own
    *  soft background, which every solid here clears. */
@@ -24,7 +25,7 @@ export interface JobStatusMeta {
 
 const JOB_STATUS_META: Record<JobStatus, JobStatusMeta> = {
   queued: { label: '排队中', badge: 'bg-info-soft text-info', dot: 'bg-info' },
-  running: { label: '生成中', badge: 'bg-accent-soft text-accent-strong', dot: 'bg-accent' },
+  running: { label: '生成中', badge: 'bg-info-soft text-info', dot: 'bg-info' },
   retry_wait: { label: '重试等待', badge: 'bg-warning-soft text-warning', dot: 'bg-warning' },
   succeeded: { label: '已完成', badge: 'bg-success-soft text-success', dot: 'bg-success' },
   failed: { label: '失败', badge: 'bg-danger-soft text-danger', dot: 'bg-danger' },

@@ -127,7 +127,7 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
           <CardTitle level={2} id="media-defaults-heading" className="text-foreground">
             默认模型
           </CardTitle>
-          <p className="text-[13px] text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             用户新建对话时预选这两个模型；用户手动切换后，那个对话以用户的选择为准。
           </p>
         </div>
@@ -142,7 +142,7 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
               {queryError instanceof Error ? queryError.message : '加载默认模型失败'}。请检查后端服务状态后重试。
             </Alert>
           ) : (
-            <div role="status" aria-busy="true" aria-label="正在加载默认模型" className="grid min-w-0 gap-6 @min-[640px]/admin:grid-cols-2">
+            <div role="status" aria-busy="true" aria-label="正在加载默认模型" className="grid min-w-0 gap-6 grid-cols-[repeat(auto-fit,minmax(260px,1fr))]">
               <span className="sr-only">正在加载默认模型</span>
               <div className="flex flex-col gap-2" aria-hidden="true">
                 <SkeletonText width="8rem" />
@@ -155,7 +155,7 @@ export function AdminMediaModelDefaults({ models }: AdminMediaModelDefaultsProps
             </div>
           )
         ) : (
-          <div className="grid min-w-0 gap-6 @min-[640px]/admin:grid-cols-2">
+          <div className="grid min-w-0 gap-6 grid-cols-[repeat(auto-fit,minmax(260px,1fr))]">
             {KINDS.map((kind) => {
               const options = enabledModelsByKind(models, kind)
               const serverId = defaultIdForKind(defaults, kind)

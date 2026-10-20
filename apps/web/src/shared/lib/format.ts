@@ -54,6 +54,13 @@ export function formatDateTime(value: string | number | Date | null | undefined)
   return `${formatDate(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+/** `MM-DD`: a compact card caption where the year is not worth the width. */
+export function formatMonthDay(value: string | number | Date | null | undefined): string {
+  const date = parse(value)
+  if (!date) return raw(value)
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 /**
  * Locale-rendered date, e.g. `2026/10/5`.
  *

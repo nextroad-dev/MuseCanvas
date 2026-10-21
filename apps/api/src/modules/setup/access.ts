@@ -3,9 +3,42 @@ import { db, getOnboardingState, getValidSetupSession } from '@musecanvas/databa
 import { hmacForPurpose } from '@musecanvas/providers'
 import { actorFrom } from '../../auth/security'
 import { fail } from '../../shared/http'
+import { resolveClaimRequired } from './claim-required'
 
 // Shared by handlers.ts and database.ts so neither has to import the other.
 export const SETUP_COOKIE = 'muse_setup'
+
+export interface SetupOpenFacts {
+  onboardingComplete: boolean
+  activeAdminCount: number
+}
+
+/**
+ * Open mode for deployments that set SETUP_CLAIM_REQUIRED=false: setup needs no cookie
+ * while onboarding is incomplete and no active admin exists. Any failure to read the
+ * facts, or a required claim, keeps setup closed. Facts are injected so the matrix is testable.
+ */
+export async function setupOpenWithoutClaim(
+  claimRequired: boolean,
+  readFacts: () => Promise<SetupOpenFacts>,
+): Promise<boolean> {
+  if (claimRequired) return false
+  try {
+    const facts = await readFacts()
+    return !facts.onboardingComplete && facts.activeAdminCount === 0
+  } catch {
+    return false
+  }
+}
+
+async function readSetupOpenFacts(): Promise<SetupOpenFacts> {
+  const [state, admins] = await Promise.all([
+    getOnboardingState(db()),
+    db().query("SELECT count(*)::int AS cnt FROM users WHERE role='admin' AND deleted_at IS NULL"),
+  ])
+  // A missing onboarding row is treated as incomplete, matching setupStatus.
+  return { onboardingComplete: state?.status === 'complete', activeAdminCount: admins.rows[0].cnt }
+}
 
 async function setupSessionValid(raw: string | undefined): Promise<boolean> {
   if (!raw) return false
@@ -17,6 +50,7 @@ async function setupSessionValid(raw: string | undefined): Promise<boolean> {
 }
 
 export async function hasSetupAccess(request: NextRequest): Promise<boolean> {
+  if (await setupOpenWithoutClaim(resolveClaimRequired(process.env), readSetupOpenFacts)) return true
   if (await setupSessionValid(request.cookies.get(SETUP_COOKIE)?.value)) {
     // A setup session only grants access while onboarding is open; after
     // completion, leftover sessions fall through to the admin role check.

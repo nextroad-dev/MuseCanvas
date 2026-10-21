@@ -16,14 +16,9 @@ export function SetupWizardSkeleton() {
       </header>
       <div className="shrink-0 bg-tonal py-6 sm:py-8" aria-hidden="true">
         <ContentFrame>
-          <ol className="flex w-full flex-col gap-4 sm:flex-row sm:items-start sm:gap-0">
-            {[0, 1, 2, 3, 4, 5, 6].map((index) => (
-              <li key={index} className="flex min-w-0 items-center gap-3 sm:flex-1 sm:flex-col sm:items-center sm:gap-2">
-                <Skeleton className="h-8 w-8 shrink-0 rounded-pill" />
-                <Skeleton className="h-4 w-12" />
-              </li>
-            ))}
-          </ol>
+          {/* The step count depends on `claimRequired`, which is unknown until status loads. The track
+              therefore reserves the band's height without drawing a number of steps. */}
+          <Skeleton className="h-14 w-full" />
         </ContentFrame>
       </div>
       <main className="flex flex-1 justify-center py-10 sm:py-14" aria-hidden="true">
@@ -32,7 +27,7 @@ export function SetupWizardSkeleton() {
             <PageHeader
               aria-hidden="true"
               title={<span className="invisible">系统初始化</span>}
-              description={<span className="invisible">按顺序完成领取、站点、邮件、管理员、数据库、存储与运行参数。</span>}
+              description={<span className="invisible">按顺序完成各项初始化配置。</span>}
             />
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-2 border-b border-border pb-6">

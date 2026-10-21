@@ -12,10 +12,15 @@ import { CaretLeftIcon as ChevronLeft, CaretRightIcon as ChevronRight } from '@p
 import {
   canCompleteSetup,
   isSetupSessionError,
+  OPEN_SETUP_NOTICE,
   parseSetupStepId,
+  resolveActiveStepIndex,
   resolveCompletionChecklist,
   resolveResumeIndex,
   resolveSetupSteps,
+  setupIntroDescription,
+  setupStepPosition,
+  shouldShowOpenSetupNotice,
 } from '../lib/setup-wizard-state'
 import type { SetupStepId } from '../lib/setup-wizard-state'
 import {
@@ -57,8 +62,11 @@ export function SetupWizard() {
   const status = statusQuery.data
   const config = configQuery.data
   const database = databaseQuery.data ?? config?.database
+  // Absent `claimRequired` (no status yet, or an older server) keeps the claim step.
+  const claimRequired = status?.claimRequired
   const steps = resolveSetupSteps({
     claimed,
+    claimRequired,
     setupComplete: status?.setupComplete === true,
     sections: status?.sections,
     databaseReachable: database?.reachable === true,
@@ -74,11 +82,13 @@ export function SetupWizard() {
     return <SetupWizardSkeleton />
   }
 
-  const activeIndex = requestedId ? Math.max(0, steps.findIndex((step) => step.id === requestedId)) : resumeIndex
+  // A deep link to a step that is not in this list (e.g. `claim` when no claim is required) resumes instead.
+  const activeIndex = resolveActiveStepIndex(steps, requestedId)
   const active = steps[activeIndex] ?? steps[0]
   const furthest = Math.max(reached, resumeIndex)
   const smtpReady = steps.find((step) => step.id === 'smtp')?.complete === true
   const configErrorIsSession = configQuery.isError && isSetupSessionError(errorCodeOf(configQuery.error))
+  const openSetupNotice = shouldShowOpenSetupNotice(claimRequired, activeIndex)
 
   function goTo(index: number) {
     const target = steps[index]
@@ -119,14 +129,15 @@ export function SetupWizard() {
   )
 
   function blockedStep(): ReactNode {
-    if (configErrorIsSession || !configQuery.isError) {
+    if (claimRequired !== false && (configErrorIsSession || !configQuery.isError)) {
+      const claimIndex = steps.findIndex((step) => step.id === 'claim')
       return (
         <Alert
           tone="info"
           role="status"
           title="请先领取初始化码"
           action={
-            <Button variant="secondary" size="sm" onClick={() => goTo(0)}>
+            <Button variant="secondary" size="sm" onClick={() => goTo(claimIndex)}>
               前往领取
             </Button>
           }
@@ -203,12 +214,13 @@ export function SetupWizard() {
           <div className="flex w-full max-w-form flex-col gap-8">
             <PageHeader
               title="系统初始化"
-              description="按顺序完成领取、站点、邮件、管理员、数据库、存储与运行参数。已完成的步骤可以随时回来修改。"
+              description={setupIntroDescription(claimRequired)}
             />
             {alerts}
 
             {/* Keyed by step: moving between steps replays the entrance on the new content only. */}
             <div key={active.id} className="motion-page-enter flex flex-col gap-8">
+              {openSetupNotice ? <Alert tone="info" title="初始化期间开放配置">{OPEN_SETUP_NOTICE}</Alert> : null}
               {renderStep()}
             </div>
 
@@ -222,6 +234,7 @@ export function SetupWizard() {
               >
                 上一步
               </Button>
+              <span className="text-sm text-muted-foreground">{setupStepPosition(steps, activeIndex)}</span>
               {activeIndex < steps.length - 1 ? (
                 <Button
                   onClick={() => goTo(activeIndex + 1)}

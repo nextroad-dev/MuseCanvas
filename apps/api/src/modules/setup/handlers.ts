@@ -59,6 +59,7 @@ import {
 } from '../settings/runtime'
 import { SETUP_COOKIE, requireSetupAccess } from './access'
 import { resolveClaimDelivery, formatClaimLogBlock } from './claim-delivery'
+import { resolveClaimRequired } from './claim-required'
 import { probeSetupDatabase, setupDatabaseTest } from './database'
 import {
   validateSiteInput,
@@ -74,6 +75,10 @@ export { hasSetupAccess } from './access'
 
 const CLAIM_TTL_SECONDS = 15 * 60
 const SETUP_SESSION_TTL_SECONDS = 30 * 60
+// Per-IP budget for the SMTP and object-storage probes. These are reachable without a claim
+// when SETUP_CLAIM_REQUIRED=false, so they must not serve as unlimited outbound probes.
+const SETUP_PROBE_LIMIT = 30
+const SETUP_PROBE_WINDOW_SECONDS = 600
 
 function asError<T>(value: T | InputError): value is InputError {
   return value !== null && typeof value === 'object' && 'code' in value && 'message' in value
@@ -196,9 +201,14 @@ function pendingSections(): Record<OnboardingSectionKey, OnboardingSectionState>
 // polls never orphan each other's codes. Only the HMAC is stored; the plaintext
 // is delivered once through the channel chosen by resolveClaimDelivery (see
 // claim-delivery.ts) and is never returned by an API response.
-async function ensureSetupClaim(): Promise<void> {
+export async function ensureSetupClaim(
+  env: Record<string, string | undefined> = process.env,
+  runTransaction: typeof transaction = transaction,
+): Promise<void> {
+  // Claim-optional deployments never mint, print, write or store a code.
+  if (!resolveClaimRequired(env)) return
   let announce = null as string | null
-  await transaction(async (client) => {
+  await runTransaction(async (client) => {
     const res = await client.query(
       'SELECT claim_token_hash, claim_expires_at, claim_consumed_at FROM onboarding_state WHERE singleton=true FOR UPDATE',
     )
@@ -222,7 +232,7 @@ async function ensureSetupClaim(): Promise<void> {
     // unconsumed setup session, suppresses a new code). Without a delivery
     // channel nothing is minted, so no unreadable claim can linger and block a
     // later bootstrap. setupComplete sweeps all setup sessions on completion.
-    const delivery = resolveClaimDelivery(process.env)
+    const delivery = resolveClaimDelivery(env)
     if (delivery.mode === 'off') {
       if (delivery.problem) console.error(`[setup] ${delivery.problem}`)
       return
@@ -256,6 +266,7 @@ async function ensureSetupClaim(): Promise<void> {
 }
 
 export async function setupStatus(): Promise<NextResponse> {
+  const claimRequired = resolveClaimRequired(process.env)
   const bootstrap = await bootstrapDiagnostics()
   const state = await getOnboardingState(db()).catch((): null => null)
   if (!state) {
@@ -266,6 +277,7 @@ export async function setupStatus(): Promise<NextResponse> {
       bootstrap,
       configRevision: 0,
       completedAt: null,
+      claimRequired,
     }
     return ok(payload)
   }
@@ -277,6 +289,7 @@ export async function setupStatus(): Promise<NextResponse> {
       bootstrap: null,
       configRevision: state.configRevision,
       completedAt: state.completedAt,
+      claimRequired,
     }
     return ok(payload)
   }
@@ -301,11 +314,14 @@ export async function setupStatus(): Promise<NextResponse> {
     bootstrap,
     configRevision: snapshot.configRevision,
     completedAt: snapshot.completedAt,
+    claimRequired,
   }
   return ok(payload)
 }
 
 export async function setupClaim(request: NextRequest, input: Record<string, unknown>): Promise<NextResponse> {
+  // No code is minted in claim-optional mode, so there is nothing to redeem.
+  if (!resolveClaimRequired(process.env)) return fail('SETUP_CLAIM_NOT_REQUIRED', '当前部署无需领取码', 409)
   const state = await getOnboardingState(db()).catch((): null => null)
   if (state?.status === 'complete') return fail('SETUP_ALREADY_COMPLETE', '系统已初始化', 409)
   const code = input.code
@@ -411,6 +427,9 @@ export async function setupSite(request: NextRequest, input: Record<string, unkn
 export async function setupSmtpTest(request: NextRequest, input: Record<string, unknown>): Promise<NextResponse> {
   const guard = await requireSetupAccess(request)
   if (guard) return guard
+  if (await limited(`setup-smtp-test:${clientIpFromRequest(request)}`, SETUP_PROBE_LIMIT, SETUP_PROBE_WINDOW_SECONDS)) {
+    return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
+  }
   const valid = validateSmtpInput(input)
   if (asError(valid)) return fail(valid.code, valid.message)
   const current = await resolveSmtpSettings()
@@ -517,6 +536,9 @@ export async function setupSmtp(request: NextRequest, input: Record<string, unkn
 export async function setupStorageTest(request: NextRequest, input: Record<string, unknown>): Promise<NextResponse> {
   const guard = await requireSetupAccess(request)
   if (guard) return guard
+  if (await limited(`setup-storage-test:${clientIpFromRequest(request)}`, SETUP_PROBE_LIMIT, SETUP_PROBE_WINDOW_SECONDS)) {
+    return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
+  }
   const valid = validateStorageInput(input)
   if (asError(valid)) return fail(valid.code, valid.message)
   // Persists only after a successful probe. Failed tests store nothing.

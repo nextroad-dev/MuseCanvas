@@ -9,23 +9,16 @@ import { useMutation,
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import { requireAdminData } from '../lib/admin-query'
-import { adminSettingsDraftChanged, hasNewerAdminSettingsRevision, requireVerifiedAdminSettings } from '../lib/admin-settings-state'
+import { hasNewerAdminSettingsRevision, requireVerifiedAdminSettings } from '../lib/admin-settings-state'
 import { AdminCanvasAgentSettings } from './admin-canvas-agent-settings'
 import type {
   RuntimeSettingsDto,
-  RuntimeSettingsInput,
   SetupConfigResponse,
   SetupSmtpTestResult,
   SetupStorageTestResult,
   SiteSettingsDto,
-  SiteSettingsInput,
-  SmtpConnectionStatus,
   SmtpSettingsDto,
-  SmtpSettingsInput,
-  SmtpTlsMode,
-  StorageConnectionStatus,
   StorageSettingsDto,
-  StorageSettingsInput,
   } from '@/shared/types'
 import {
   Alert,
@@ -34,18 +27,34 @@ import {
   CardDescription,
   CardTitle,
   Dialog,
-  FieldGroup,
-  FormField,
-  Input,
   PageHeader,
-  Select,
   SkeletonText,
   SkeletonTile,
   Tabs,
   iconSize,
 } from '@/shared/components/ui'
-import type { BadgeTone } from '@/shared/components/ui'
 import { ArrowClockwiseIcon as RefreshCw } from '@phosphor-icons/react'
+import { ConnectionBadge } from '@/features/settings-forms/settings-form-shared'
+import { SiteSettingsForm } from '@/features/settings-forms/site-settings-form'
+import { SmtpSettingsForm } from '@/features/settings-forms/smtp-settings-form'
+import { StorageSettingsForm } from '@/features/settings-forms/storage-settings-form'
+import { RuntimeSettingsForm } from '@/features/settings-forms/runtime-settings-form'
+import {
+  runtimeDraftChanged,
+  runtimeDraftFromValues,
+  resolveRuntimeValues,
+  runtimeTotalBelowImage,
+  siteDraftChanged,
+  siteDraftFromDto,
+  smtpDraftChanged,
+  smtpDraftFromDto,
+  storageDraftChanged,
+  storageDraftFromDto,
+  toSiteInput,
+  toSmtpInput,
+  toStorageInput,
+} from '@/features/settings-forms/settings-form-state'
+import type { RuntimeDraft, SiteDraft, SmtpDraft, StorageDraft } from '@/features/settings-forms/settings-form-state'
 
 const settingsQueryKey = ['admin', 'settings'] as const
 
@@ -75,33 +84,6 @@ function SettingsSectionFeedback({ feedback, newerRevision, dirty, busy, onReloa
 
 /** Persistent section panels preserve drafts and write-only secret inputs across tab changes. */
 type SectionId = 'site' | 'smtp' | 'storage' | 'runtime' | 'canvasAgent'
-
-const connectionStatusTone: Record<SmtpConnectionStatus | StorageConnectionStatus, BadgeTone> = {
-  not_configured: 'neutral',
-  configured: 'warning',
-  verified: 'success',
-  error: 'danger',
-}
-
-const connectionStatusLabel: Record<SmtpConnectionStatus | StorageConnectionStatus, string> = {
-  not_configured: '未配置',
-  configured: '已保存待验证',
-  verified: '已验证',
-  error: '连接异常',
-}
-
-// Empty inputs are omitted so the server keeps the stored value instead of clearing it.
-function keepIfEmpty(raw: string): string | undefined {
-  return raw.trim() === '' ? undefined : raw.trim()
-}
-
-function keepIfEmptyNumber(raw: string): number | undefined {
-  return raw.trim() === '' ? undefined : Number(raw)
-}
-
-function ConnectionBadge({ status }: { status: SmtpConnectionStatus | StorageConnectionStatus }) {
-  return <Badge tone={connectionStatusTone[status]}>{connectionStatusLabel[status]}</Badge>
-}
 
 /** Section header: title + description on the left, status metadata on the right. */
 function SectionHeader({
@@ -197,17 +179,13 @@ function SiteSection({
   const queryClient = useQueryClient()
   const [settings, setSettings] = useState(latestSettings)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [siteName, setSiteName] = useState(settings.siteName ?? '')
-  const [siteUrl, setSiteUrl] = useState(settings.siteUrl ?? '')
+  const [draft, setDraft] = useState<SiteDraft>(() => siteDraftFromDto(latestSettings))
 
-  const dirty = siteName.trim() !== (settings.siteName ?? '') || (siteUrl.trim() || null) !== (settings.siteUrl ?? null)
+  const dirty = siteDraftChanged(draft, settings)
 
   const save = useMutation({
     mutationFn: async () => {
-      const body: SiteSettingsInput = {
-        siteName: siteName.trim(),
-        siteUrl: siteUrl.trim() || null,
-      }
+      const body = toSiteInput(draft)
       if (!body.siteName) throw new Error('请输入站点名称')
       const res = await api<SiteSettingsDto>(API_ENDPOINTS.setup.site, { method: 'POST', body })
       if (!res.success) throw new Error(res.error?.message || '保存站点配置失败')
@@ -222,15 +200,13 @@ function SiteSection({
   })
 
   function reset() {
-    setSiteName(settings.siteName ?? '')
-    setSiteUrl(settings.siteUrl ?? '')
+    setDraft(siteDraftFromDto(settings))
   }
 
   function loadSettings(next: SiteSettingsDto) {
     setSettings(next)
     setFeedback(null)
-    setSiteName(next.siteName ?? '')
-    setSiteUrl(next.siteUrl ?? '')
+    setDraft(siteDraftFromDto(next))
   }
 
   const busy = save.isPending
@@ -245,32 +221,15 @@ function SiteSection({
           description="用于邮件、OAuth 回调与分享链接中的实例公开地址。"
           status={updatedAtStatus(settings.updatedAt)}
         />
-        <form
-          id={FORM_ID.site}
-          onSubmit={(e) => {
-            e.preventDefault()
+        <SiteSettingsForm
+          formId={FORM_ID.site}
+          draft={draft}
+          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
+          onSubmit={() => {
             if (!busy && dirty) save.mutate()
           }}
-        >
-          <fieldset disabled={busy} className="min-w-0">
-            <FieldGroup>
-              <FormField label="站点名称" required hint="显示在标题、邮件与页面元信息中，最长 120 字符。">
-                <Input type="text" maxLength={120} value={siteName} onChange={(e) => setSiteName(e.target.value)} />
-              </FormField>
-              <FormField
-                label="站点地址（可选）"
-                hint="必须是 HTTPS 根地址，不能带路径、查询参数或认证信息；留空则回退到服务端环境变量推导的地址。"
-              >
-                <Input
-                  type="text"
-                  placeholder="https://musecanvas.example.com"
-                  value={siteUrl}
-                  onChange={(e) => setSiteUrl(e.target.value)}
-                />
-              </FormField>
-            </FieldGroup>
-          </fieldset>
-        </form>
+          disabled={busy}
+        />
       </section>
       <SaveBar formId={FORM_ID.site} dirty={dirty} saving={save.isPending} busy={busy} onCancel={reset} />
     </>
@@ -287,34 +246,13 @@ function SmtpSection({
   const queryClient = useQueryClient()
   const [settings, setSettings] = useState(latestSettings)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [host, setHost] = useState(settings.host ?? '')
-  const [port, setPort] = useState(settings.port === null ? '' : String(settings.port ?? ''))
-  const [tlsMode, setTlsMode] = useState<SmtpTlsMode>(settings.tlsMode)
-  const [username, setUsername] = useState(settings.username ?? '')
-  const [password, setPassword] = useState('')
-  const [fromAddress, setFromAddress] = useState(settings.fromAddress ?? '')
-  const [fromName, setFromName] = useState(settings.fromName ?? '')
+  const [draft, setDraft] = useState<SmtpDraft>(() => smtpDraftFromDto(latestSettings))
 
-  const portBaseline = settings.port === null ? '' : String(settings.port ?? '')
-  const dirty = adminSettingsDraftChanged(toInput(), settings)
-
-  // The password field is write-only: an untouched input is omitted so the stored
-  // secret survives, while sending an empty string would wipe it.
-  function toInput(): SmtpSettingsInput {
-    return {
-      host: keepIfEmpty(host),
-      port: keepIfEmptyNumber(port),
-      tlsMode: tlsMode === settings.tlsMode ? undefined : tlsMode,
-      username: keepIfEmpty(username),
-      password: password.trim() || undefined,
-      fromAddress: keepIfEmpty(fromAddress),
-      fromName: keepIfEmpty(fromName),
-    }
-  }
+  const dirty = smtpDraftChanged(draft, settings)
 
   const save = useMutation({
     mutationFn: async () => {
-      const res = await api<SmtpSettingsDto>(API_ENDPOINTS.setup.smtp, { method: 'POST', body: toInput() })
+      const res = await api<SmtpSettingsDto>(API_ENDPOINTS.setup.smtp, { method: 'POST', body: toSmtpInput(draft, settings) })
       if (!res.success) throw new Error(res.error?.message || '保存 SMTP 设置失败')
       return requireAdminData(res, '保存响应缺少配置数据')
     },
@@ -330,7 +268,7 @@ function SmtpSection({
     mutationFn: async () => {
       const res = await api<SetupSmtpTestResult>(API_ENDPOINTS.setup.smtpTest, {
         method: 'POST',
-        body: toInput(),
+        body: toSmtpInput(draft, settings),
       })
       return requireVerifiedAdminSettings(res, 'SMTP 连接验证未通过或响应缺少设置数据')
     },
@@ -343,25 +281,13 @@ function SmtpSection({
   })
 
   function reset() {
-    setHost(settings.host ?? '')
-    setPort(portBaseline)
-    setTlsMode(settings.tlsMode)
-    setUsername(settings.username ?? '')
-    setPassword('')
-    setFromAddress(settings.fromAddress ?? '')
-    setFromName(settings.fromName ?? '')
+    setDraft(smtpDraftFromDto(settings))
   }
 
   function loadSettings(next: SmtpSettingsDto) {
     setSettings(next)
     setFeedback(null)
-    setHost(next.host ?? '')
-    setPort(next.port === null ? '' : String(next.port ?? ''))
-    setTlsMode(next.tlsMode)
-    setUsername(next.username ?? '')
-    setPassword('')
-    setFromAddress(next.fromAddress ?? '')
-    setFromName(next.fromName ?? '')
+    setDraft(smtpDraftFromDto(next))
   }
 
   const busy = save.isPending || test.isPending
@@ -376,64 +302,16 @@ function SmtpSection({
           description="用于发送登录验证码与通知邮件。"
           status={<ConnectionBadge status={settings.status} />}
         />
-        <form
-          id={FORM_ID.smtp}
-          onSubmit={(e) => {
-            e.preventDefault()
+        <SmtpSettingsForm
+          formId={FORM_ID.smtp}
+          baseline={settings}
+          draft={draft}
+          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
+          onSubmit={() => {
             if (!busy && dirty) save.mutate()
           }}
-        >
-          <fieldset disabled={busy} className="min-w-0">
-            <div className="grid min-w-0 gap-6 @min-[560px]/fields:grid-cols-2">
-              <FormField label="发信服务器" hint="留空表示保持当前值不变。">
-                <Input type="text" placeholder="smtp.example.com" value={host} onChange={(e) => setHost(e.target.value)} />
-              </FormField>
-              <FormField label="端口">
-                <Input
-                  type="number"
-                  min={1}
-                  max={65535}
-                  placeholder={settings.port === null ? '465' : String(settings.port)}
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                />
-              </FormField>
-              <FormField label="加密方式">
-                <Select value={tlsMode} onChange={(e) => setTlsMode(e.target.value as SmtpTlsMode)}>
-                  <option value="implicit_tls">隐式 TLS（465）</option>
-                  <option value="starttls">STARTTLS（587）</option>
-                  <option value="none">不加密</option>
-                </Select>
-              </FormField>
-              <FormField label="登录用户名">
-                <Input
-                  type="text"
-                  autoComplete="off"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                />
-              </FormField>
-              <FormField
-                label="登录密码 / 授权码"
-                hint={settings.hasSecret ? '已配置密钥，留空则保持不变。' : '密钥仅写入，不会回显。'}
-              >
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder={settings.hasSecret ? '••••••••' : '未设置'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </FormField>
-              <FormField label="发件地址">
-                <Input type="email" value={fromAddress} onChange={(e) => setFromAddress(e.target.value)} />
-              </FormField>
-              <FormField label="发件人名称">
-                <Input type="text" maxLength={120} value={fromName} onChange={(e) => setFromName(e.target.value)} />
-              </FormField>
-            </div>
-          </fieldset>
-        </form>
+          disabled={busy}
+        />
       </section>
 
       <DangerZone description="验证当前草稿的 SMTP 连接，不发送邮件；连接成功后才保存设置，连接失败不保存。测试会真实连接外部服务；成功保存后登录密钥可能被覆盖，旧值无法取回。">
@@ -457,31 +335,13 @@ function StorageSection({
   const queryClient = useQueryClient()
   const [settings, setSettings] = useState(latestSettings)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [endpoint, setEndpoint] = useState(settings.endpoint ?? '')
-  const [publicEndpoint, setPublicEndpoint] = useState(settings.publicEndpoint ?? '')
-  const [region, setRegion] = useState(settings.region)
-  const [bucket, setBucket] = useState(settings.bucket ?? '')
-  const [accessKeyId, setAccessKeyId] = useState(settings.accessKeyId ?? '')
-  const [secretAccessKey, setSecretAccessKey] = useState('')
-  const [signedUrlTtlSeconds, setSignedUrlTtlSeconds] = useState(String(settings.signedUrlTtlSeconds))
+  const [draft, setDraft] = useState<StorageDraft>(() => storageDraftFromDto(latestSettings))
 
-  const dirty = adminSettingsDraftChanged(toInput(), settings)
-
-  function toInput(): StorageSettingsInput {
-    return {
-      endpoint: keepIfEmpty(endpoint),
-      publicEndpoint: keepIfEmpty(publicEndpoint),
-      region: keepIfEmpty(region),
-      bucket: keepIfEmpty(bucket),
-      accessKeyId: keepIfEmpty(accessKeyId),
-      secretAccessKey: secretAccessKey.trim() || undefined,
-      signedUrlTtlSeconds: keepIfEmptyNumber(signedUrlTtlSeconds),
-    }
-  }
+  const dirty = storageDraftChanged(draft, settings)
 
   const save = useMutation({
     mutationFn: async () => {
-      const res = await api<StorageSettingsDto>(API_ENDPOINTS.setup.storage, { method: 'POST', body: toInput() })
+      const res = await api<StorageSettingsDto>(API_ENDPOINTS.setup.storage, { method: 'POST', body: toStorageInput(draft, settings) })
       if (!res.success) throw new Error(res.error?.message || '保存对象存储设置失败')
       return requireAdminData(res, '保存响应缺少配置数据')
     },
@@ -497,7 +357,7 @@ function StorageSection({
     mutationFn: async () => {
       const res = await api<SetupStorageTestResult>(API_ENDPOINTS.setup.storageTest, {
         method: 'POST',
-        body: toInput(),
+        body: toStorageInput(draft, settings),
       })
       return requireVerifiedAdminSettings(res, '对象存储连通性测试未通过或响应缺少设置数据')
     },
@@ -510,25 +370,13 @@ function StorageSection({
   })
 
   function reset() {
-    setEndpoint(settings.endpoint ?? '')
-    setPublicEndpoint(settings.publicEndpoint ?? '')
-    setRegion(settings.region)
-    setBucket(settings.bucket ?? '')
-    setAccessKeyId(settings.accessKeyId ?? '')
-    setSecretAccessKey('')
-    setSignedUrlTtlSeconds(String(settings.signedUrlTtlSeconds))
+    setDraft(storageDraftFromDto(settings))
   }
 
   function loadSettings(next: StorageSettingsDto) {
     setSettings(next)
     setFeedback(null)
-    setEndpoint(next.endpoint ?? '')
-    setPublicEndpoint(next.publicEndpoint ?? '')
-    setRegion(next.region)
-    setBucket(next.bucket ?? '')
-    setAccessKeyId(next.accessKeyId ?? '')
-    setSecretAccessKey('')
-    setSignedUrlTtlSeconds(String(next.signedUrlTtlSeconds))
+    setDraft(storageDraftFromDto(next))
   }
 
   const busy = save.isPending || test.isPending
@@ -540,78 +388,19 @@ function StorageSection({
       <section className="@container/fields flex min-w-0 flex-col gap-6">
         <SectionHeader
           title="对象存储"
-          description="S3 兼容存储（含 MinIO / OSS / COS / R2），用于持久化生成的图像与视频资产。"
+          description="S3 兼容存储（含 MinIO / OSS / COS / R2）或本地磁盘目录，用于持久化生成的图像与视频资产。"
           status={<ConnectionBadge status={settings.status} />}
         />
-        <form
-          id={FORM_ID.storage}
-          onSubmit={(e) => {
-            e.preventDefault()
+        <StorageSettingsForm
+          formId={FORM_ID.storage}
+          baseline={settings}
+          draft={draft}
+          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
+          onSubmit={() => {
             if (!busy && dirty) save.mutate()
           }}
-        >
-          <fieldset disabled={busy} className="min-w-0">
-            <div className="grid min-w-0 gap-6 @min-[560px]/fields:grid-cols-2">
-              <FormField label="服务端点" hint="必须为 HTTP(S) 地址，不能带查询参数。">
-                <Input
-                  type="text"
-                  placeholder="https://minio.internal:9000"
-                  value={endpoint}
-                  onChange={(e) => setEndpoint(e.target.value)}
-                />
-              </FormField>
-              <FormField label="公网访问端点（可选）">
-                <Input
-                  type="text"
-                  placeholder="https://cdn.example.com"
-                  value={publicEndpoint}
-                  onChange={(e) => setPublicEndpoint(e.target.value)}
-                />
-              </FormField>
-              <FormField label="区域" hint="仅小写字母、数字与连字符，最长 32 字符。">
-                <Input
-                  type="text"
-                  maxLength={32}
-                  placeholder="us-east-1"
-                  value={region}
-                  onChange={(e) => setRegion(e.target.value)}
-                />
-              </FormField>
-              <FormField label="存储桶" hint="3-63 字符，仅小写字母、数字、连字符与点。">
-                <Input type="text" value={bucket} onChange={(e) => setBucket(e.target.value)} />
-              </FormField>
-              <FormField label="Access Key ID">
-                <Input
-                  type="text"
-                  autoComplete="off"
-                  value={accessKeyId}
-                  onChange={(e) => setAccessKeyId(e.target.value)}
-                />
-              </FormField>
-              <FormField
-                label="Secret Access Key"
-                hint={settings.hasSecret ? '已配置密钥，留空则保持不变。' : '密钥仅写入，不会回显。'}
-              >
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder={settings.hasSecret ? '••••••••' : '未设置'}
-                  value={secretAccessKey}
-                  onChange={(e) => setSecretAccessKey(e.target.value)}
-                />
-              </FormField>
-              <FormField label="签名 URL 有效期（秒）" hint="允许范围 60 - 3600。">
-                <Input
-                  type="number"
-                  min={60}
-                  max={3600}
-                  value={signedUrlTtlSeconds}
-                  onChange={(e) => setSignedUrlTtlSeconds(e.target.value)}
-                />
-              </FormField>
-            </div>
-          </fieldset>
-        </form>
+          disabled={busy}
+        />
       </section>
 
       <DangerZone description="测试当前草稿，会真实读写存储桶中的测试对象；测试成功后才保存设置，失败不保存。成功保存后 Secret Access Key 可能被覆盖，旧值无法取回。">
@@ -625,37 +414,6 @@ function StorageSection({
   )
 }
 
-const runtimeFields: Array<{
-  key: keyof RuntimeSettingsInput
-  label: string
-  min: number
-  max: number
-}> = [
-  { key: 'uploadTtlSeconds', label: '上传暂存有效期（秒）', min: 300, max: 604800 },
-  { key: 'signedUrlTtlSeconds', label: '签名 URL 有效期（秒）', min: 60, max: 3600 },
-  { key: 'maxImageBytes', label: '单图大小上限（字节）', min: 1, max: 100000000 },
-  { key: 'maxTotalBytes', label: '单次上传总大小上限（字节）', min: 1, max: 200000000 },
-  { key: 'maxInputs', label: '单次生成参考图上限（张）', min: 1, max: 32 },
-  { key: 'providerTimeoutMs', label: '上游请求超时（毫秒）', min: 1, max: 3600000 },
-  { key: 'maxOutputBytes', label: '生成结果大小上限（字节）', min: 1, max: 100000000 },
-  { key: 'jobLeaseMs', label: '任务租约时长（毫秒）', min: 1, max: 3600000 },
-]
-
-type RuntimeDraft = Record<keyof RuntimeSettingsInput, string>
-
-function toRuntimeDraft(settings: RuntimeSettingsDto): RuntimeDraft {
-  return {
-    uploadTtlSeconds: String(settings.uploadTtlSeconds),
-    signedUrlTtlSeconds: String(settings.signedUrlTtlSeconds),
-    maxImageBytes: String(settings.maxImageBytes),
-    maxTotalBytes: String(settings.maxTotalBytes),
-    maxInputs: String(settings.maxInputs),
-    providerTimeoutMs: String(settings.providerTimeoutMs),
-    maxOutputBytes: String(settings.maxOutputBytes),
-    jobLeaseMs: String(settings.jobLeaseMs),
-  }
-}
-
 function RuntimeSection({
   settings: latestSettings,
   onStateChange,
@@ -666,33 +424,20 @@ function RuntimeSection({
   const queryClient = useQueryClient()
   const [settings, setSettings] = useState(latestSettings)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [draft, setDraft] = useState<RuntimeDraft>(() => toRuntimeDraft(settings))
+  const [draft, setDraft] = useState<RuntimeDraft>(() => runtimeDraftFromValues(latestSettings))
 
-  const dirty = adminSettingsDraftChanged(toValues(), settings)
-
-  function resolve(key: keyof RuntimeSettingsInput) {
-    const raw = draft[key].trim()
-    return raw === '' ? settings[key] : Number(raw)
-  }
+  const dirty = runtimeDraftChanged(draft, settings)
 
   // The same cross-check the mutation runs, surfaced on the field that caused it.
-  const totalBelowImage = resolve('maxTotalBytes') < resolve('maxImageBytes')
-
-  function toValues(): Record<keyof RuntimeSettingsInput, number> {
-    // Every field is always submitted: the server only cross-checks the keys present
-    // in the request, so a partial submit could store a total cap below the
-    // single-image cap that stays in the row. Blank inputs fall back to the stored value.
-    const values = {} as Record<keyof RuntimeSettingsInput, number>
-    for (const { key } of runtimeFields) {
-      values[key] = resolve(key)
-    }
-    return values
-  }
+  const totalBelowImage = runtimeTotalBelowImage(resolveRuntimeValues(draft, settings))
 
   const save = useMutation({
     mutationFn: async () => {
-      const values = toValues()
-      if (values.maxTotalBytes < values.maxImageBytes) {
+      // Every field is always submitted: the server only cross-checks the keys present
+      // in the request, so a partial submit could store a total cap below the
+      // single-image cap that stays in the row. Blank inputs fall back to the stored value.
+      const values = resolveRuntimeValues(draft, settings)
+      if (runtimeTotalBelowImage(values)) {
         throw new Error('总大小上限不能小于单图大小上限')
       }
       const res = await api<RuntimeSettingsDto>(API_ENDPOINTS.setup.runtime, { method: 'POST', body: values })
@@ -710,7 +455,7 @@ function RuntimeSection({
   function loadSettings(next: RuntimeSettingsDto) {
     setSettings(next)
     setFeedback(null)
-    setDraft(toRuntimeDraft(next))
+    setDraft(runtimeDraftFromValues(next))
   }
 
   const busy = save.isPending
@@ -725,35 +470,16 @@ function RuntimeSection({
           description="上传、生成任务与上游调用的护栏参数，留空的字段保持原值。"
           status={updatedAtStatus(settings.updatedAt)}
         />
-        <form
-          id={FORM_ID.runtime}
-          onSubmit={(e) => {
-            e.preventDefault()
+        <RuntimeSettingsForm
+          formId={FORM_ID.runtime}
+          draft={draft}
+          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
+          onSubmit={() => {
             if (!busy && dirty) save.mutate()
           }}
-        >
-          <fieldset disabled={busy} className="min-w-0">
-            <div className="grid min-w-0 gap-6 @min-[560px]/fields:grid-cols-2">
-              {runtimeFields.map(({ key, label, min, max }) => (
-                <FormField
-                  key={key}
-                  label={label}
-                  error={
-                    key === 'maxTotalBytes' && totalBelowImage ? '总大小上限不能小于单图大小上限。' : undefined
-                  }
-                >
-                  <Input
-                    type="number"
-                    min={min}
-                    max={max}
-                    value={draft[key]}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }))}
-                  />
-                </FormField>
-              ))}
-            </div>
-          </fieldset>
-        </form>
+          disabled={busy}
+          errors={totalBelowImage ? { maxTotalBytes: '总大小上限不能小于单图大小上限。' } : undefined}
+        />
       </section>
 
       <SaveBar
@@ -761,7 +487,7 @@ function RuntimeSection({
         dirty={dirty}
         saving={save.isPending}
         busy={busy}
-        onCancel={() => setDraft(toRuntimeDraft(settings))}
+        onCancel={() => setDraft(runtimeDraftFromValues(settings))}
       />
     </>
   )

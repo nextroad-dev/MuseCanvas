@@ -54,6 +54,12 @@ export const API_ENDPOINTS = {
     edit: `${P}/images/edit`,
   },
 
+  // 媒体对象读取与上传：URL 由服务端签名生成（HMAC 查询串），web 客户端从不自行拼接这些地址
+  media: {
+    object: `${P}/media/object`,
+    upload: `${P}/media/upload`,
+  },
+
   jobs: {
     list: `${P}/jobs`,
     detail: (id: string) => `${P}/jobs/${id}`,
@@ -83,6 +89,9 @@ export const API_ENDPOINTS = {
     smtpTest: `${P}/setup/smtp/test`,
     storage: `${P}/setup/storage`,
     storageTest: `${P}/setup/storage/test`,
+    // GET reports the active database driver and connection summary (no password); POST tests the connection
+    database: `${P}/setup/database`,
+    databaseTest: `${P}/setup/database/test`,
     runtime: `${P}/setup/runtime`,
     promptTemplatesImport: `${P}/setup/prompt-templates/import`,
     adminRequest: `${P}/setup/admin/request`,

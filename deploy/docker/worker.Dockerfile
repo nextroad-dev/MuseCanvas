@@ -30,7 +30,7 @@ COPY packages packages
 # default), both of which live on the world-writable /tmp. The cache dir is
 # pre-created here so the default path exists even when /tmp is a tmpfs mount.
 RUN addgroup -S app && adduser -S -G app app \
- && mkdir -p /tmp/musecanvas-plugin-cache \
- && chown -R app:app /app /opt/corepack /tmp/musecanvas-plugin-cache
+ && mkdir -p /tmp/musecanvas-plugin-cache /data/media \
+ && chown -R app:app /app /opt/corepack /tmp/musecanvas-plugin-cache /data/media
 USER app
 CMD ["pnpm", "--filter", "@musecanvas/worker", "start"]

@@ -85,8 +85,11 @@ services:
         condition: service_completed_successfully
       db-migrate:
         condition: service_completed_successfully
+    volumes:
+      - media_data:/data/media
     environment: &backend-env
       NODE_ENV: production
+      SETUP_CLAIM_DELIVERY: ${SETUP_CLAIM_DELIVERY:-log}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-12}
       DATABASE_CONNECTION_TIMEOUT_MS: ${DATABASE_CONNECTION_TIMEOUT_MS:-5000}
       DATABASE_IDLE_TIMEOUT_MS: ${DATABASE_IDLE_TIMEOUT_MS:-30000}
@@ -165,6 +168,8 @@ services:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
+    volumes:
+      - media_data:/data/media
     environment: *backend-env
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:3010/health', {signal: AbortSignal.timeout(2000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
@@ -208,4 +213,5 @@ volumes:
   postgres_data: {}
   postgres_socket: {}
   redis_data: {}
+  media_data: {}
   minio_data: {}

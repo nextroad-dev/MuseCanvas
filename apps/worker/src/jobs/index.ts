@@ -4,15 +4,6 @@ import { assertProviderLease, fenceProviderContext, providerLeaseSignal, Provide
 import { createHash } from 'node:crypto'
 import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
 import {
-  AbortMultipartUploadCommand,
-  CompleteMultipartUploadCommand,
-  CreateMultipartUploadCommand,
-  DeleteObjectCommand,
-  GetObjectCommand,
-  PutObjectCommand,
-  UploadPartCommand,
-} from '@aws-sdk/client-s3'
-import {
   acquireModelCapacity,
   db,
   getLatestModelConfigRevision,
@@ -52,7 +43,7 @@ import {
 } from '@musecanvas/providers/core/image-input'
 import type { InputLimits } from '@musecanvas/providers/core/image-input'
 import { preprocessPrompt, type PreprocessPromptJob } from '../preprocessing'
-import { getStorageClient, storageOperationSignal, type StorageClientHandle } from '../shared/storage'
+import { getStorageDriver, putStorageObjectLarge, storageOperationSignal, type WorkerStorageDriver } from '../shared/storage'
 import { resolveMaxOutputBytes as resolveRuntimeMaxOutputBytes, resolveProviderTimeoutMs, resolveRuntimeSettings } from '../shared/runtime'
 import {
   PROVIDER_RUN_STATE_KEY_ID,
@@ -138,24 +129,24 @@ export async function loadAndValidateInputImages(
   const inputImages: Array<{ data: Buffer; mimeType: 'image/png' | 'image/jpeg' }> = []
 
   for (const row of rows.rows) {
-    let storage: StorageClientHandle
+    let storage: WorkerStorageDriver
     try {
-      storage = await getStorageClient()
+      storage = await getStorageDriver()
     } catch {
       throw new Error('STORAGE_NOT_CONFIGURED')
     }
     let s3Res
     const inputDeadline = storageOperationSignal()
     try {
-      s3Res = await storage.s3.send(new GetObjectCommand({ Bucket: storage.bucket, Key: row.object_key }), { abortSignal: inputDeadline })
+      s3Res = await storage.open(row.object_key, inputDeadline)
     } catch {
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
     }
-    if (!s3Res.Body) {
+    if (!s3Res.body) {
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
     }
 
-    const contentLength = s3Res.ContentLength
+    const contentLength = s3Res.contentLength
     if (contentLength !== undefined) {
       if (contentLength <= 0 || contentLength > maxSingle) {
         throw new Error('INVALID_INPUT_IMAGE_SIZE')
@@ -167,7 +158,7 @@ export async function loadAndValidateInputImages(
 
     let data: Buffer
     try {
-      const bytes = await readInputBody(s3Res.Body, inputDeadline)
+      const bytes = await readInputBody(s3Res.body, inputDeadline)
       data = Buffer.from(bytes)
     } catch {
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
@@ -262,23 +253,23 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
     for (const row of rows) {
       const mime = String(row.mime_type || '')
       if (!mime.startsWith('image/')) continue
-      let storage: StorageClientHandle
+      let storage: WorkerStorageDriver
       try {
-        storage = await getStorageClient()
+        storage = await getStorageDriver()
       } catch {
         throw new Error('STORAGE_NOT_CONFIGURED')
       }
       let s3Res
       const inputDeadline = storageOperationSignal()
       try {
-        s3Res = await storage.s3.send(new GetObjectCommand({ Bucket: storage.bucket, Key: String(row.object_key) }), { abortSignal: inputDeadline })
+        s3Res = await storage.open(String(row.object_key), inputDeadline)
       } catch {
         throw new Error('INPUT_IMAGE_UNAVAILABLE')
       }
-      if (!s3Res.Body) throw new Error('INPUT_IMAGE_UNAVAILABLE')
+      if (!s3Res.body) throw new Error('INPUT_IMAGE_UNAVAILABLE')
       let data: Buffer
       try {
-        data = Buffer.from(await readInputBody(s3Res.Body, inputDeadline))
+        data = Buffer.from(await readInputBody(s3Res.body, inputDeadline))
       } catch {
         throw new Error('INPUT_IMAGE_UNAVAILABLE')
       }
@@ -401,9 +392,9 @@ export async function persistJobFailure(
 }
 
 async function deleteUploadedObjects(uploaded: Array<{ key: string }>): Promise<void> {
-  let storage: StorageClientHandle | null = null
+  let storage: WorkerStorageDriver | null = null
   try {
-    storage = await getStorageClient()
+    storage = await getStorageDriver()
   } catch {
     console.error('generated media cleanup skipped', { code: 'STORAGE_NOT_CONFIGURED' })
     return
@@ -411,7 +402,7 @@ async function deleteUploadedObjects(uploaded: Array<{ key: string }>): Promise<
   for (const item of uploaded) {
     assertProviderLease()
     try {
-      await storage.s3.send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: item.key }), { abortSignal: storageOperationSignal(providerLeaseSignal()) })
+      await storage.delete(item.key, providerLeaseSignal())
     } catch (error) {
       console.error('generated media cleanup failed', {
         key: item.key,
@@ -694,33 +685,7 @@ async function storeRunUnknown(run: ProviderRunEntity, result: OperationResult):
 }
 
 async function uploadBufferToS3(key: string, data: Buffer, contentType: string): Promise<string | null> {
-  const MULTIPART_THRESHOLD = 8_000_000
-  const PART_SIZE = 5_000_000
-  const storage = await getStorageClient()
-  if (data.length < MULTIPART_THRESHOLD) {
-    await storage.s3.send(new PutObjectCommand({ Bucket: storage.bucket, Key: key, Body: data, ContentType: contentType, Metadata: { checksum: createHash('sha256').update(data).digest('hex') } }), { abortSignal: storageOperationSignal(providerLeaseSignal()) })
-    return null
-  }
-  const created = await storage.s3.send(new CreateMultipartUploadCommand({ Bucket: storage.bucket, Key: key, ContentType: contentType }), { abortSignal: storageOperationSignal(providerLeaseSignal()) })
-  const uploadId = created.UploadId
-  if (!uploadId) {
-    await storage.s3.send(new PutObjectCommand({ Bucket: storage.bucket, Key: key, Body: data, ContentType: contentType }), { abortSignal: storageOperationSignal(providerLeaseSignal()) })
-    return null
-  }
-  try {
-    const parts: Array<{ ETag?: string; PartNumber: number }> = []
-    let partNumber = 1
-    for (let offset = 0; offset < data.length; offset += PART_SIZE, partNumber += 1) {
-      const chunk = data.subarray(offset, Math.min(offset + PART_SIZE, data.length))
-      const uploaded = await storage.s3.send(new UploadPartCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: chunk }), { abortSignal: storageOperationSignal(providerLeaseSignal()) })
-      parts.push({ ETag: uploaded.ETag, PartNumber: partNumber })
-    }
-    await storage.s3.send(new CompleteMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId, MultipartUpload: { Parts: parts } }), { abortSignal: storageOperationSignal(providerLeaseSignal()) })
-    return uploadId
-  } catch (error) {
-    try { await storage.s3.send(new AbortMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId }), { abortSignal: storageOperationSignal() }) } catch (abortError) { console.error('multipart upload abort failed', { key, code: abortError instanceof Error ? abortError.name : 'ABORT_FAILED' }) }
-    throw error
-  }
+  return putStorageObjectLarge(key, data, contentType, providerLeaseSignal())
 }
 
 async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unknown>, revision: ModelConfigRevisionEntity, config: ProviderConfig, outputs: OutputDescriptor[], prompt: string): Promise<void> {

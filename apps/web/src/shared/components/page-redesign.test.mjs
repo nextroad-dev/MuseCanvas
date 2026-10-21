@@ -100,44 +100,66 @@ test('brand sizing inherits wrapper and only monochrome assets get dark filterin
   assert.doesNotMatch(primary, /brightness|invert/)
 })
 
-test('setup skeleton reserves the real title/description/action track before its card', () => {
+test('setup skeleton reserves the real title and seven-step track before its body', () => {
   const Surface = props => React.createElement('div', null, props.children)
-  const { SetupWizardSkeleton } = load('features/setup/components/setup-wizard.tsx', {
-    'next/link': {}, 'next/navigation': {}, '@tanstack/react-query': {},
-    '@musecanvas/contracts': {}, '@/shared/services/api': {}, './setup-state': {},
+  const { SetupWizardSkeleton } = load('features/setup/components/setup-wizard-skeleton.tsx', {
     '@/shared/components/ui': new Proxy({
       PageHeader: load('shared/components/ui/page-header.tsx').PageHeader,
-      Card: props => React.createElement('section', { 'data-card': true }, props.children),
       Skeleton: props => React.createElement('span', { 'data-skeleton': true, className: props.className }),
     }, { get: (object, key) => key in object ? object[key] : Surface }),
     '@/shared/components/content-frame': { ContentFrame: props => React.createElement('div', { className: props.className }, props.children) },
-    '@/shared/components/brand-mark': {}, '@phosphor-icons/react': {},
   })
   const html = renderToStaticMarkup(React.createElement(SetupWizardSkeleton))
-  assert.match(html, /max-w-form flex-col gap-6/)
-  assert.match(html, /<h1[^>]*><span class="invisible">系统初始化检查/)
-  assert.ok(html.indexOf('系统初始化检查') < html.indexOf('data-card="true"'))
-  assert.match(html, /h-\[var\(--control-md\)\] w-24/)
+  assert.match(html, /max-w-form flex-col gap-8/)
+  assert.match(html, /<h1[^>]*><span class="invisible">系统初始化/)
+  assert.equal((html.match(/<li/g) ?? []).length, 7, 'one placeholder per wizard step')
+  assert.ok(html.indexOf('系统初始化') < html.indexOf('bg-tonal p-4'), 'title precedes the step body placeholder')
+  assert.match(html, /h-\[var\(--control-md\)\] w-28/)
 })
 
-test('setup first read failure is visibly unknown, never fake pending/failed bootstrap', () => {
-  let query
-  const Surface = props => React.createElement('div', null, props.title, props.description, props.children)
+test('setup first read failure is visibly unknown, never fake pending/failed bootstrap', async () => {
+  const stateModule = load('features/setup/lib/setup-wizard-state.ts')
+  const { ApiError } = load('shared/services/client-api.ts')
+  const queries = []
+  const Surface = props => React.createElement('div', null, props.title, props.description, props.children, props.action)
+  const requests = load('features/setup/lib/setup-requests.ts', {
+    '@/shared/services/api': { api: async () => ({ success: false }), ApiError },
+    '@musecanvas/contracts': { API_ENDPOINTS: { setup: { status: '/fixture-status', config: '/fixture-config', database: '/fixture-database', databaseTest: '/fixture-database/test' } } },
+    './setup-wizard-state': stateModule,
+  })
   const { SetupWizard } = load('features/setup/components/setup-wizard.tsx', {
     'next/link': { default: props => React.createElement('a', { href: props.href }, props.children) },
-    'next/navigation': { useRouter: () => ({ push() {} }), useSearchParams: () => new URLSearchParams('step=review') },
-    '@tanstack/react-query': { useQuery: options => { query = options; return { data: undefined, error: new Error('fixture'), isLoading: false, isFetching: false, refetch() {} } } },
-    '@musecanvas/contracts': { API_ENDPOINTS: { setup: { status: '/fixture-status' } } },
-    '@/shared/services/api': { api: async () => ({ success: false }), ApiError: load('shared/services/client-api.ts').ApiError },
-    './setup-state': { isSetupStepComplete },
-    '@/shared/components/ui': new Proxy({ iconSize: {}, buttonVariants: () => '' }, { get: (object, key) => key in object ? object[key] : Surface }),
+    'next/navigation': { useRouter: () => ({ replace() {} }), useSearchParams: () => new URLSearchParams('step=site') },
+    '@tanstack/react-query': {
+      useQueryClient: () => ({}),
+      useQuery: options => {
+        queries.push(options)
+        const key = options.queryKey[1]
+        if (key === 'status') return { data: undefined, error: new Error('fixture'), isError: true, isSuccess: false, isLoading: false, isFetching: false, refetch() {} }
+        if (key === 'config') return { data: undefined, error: new ApiError('SETUP_SESSION_INVALID', '无初始化访问权限'), isError: true, isSuccess: false, isLoading: false, isFetching: false, refetch() {} }
+        return { data: undefined, error: null, isError: false, isSuccess: false, isLoading: false, isFetching: false, refetch() {} }
+      },
+    },
+    '@/shared/components/ui': new Proxy({ iconSize: { sm: '' }, buttonVariants: () => '' }, { get: (object, key) => key in object ? object[key] : Surface }),
     '@/shared/components/content-frame': { ContentFrame: Surface },
     '@/shared/components/brand-mark': { BrandMark: () => null },
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }),
+    '../lib/setup-wizard-state': stateModule,
+    '../lib/setup-requests': requests,
+    './setup-wizard-skeleton': { SetupWizardSkeleton: () => null },
+    './steps/claim-step': { ClaimStep: () => null },
+    './steps/site-step': { SiteStep: () => null },
+    './steps/smtp-step': { SmtpStep: () => null },
+    './steps/admin-step': { AdminStep: () => null },
+    './steps/database-step': { DatabaseStep: () => null },
+    './steps/storage-step': { StorageStep: () => null },
+    './steps/complete-step': { CompleteStep: () => null },
   })
   const html = renderToStaticMarkup(React.createElement(SetupWizard))
+  assert.match(html, /无法读取初始化状态/)
   assert.match(html, /当前状态未知/)
-  assert.doesNotMatch(html, />尚未完成<|环境检查尚未通过/, 'no pending status badge or failed bootstrap result is rendered')
-  assert.equal(query.retry, false)
-  return assert.rejects(query.queryFn(), /无法读取初始化状态/)
+  assert.doesNotMatch(html, /尚未完成|环境检查尚未通过|只读检查/, 'no pending badge, failed bootstrap or read-only label is rendered')
+  const status = queries.find(query => query.queryKey[1] === 'status')
+  assert.equal(status.retry, false)
+  await assert.rejects(status.queryFn(), /无法读取初始化状态。请检查服务连接后重试。/)
 })

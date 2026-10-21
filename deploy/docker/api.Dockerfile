@@ -23,7 +23,10 @@ RUN pnpm --filter @musecanvas/api build
 # Drop to an unprivileged user. `next start` writes its image/ISR cache under
 # apps/api/.next at runtime, so the whole app tree (plus the corepack cache) is
 # handed to `app`; /app is otherwise root-owned and would fail on first write.
+# /data/media is the mount point of the shared local-storage volume (media_data). It is
+# created and owned by `app` here so a fresh named volume inherits that ownership.
 RUN addgroup -S app && adduser -S -G app app \
- && chown -R app:app /app /opt/corepack
+ && mkdir -p /data/media \
+ && chown -R app:app /app /opt/corepack /data/media
 USER app
 CMD ["pnpm", "--filter", "@musecanvas/api", "start"]

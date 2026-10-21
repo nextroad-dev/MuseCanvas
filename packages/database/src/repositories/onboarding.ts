@@ -308,6 +308,8 @@ export async function updateSmtpSettings(
 // ---------------------------------------------------------------------------
 
 export type StorageConnectionStatus = 'not_configured' | 'configured' | 'verified' | 'error'
+/** 's3' reads the bucket described by the S3 fields; 'local' stores files under local_root. */
+export type StorageDriverKind = 's3' | 'local'
 
 export interface StorageSettingsRow {
   endpoint: string | null
@@ -320,11 +322,17 @@ export interface StorageSettingsRow {
   encryption_key_id: string | null
   signed_url_ttl_seconds: number
   status: StorageConnectionStatus
+  /** Optional so rows read before migration 0040 (and hand-built fixtures) remain valid. Absent means 's3'. */
+  storage_driver?: StorageDriverKind | null
+  local_root?: string | null
   revision: number
   updated_at: Date
 }
 
 export interface StorageSettingsEntity {
+  /** Optional for compatibility with fixtures built before migration 0040. Populated by toStorageSettingsEntity. */
+  driver?: StorageDriverKind
+  localRoot?: string | null
   endpoint: string | null
   publicEndpoint: string | null
   region: string
@@ -343,6 +351,8 @@ export interface StorageSettingsEntity {
 
 export function toStorageSettingsEntity(row: StorageSettingsRow): StorageSettingsEntity {
   return {
+    driver: row.storage_driver ?? 's3',
+    localRoot: row.local_root ?? null,
     endpoint: row.endpoint,
     publicEndpoint: row.public_endpoint,
     region: row.region,
@@ -359,15 +369,27 @@ export function toStorageSettingsEntity(row: StorageSettingsRow): StorageSetting
   }
 }
 
+/** Raw singleton row (snake_case, as stored). Used by the shared storage resolver; never returned to clients. */
+export async function getStorageSettingsRow(
+  client: pg.PoolClient | pg.Pool,
+): Promise<StorageSettingsRow | null> {
+  const res = await client.query('SELECT * FROM object_storage_settings WHERE singleton = true')
+  if (!res.rows[0]) return null
+  return res.rows[0] as StorageSettingsRow
+}
+
 export async function getStorageSettings(
   client: pg.PoolClient | pg.Pool,
 ): Promise<StorageSettingsEntity | null> {
-  const res = await client.query('SELECT * FROM object_storage_settings WHERE singleton = true')
-  if (!res.rows[0]) return null
-  return toStorageSettingsEntity(res.rows[0] as StorageSettingsRow)
+  const row = await getStorageSettingsRow(client)
+  if (!row) return null
+  return toStorageSettingsEntity(row)
 }
 
 export interface UpdateStorageSettingsInput {
+  driver?: StorageDriverKind
+  /** Absolute directory for driver 'local'. Validated by the database CHECK. */
+  localRoot?: string | null
   endpoint?: string | null
   publicEndpoint?: string | null
   region?: string | null
@@ -397,7 +419,8 @@ export async function updateStorageSettings(
          access_key_id = $5, signed_url_ttl_seconds = $6, status = $7,
          secret_encrypted = $8, secret_fingerprint = $9, encryption_key_id = $10,
          revision = revision + 1, updated_at = now(),
-         updated_by = COALESCE($11, updated_by)
+         updated_by = COALESCE($11, updated_by),
+         storage_driver = $12, local_root = $13
      WHERE singleton = true RETURNING *`,
     [
       input.endpoint !== undefined ? input.endpoint : (row?.endpoint ?? null),
@@ -411,6 +434,8 @@ export async function updateStorageSettings(
       clearSecret ? null : (input.secretFingerprint !== undefined ? input.secretFingerprint : (row?.secret_fingerprint ?? null)),
       input.encryptionKeyId !== undefined ? input.encryptionKeyId : (row?.encryption_key_id ?? null),
       updatedBy ?? null,
+      input.driver !== undefined ? input.driver : (row?.storage_driver ?? 's3'),
+      input.localRoot !== undefined ? input.localRoot : (row?.local_root ?? null),
     ],
   )
   const saved = toStorageSettingsEntity(res.rows[0] as StorageSettingsRow)
@@ -548,7 +573,7 @@ export async function markOnboardingSection(
 }
 
 // ---------------------------------------------------------------------------
-// Setup sessions (single-use, hashed tokens)
+// Setup sessions (30 minute TTL, hashed tokens; consumed only when setup completes)
 // ---------------------------------------------------------------------------
 
 export interface SetupSessionRow {
@@ -578,7 +603,7 @@ export function toSetupSessionEntity(row: SetupSessionRow): SetupSessionEntity {
 }
 
 export interface CreateSetupSessionInput {
-  /** Hash of the raw single-use token. The raw token is never stored. */
+  /** Hash of the raw session token. The raw token is never stored. */
   tokenHash: string
   expiresInSeconds: number
 }

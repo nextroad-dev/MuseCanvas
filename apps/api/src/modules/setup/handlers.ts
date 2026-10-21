@@ -9,7 +9,6 @@ import {
   installSetupClaim,
   verifyAndConsumeSetupClaim,
   createSetupSession,
-  getValidSetupSession,
   updateSiteSettings,
   updateSmtpSettings,
   updateStorageSettings,
@@ -17,9 +16,15 @@ import {
   markOnboardingSection,
   tryCompleteOnboarding,
   getActivePromptTemplateSet,
+  getStorageSettingsRow,
   listPromptTemplateEntries,
+  isStorageConfigError,
+  DEFAULT_SETUP_CLAIM_MAX_ATTEMPTS,
+  STORAGE_SIGNED_URL_TTL_DEFAULT_SECONDS,
+  type StorageSettingsRow,
 } from '@musecanvas/database'
 import {
+  decryptForPurpose,
   derivePurposeKey,
   encryptForPurpose,
   hmacForPurpose,
@@ -31,12 +36,14 @@ import type {
   OnboardingSectionKey,
   OnboardingSectionState,
   SetupStatusResponse,
+  StorageSettingsDto,
 } from '@musecanvas/contracts'
 import { hashOtp, hashToken, randomToken, verifyOtpHash, actorFrom, shouldUseSecureCookie } from '../../auth/security'
 import { writeAudit } from '../../shared/audit'
 import { body, clientIpFromRequest, emailValid, fail, ok } from '../../shared/http'
 import { userDto } from '../../shared/dto'
 import { sendMail, verifySmtpConnection, testStorageConnection } from '../../shared/services'
+import { testStorageDriver } from '../../shared/storage'
 import { limited, redisPing } from '../../shared/redis'
 import {
   resolvePublicOrigin,
@@ -50,6 +57,9 @@ import {
   storageSettingsDto,
   runtimeSettingsDto,
 } from '../settings/runtime'
+import { SETUP_COOKIE, requireSetupAccess } from './access'
+import { resolveClaimDelivery, formatClaimLogBlock } from './claim-delivery'
+import { probeSetupDatabase, setupDatabaseTest } from './database'
 import {
   validateSiteInput,
   validateSmtpInput,
@@ -58,8 +68,10 @@ import {
   validateTemplateImport,
   type InputError,
 } from './validation'
+import { runStorageSave, runStorageTest, type StorageSetupDeps, type StorageSetupOutcome } from './storage-setup'
 
-const SETUP_COOKIE = 'muse_setup'
+export { hasSetupAccess } from './access'
+
 const CLAIM_TTL_SECONDS = 15 * 60
 const SETUP_SESSION_TTL_SECONDS = 30 * 60
 
@@ -73,33 +85,55 @@ async function noAdminGuard(): Promise<NextResponse | null> {
   return null
 }
 
-async function setupSessionValid(raw: string | undefined): Promise<boolean> {
-  if (!raw) return false
-  try {
-    return !!(await getValidSetupSession(db(), hmacForPurpose(raw, 'setup-session')))
-  } catch {
-    return false
+// Storage save and test decisions live in ./storage-setup.ts. These helpers only bind the
+// real database, crypto and probe effects. The config read still degrades an unreadable
+// saved row to this placeholder so the wizard renders and offers re-entry.
+function decryptStoredStorageSecret(row: StorageSettingsRow): string {
+  return decryptForPurpose(row.secret_encrypted ?? '', 'object-storage-credentials', row.encryption_key_id ?? null)
+}
+
+function storageSetupDeps(updatedBy: string | null): StorageSetupDeps {
+  return {
+    loadRow: () => getStorageSettingsRow(db()),
+    decryptSecret: decryptStoredStorageSecret,
+    encryptSecret: plaintext => encryptForPurpose(plaintext, 'object-storage-credentials'),
+    probeLocal: config => testStorageDriver(config),
+    probeS3: settings => testStorageConnection({
+      endpoint: settings.endpoint,
+      publicEndpoint: settings.publicEndpoint,
+      region: settings.region,
+      bucket: settings.bucket,
+      accessKeyId: settings.accessKeyId,
+      secretAccessKey: settings.secretAccessKey,
+      signedUrlTtlSeconds: settings.signedUrlTtlSeconds,
+    }),
+    persist: async input => {
+      await updateStorageSettings(db(), input, updatedBy)
+    },
   }
 }
 
-export async function hasSetupAccess(request: NextRequest): Promise<boolean> {
-  if (await setupSessionValid(request.cookies.get(SETUP_COOKIE)?.value)) {
-    // A setup session only grants access while onboarding is open; after
-    // completion, leftover sessions fall through to the admin role check.
-    const state = await getOnboardingState(db()).catch((): null => null)
-    if (state?.status !== 'complete') return true
-  }
-  try {
-    const actor = await actorFrom(request)
-    return !!actor && actor.role === 'admin'
-  } catch {
-    return false
-  }
+function storageOutcomeFailure(outcome: Extract<StorageSetupOutcome, { ok: false }>): NextResponse {
+  return fail(outcome.code, outcome.message, outcome.status)
 }
 
-async function requireSetupAccess(request: NextRequest): Promise<NextResponse | null> {
-  if (await hasSetupAccess(request)) return null
-  return fail('SETUP_SESSION_INVALID', '无初始化访问权限，请先验证一次性验证码', 401)
+function unreadableStorageDto(): StorageSettingsDto {
+  return {
+    driver: 's3',
+    localRoot: null,
+    endpoint: null,
+    publicEndpoint: null,
+    region: 'us-east-1',
+    bucket: null,
+    accessKeyId: null,
+    signedUrlTtlSeconds: STORAGE_SIGNED_URL_TTL_DEFAULT_SECONDS,
+    hasSecret: false,
+    secretFingerprint: null,
+    encryptionKeyId: null,
+    status: 'error',
+    revision: 0,
+    updatedAt: new Date(0).toISOString(),
+  }
 }
 
 async function actorId(request: NextRequest): Promise<string | null> {
@@ -160,8 +194,10 @@ function pendingSections(): Record<OnboardingSectionKey, OnboardingSectionState>
 
 // Single-flight claim install serialized by a row lock, so concurrent status
 // polls never orphan each other's codes. Only the HMAC is stored; the plaintext
-// is delivered once (dev stdout or `SETUP_CLAIM_FILE`) and never returned.
+// is delivered once through the channel chosen by resolveClaimDelivery (see
+// claim-delivery.ts) and is never returned by an API response.
 async function ensureSetupClaim(): Promise<void> {
+  let announce = null as string | null
   await transaction(async (client) => {
     const res = await client.query(
       'SELECT claim_token_hash, claim_expires_at, claim_consumed_at FROM onboarding_state WHERE singleton=true FOR UPDATE',
@@ -183,36 +219,40 @@ async function ensureSetupClaim(): Promise<void> {
     }
     // Sole channel for obtaining the claim code during bootstrap (no API ever
     // returns it); regeneration is guarded above (a live claim, or any
-    // unconsumed setup session, suppresses a new code). The plaintext must not
-    // be broadcast through the server log in production: logs are shipped to
-    // aggregators and readable far beyond the operator. Production therefore
-    // writes it to `SETUP_CLAIM_FILE` (mode 0600) and never to stdout, while
-    // development keeps the one-time console line for convenience. Without a
-    // production delivery channel nothing is minted, so no unreadable claim can
-    // linger and block a later bootstrap. setupComplete sweeps all setup
-    // sessions on completion.
-    const claimFile = process.env.SETUP_CLAIM_FILE
-    if (process.env.NODE_ENV === 'production' && !claimFile) {
-      console.error('[setup] SETUP_CLAIM_FILE is not configured; refusing to mint a setup claim code whose plaintext cannot be delivered without logging it')
+    // unconsumed setup session, suppresses a new code). Without a delivery
+    // channel nothing is minted, so no unreadable claim can linger and block a
+    // later bootstrap. setupComplete sweeps all setup sessions on completion.
+    const delivery = resolveClaimDelivery(process.env)
+    if (delivery.mode === 'off') {
+      if (delivery.problem) console.error(`[setup] ${delivery.problem}`)
       return
     }
     const code = randomToken(24)
-    if (claimFile) {
+    if (delivery.mode === 'file') {
+      // Written before the install so a failed write leaves no unreadable live claim behind.
       try {
-        writeFileSync(claimFile, `${code}\n`, { mode: 0o600 })
-        console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes) written to ${claimFile}`)
+        writeFileSync(delivery.file, `${code}\n`, { mode: 0o600 })
+        console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes) written to ${delivery.file}`)
       } catch (error) {
         console.error('[setup] failed to write the setup claim code file', error instanceof Error ? error.message : error)
         return
       }
-    } else {
-      console.log(`[setup] one-time setup claim code (valid ${CLAIM_TTL_SECONDS / 60} minutes, printed once): ${code}`)
     }
-    await installSetupClaim(client, {
+    const installed = await installSetupClaim(client, {
       tokenHash: hmacForPurpose(code, 'setup-session'),
       expiresInSeconds: CLAIM_TTL_SECONDS,
     })
+    if (delivery.mode === 'log') {
+      announce = formatClaimLogBlock({
+        code,
+        expiresAt: installed.claimExpiresAt ?? new Date(Date.now() + CLAIM_TTL_SECONDS * 1000).toISOString(),
+        ttlMinutes: CLAIM_TTL_SECONDS / 60,
+        maxAttempts: DEFAULT_SETUP_CLAIM_MAX_ATTEMPTS,
+      })
+    }
   })
+  // Printed only after the install commits, so a rolled-back claim never leaves a usable-looking line behind.
+  if (announce) console.log(announce)
 }
 
 export async function setupStatus(): Promise<NextResponse> {
@@ -315,9 +355,14 @@ export async function setupConfig(request: NextRequest): Promise<NextResponse> {
   const [site, smtp, storage, runtime] = await Promise.all([
     resolveSiteSettings(),
     resolveSmtpSettings(),
-    resolveStorageSettings(),
+    // An unreadable saved secret is reported as an error status, so the wizard still renders.
+    resolveStorageSettings().catch((error: unknown): null => {
+      if (isStorageConfigError(error)) return null
+      throw error
+    }),
     resolveRuntimeSettings(),
   ])
+  const database = await probeSetupDatabase().catch((): undefined => undefined)
   const active = await getActivePromptTemplateSet(db()).catch((): null => null)
   let entries: { name: string; description: string; path: string }[] = []
   if (active) {
@@ -336,8 +381,9 @@ export async function setupConfig(request: NextRequest): Promise<NextResponse> {
   return ok({
     site: siteSettingsDto(site),
     smtp: smtpSettingsDto(smtp),
-    storage: storageSettingsDto(storage),
+    storage: storage ? storageSettingsDto(storage) : unreadableStorageDto(),
     runtime: runtimeSettingsDto(runtime),
+    database,
     templates: {
       active: active
         ? { id: active.id, name: active.name, version: active.version, entryCount: active.entryCount, updatedAt: active.updatedAt }
@@ -473,53 +519,11 @@ export async function setupStorageTest(request: NextRequest, input: Record<strin
   if (guard) return guard
   const valid = validateStorageInput(input)
   if (asError(valid)) return fail(valid.code, valid.message)
-  const current = await resolveStorageSettings()
-  const secret = valid.secret.kind === 'keep'
-    ? current.secretAccessKey
-    : valid.secret.kind === 'set'
-      ? valid.secret.secret
-      : null
-  const merged = {
-    endpoint: valid.endpoint ?? current.endpoint,
-    publicEndpoint: valid.publicEndpoint ?? current.publicEndpoint,
-    region: valid.region ?? current.region,
-    bucket: valid.bucket ?? current.bucket,
-    accessKeyId: valid.accessKeyId ?? current.accessKeyId,
-    secretAccessKey: secret,
-    signedUrlTtlSeconds: valid.signedUrlTtlSeconds ?? current.signedUrlTtlSeconds,
-  }
-  if (!merged.bucket || !merged.accessKeyId || !merged.secretAccessKey) {
-    return fail('STORAGE_TEST_FAILED', '对象存储访问信息尚未配置完整', 400)
-  }
+  // Persists only after a successful probe. Failed tests store nothing.
+  const outcome = await runStorageTest(valid, storageSetupDeps(await actorId(request)))
+  if (!outcome.ok) return storageOutcomeFailure(outcome)
   try {
-    await testStorageConnection(merged)
-  } catch {
-    return fail('STORAGE_TEST_FAILED', '对象存储连接测试失败，请检查配置', 400)
-  }
-  // Persist only after a successful round-trip. Failed tests store nothing.
-  try {
-    const encrypted = merged.secretAccessKey
-      ? encryptForPurpose(merged.secretAccessKey, 'object-storage-credentials')
-      : null
-    await updateStorageSettings(
-      db(),
-      {
-        endpoint: merged.endpoint,
-        publicEndpoint: merged.publicEndpoint,
-        region: merged.region ?? 'us-east-1',
-        bucket: merged.bucket,
-        accessKeyId: merged.accessKeyId,
-        signedUrlTtlSeconds: merged.signedUrlTtlSeconds,
-        status: 'verified',
-        ...(encrypted
-          ? { secretCiphertext: encrypted.ciphertext, secretFingerprint: encrypted.fingerprint, encryptionKeyId: encrypted.keyId }
-          : valid.secret.kind === 'clear'
-            ? { clearSecret: true }
-            : {}),
-      },
-      await actorId(request),
-    )
-    await writeAudit(db(), null, 'setup.storage.test', 'onboarding', 'singleton', { status: 'success' })
+    await writeAudit(db(), null, 'setup.storage.test', 'onboarding', 'singleton', { status: 'success', driver: outcome.settings.driver })
   } catch {
     return fail('INTERNAL_ERROR', '保存对象存储设置失败', 500)
   }
@@ -532,46 +536,13 @@ export async function setupStorage(request: NextRequest, input: Record<string, u
   if (guard) return guard
   const valid = validateStorageInput(input)
   if (asError(valid)) return fail(valid.code, valid.message)
-  const current = await resolveStorageSettings()
-  const secret = valid.secret.kind === 'keep'
-    ? current.secretAccessKey
-    : valid.secret.kind === 'set'
-      ? valid.secret.secret
-      : null
-  const merged = {
-    endpoint: valid.endpoint ?? current.endpoint,
-    publicEndpoint: valid.publicEndpoint ?? current.publicEndpoint,
-    region: valid.region ?? current.region,
-    bucket: valid.bucket ?? current.bucket,
-    accessKeyId: valid.accessKeyId ?? current.accessKeyId,
-    secretAccessKey: secret,
-    signedUrlTtlSeconds: valid.signedUrlTtlSeconds ?? current.signedUrlTtlSeconds,
-  }
+  const outcome = await runStorageSave(valid, storageSetupDeps(await actorId(request)))
+  if (!outcome.ok) return storageOutcomeFailure(outcome)
+  const { settings } = outcome
   try {
-    const encrypted = merged.secretAccessKey
-      ? encryptForPurpose(merged.secretAccessKey, 'object-storage-credentials')
-      : null
-    const saved = await updateStorageSettings(
-      db(),
-      {
-        endpoint: merged.endpoint,
-        publicEndpoint: merged.publicEndpoint,
-        region: merged.region ?? 'us-east-1',
-        bucket: merged.bucket,
-        accessKeyId: merged.accessKeyId,
-        signedUrlTtlSeconds: merged.signedUrlTtlSeconds,
-        status: merged.bucket ? 'configured' : 'not_configured',
-        ...(encrypted
-          ? { secretCiphertext: encrypted.ciphertext, secretFingerprint: encrypted.fingerprint, encryptionKeyId: encrypted.keyId }
-          : valid.secret.kind === 'clear'
-            ? { clearSecret: true }
-            : {}),
-      },
-      await actorId(request),
-    )
     await writeAudit(db(), null, 'setup.storage.update', 'onboarding', 'singleton', {
-      endpoint: saved.endpoint, publicEndpoint: saved.publicEndpoint, region: saved.region,
-      bucket: saved.bucket, accessKeyId: saved.accessKeyId, status: saved.status,
+      driver: settings.driver, endpoint: settings.endpoint, publicEndpoint: settings.publicEndpoint, region: settings.region,
+      bucket: settings.bucket, accessKeyId: settings.accessKeyId,
     })
   } catch {
     return fail('INTERNAL_ERROR', '保存对象存储设置失败', 500)
@@ -755,6 +726,9 @@ export async function handleSetupPost(request: NextRequest, path: string): Promi
       return setupStorageTest(request, await body(request))
     case 'setup/storage':
       return setupStorage(request, await body(request))
+    // No body: the probe is a fixed check, so the stream is never read.
+    case 'setup/database/test':
+      return setupDatabaseTest(request)
     case 'setup/runtime':
       return setupRuntime(request, await body(request))
     case 'setup/prompt-templates/import':

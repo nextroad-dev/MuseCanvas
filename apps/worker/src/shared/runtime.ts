@@ -13,7 +13,13 @@
 // internals: they are returned only to storage/credential call paths in this
 // process and are never logged (see provider-state redactForLog).
 
-import { db } from '@musecanvas/database'
+import {
+  db,
+  getStorageSettingsRow,
+  resolveStorageConfig,
+  type ResolvedStorageConfig,
+  type StorageSettingsRow,
+} from '@musecanvas/database'
 import {
   getActivePromptTemplateSet,
   listPromptTemplateEntries,
@@ -26,19 +32,15 @@ export type SettingsSource = 'database' | 'environment'
 
 export type StorageConnectionStatus = 'not_configured' | 'configured' | 'verified' | 'error'
 
-export interface ResolvedStorageSettings {
-  endpoint: string | null
-  publicEndpoint: string | null
-  region: string
-  bucket: string | null
-  accessKeyId: string | null
-  /** Decrypted plaintext. Worker-internal only: never log, never return via API. */
-  secretAccessKey: string | null
-  signedUrlTtlSeconds: number
-  status: StorageConnectionStatus
-  revision: number
-  source: SettingsSource
-}
+/**
+ * Effective storage configuration from the shared resolver. Check `driver` and
+ * `configured` before using the S3 fields. Secrets are worker-internal only: never
+ * log them and never return them via API.
+ */
+export type ResolvedStorageSettings = ResolvedStorageConfig
+
+/** Storage outcome kept apart from the other groups, so one bad storage config cannot fail runtime reads. */
+type StorageLoad = { ok: true; value: ResolvedStorageSettings } | { ok: false; error: unknown }
 
 export interface ResolvedRuntimeSettings {
   uploadTtlSeconds: number
@@ -71,7 +73,7 @@ export interface ResolvedPromptTemplates {
 interface CacheEntry {
   configRevision: number
   at: number
-  storage: ResolvedStorageSettings
+  storage: StorageLoad
   runtime: ResolvedRuntimeSettings
   templates: ResolvedPromptTemplates
 }
@@ -120,83 +122,29 @@ function asSafeInt(value: unknown): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null
 }
 
-async function loadStorageSettings(): Promise<ResolvedStorageSettings> {
+async function loadStorageSettings(): Promise<StorageLoad> {
+  let row: StorageSettingsRow | null = null
   try {
-    const res = await db().query('SELECT * FROM object_storage_settings WHERE singleton = true')
-    const row = res.rows[0] as Record<string, unknown> | undefined
-    if (row) {
-      const status = String(row.status || 'not_configured') as StorageConnectionStatus
-      if (status === 'configured' || status === 'verified') {
-        const endpoint = (row.endpoint as string | null) || null
-        const publicEndpoint = (row.public_endpoint as string | null) || null
-        const region = (row.region as string | null) || 'us-east-1'
-        const bucket = (row.bucket as string | null) || null
-        const accessKeyId = (row.access_key_id as string | null) || null
-        const ttl = asSafeInt(row.signed_url_ttl_seconds)
-        const signedUrlTtlSeconds =
-          ttl !== null && ttl >= 60 && ttl <= 3600 ? ttl : RUNTIME_SETTINGS_DEFAULTS.signedUrlTtlSeconds
-        const ciphertext = (row.secret_encrypted as string | null) || null
-        const keyId = (row.encryption_key_id as string | null) || null
-        let secretAccessKey: string | null = null
-        if (ciphertext) {
-          try {
-            secretAccessKey = decryptForPurpose(ciphertext, 'object-storage-credentials', keyId)
-          } catch {
-            throw new Error('INVALID_CONFIG')
-          }
-        }
-        return {
-          endpoint,
-          publicEndpoint,
-          region,
-          bucket,
-          accessKeyId,
-          secretAccessKey,
-          signedUrlTtlSeconds,
-          status,
-          revision: Number(row.revision ?? 0),
-          source: 'database',
-        }
-      }
-    }
+    row = await getStorageSettingsRow(db())
+  } catch {
+    // Missing table / DB down: the shared resolver then uses the environment block.
+    row = null
+  }
+  try {
+    // Driver, source, endpoint fallbacks and TTL bounds come from the shared resolver.
+    // A decrypt failure on a usable row throws INVALID_CONFIG and never falls back to env.
+    const value = resolveStorageConfig({
+      row,
+      decryptSecret: stored => decryptForPurpose(
+        stored.secret_encrypted ?? '',
+        'object-storage-credentials',
+        stored.encryption_key_id ?? null,
+      ),
+      env: process.env,
+    })
+    return { ok: true, value }
   } catch (error) {
-    // INVALID_CONFIG from a failed decrypt must fail closed, never fall back.
-    if (error instanceof Error && error.message === 'INVALID_CONFIG') throw error
-    // Missing table / missing row / DB down: fall through to env compatibility.
-  }
-  const endpoint = envText('S3_ENDPOINT') || envText('S3_PUBLIC_ENDPOINT')
-  const publicEndpoint = envText('S3_PUBLIC_ENDPOINT') || endpoint
-  const region = envText('S3_REGION') || 'us-east-1'
-  const bucket = envText('S3_BUCKET')
-  const accessKeyId = envText('S3_ACCESS_KEY_ID')
-  const secretAccessKey = envText('S3_SECRET_ACCESS_KEY')
-  const signedUrlTtlSeconds =
-    envInt('GENERATION_UPLOAD_SIGN_TTL_SECONDS', 60, 3600) ?? RUNTIME_SETTINGS_DEFAULTS.signedUrlTtlSeconds
-  if (endpoint && bucket && accessKeyId && secretAccessKey) {
-    return {
-      endpoint,
-      publicEndpoint,
-      region,
-      bucket,
-      accessKeyId,
-      secretAccessKey,
-      signedUrlTtlSeconds,
-      status: 'configured',
-      revision: 0,
-      source: 'environment',
-    }
-  }
-  return {
-    endpoint,
-    publicEndpoint,
-    region,
-    bucket,
-    accessKeyId,
-    secretAccessKey,
-    signedUrlTtlSeconds,
-    status: 'not_configured',
-    revision: 0,
-    source: 'environment',
+    return { ok: false, error }
   }
 }
 
@@ -306,7 +254,9 @@ async function ensureCache(): Promise<CacheEntry> {
 }
 
 export async function resolveStorageSettings(): Promise<ResolvedStorageSettings> {
-  return (await ensureCache()).storage
+  const storage = (await ensureCache()).storage
+  if (!storage.ok) throw storage.error
+  return storage.value
 }
 
 export async function resolveRuntimeSettings(): Promise<ResolvedRuntimeSettings> {

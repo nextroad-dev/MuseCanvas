@@ -1,7 +1,6 @@
-import { DeleteObjectCommand } from '@aws-sdk/client-s3'
 import { db, transaction } from '@musecanvas/database'
 import { dispatchOutbox } from '../queue'
-import { getStorageClient } from '../shared/storage'
+import { deleteStorageObject as deleteSharedStorageObject } from '../shared/storage'
 import { resolveUploadSignTtlSeconds } from '../shared/runtime'
 import { purgeCanvasContentForActor } from './canvas-cleanup'
 
@@ -9,13 +8,12 @@ const DUE_POLL_LIMIT = 50
 const CANCEL_SCAN_LIMIT = 50
 
 /**
- * Best-effort single-object delete through the per-revision storage client.
+ * Best-effort single-object delete through the shared storage driver.
  * Storage misconfiguration surfaces as STORAGE_NOT_CONFIGURED and is left
  * for the next sweep; object deletes never fail the maintenance tick itself.
  */
 async function deleteStorageObject(objectKey: string): Promise<void> {
-  const { s3, bucket } = await getStorageClient()
-  await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }), { abortSignal: AbortSignal.timeout(10_000) })
+  await deleteSharedStorageObject(objectKey, AbortSignal.timeout(10_000))
 }
 
 async function recoverExpiredLeases() {

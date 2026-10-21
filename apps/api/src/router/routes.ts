@@ -1,8 +1,10 @@
+import { NextResponse } from 'next/server'
 import { fail, ok } from '../shared/http'
 import type { OAuthProvider } from '../auth/oauth'
 import { adminOAuthSettings, oauthProviderList } from '../modules/auth/oauth-settings'
 import { completeOAuthInvitation, handleOAuthCallback, startOAuth } from '../modules/auth/oauth-flow'
 import { handleSetupPost, setupConfig, setupStatus } from '../modules/setup/handlers'
+import { setupDatabaseStatus } from '../modules/setup/database'
 import { readiness } from '../modules/health/handlers'
 import { readSession, registrationMode, setRegistrationMode } from '../modules/session/handlers'
 import { listLinkedIdentities, startLink, unlinkIdentity } from '../modules/auth/account'
@@ -17,6 +19,7 @@ import { postCanvasAgentMessages, getCanvasAgentHistory, getCanvasAgentTurn, pos
 import { readCanvasAgentSettings, updateCanvasAgentSettings } from '../modules/admin/canvas-agent-settings'
 import { readMediaModelDefaults, updateMediaModelDefaults } from '../modules/admin/media-model-defaults'
 import { editImage } from '../modules/image-edit/handlers'
+import { receiveMediaUpload, serveMediaObject } from '../modules/media'
 import {
   completeGenerationUpload,
   createGenerationUpload,
@@ -70,7 +73,11 @@ import type { Route } from './types'
  * answer without ever consuming the request stream.
  */
 
-/** The setup wizard posts to these eleven paths; all public, all pre-body. */
+/** The media handlers answer with the platform `Response`; the route table speaks `NextResponse`. */
+const asNextResponse = (response: Response) =>
+  new NextResponse(response.body, { status: response.status, statusText: response.statusText, headers: response.headers })
+
+/** The setup wizard posts to these twelve paths; all public, all pre-body. */
 const SETUP_POST_PATHS = [
   'setup/complete',
   'setup/claim',
@@ -79,6 +86,7 @@ const SETUP_POST_PATHS = [
   'setup/smtp/test',
   'setup/storage',
   'setup/storage/test',
+  'setup/database/test',
   'setup/runtime',
   'setup/prompt-templates/import',
   'setup/admin/request',
@@ -98,10 +106,14 @@ export const GET_ROUTES: Route[] = [
   { path: 'health/ready', access: 'public', handler: () => readiness() },
   { path: 'setup/status', access: 'public', handler: () => setupStatus() },
   { path: 'setup/config', access: 'public', handler: context => setupConfig(context.request) },
+  // Public at the router; the handler applies the setup-session or admin check itself.
+  { path: 'setup/database', access: 'public', handler: context => setupDatabaseStatus(context.request) },
   { path: 'registration', access: 'public', handler: context => registrationMode(context) },
   { path: 'auth/oauth/providers', access: 'public', handler: async () => ok({ providers: await oauthProviderList() }) },
   { path: 'auth/oauth/:oauth/start', access: 'public', handler: context => startOAuth(context.params.oauth as OAuthProvider, 'login') },
   { path: 'auth/oauth/:oauth/callback', access: 'public', handler: context => handleOAuthCallback(context.request, context.params.oauth as OAuthProvider) },
+  // Authorized by the HMAC signature in the query string, not by a session.
+  { path: 'media/object', access: 'public', handler: async context => asNextResponse(await serveMediaObject(context.request)) },
 
   // --- the caller's own account -------------------------------------------
   { path: 'session', access: 'actor', handler: context => readSession(context) },
@@ -159,6 +171,9 @@ export const POST_ROUTES: Route[] = [
   { path: 'auth/otp/verify', access: 'public', handler: context => verifyOtp(context) },
   { path: 'auth/logout', access: 'public', handler: context => logout(context) },
   { path: 'auth/oauth/invitation', access: 'public', handler: async context => completeOAuthInvitation(context.request, await context.json()) },
+  // Signed like `media/object`. Browser-initiated, so it is same-origin and passes the origin check in
+  // pipeline.ts; it never calls `context.json()`, since the body is the raw upload.
+  { path: 'media/upload', access: 'public', handler: async context => asNextResponse(await receiveMediaUpload(context.request)) },
 
   // --- authenticated ------------------------------------------------------
   { path: 'generation-uploads', access: 'actor', handler: async context => createGenerationUpload(context.actor, await context.json()) },

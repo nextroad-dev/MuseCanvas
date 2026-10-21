@@ -1,4 +1,4 @@
-import { SetupWizardSkeleton } from '@/features/setup/components/setup-wizard'
+import { SetupWizardSkeleton } from '@/features/setup/components/setup-wizard-skeleton'
 
 /**
  * Route-level loading state. It reuses the wizard's own skeleton so the header,

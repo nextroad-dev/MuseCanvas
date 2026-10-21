@@ -1,4 +1,5 @@
-import { SetupWizard, SetupWizardSkeleton } from '@/features/setup/components/setup-wizard'
+import { SetupWizard } from '@/features/setup/components/setup-wizard'
+import { SetupWizardSkeleton } from '@/features/setup/components/setup-wizard-skeleton'
 import { Suspense } from 'react'
 
 export const dynamic = 'force-dynamic'

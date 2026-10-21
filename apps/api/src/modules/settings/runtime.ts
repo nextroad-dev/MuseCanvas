@@ -1,9 +1,18 @@
-import { db, getSiteSettings, getSmtpSettings, getStorageSettings, getRuntimeSettings } from '@musecanvas/database'
+import {
+  db,
+  getSiteSettings,
+  getSmtpSettings,
+  getStorageSettingsRow,
+  getRuntimeSettings,
+  resolveStorageConfig,
+  toStorageSettingsEntity,
+} from '@musecanvas/database'
 import type {
   SiteSettingsEntity,
   SmtpSettingsEntity,
-  StorageSettingsEntity,
+  StorageSettingsRow,
   RuntimeSettingsEntity,
+  ResolvedStorageConfig,
 } from '@musecanvas/database'
 import { decryptForPurpose } from '@musecanvas/providers'
 import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
@@ -13,6 +22,7 @@ import type {
   SmtpSettingsDto,
   SmtpTlsMode,
   StorageConnectionStatus,
+  StorageDriverKind,
   StorageSettingsDto,
   RuntimeSettingsDto,
 } from '@musecanvas/contracts'
@@ -49,6 +59,10 @@ export interface ResolvedSmtpSettings {
 }
 
 export interface ResolvedStorageSettings {
+  driver: StorageDriverKind
+  /** Absolute local root from the row (or null). Meaningful for driver 'local'. */
+  localRoot: string | null
+  /** For driver 's3': server-side endpoint (endpoint, falling back to publicEndpoint). */
   endpoint: string | null
   publicEndpoint: string | null
   region: string
@@ -78,12 +92,19 @@ export interface ResolvedRuntimeSettings {
   updatedAt: string
 }
 
+/**
+ * Storage resolves separately from the other groups. An unusable storage config
+ * (undecryptable secret, invalid local root) fails only storage consumers, so site,
+ * SMTP and runtime reads keep working.
+ */
+type StorageLoad = { ok: true; value: ResolvedStorageSettings } | { ok: false; error: unknown }
+
 interface SettingsCache {
   revision: number
   loadedAt: number
   site: ResolvedSiteSettings
   smtp: ResolvedSmtpSettings
-  storage: ResolvedStorageSettings
+  storage: StorageLoad
   runtime: ResolvedRuntimeSettings
 }
 
@@ -220,31 +241,70 @@ async function loadSmtp(): Promise<ResolvedSmtpSettings> {
   }
 }
 
-async function loadStorage(): Promise<ResolvedStorageSettings> {
-  let row: StorageSettingsEntity | null = null
+async function loadStorage(): Promise<StorageLoad> {
+  let row: StorageSettingsRow | null = null
   try {
-    row = await getStorageSettings(db())
+    row = await getStorageSettingsRow(db())
   } catch {
     row = null
   }
-  const bucket = row?.bucket ?? env('S3_BUCKET') ?? null
-  const secretAccessKey = decryptSecret(row?.secretCiphertext, 'object-storage-credentials', row?.encryptionKeyId)
-    ?? env('S3_SECRET_ACCESS_KEY')
-    ?? null
+  let config: ResolvedStorageConfig
+  try {
+    // The shared resolver owns source selection. A decrypt failure on a usable row
+    // throws INVALID_CONFIG here and is never replaced by the environment secret.
+    config = resolveStorageConfig({
+      row,
+      decryptSecret: stored => decryptForPurpose(
+        stored.secret_encrypted ?? '',
+        'object-storage-credentials',
+        stored.encryption_key_id ?? null,
+      ),
+      env: process.env,
+    })
+  } catch (error) {
+    return { ok: false, error }
+  }
+  return { ok: true, value: toResolvedStorage(config, row) }
+}
+
+function toResolvedStorage(config: ResolvedStorageConfig, row: StorageSettingsRow | null): ResolvedStorageSettings {
+  const stored = row ? toStorageSettingsEntity(row) : null
+  if (config.driver === 'local') {
+    // The S3 fields stay visible so an operator can switch back. They are never used for I/O.
+    return {
+      driver: 'local',
+      localRoot: config.root,
+      endpoint: stored?.endpoint ?? null,
+      publicEndpoint: stored?.publicEndpoint ?? null,
+      region: stored?.region ?? 'us-east-1',
+      bucket: stored?.bucket ?? null,
+      accessKeyId: stored?.accessKeyId ?? null,
+      secretAccessKey: null,
+      signedUrlTtlSeconds: config.signedUrlTtlSeconds,
+      status: stored?.status ?? 'configured',
+      hasSecret: stored?.hasSecret ?? false,
+      secretFingerprint: stored?.secretFingerprint ?? null,
+      encryptionKeyId: stored?.encryptionKeyId ?? null,
+      revision: stored ? stored.revision : 1,
+      updatedAt: stored?.updatedAt ?? SYNTHETIC_UPDATED_AT,
+    }
+  }
   return {
-    endpoint: row?.endpoint ?? env('S3_ENDPOINT') ?? null,
-    publicEndpoint: row?.publicEndpoint ?? env('S3_PUBLIC_ENDPOINT') ?? null,
-    region: row?.region ?? env('S3_REGION') ?? 'us-east-1',
-    bucket,
-    accessKeyId: row?.accessKeyId ?? env('S3_ACCESS_KEY_ID') ?? null,
-    secretAccessKey,
-    signedUrlTtlSeconds: row?.signedUrlTtlSeconds ?? envInt('S3_SIGNED_URL_TTL', 60, 3600) ?? 900,
-    status: row?.status ?? (bucket ? 'configured' : 'not_configured'),
-    hasSecret: row ? row.hasSecret : secretAccessKey !== null,
-    secretFingerprint: row?.secretFingerprint ?? null,
-    encryptionKeyId: row?.encryptionKeyId ?? null,
-    revision: row?.revision ?? 1,
-    updatedAt: row?.updatedAt ?? SYNTHETIC_UPDATED_AT,
+    driver: 's3',
+    localRoot: stored?.localRoot ?? null,
+    endpoint: config.endpoint,
+    publicEndpoint: config.publicEndpoint,
+    region: config.region,
+    bucket: config.bucket,
+    accessKeyId: config.accessKeyId,
+    secretAccessKey: config.secretAccessKey,
+    signedUrlTtlSeconds: config.signedUrlTtlSeconds,
+    status: stored?.status ?? (config.configured ? 'configured' : 'not_configured'),
+    hasSecret: stored ? stored.hasSecret : config.secretAccessKey !== null,
+    secretFingerprint: stored?.secretFingerprint ?? null,
+    encryptionKeyId: stored?.encryptionKeyId ?? null,
+    revision: stored ? stored.revision : 1,
+    updatedAt: stored?.updatedAt ?? SYNTHETIC_UPDATED_AT,
   }
 }
 
@@ -313,7 +373,9 @@ export async function resolveSmtpSettings(): Promise<ResolvedSmtpSettings> {
 }
 
 export async function resolveStorageSettings(): Promise<ResolvedStorageSettings> {
-  return (await cached()).storage
+  const storage = (await cached()).storage
+  if (!storage.ok) throw storage.error
+  return storage.value
 }
 
 export async function resolveRuntimeSettings(): Promise<ResolvedRuntimeSettings> {
@@ -344,6 +406,8 @@ export function smtpSettingsDto(resolved: ResolvedSmtpSettings): SmtpSettingsDto
 
 export function storageSettingsDto(resolved: ResolvedStorageSettings): StorageSettingsDto {
   return {
+    driver: resolved.driver,
+    localRoot: resolved.localRoot,
     endpoint: resolved.endpoint,
     publicEndpoint: resolved.publicEndpoint,
     region: resolved.region,

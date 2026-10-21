@@ -116,14 +116,30 @@ test('admin-installed-plugins: only uncached errors replace records; all screens
   assert.equal(tags(source('admin-installed-plugins'), 'PluginRecordDetails').length, 1, 'full package content belongs only to its dialog')
 })
 
+const settingsForms = ['site', 'smtp', 'storage', 'runtime']
+  .map((name) => readFileSync(new URL(`../../settings-forms/${name}-settings-form.tsx`, import.meta.url), 'utf8'))
+  .join('\n')
+
 test('settings panels persist, visible tabs replace the second rail, fields use their own container', () => {
   const text = read('admin-settings-view')
   assert.doesNotMatch(text, /w-settings-nav|md:hidden|sectionGroups/)
   assert.match(text, /lazy=\{false\}/)
   assert.match(text, /listClassName="max-w-full overflow-x-auto"/)
-  assert.match(text, /@min-\[560px\]\/fields:grid-cols-2/)
+  // Field grids moved with the extracted forms; the admin section still owns the container.
+  assert.match(settingsForms, /@min-\[560px\]\/fields:grid-cols-2/)
+  assert.match(text, /@container\/fields/)
   assert.match(text, /sticky bottom-0/)
   assert.match(text, /未保存/)
+})
+
+test('admin settings sections consume the shared forms and the storage driver switch is offered in both places', () => {
+  const text = read('admin-settings-view')
+  for (const name of ['SiteSettingsForm', 'SmtpSettingsForm', 'StorageSettingsForm', 'RuntimeSettingsForm']) {
+    assert.match(text, new RegExp(`<${name}\\b`), name)
+  }
+  assert.doesNotMatch(text, /<Input\b|<FormField\b|<Select\b/, 'admin view no longer declares field markup itself')
+  assert.match(settingsForms, /S3 兼容对象存储/)
+  assert.match(settingsForms, /本地磁盘/)
 })
 
 test('canvas agent settings mount as a settings tab and save through the real contract without a connectivity probe', () => {

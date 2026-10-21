@@ -1,6 +1,7 @@
 import { emailValid } from '../../shared/http'
 import { PROMPT_TEMPLATE_VAR_LOOKUP } from '@musecanvas/contracts'
 import { isPrivateProviderHost } from '@musecanvas/providers'
+import { validateLocalStorageRoot, type StorageDriverKind } from '@musecanvas/database'
 
 // Pure validators for the persisted onboarding endpoints. Every function is
 // synchronous and side-effect free: callers map failures to fail() responses
@@ -175,6 +176,8 @@ function validHttpUrl(raw: string, field: string): string | InputError {
 }
 
 const STORAGE_FIELDS = new Set([
+  'driver',
+  'localRoot',
   'endpoint',
   'publicEndpoint',
   'region',
@@ -184,9 +187,18 @@ const STORAGE_FIELDS = new Set([
   'signedUrlTtlSeconds',
 ])
 
+const STORAGE_LOCAL_ROOT_MESSAGE = '本地存储目录必须是不含 ".." 的绝对路径，且不超过 512 个字符'
+
 export type StorageSecretAction = { kind: 'keep' } | { kind: 'clear' } | { kind: 'set'; secret: string }
 
 export interface ValidStorageInput {
+  /**
+   * Undefined when the request omits it, which means "keep the stored driver" (the web form
+   * only sends `driver` when the user switches it). Only an explicit value changes the driver.
+   */
+  driver: StorageDriverKind | undefined
+  /** Validated absolute directory. Required when driver is 'local'. */
+  localRoot: string | null | undefined
   endpoint: string | null | undefined
   publicEndpoint: string | null | undefined
   region: string | null | undefined
@@ -196,9 +208,36 @@ export interface ValidStorageInput {
   signedUrlTtlSeconds: number | null | undefined
 }
 
+function isValidLocalRoot(root: string): boolean {
+  try {
+    validateLocalStorageRoot(root)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function validateStorageInput(input: Record<string, unknown>): ValidStorageInput | InputError {
   const unknown = rejectUnknownFields(input, STORAGE_FIELDS)
   if (unknown) return unknown
+  let driver: StorageDriverKind | undefined
+  if (input.driver !== undefined) {
+    if (input.driver !== 's3' && input.driver !== 'local') return INVALID_INPUT('存储驱动类型无效')
+    driver = input.driver
+  }
+  let localRoot: string | null | undefined = undefined
+  if (input.localRoot !== undefined) {
+    if (input.localRoot === null) {
+      localRoot = null
+    } else if (typeof input.localRoot !== 'string') {
+      return INVALID_INPUT(STORAGE_LOCAL_ROOT_MESSAGE)
+    } else {
+      const trimmed = input.localRoot.trim()
+      if (trimmed !== '' && !isValidLocalRoot(trimmed)) return INVALID_INPUT(STORAGE_LOCAL_ROOT_MESSAGE)
+      localRoot = trimmed === '' ? null : trimmed
+    }
+  }
+  if (driver === 'local' && !localRoot) return INVALID_INPUT('本地存储必须填写存储目录')
   let endpoint: string | null | undefined
   if (input.endpoint !== undefined) {
     if (input.endpoint === null || input.endpoint === '') {
@@ -257,7 +296,7 @@ export function validateStorageInput(input: Record<string, unknown>): ValidStora
   }
   const signedUrlTtlSeconds = optionalInt(input.signedUrlTtlSeconds, 60, 3600)
   if (signedUrlTtlSeconds instanceof Object && 'code' in signedUrlTtlSeconds) return signedUrlTtlSeconds
-  return { endpoint, publicEndpoint, region, bucket, accessKeyId, secret, signedUrlTtlSeconds }
+  return { driver, localRoot, endpoint, publicEndpoint, region, bucket, accessKeyId, secret, signedUrlTtlSeconds }
 }
 
 const RUNTIME_FIELDS = new Set([

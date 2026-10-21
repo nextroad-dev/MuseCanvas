@@ -7,7 +7,7 @@ import type { SetupClaimResult } from '@musecanvas/contracts'
 import { api } from '@/shared/services/api'
 import { Alert, Badge, Button, FormField, Input } from '@/shared/components/ui'
 import { CheckIcon as Check } from '@phosphor-icons/react'
-import { claimErrorMessage, stepDefinition } from '../../lib/setup-wizard-state'
+import { claimErrorMessage, claimFailureOutcome, stepDefinition } from '../../lib/setup-wizard-state'
 import { errorCodeOf, invalidateSetupQueries, requireSetupData } from '../../lib/setup-requests'
 import { focusFirstInvalidField } from '@/features/settings-forms/settings-form-shared'
 import { StepFrame } from './step-frame'
@@ -34,8 +34,16 @@ export function ClaimStep({ claimed }: { claimed: boolean }) {
       setCode('')
       await invalidateSetupQueries(queryClient)
     },
-    onError: (err) => {
-      setError(claimErrorMessage(errorCodeOf(err)))
+    onError: async (err) => {
+      const outcome = claimFailureOutcome(errorCodeOf(err))
+      if (outcome.kind === 'refetch-status') {
+        // Stale status: the server no longer wants a claim code. Refetching drops this step from the
+        // wizard, which then resumes at the first incomplete step. No error is shown.
+        setError(null)
+        await invalidateSetupQueries(queryClient)
+        return
+      }
+      setError(outcome.message)
       requestAnimationFrame(() => focusFirstInvalidField(FORM_ID))
     },
   })

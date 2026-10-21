@@ -100,7 +100,7 @@ test('brand sizing inherits wrapper and only monochrome assets get dark filterin
   assert.doesNotMatch(primary, /brightness|invert/)
 })
 
-test('setup skeleton reserves the real title and seven-step track before its body', () => {
+test('setup skeleton reserves the real title and a count-free track before its body', () => {
   const Surface = props => React.createElement('div', null, props.children)
   const { SetupWizardSkeleton } = load('features/setup/components/setup-wizard-skeleton.tsx', {
     '@/shared/components/ui': new Proxy({
@@ -112,7 +112,11 @@ test('setup skeleton reserves the real title and seven-step track before its bod
   const html = renderToStaticMarkup(React.createElement(SetupWizardSkeleton))
   assert.match(html, /max-w-form flex-col gap-8/)
   assert.match(html, /<h1[^>]*><span class="invisible">系统初始化/)
-  assert.equal((html.match(/<li/g) ?? []).length, 7, 'one placeholder per wizard step')
+  // Before status loads the wizard does not know whether the claim step exists (`claimRequired` is
+  // unknown), so the skeleton must not draw a step count: no per-step placeholders, one neutral track.
+  assert.equal((html.match(/<li/g) ?? []).length, 0, 'no per-step placeholders, so no claimed step count')
+  assert.match(html, /h-14 w-full/, 'stepper band keeps its height with a single track')
+  assert.doesNotMatch(html, /领取/, 'the placeholder copy names no step')
   assert.ok(html.indexOf('系统初始化') < html.indexOf('bg-tonal p-4'), 'title precedes the step body placeholder')
   assert.match(html, /h-\[var\(--control-md\)\] w-28/)
 })
@@ -162,4 +166,57 @@ test('setup first read failure is visibly unknown, never fake pending/failed boo
   const status = queries.find(query => query.queryKey[1] === 'status')
   assert.equal(status.retry, false)
   await assert.rejects(status.queryFn(), /无法读取初始化状态。请检查服务连接后重试。/)
+})
+
+test('setup wizard hides the claim step when status says claimRequired is false, and notes the open window on site', async () => {
+  const stateModule = load('features/setup/lib/setup-wizard-state.ts')
+  const { ApiError } = load('shared/services/client-api.ts')
+  const requests = load('features/setup/lib/setup-requests.ts', {
+    '@/shared/services/api': { api: async () => ({ success: false }), ApiError },
+    '@musecanvas/contracts': { API_ENDPOINTS: { setup: { status: '/fixture-status', config: '/fixture-config', database: '/fixture-database', databaseTest: '/fixture-database/test' } } },
+    './setup-wizard-state': stateModule,
+  })
+  const render = (status) => {
+    const Surface = props => React.createElement('div', null, props.title, props.description, props.children, props.action)
+    const { SetupWizard } = load('features/setup/components/setup-wizard.tsx', {
+      'next/link': { default: props => React.createElement('a', { href: props.href }, props.children) },
+      'next/navigation': { useRouter: () => ({ replace() {} }), useSearchParams: () => new URLSearchParams('') },
+      '@tanstack/react-query': {
+        useQueryClient: () => ({}),
+        useQuery: options => {
+          const key = options.queryKey[1]
+          const ok = data => ({ data, error: null, isError: false, isSuccess: true, isLoading: false, isFetching: false, refetch() {} })
+          if (key === 'status') return ok(status)
+          if (key === 'config') return ok({ site: {}, smtp: {}, storage: {}, runtime: {}, database: { reachable: false } })
+          return { data: undefined, error: null, isError: false, isSuccess: false, isLoading: false, isFetching: false, refetch() {} }
+        },
+      },
+      '@/shared/components/ui': new Proxy({ iconSize: { sm: '' }, buttonVariants: () => '' }, { get: (object, key) => key in object ? object[key] : Surface }),
+      '@/shared/components/content-frame': { ContentFrame: Surface },
+      '@/shared/components/brand-mark': { BrandMark: () => null },
+      '@phosphor-icons/react': new Proxy({}, { get: () => () => null }),
+      '../lib/setup-wizard-state': stateModule,
+      '../lib/setup-requests': requests,
+      './setup-wizard-skeleton': { SetupWizardSkeleton: () => null },
+      './steps/claim-step': { ClaimStep: () => null },
+      './steps/site-step': { SiteStep: () => null },
+      './steps/smtp-step': { SmtpStep: () => null },
+      './steps/admin-step': { AdminStep: () => null },
+      './steps/database-step': { DatabaseStep: () => null },
+      './steps/storage-step': { StorageStep: () => null },
+      './steps/complete-step': { CompleteStep: () => null },
+    })
+    return renderToStaticMarkup(React.createElement(SetupWizard))
+  }
+
+  const open = render({ setupComplete: false, sections: {}, claimRequired: false })
+  assert.match(open, /第 1 \/ 6 步/, 'numbering counts the six steps without a claim')
+  assert.doesNotMatch(open, /第 1 \/ 7 步/)
+  assert.doesNotMatch(open, /领取初始化码/, 'no claim prompt or step is offered')
+  assert.ok(open.includes('初始化期间任何能访问此地址的人都可以配置'), 'open-window notice is shown on the first step')
+
+  const required = render({ setupComplete: false, sections: {} })
+  // The config read succeeds in this stub, so the session counts as claimed and resume is site (2 of 7).
+  assert.match(required, /第 2 \/ 7 步/, 'absent claimRequired keeps the seven-step wizard')
+  assert.doesNotMatch(required, /初始化期间任何能访问此地址的人都可以配置/)
 })

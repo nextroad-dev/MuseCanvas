@@ -7,7 +7,7 @@ export type SetupStepId = 'claim' | 'site' | 'smtp' | 'admin' | 'database' | 'st
 
 export interface SetupStepDefinition {
   id: SetupStepId
-  /** Short stepper label: it has to fit a 360px row of seven steps. */
+  /** Short stepper label: it has to fit a 360px row of up to seven steps. */
   label: string
   title: string
   description: string
@@ -60,6 +60,8 @@ export const SETUP_STEPS: readonly SetupStepDefinition[] = [
 
 export interface SetupProgressInput {
   claimed: boolean
+  /** `SetupStatusResponse.claimRequired`. Absent means required (the safe default for older servers). */
+  claimRequired?: boolean
   setupComplete: boolean
   sections?: Partial<Record<OnboardingSectionKey, Pick<OnboardingSectionState, 'status'>>> | null
   databaseReachable: boolean
@@ -73,11 +75,25 @@ function sectionDone(sections: SetupProgressInput['sections'], key: OnboardingSe
   return sections?.[key]?.status === 'complete'
 }
 
+/** Only an explicit `false` from the server opens setup without a claim code. */
+export function isSetupClaimRequired(claimRequired: boolean | null | undefined): boolean {
+  return claimRequired !== false
+}
+
+/**
+ * The ordered steps the wizard shows. The claim step is present only when the server requires a
+ * claim code; the stepper, navigation, numbering and resume all read this list.
+ */
+export function setupStepDefinitions(claimRequired: boolean | null | undefined): readonly SetupStepDefinition[] {
+  return isSetupClaimRequired(claimRequired) ? SETUP_STEPS : SETUP_STEPS.filter((step) => step.id !== 'claim')
+}
+
 /** Completion is a stored fact per step. Missing data counts as not done, never as done. */
 export function isSetupStepDone(id: SetupStepId, input: SetupProgressInput): boolean {
   switch (id) {
     case 'claim':
-      return input.claimed
+      // Without a required claim there is nothing to enter, so the step counts as satisfied.
+      return !isSetupClaimRequired(input.claimRequired) || input.claimed
     case 'site':
       return sectionDone(input.sections, 'site')
     case 'smtp':
@@ -94,13 +110,42 @@ export function isSetupStepDone(id: SetupStepId, input: SetupProgressInput): boo
 }
 
 export function resolveSetupSteps(input: SetupProgressInput): ResolvedSetupStep[] {
-  return SETUP_STEPS.map((step) => ({ ...step, complete: isSetupStepDone(step.id, input) }))
+  return setupStepDefinitions(input.claimRequired).map((step) => ({ ...step, complete: isSetupStepDone(step.id, input) }))
 }
 
 /** The first step that is not complete; the last step when everything is already done. */
 export function resolveResumeIndex(steps: ReadonlyArray<{ complete: boolean }>): number {
   const index = steps.findIndex((step) => !step.complete)
   return index === -1 ? Math.max(0, steps.length - 1) : index
+}
+
+/**
+ * Index of the step to show. A `?step=` deep link that is not in the resolved list (for example
+ * `claim` while the claim is not required) falls back to the resume index, never to the first step.
+ */
+export function resolveActiveStepIndex(steps: ReadonlyArray<{ id: SetupStepId; complete: boolean }>, requested: SetupStepId | null): number {
+  const resumeIndex = resolveResumeIndex(steps)
+  if (requested === null) return resumeIndex
+  const index = steps.findIndex((step) => step.id === requested)
+  return index === -1 ? resumeIndex : index
+}
+
+/** Human position for the progress copy, e.g. `第 2 / 6 步`, counted from the resolved list. */
+export function setupStepPosition(steps: ReadonlyArray<unknown>, index: number): string {
+  return `第 ${index + 1} / ${steps.length} 步`
+}
+
+/** Shown on the first visible step only, and only while no claim code is required. */
+export function shouldShowOpenSetupNotice(claimRequired: boolean | null | undefined, activeIndex: number): boolean {
+  return !isSetupClaimRequired(claimRequired) && activeIndex === 0
+}
+
+export const OPEN_SETUP_NOTICE = '初始化期间任何能访问此地址的人都可以配置，创建管理员后此页面将自动仅对管理员开放。'
+
+/** Intro sentence under the page title; it names only the steps this server will show. */
+export function setupIntroDescription(claimRequired: boolean | null | undefined): string {
+  const names = isSetupClaimRequired(claimRequired) ? '领取、站点、邮件、管理员、数据库、存储与运行参数' : '站点、邮件、管理员、数据库、存储与运行参数'
+  return `按顺序完成${names}。已完成的步骤可以随时回来修改。`
 }
 
 export function parseSetupStepId(raw: string | null | undefined): SetupStepId | null {
@@ -146,6 +191,17 @@ const CLAIM_LOCATION_HINT = '领取码 15 分钟内有效且只能使用一次�
 /** Session-scoped codes: any of these means the operator must claim again. */
 export function isSetupSessionError(code: string | null | undefined): boolean {
   return code === 'SETUP_SESSION_INVALID' || code === 'SETUP_SESSION_EXPIRED' || code === 'SETUP_SESSION_CONSUMED' || code === 'UNAUTHORIZED'
+}
+
+/**
+ * What a failed claim means on screen. `SETUP_CLAIM_NOT_REQUIRED` is not an error for the operator:
+ * the cached status is stale, so it is refetched and the wizard moves on without a message.
+ */
+export type ClaimFailureOutcome = { kind: 'refetch-status' } | { kind: 'message'; message: string }
+
+export function claimFailureOutcome(code: string | null | undefined): ClaimFailureOutcome {
+  if (code === 'SETUP_CLAIM_NOT_REQUIRED') return { kind: 'refetch-status' }
+  return { kind: 'message', message: claimErrorMessage(code) }
 }
 
 export function claimErrorMessage(code: string | null | undefined): string {

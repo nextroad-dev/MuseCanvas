@@ -701,6 +701,12 @@ export interface SetupStatusResponse {
   bootstrap: BootstrapDiagnostics | null
   configRevision: number
   completedAt: string | null
+  /**
+   * Whether /setup needs a one-time claim code before it opens. Absent means true (the safe
+   * default for older servers). False only when the operator set SETUP_CLAIM_REQUIRED=false,
+   * in which case setup is open until the first admin exists and the wizard hides the claim step.
+   */
+  claimRequired?: boolean
 }
 
 export const SetupErrorCode = {
@@ -708,6 +714,7 @@ export const SetupErrorCode = {
   SETUP_SESSION_INVALID: 'SETUP_SESSION_INVALID',
   SETUP_SESSION_EXPIRED: 'SETUP_SESSION_EXPIRED',
   SETUP_SESSION_CONSUMED: 'SETUP_SESSION_CONSUMED',
+  SETUP_CLAIM_NOT_REQUIRED: 'SETUP_CLAIM_NOT_REQUIRED',
   SETUP_INCOMPLETE: 'SETUP_INCOMPLETE',
   INVALID_INPUT: 'INVALID_INPUT',
   INVALID_OTP: 'INVALID_OTP',

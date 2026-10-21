@@ -5,16 +5,24 @@ import {
   adminVerifyErrorMessage,
   canCompleteSetup,
   claimErrorMessage,
+  claimFailureOutcome,
   databaseDriverCards,
+  isSetupClaimRequired,
   isSetupSessionError,
   isSetupStepDone,
   maskConnectionValue,
+  OPEN_SETUP_NOTICE,
   parseSetupStepId,
   resendCooldownRemaining,
+  resolveActiveStepIndex,
   resolveCompletionChecklist,
   resolveResumeIndex,
   resolveSetupSteps,
+  setupIntroDescription,
+  setupStepDefinitions,
+  setupStepPosition,
   SETUP_STEPS,
+  shouldShowOpenSetupNotice,
   stepDefinition,
 } from './setup-wizard-state.ts'
 
@@ -177,4 +185,115 @@ test('completion checklist mirrors the server gate: every required section must 
   assert.equal(canCompleteSetup(resolveCompletionChecklist({ ...all, bootstrap: undefined })), false, 'missing bootstrap is not done')
   assert.equal(canCompleteSetup(resolveCompletionChecklist(undefined)), false)
   assert.equal(canCompleteSetup([]), false, 'an empty checklist never allows completion')
+})
+
+test('step list: undefined and true keep the claim step first; false starts at site with six steps', () => {
+  const ids = (claimRequired) => setupStepDefinitions(claimRequired).map((step) => step.id)
+  assert.deepEqual(ids(undefined), ['claim', 'site', 'smtp', 'admin', 'database', 'storage', 'complete'], 'absent means required')
+  assert.deepEqual(ids(true), ids(undefined))
+  assert.deepEqual(ids(false), ['site', 'smtp', 'admin', 'database', 'storage', 'complete'])
+  assert.equal(isSetupClaimRequired(undefined), true)
+  assert.equal(isSetupClaimRequired(null), true, 'a null from a sloppy payload is not an opt-out')
+  assert.equal(isSetupClaimRequired(false), false)
+})
+
+test('resolved steps follow the claim mode; without a required claim the claim step is neither listed nor pending', () => {
+  const open = resolveSetupSteps(progress({ claimRequired: false, claimed: false }))
+  assert.equal(open.length, 6)
+  assert.equal(open.some((step) => step.id === 'claim'), false)
+  assert.equal(open[0].id, 'site')
+  assert.equal(isSetupStepDone('claim', progress({ claimRequired: false, claimed: false })), true, 'satisfied without a claim')
+  assert.equal(isSetupStepDone('claim', progress({ claimRequired: true, claimed: false })), false)
+  assert.equal(isSetupStepDone('claim', progress({ claimRequired: undefined, claimed: true })), true)
+})
+
+test('resume without a required claim starts at site and lands on the first incomplete step after it', () => {
+  const sections = { site: complete }
+  const steps = resolveSetupSteps(progress({ claimRequired: false, claimed: false, sections }))
+  assert.equal(steps[resolveResumeIndex(steps)].id, 'smtp')
+  const fresh = resolveSetupSteps(progress({ claimRequired: false }))
+  assert.equal(resolveResumeIndex(fresh), 0, 'a fresh open install starts at site')
+})
+
+test('resume in required mode is unchanged: the claim step is first until the session is claimed', () => {
+  const stored = { site: complete, smtp: complete, admin: complete, storage: complete }
+  const unclaimed = resolveSetupSteps(progress({ claimRequired: true, claimed: false, sections: stored, databaseReachable: true }))
+  assert.equal(unclaimed[resolveResumeIndex(unclaimed)].id, 'claim')
+  const claimed = resolveSetupSteps(progress({ claimRequired: true, claimed: true, sections: stored, databaseReachable: true }))
+  assert.equal(claimed[resolveResumeIndex(claimed)].id, 'complete')
+})
+
+test('every step in every mode resumes at itself when it is the first incomplete one', () => {
+  const sections = {}
+  for (const claimRequired of [undefined, false]) {
+    const base = setupStepDefinitions(claimRequired)
+    const steps = resolveSetupSteps(progress({ claimRequired, claimed: false, sections, databaseReachable: false }))
+    assert.equal(steps.length, base.length)
+    assert.equal(steps[resolveResumeIndex(steps)].id, steps[0].id)
+  }
+  // Walk each mode step by step: completing every earlier step must resume at the next one.
+  const walk = [
+    ['smtp', { site: complete }],
+    ['admin', { site: complete, smtp: complete }],
+    ['database', { site: complete, smtp: complete, admin: complete }],
+    ['storage', { site: complete, smtp: complete, admin: complete }],
+  ]
+  for (const [expected, stored] of walk) {
+    const steps = resolveSetupSteps(progress({ claimRequired: false, claimed: false, sections: stored, databaseReachable: expected !== 'database' }))
+    assert.equal(steps[resolveResumeIndex(steps)].id, expected, expected)
+  }
+})
+
+test('a deep link to claim while no claim is required falls back to the first incomplete step', () => {
+  const steps = resolveSetupSteps(progress({ claimRequired: false, claimed: false, sections: { site: complete } }))
+  const resume = resolveResumeIndex(steps)
+  assert.equal(resolveActiveStepIndex(steps, 'claim'), resume)
+  assert.equal(steps[resolveActiveStepIndex(steps, 'claim')].id, 'smtp', 'not site, which is merely the first step')
+})
+
+test('deep links name a step that is in the resolved list; null resumes; unknown ids cannot reach a missing step', () => {
+  const open = resolveSetupSteps(progress({ claimRequired: false, claimed: false }))
+  assert.equal(resolveActiveStepIndex(open, 'admin'), 2)
+  assert.equal(resolveActiveStepIndex(open, null), resolveResumeIndex(open))
+  const required = resolveSetupSteps(progress({ claimRequired: true, claimed: false }))
+  assert.equal(resolveActiveStepIndex(required, 'claim'), 0)
+  assert.equal(resolveActiveStepIndex(required, 'site'), 1)
+})
+
+test('numbering and progress copy count the resolved list, never a fixed seven', () => {
+  assert.equal(setupStepPosition(setupStepDefinitions(false), 0), '第 1 / 6 步')
+  assert.equal(setupStepPosition(setupStepDefinitions(false), 5), '第 6 / 6 步')
+  assert.equal(setupStepPosition(setupStepDefinitions(true), 0), '第 1 / 7 步')
+  assert.equal(setupStepPosition(setupStepDefinitions(undefined), 6), '第 7 / 7 步')
+})
+
+test('the open-setup notice shows only on the first visible step and only when no claim is required', () => {
+  assert.equal(shouldShowOpenSetupNotice(false, 0), true)
+  assert.equal(shouldShowOpenSetupNotice(false, 1), false)
+  assert.equal(shouldShowOpenSetupNotice(true, 0), false)
+  assert.equal(shouldShowOpenSetupNotice(undefined, 0), false, 'absent means required')
+  assert.match(OPEN_SETUP_NOTICE, /任何能访问此地址的人/)
+  assert.match(OPEN_SETUP_NOTICE, /仅对管理员开放/)
+})
+
+test('intro copy names only the steps this server shows', () => {
+  assert.match(setupIntroDescription(true), /^按顺序完成领取、站点、/)
+  assert.match(setupIntroDescription(undefined), /领取/)
+  assert.doesNotMatch(setupIntroDescription(false), /领取/)
+  assert.match(setupIntroDescription(false), /^按顺序完成站点、邮件、管理员/)
+})
+
+test('the claim step never appears in the completion checklist, in either mode', () => {
+  const sections = { bootstrap: complete, site: complete, smtp: complete, admin: complete, storage: complete, runtime: complete }
+  assert.equal(resolveCompletionChecklist(sections).some((item) => item.key === 'claim'), false)
+  assert.equal(canCompleteSetup(resolveCompletionChecklist(sections)), true, 'the gate is the same without a claim')
+})
+
+test('SETUP_CLAIM_NOT_REQUIRED from the claim endpoint refetches status and shows no error', () => {
+  assert.deepEqual(claimFailureOutcome('SETUP_CLAIM_NOT_REQUIRED'), { kind: 'refetch-status' })
+  for (const code of ['SETUP_SESSION_INVALID', 'INVALID_INPUT', 'RATE_LIMITED', undefined]) {
+    const outcome = claimFailureOutcome(code)
+    assert.equal(outcome.kind, 'message', String(code))
+    assert.equal(outcome.message, claimErrorMessage(code))
+  }
 })

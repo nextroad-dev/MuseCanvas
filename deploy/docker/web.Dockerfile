@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine AS build
 RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -16,7 +16,7 @@ COPY apps/web apps/web
 ENV STANDALONE=true
 RUN pnpm --filter @musecanvas/web build
 
-FROM node:22-alpine AS runner
+FROM node:22.23.4-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0

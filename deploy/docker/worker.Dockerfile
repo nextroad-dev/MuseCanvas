@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 # Pin the corepack cache outside /root: the image ships pnpm only as a corepack
 # shim, and /root is mode 0700, so the non-root runtime user below could not
 # reach the build-time cache and would re-download pnpm on every container start.

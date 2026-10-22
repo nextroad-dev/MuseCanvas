@@ -1,6 +1,6 @@
 import { createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { NextRequest } from 'next/server'
-import { db } from '../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import {
   BOOTSTRAP_CONFIG_INVALID,
   CURRENT_KEY_ID,
@@ -12,7 +12,7 @@ import {
   encryptProviderCredential,
   fingerprintApiKey,
   hmacForPurpose,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 
 export type Actor = { id: string; email: string; role: 'user' | 'admin'; status: 'active' | 'disabled'; createdAt: string }
 

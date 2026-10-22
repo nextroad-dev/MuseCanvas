@@ -1,0 +1,241 @@
+import { create } from 'zustand'
+import type { EditSelection } from '@musecanvas/contracts'
+import type { GenerateModeTab, StagedReferenceImage } from '@/shared/types'
+import type { ParameterState, ParameterValue } from '@/shared/lib/media-parameters'
+
+// A file decode can outlive/unmount its dialog; keep the submit gate accurate across remounts.
+let referencePreparationCount = 0
+
+/**
+ * The image 局部修改 is editing.
+ *
+ * Only ever a job output or a library asset — both of which already own an
+ * `assets` row — so the request references the source by id and no bytes leave
+ * the browser. That is also why nothing here holds a `File`: an edit never
+ * re-uploads, and a field for it would invite a second upload of a picture the
+ * server already has.
+ *
+ * `selection` is the one committed rectangle, and it is stored in
+ * **source-image pixels** (`EditSelection`), never in screen pixels: the stage
+ * repaints it through `imageSelectionToDisplaySelection`, so a window resize
+ * moves the image and the rectangle together instead of drifting them apart.
+ */
+export interface EditTarget {
+  /** `assets.id` of the image being edited. */
+  assetId: string
+  /** Playable (signed) URL for the stage; it can expire, and the stage says so. */
+  url: string
+  /** Declared pixel size. Optional because the stage falls back to the image
+   *  element's own intrinsic size, which is the authority once it has decoded. */
+  width?: number
+  height?: number
+  selection: EditSelection | null
+}
+
+export interface GenerateUiState {
+  // Core text / model selections
+  prompt: string
+  negativePrompt: string
+  /**
+   * Current output kind: which model catalogue and parameter set the composer
+   * drives. This is *not* a navigation mode any more — the workspace nav is two
+   * plain route links (创作 / 图库) and never touches it; only an explicit model
+   * pick (or a `?tab=` deep link) changes it.
+   */
+  activeTab: GenerateModeTab
+  /** Model choice is remembered per kind so switching kinds never loses a selection. */
+  selectedModelIdByKind: Record<GenerateModeTab, string>
+
+  /**
+   * Generation parameters, keyed by model kind and then by the canonical
+   * descriptor name the model declared.
+   *
+   * An absent key means "use that descriptor's own default", which is why
+   * switching models needs no reset and why the map stays sparse. Values that
+   * the newly selected model does not accept are dropped by
+   * `reconcileParams`/`buildMediaParameters` rather than remembered, so a
+   * `quality=max` picked on a 2.5 model cannot be sent to one without that rung.
+   */
+  paramsByKind: Record<GenerateModeTab, ParameterState>
+
+  // Staged input images
+  stagedImages: StagedReferenceImage[]
+  /** True while selected local files are being decoded and validated before staging. */
+  isPreparingReferences: boolean
+  inlineUploadError: string | null
+
+  // Inspector / UI state
+  selectedJobId: string | null
+  activeOutputIndex: number
+  /** Only the creation request is busy; background jobs never acquire this lock. */
+  isGenerating: boolean
+  composerExpanded: boolean
+  advancedOpen: boolean
+  /** Non-null while 局部修改 owns the stage. See `EditTarget`. */
+  editTarget: EditTarget | null
+  /** Kept here instead of local state so collapsing survives a remount of the console. */
+  railOpen: boolean
+  activeBoardOpen: boolean
+  historyOpen: boolean
+
+  // Actions
+  setPrompt: (prompt: string) => void
+  setNegativePrompt: (negativePrompt: string) => void
+  setActiveTab: (tab: GenerateModeTab) => void
+  setSelectedModelId: (tab: GenerateModeTab, modelId: string) => void
+  /**
+   * Forget both kinds' remembered picks so the next resolution falls back to
+   * the admin defaults. Called when a new conversation starts (and on actor
+   * switch): within a conversation the user's explicit switch stays put.
+   */
+  clearSelectedModels: () => void
+  setParam: (tab: GenerateModeTab, name: string, value: ParameterValue) => void
+  clearParams: (tab: GenerateModeTab) => void
+  /**
+   * Replace one tab's whole parameter map. Used after a model switch, when
+   * several picks become illegal at once and the rendered controls have to agree
+   * with what the console is about to send.
+   */
+  replaceParams: (tab: GenerateModeTab, values: ParameterState) => void
+  setStagedImages: (images: StagedReferenceImage[] | ((prev: StagedReferenceImage[]) => StagedReferenceImage[])) => void
+  beginReferencePreparation: () => void
+  finishReferencePreparation: () => void
+  addStagedImage: (image: StagedReferenceImage) => void
+  updateStagedImage: (localId: string, patch: Partial<StagedReferenceImage>) => void
+  removeStagedImage: (localId: string) => void
+  clearStagedImages: () => void
+  setSelectedJobId: (jobId: string | null) => void
+  setActiveOutputIndex: (idx: number) => void
+  setIsGenerating: (generating: boolean) => void
+  tryBeginSubmission: () => boolean
+  finishSubmission: () => void
+  setComposerExpanded: (expanded: boolean) => void
+  setInlineUploadError: (error: string | null) => void
+  /** Enter 局部修改 on one image, or leave it with `null`. Takes whole targets
+   *  only: the rectangle has its own action below, so a caller can never echo
+   *  back a stale selection while changing the picture. */
+  setEditTarget: (target: EditTarget | null) => void
+  /** Commit the stage's selection in source-image pixels, or clear it. A no-op
+   *  outside edit mode, because there is no image to put a rectangle on. */
+  setEditSelection: (selection: EditSelection | null) => void
+  toggleAdvanced: () => void
+  setRailOpen: (open: boolean) => void
+  setActiveBoardOpen: (open: boolean) => void
+  setHistoryOpen: (open: boolean) => void
+  resetForm: () => void
+}
+
+const initialState = {
+  prompt: '',
+  negativePrompt: '',
+  activeTab: 'image' as GenerateModeTab,
+  selectedModelIdByKind: { image: '', video: '' } as Record<GenerateModeTab, string>,
+  paramsByKind: { image: {}, video: {} } as Record<GenerateModeTab, ParameterState>,
+  stagedImages: [] as StagedReferenceImage[],
+  isPreparingReferences: false,
+  inlineUploadError: null as string | null,
+  selectedJobId: null as string | null,
+  activeOutputIndex: 0,
+  isGenerating: false,
+  composerExpanded: false,
+  advancedOpen: false,
+  editTarget: null as EditTarget | null,
+  railOpen: false,
+  activeBoardOpen: true,
+  historyOpen: true,
+}
+
+export const useGenerateUiStore = create<GenerateUiState>((set, get) => ({
+  ...initialState,
+
+  setPrompt: (prompt) => { if (!get().isGenerating) set({ prompt }) },
+  setNegativePrompt: (negativePrompt) => { if (!get().isGenerating) set({ negativePrompt }) },
+  setActiveTab: (activeTab) => { if (!get().isGenerating) set({ activeTab }) },
+  setSelectedModelId: (tab, id) =>
+    set((state) => ({
+      selectedModelIdByKind: state.isGenerating ? state.selectedModelIdByKind : { ...state.selectedModelIdByKind, [tab]: id },
+    })),
+  clearSelectedModels: () => {
+    if (get().isGenerating) return
+    set({ selectedModelIdByKind: { image: '', video: '' } })
+  },
+  setParam: (tab, name, value) =>
+    set((state) => ({
+      paramsByKind: state.isGenerating ? state.paramsByKind : { ...state.paramsByKind, [tab]: { ...state.paramsByKind[tab], [name]: value } },
+    })),
+  clearParams: (tab) =>
+    set((state) => ({ paramsByKind: state.isGenerating ? state.paramsByKind : { ...state.paramsByKind, [tab]: {} } })),
+  replaceParams: (tab, values) =>
+    set((state) => ({ paramsByKind: state.isGenerating ? state.paramsByKind : { ...state.paramsByKind, [tab]: values } })),
+
+  setStagedImages: (images) =>
+    set((state) => ({
+      stagedImages: state.isGenerating ? state.stagedImages : typeof images === 'function' ? images(state.stagedImages) : images,
+    })),
+
+  beginReferencePreparation: () => {
+    referencePreparationCount += 1
+    set({ isPreparingReferences: true })
+  },
+  finishReferencePreparation: () => {
+    referencePreparationCount = Math.max(0, referencePreparationCount - 1)
+    set({ isPreparingReferences: referencePreparationCount > 0 })
+  },
+
+  addStagedImage: (image) =>
+    set((state) => ({
+      stagedImages: state.isGenerating ? state.stagedImages : [...state.stagedImages, image],
+    })),
+
+  updateStagedImage: (localId, patch) =>
+    set((state) => ({
+      stagedImages: state.stagedImages.map((img) =>
+        img.localId === localId ? { ...img, ...patch } : img,
+      ),
+    })),
+
+  // Internal decode/upload cleanup must finish even while an unrelated edit is
+  // creating. User removals are guarded at the reference dialog boundary.
+  removeStagedImage: (localId) =>
+    set((state) => ({
+      stagedImages: state.stagedImages.filter((img) => img.localId !== localId),
+    })),
+
+  clearStagedImages: () => set({ stagedImages: [] }),
+  setSelectedJobId: (selectedJobId) => set({ selectedJobId, activeOutputIndex: 0 }),
+  setActiveOutputIndex: (activeOutputIndex) => set({ activeOutputIndex }),
+  setIsGenerating: (isGenerating) => set({ isGenerating }),
+  tryBeginSubmission: () => {
+    if (get().isGenerating) return false
+    set({ isGenerating: true })
+    return true
+  },
+  finishSubmission: () => set({ isGenerating: false }),
+  setComposerExpanded: (composerExpanded) => set({ composerExpanded }),
+  setInlineUploadError: (inlineUploadError) => set({ inlineUploadError }),
+  setEditTarget: (editTarget) => {
+    // Success can leave editing while the request still owns the lock.
+    if (!get().isGenerating || editTarget === null) set({ editTarget })
+  },
+  setEditSelection: (selection) =>
+    set((state) =>
+      state.editTarget && !state.isGenerating ? { editTarget: { ...state.editTarget, selection } } : state,
+    ),
+  toggleAdvanced: () => set((state) => ({ advancedOpen: !state.advancedOpen })),
+  setRailOpen: (railOpen) => set({ railOpen }),
+  setActiveBoardOpen: (activeBoardOpen) => set({ activeBoardOpen }),
+  setHistoryOpen: (historyOpen) => set({ historyOpen }),
+  resetForm: () => {
+    if (get().isGenerating) return
+    set({
+      prompt: '',
+      negativePrompt: '',
+      paramsByKind: { image: {}, video: {} },
+      stagedImages: [],
+      inlineUploadError: null,
+      selectedJobId: null,
+      activeOutputIndex: 0,
+      editTarget: null,
+    })
+  },
+}))

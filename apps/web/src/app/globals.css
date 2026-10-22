@@ -1,0 +1,1000 @@
+@import "tailwindcss";
+
+/* Class/attribute-driven dark mode: `dark:` utilities key off data-theme. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * Design tokens — the single source of truth for the whole web app.
+ * Aligned with the Jude-Frontweb design system (v19, `assets/tokens.css`).
+ *
+ * Naming policy: values and *roles* follow the spec; utility names stay idiomatic
+ * Tailwind so call sites read naturally. The spec-name → app-name map is:
+ *
+ *   spec --jf-*                    app --color-* / utility
+ *   ---------------------          -------------------------------------------
+ *   tonal / tonal-hover/active     tonal / tonal-hover / tonal-active / tonal-selected
+ *   border-subtle                  border            (decoration only, never a card rule)
+ *   text / text-secondary          foreground / muted-foreground
+ *   decorative-muted               decorative-muted  (non-informational ONLY)
+ *   {status}-bg                    {status}-soft
+ *   radius-object / radius-dialog  rounded-card / rounded-panel
+ *   content-max / form-max        max-w-content / max-w-form / max-w-reading
+ *
+ * Usage rules (violations are bugs, not taste):
+ *   main action              -> primary (ink solid). NEVER a green solid button:
+ *                               brand green is reserved for the logo and for status
+ *                               graphics/text, per "不要将绿色提升为默认品牌主色".
+ *   selection / current      -> tonal-selected + a 3px primary bar, not brand green
+ *   neutral hover            -> tonal-hover        pressed -> tonal-active
+ *   semantic status          -> success|warning|danger|info (+ -soft + -border)
+ *   control outlines         -> border-control (>= 3:1 on surface); focus -> border-focus
+ *   readable text            -> foreground or muted-foreground. decorative-muted must
+ *                               never carry information (it is ~2.9:1 on white).
+ *   cards / panels           -> bg-surface + shadow-soft + rounded-card, NO rule, and
+ *                               NO divider line inside (spacing + heading level only)
+ *   sections / table rows    -> whitespace, a surface step, or a 1px border rule
+ *
+ * Elevation ladder (z-index-*): sticky 10 < dropdown 20 < overlay 30 < modal 40
+ * < toast 50 < tooltip 60 < command 70. A modal must never borrow the overlay level.
+ */
+@theme static {
+  /* --- Breakpoints: from the content, per Jude-Frontweb (not Tailwind defaults) --- */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 960px;
+  --breakpoint-lg: 1280px;
+  --breakpoint-xl: 1536px;
+  --breakpoint-2xl: 1920px;
+
+  /* --- Surfaces --- */
+  --color-canvas: #f7f7f3;
+  --color-surface: #ffffff;
+  --color-surface-hover: #fafafa;
+  --color-tonal: #efefe9;
+  --color-tonal-hover: #e8e8e0;
+  --color-tonal-active: #e0e0d6;
+  --color-tonal-selected: #e3e3da;
+
+  /* --- Text --- */
+  --color-foreground: #1a1a18;
+  --color-muted-foreground: #62625c;
+  --color-decorative-muted: #999993;
+  --color-foreground-inverse: #f7f7f3;
+  /* Legible text on a solid semantic fill (WCAG-checked pairings). */
+  --color-on-primary: #ffffff;
+  --color-on-danger: #ffffff;
+  --color-on-warning: #ffffff;
+  --color-on-success: #ffffff;
+  --color-on-info: #ffffff;
+  --color-on-media: #ffffff;
+  --color-media-track: rgba(255, 255, 255, 0.25);
+
+  /* --- Lines --- */
+  --color-border: #e5e5dd;
+  --color-border-control: #85857e;
+  --color-border-focus: #1a1a18;
+  --color-border-strong: #4a4a44;
+
+  /* --- Primary action (deep neutral ink) --- */
+  --color-primary: #1a1a18;
+  --color-primary-hover: #333330;
+  --color-primary-active: #1a1a18;
+  --color-primary-soft: #f0f0ea;
+
+  /* --- Brand accent (green): logo + status graphics only, never a solid action --- */
+  --color-accent: #168a49;
+  --color-accent-strong: #0d6133;
+  --color-accent-soft: #e7f6ec;
+  --color-accent-hover: #0d6133;
+  --color-accent-contrast: #ffffff;
+
+  /* --- Semantic status: fg / soft bg / hover / active / border --- */
+  --color-success: #166534;
+  --color-success-soft: #f0fdf4;
+  --color-success-hover: #15803d;
+  --color-success-active: #166534;
+  --color-success-border: #bbf7d0;
+
+  --color-warning: #854d0e;
+  --color-warning-soft: #fefce8;
+  --color-warning-hover: #a16207;
+  --color-warning-active: #854d0e;
+  --color-warning-border: #fde68a;
+
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fef2f2;
+  --color-danger-hover: #991b1b;
+  --color-danger-active: #7f1d1d;
+  --color-danger-border: #fecaca;
+
+  --color-info: #1e40af;
+  --color-info-soft: #eff6ff;
+  --color-info-hover: #1d4ed8;
+  --color-info-active: #1e3a8a;
+  --color-info-border: #bfdbfe;
+
+  --color-neutral-status: #57534e;
+  --color-neutral-soft: #e9e9e1;
+  --color-positive: #166534;
+  --color-negative: #b91c1c;
+
+  /* Data visualization: bar/pie chart series. Kept distinct from semantic
+     status so a chart can use neutral ink for the positive series and a
+     reserved coral for the negative/failure series without implying UI state. */
+  --color-chart-positive: #1a1a18;
+  --color-chart-negative: #e06c53;
+
+  /* Scrim / media backdrop (combine with --opacity-overlay) */
+  --color-overlay: #1a1a18;
+
+  /* --- Fonts --- */
+  --font-sans: "IBM Plex Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /*
+   * --- Type scale ---
+   * Line-height, tracking and weight ride on the size, so `text-display` and
+   * `text-section` are already correct without companion utilities at the call site.
+   * Headings are weight 400: hierarchy comes from size and spacing, never from bold.
+   */
+  --text-display: clamp(36px, 4vw, 60px);
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.0175em;
+  --text-display--font-weight: 400;
+
+  --text-title: 32px;
+  --text-title--line-height: 1.25;
+  --text-title--font-weight: 400;
+
+  --text-section: 24px;
+  --text-section--line-height: 1.35;
+  --text-section--font-weight: 400;
+
+  --text-subtitle: 20px;
+  --text-subtitle--line-height: 1.4;
+  --text-subtitle--font-weight: 400;
+
+  /* Card / module title: 18px on 500, from the spec's typography pairing table. */
+  --text-module: 18px;
+  --text-module--line-height: 1.4;
+  --text-module--font-weight: 500;
+
+  --text-overline: 11px;
+  --text-overline--line-height: 1.4;
+  --text-overline--letter-spacing: 0.05em;
+  --text-overline--font-weight: 500;
+
+  /* Caption: 11px metadata, badges and footnotes. Use `text-caption`, never `text-[11px]`. */
+  --text-caption: 11px;
+  --text-caption--line-height: 1.5;
+
+  /* Body 1.59, compact controls/tables 1.5, captions 1.5. */
+  --text-base--line-height: 1.59;
+  --text-sm--line-height: 1.5;
+  --text-xs--line-height: 1.5;
+
+  /* --- Radius: one value per semantic job --- */
+  --radius-checkbox: 50%;
+  --radius-control: 10px;
+  --radius-popover: 12px;
+  --radius-card: 14px;
+  --radius-panel: 18px;
+  --radius-pill: 9999px;
+
+  /*
+   * --- Shadows: the elevation ladder ---
+   * soft = a card at rest · floating = a lifted tile · dropdown / toast / modal /
+   * drawer / command = the matching floating surface. One name per elevation;
+   * there are no t-shirt-size aliases.
+   */
+  --shadow-soft: 0 4px 20px rgb(0 0 0 / 0.04);
+  --shadow-floating: 0 12px 32px rgb(0 0 0 / 0.06);
+  --shadow-dropdown: 0 8px 24px rgb(0 0 0 / 0.08);
+  --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.1);
+  --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.12);
+  --shadow-drawer: -4px 0 24px rgb(0 0 0 / 0.06);
+  --shadow-command: 0 16px 48px rgb(0 0 0 / 0.14);
+
+  /* --- Control heights (40 is the default; 32 dense toolbars; 48 touch) --- */
+  --control-xs: 24px;
+  --control-sm: 32px;
+  --control-md: 40px;
+  --control-lg: 48px;
+  --control-xl: 56px;
+
+  /* --- Icon sizes --- */
+  --icon-xs: 12px;
+  --icon-sm: 16px;
+  --icon-md: 20px;
+  --icon-lg: 24px;
+  --icon-xl: 32px;
+  --icon-2xl: 48px;
+
+  /* --- Layout frame --- */
+  --layout-header: 56px;
+  --layout-sidebar: 260px;
+  --layout-sidebar-collapsed: 64px;
+  --layout-widget-min: 280px;
+  --layout-gutter: 16px;
+  --layout-gutter-sm: 24px;
+  --layout-gutter-md: 32px;
+
+  /*
+   * --- Spacing scale: 4px base ---
+   * Plain custom properties, deliberately NOT `--spacing-*` (that namespace would
+   * override Tailwind's numeric `p-4` / `gap-4` utilities). Use them in arbitrary
+   * values, e.g. `gap-[var(--space-3)]`.
+   */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-9: 36px;
+  --space-10: 40px;
+  --space-11: 44px;
+  --space-12: 48px;
+
+  /*
+   * --- Page content widths (max-width of a page body) ---
+   * narrow = forms and single-column reading, medium = two-column workspaces,
+   * wide = full content frame. Each aliases the existing container token it matches.
+   */
+  --content-narrow: var(--container-form);
+  --content-medium: 960px;
+  --content-wide: var(--container-content);
+
+  /* `max-w-*` / `w-*` sizes generated from --container-* */
+  --container-content: 1440px;
+  --container-form: 640px;
+  --container-reading: 72ch;
+  --container-sidebar: 260px;
+  --container-sidebar-collapsed: 64px;
+  /* 设置页 left group nav — the spec's 240px rail, deliberately narrower than the
+     260px admin sidebar because it lists section names, not icon+label rows. */
+  --container-settings-nav: 240px;
+  --container-dialog-narrow: 420px;
+  --container-dialog-wide: 720px;
+
+  /*
+   * --- Motion: three durations ---
+   *   fast 120ms  hover, press, colour, tooltip, and EVERY exit (an exit runs about
+   *               1/3 faster than the entrance it undoes)
+   *   base 180ms  default entrances: menus, list reveals, fades
+   *   slow 240ms  overlays, dialogs, drawers, toasts, page-level entrances
+   * The other duration names are aliases of these three, kept so existing call
+   * sites do not break. Loop periods (shimmer, spin, progress) are cycle lengths,
+   * not transitions, so they keep their own names. Stagger offsets are not
+   * durations either.
+   */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 240ms;
+  --motion-press: var(--motion-fast);
+  --motion-exit: var(--motion-fast);
+  --motion-overlay: var(--motion-slow);
+  --motion-emphasis: var(--motion-slow);
+  --motion-page: var(--motion-slow);
+  --motion-shimmer: 1.5s;
+  --motion-spin: 600ms;
+  --motion-progress: 1.2s;
+  --stagger-step: 50ms;
+  --stagger-step-page: 100ms;
+
+  /*
+   * --- Motion: two easings ---
+   *   standard    the default for every state change and exit (`transition-*`)
+   *   emphasized  decelerating entrance for overlays and page-level reveals
+   * `--ease-out`, `--ease-in` and `--ease-in-out` are aliases of these two.
+   */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0, 0, 0.2, 1);
+  --ease-out: var(--ease-emphasized);
+  --ease-in: var(--ease-standard);
+  --ease-in-out: var(--ease-standard);
+
+  /*
+   * Motion: what a bare `transition-*` means.
+   *
+   * Tailwind ships `--default-transition-duration: 150ms` and
+   * `cubic-bezier(0.4, 0, 0.2, 1)` — neither is a token in this system. Without
+   * this override, `transition-colors` (no explicit duration) silently runs at a
+   * duration the design system never chose, which is the one form of motion drift
+   * no call site can be blamed for. Pointing the defaults at `--motion-fast` /
+   * `--ease-standard` makes the plain utility the correct one, so `transition-colors`
+   * is always right and `duration-[var(--motion-fast)] ease-[var(--ease-standard)]`
+   * never has to be written by hand again.
+   *
+   * `--ease-out` is numerically identical to Tailwind's own `ease-out`. `--ease-in`
+   * and `--ease-in-out` now alias the standard curve (the two-easing rule above),
+   * so bare uses of them follow the same curve as every other state change.
+   *
+   * `.motion-*` utilities and `button-variants.ts` declare their durations
+   * explicitly on purpose and are unaffected.
+   */
+  --default-transition-duration: var(--motion-fast);
+  --default-transition-timing-function: var(--ease-standard);
+
+  /* --- Elevation stacking (see the ladder in the header comment) --- */
+  --z-index-sticky: 10;
+  --z-index-dropdown: 20;
+  --z-index-overlay: 30;
+  --z-index-modal: 40;
+  --z-index-toast: 50;
+  --z-index-tooltip: 60;
+  --z-index-command: 70;
+
+  /* --- Opacity scale --- */
+  --opacity-disabled: 0.45;
+  --opacity-muted: 0.65;
+  --opacity-overlay: 0.4;
+  --opacity-ghost-hover: 0.06;
+  --opacity-ghost-active: 0.1;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.59;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Dark theme — Jude-Frontweb rule: every light token has a dark variant, status
+ * colors flip to a brighter foreground on a deeper background, and shadow alphas
+ * deepen so elevation stays visible on dark surfaces.
+ * Declared after @theme so these overrides win the cascade.
+ *
+ * Solid semantic fills invert their text pairing on purpose: the dark variants of
+ * success/warning/danger/info are bright colors, so text on them is dark ink.
+ */
+@layer base {
+  :root[data-theme='dark'] {
+    /* Surfaces */
+    --color-canvas: #1a1a18;
+    --color-surface: #242422;
+    --color-surface-hover: #2a2a28;
+    --color-tonal: #2e2e2a;
+    --color-tonal-hover: #383832;
+    --color-tonal-active: #42423c;
+    --color-tonal-selected: #3d3d36;
+
+    /* Text */
+    --color-foreground: #e5e5dd;
+    --color-muted-foreground: #adada5;
+    --color-decorative-muted: #6a6a62;
+    --color-foreground-inverse: #1a1a18;
+    --color-on-primary: #1a1a18;
+    --color-on-danger: #1a1a18;
+    --color-on-warning: #1a1a18;
+    --color-on-success: #1a1a18;
+    --color-on-info: #1a1a18;
+    --color-on-media: #ffffff;
+    --color-media-track: rgba(255, 255, 255, 0.25);
+
+    /* Lines */
+    --color-border: #3a3a34;
+    --color-border-control: #6a6a62;
+    --color-border-focus: #e5e5dd;
+    --color-border-strong: #8a8a82;
+
+    /* Primary action flips to a light solid on dark surfaces */
+    --color-primary: #e5e5dd;
+    --color-primary-hover: #f0f0ea;
+    --color-primary-active: #d5d5cd;
+    --color-primary-soft: #2e2e2a;
+
+    /* Brand accent: brighter green on a deeper background */
+    --color-accent: #3ecf7a;
+    --color-accent-strong: #6fe3a0;
+    --color-accent-soft: #0e2e1d;
+    --color-accent-hover: #6fe3a0;
+    --color-accent-contrast: #062012;
+
+    /* Status — bright foreground + deep background */
+    --color-success: #4ade80;
+    --color-success-soft: #052e16;
+    --color-success-hover: #22c55e;
+    --color-success-active: #4ade80;
+    --color-success-border: #166534;
+
+    --color-warning: #fbbf24;
+    --color-warning-soft: #451a03;
+    --color-warning-hover: #f59e0b;
+    --color-warning-active: #fbbf24;
+    --color-warning-border: #854d0e;
+
+    --color-danger: #f87171;
+    --color-danger-hover: #ef4444;
+    --color-danger-active: #fca5a5;
+    --color-danger-soft: #450a0a;
+    --color-danger-border: #b91c1c;
+
+    --color-info: #60a5fa;
+    --color-info-soft: #172554;
+    --color-info-hover: #3b82f6;
+    --color-info-active: #93c5fd;
+    --color-info-border: #1e40af;
+
+    --color-neutral-status: #d6d6cf;
+    --color-neutral-soft: #2e2e2a;
+    --color-positive: #4ade80;
+    --color-negative: #f87171;
+
+    /* Data visualization dark variants: brighter so they read on dark surfaces. */
+    --color-chart-positive: #e5e5dd;
+    --color-chart-negative: #ff8a70;
+
+    --color-overlay: #0c0c0b;
+
+    /* Shadows deepen their alpha to stay legible on dark surfaces */
+    --shadow-soft: 0 4px 20px rgb(0 0 0 / 0.15);
+    --shadow-floating: 0 12px 32px rgb(0 0 0 / 0.2);
+    --shadow-dropdown: 0 8px 24px rgb(0 0 0 / 0.25);
+    --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.3);
+    --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.35);
+    --shadow-drawer: -4px 0 24px rgb(0 0 0 / 0.2);
+    --shadow-command: 0 16px 48px rgb(0 0 0 / 0.4);
+
+    --opacity-overlay: 0.55;
+    --opacity-ghost-hover: 0.08;
+    --opacity-ghost-active: 0.14;
+  }
+}
+
+/* One focus ring for every focusable element. Components must not redefine it. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+  }
+
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /*
+   * Headings carry no weight of their own — the scale is the hierarchy. Any
+   * utility class still wins, so `font-medium` on a button label stays available.
+   */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-weight: 400;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+/* Reduced motion: no spins, flashes, shifts or shimmer. State stays legible
+   through static shape, color and text only.
+   The delays are zeroed alongside the durations on purpose: `.motion-stagger`
+   offsets items with `animation-delay`, and a 12-step list would otherwise keep
+   the last cell invisible for ~480ms even though nothing animates any more. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * Keyframes — top level (never inside `@layer`, so a layer order change cannot
+ * hide them) and paired with the `.motion-*` utilities below.
+ *
+ * FAIL-VISIBLE RULE (read before adding an animation): the base declaration of
+ * every animated element must be its FINAL VISIBLE state, and the keyframes must
+ * carry the temporary invisible starting point. Because the block above rewrites
+ * durations to 0.01ms globally, an element whose *base* rule is `opacity: 0` and
+ * that relies on an animation to become visible would stay permanently invisible
+ * for anyone with reduced motion on. Entrances therefore use
+ * `animation-fill-mode: backwards` (the from-frame paints during the stagger
+ * delay and nothing after the run); exits use `forwards` only because the dialog
+ * hook (`src/shared/hooks/useDialog.ts`) also unmounts on a timer, so a missed
+ * `animationend` can never leave a faded-out element stuck on screen.
+ */
+@keyframes mc-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Page-level entrance: 8px rise + fade, 400ms. */
+@keyframes mc-reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Card / dialog / dropdown entrance. The scale start is set per utility. */
+@keyframes mc-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(var(--pop-from, 0.96));
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Skeleton sweep. With `background-size: 200% 100%` the highlight crosses two
+   container widths per pass, and the loop restarts off-screen: seamless. */
+@keyframes mc-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Toast entrance: drops 16px into place. */
+@keyframes mc-slide-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mc-slide-out-down {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+}
+
+/* Direction-aware drawer motion. */
+@keyframes mc-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes mc-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes mc-slide-out-right {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes mc-slide-out-left {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes mc-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes mc-scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes mc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Indeterminate progress: the fill travels the track. Never fake a percentage. */
+@keyframes mc-progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* Drop-target pulse (drag & drop). */
+@keyframes mc-dropzone-pulse {
+  0%,
+  100% {
+    background-color: var(--color-tonal);
+  }
+  50% {
+    background-color: var(--color-tonal-hover);
+  }
+}
+
+@layer utilities {
+  /* Preserve the shared keyboard ring even on legacy controls using outline-none. */
+  .outline-none:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+  }
+
+  /* The one disabled treatment: never invent an opacity value at the call site. */
+  .is-disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+
+  /* Secondary, non-informational graphics only. */
+  .is-muted {
+    opacity: var(--opacity-muted);
+  }
+
+  /* Functional scrim for text legibility on top of photos/videos. */
+  .media-scrim {
+    background-image: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--color-overlay) 80%, transparent) 0%,
+      color-mix(in srgb, var(--color-overlay) 30%, transparent) 50%,
+      color-mix(in srgb, var(--color-overlay) 0%, transparent) 100%
+    );
+  }
+
+  /*
+   * Entrances. `animation` is written as longhands on purpose: the shorthand
+   * resets `animation-delay`, which would silently kill `.motion-stagger`.
+   * Entrances ease out (emphasized); exits run at --motion-fast on the standard curve.
+   */
+  .motion-fade-in {
+    animation-name: mc-fade-in;
+    animation-duration: var(--motion-base);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  /* Generated-image reveal into its reserved frame: slow (240ms) emphasized fade.
+     Used only where a result image lands in its frame. The base state is visible,
+     and reduced motion zeroes the duration through the global rule, so the image
+     is never left hidden. */
+  .motion-fade-in-slow {
+    animation-name: mc-fade-in;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: var(--ease-emphasized);
+    animation-fill-mode: backwards;
+  }
+
+  /* Component-level list/grid entrance: 180ms fade. */
+  .motion-reveal {
+    animation-name: mc-reveal-up;
+    animation-duration: var(--motion-base);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  /* Page / section entrance: fade-in-up (8px rise) over --motion-page (= slow). */
+  .motion-page {
+    animation-name: mc-reveal-up;
+    animation-duration: var(--motion-page);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  /*
+   * Page-level entrance: fade + 8px rise over --motion-slow, emphasized easing.
+   * Only applied when motion is allowed, so under prefers-reduced-motion the page
+   * has no animation at all and its base state is the visible page.
+   */
+  @media (prefers-reduced-motion: no-preference) {
+    .motion-page-enter {
+      animation-name: mc-reveal-up;
+      animation-duration: var(--motion-slow);
+      animation-timing-function: var(--ease-emphasized);
+      animation-fill-mode: backwards;
+    }
+  }
+
+  /* Card entrance: fade-in-scale from 0.96. */
+  .motion-pop {
+    animation-name: mc-pop-in;
+    animation-duration: var(--motion-overlay);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  /* Menu / dropdown entrance: lighter scale, quicker. */
+  .motion-menu {
+    animation-name: mc-pop-in;
+    --pop-from: 0.95;
+    animation-duration: var(--motion-base);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  /* Press feedback: quick 0.98 dip, plus the hover color fade every pressable
+     control also needs. Both live in one declaration on purpose: a separate
+     `transition-colors` on the same element would overwrite `transition-property`
+     and silently drop one of the two. Never pair this with `transition-*`. */
+  .motion-press {
+    transition-property: color, background-color, border-color, transform;
+    transition-duration: var(--motion-fast), var(--motion-fast), var(--motion-fast), var(--motion-press);
+    transition-timing-function: var(--ease-standard), var(--ease-standard), var(--ease-standard), var(--ease-in);
+  }
+
+  .motion-press:active {
+    transform: scale(0.98);
+  }
+
+  /* Toast lifecycle (pair `.motion-toast-in` with `.motion-toast-out` on dismiss). */
+  .motion-toast-in {
+    animation-name: mc-slide-in-down;
+    animation-duration: var(--motion-overlay);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-toast-out {
+    animation-name: mc-slide-out-down;
+    animation-duration: var(--motion-exit);
+    animation-timing-function: var(--ease-in);
+    animation-fill-mode: forwards;
+  }
+
+  /* Direction-aware drawer entrance and exit. */
+  .motion-drawer-in {
+    animation-name: mc-slide-in-right;
+    animation-duration: var(--motion-overlay);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-drawer-in-left {
+    animation-name: mc-slide-in-left;
+    animation-duration: var(--motion-overlay);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-drawer-out-right {
+    animation-name: mc-slide-out-right;
+    animation-duration: var(--motion-exit);
+    animation-timing-function: var(--ease-in);
+    animation-fill-mode: forwards;
+  }
+
+  .motion-drawer-out-left {
+    animation-name: mc-slide-out-left;
+    animation-duration: var(--motion-exit);
+    animation-timing-function: var(--ease-in);
+    animation-fill-mode: forwards;
+  }
+
+  /* Opacity-only hover feedback: tiles and rows fade in, nothing moves and no
+     colour animates here. Pair with `group-hover:opacity-100`. Colour changes are
+     a plain `transition-colors`, which already runs at the token speed. */
+  .motion-hover-fade {
+    transition-property: opacity, transform;
+    transition-duration: var(--motion-fast);
+    transition-timing-function: var(--ease-standard);
+  }
+
+  /* Loading skeleton. Base state is the static, visible placeholder; the
+     animation only moves the highlight, so reduced motion keeps a legible box. */
+  .motion-shimmer {
+    background-color: var(--color-tonal);
+    background-image: linear-gradient(
+      to right,
+      transparent 0%,
+      color-mix(in srgb, var(--color-surface) 70%, transparent) 45%,
+      transparent 90%
+    );
+    background-repeat: no-repeat;
+    background-size: 200% 100%;
+    animation-name: mc-shimmer;
+    animation-duration: var(--motion-shimmer);
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  /* Reduced motion: the skeleton is a static tonal box. The highlight band goes too,
+     because the finished `mc-shimmer` would otherwise leave it parked at the
+     background origin as a permanent band. */
+  @media (prefers-reduced-motion: reduce) {
+    .motion-shimmer {
+      animation: none;
+      background-image: none;
+    }
+  }
+
+  /* Spinner: 600ms linear, and only while something is actually pending. */
+  .motion-spin {
+    animation-name: mc-spin;
+    animation-duration: var(--motion-spin);
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  /* Indeterminate progress bar fill. */
+  .motion-progress-indeterminate {
+    animation-name: mc-progress-indeterminate;
+    animation-duration: var(--motion-progress);
+    animation-timing-function: var(--ease-in-out);
+    animation-iteration-count: infinite;
+  }
+
+  /* Live drop target. */
+  .motion-dropzone {
+    animation-name: mc-dropzone-pulse;
+    animation-duration: 1s;
+    animation-timing-function: var(--ease-in-out);
+    animation-iteration-count: infinite;
+  }
+
+  /* Dialog lifecycle: `.motion-fade-in` / `.motion-fade-out` go on the scrim,
+     the pair below on the panel. */
+  .motion-dialog-in {
+    animation-name: mc-pop-in;
+    animation-duration: var(--motion-overlay);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-fade-out {
+    animation-name: mc-fade-out;
+    animation-duration: var(--motion-exit);
+    animation-timing-function: var(--ease-in);
+    animation-fill-mode: forwards;
+  }
+
+  .motion-dialog-out {
+    animation-name: mc-scale-out;
+    animation-duration: var(--motion-exit);
+    animation-timing-function: var(--ease-in);
+    animation-fill-mode: forwards;
+  }
+
+  /* Entrance offset: callers set `--stagger-index` (unitless, 0-based) and,
+     for marketing sections, `--stagger-step: var(--stagger-step-page)`.
+     Clamped to 8 steps so a long page never ends up waiting on the last cell. */
+  .motion-stagger {
+    animation-delay: calc(min(var(--stagger-index, 0), 8) * var(--stagger-step));
+  }
+
+  /* Scroll-linked section entrance (see `shared/components/reveal.tsx`). Opt-in
+     twice — motion allowed AND `view()` timelines supported — so the fallback is
+     the static, visible block, never a hidden one. The range is a fixed scroll
+     distance so a tall section is fully opaque long before its end is in view. */
+  @media (prefers-reduced-motion: no-preference) {
+    @supports (animation-timeline: view()) {
+      .motion-scroll-reveal {
+        animation-name: mc-reveal-up;
+        animation-duration: auto;
+        animation-timing-function: var(--ease-out);
+        animation-fill-mode: backwards;
+        animation-timeline: view();
+        animation-range: entry 0% entry 160px;
+      }
+    }
+  }
+
+  /* Tab underline / position changes glide; nothing is reordered abruptly. */
+  .motion-position {
+    transition-property: transform, width, left, top;
+    transition-duration: var(--motion-base);
+    transition-timing-function: var(--ease-standard);
+  }
+
+  /* On touch-first devices, actions must be discoverable without a hover state. */
+  @media (hover: none), (pointer: coarse) {
+    .media-tile-actions {
+      opacity: 1;
+    }
+  }
+
+  /*
+   * Reading progress (legal pages, see `shared/components/legal-shell.tsx`):
+   * a 2px `bg-primary` bar pinned to the viewport top, driven by the scroll
+   * timeline. Hidden by default; only displayed where `scroll()` timelines are
+   * supported AND the user has not asked for reduced motion — everywhere else
+   * the page is simply complete without it (fail-visible).
+   */
+  .motion-reading-progress {
+    display: none;
+  }
+
+  @keyframes mc-reading-progress {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  @supports (animation-timeline: scroll()) {
+    @media (prefers-reduced-motion: no-preference) {
+      .motion-reading-progress {
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background-color: var(--color-primary);
+        transform-origin: 0 50%;
+        z-index: var(--z-index-sticky);
+        animation-name: mc-reading-progress;
+        animation-duration: auto;
+        animation-timing-function: linear;
+        animation-fill-mode: both;
+        animation-timeline: scroll();
+      }
+    }
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-control);
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted-foreground);
+}

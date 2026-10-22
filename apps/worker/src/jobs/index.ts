@@ -1,33 +1,23 @@
 import type pg from 'pg'
-import { createHash, randomUUID } from 'node:crypto'
-import { RUNTIME_SETTINGS_DEFAULTS } from '../../../../packages/contracts/src/index'
-import {
-  AbortMultipartUploadCommand,
-  CompleteMultipartUploadCommand,
-  CreateMultipartUploadCommand,
-  DeleteObjectCommand,
-  GetObjectCommand,
-  PutObjectCommand,
-  UploadPartCommand,
-} from '@aws-sdk/client-s3'
+import { assertProviderLease, fenceProviderContext, providerLeaseSignal, ProviderLeaseLostError, updateProviderRunState, withProviderLease } from './lease'
+
+import { createHash } from 'node:crypto'
+import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
 import {
   acquireModelCapacity,
-  acquireWorkerLease,
   db,
   getLatestModelConfigRevision,
   getLatestProviderRunForJob,
   getModelConfigRevisionById,
   getProviderRunById,
   registerOutputIngestion,
-  releaseWorkerLease,
   transaction,
   updateOutputIngestion,
-  updateProviderRunState,
   getOutputIngestionByRunIndex,
   findProviderCredential,
   type ModelConfigRevisionEntity,
   type ProviderRunEntity,
-} from '../../../../packages/database/src/index'
+} from '@musecanvas/database'
 import {
   decodeStoredCredential,
   decryptStoredCredential,
@@ -42,7 +32,7 @@ import {
   NormalizedProviderError,
   buildDerivedPreview,
   type DerivedPreview,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import { createMediaExecutionContext, resolveMediaPlugin } from '../plugins/availability'
 import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
 import {
@@ -50,13 +40,12 @@ import {
   MAX_INPUT_IMAGES,
   MAX_UPLOAD_IMAGE_BYTES,
   MAX_UPLOAD_TOTAL_BYTES,
-} from '../../../../packages/providers/src/core/image-input'
-import type { InputLimits } from '../../../../packages/providers/src/core/image-input'
-import { preprocessPrompt } from '../preprocessing'
-import { getStorageClient, type StorageClientHandle } from '../shared/storage'
+} from '@musecanvas/providers/core/image-input'
+import type { InputLimits } from '@musecanvas/providers/core/image-input'
+import { preprocessPrompt, type PreprocessPromptJob } from '../preprocessing'
+import { getStorageDriver, putStorageObjectLarge, storageOperationSignal, type WorkerStorageDriver } from '../shared/storage'
 import { resolveMaxOutputBytes as resolveRuntimeMaxOutputBytes, resolveProviderTimeoutMs, resolveRuntimeSettings } from '../shared/runtime'
 import {
-  PROVIDER_LEASE_SECONDS,
   PROVIDER_RUN_STATE_KEY_ID,
   SyncRetryPersistenceError,
   decryptOpaqueState,
@@ -75,6 +64,20 @@ import {
   submissionUnknownNextActionAt,
   syncNoRemotePollCode,
 } from '../provider-state'
+
+/** Keep the GET deadline alive while consuming the S3 body after headers. */
+export async function readInputBody(body: { transformToByteArray(): Promise<Uint8Array>; destroy?: () => void }, signal: AbortSignal): Promise<Uint8Array> {
+  let abort: () => void = () => {}
+  const canceled = new Promise<never>((_, reject) => {
+    abort = () => {
+      try { body.destroy?.() } finally { reject(signal.reason || new Error('STORAGE_OPERATION_TIMEOUT')) }
+    }
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  })
+  try { return await Promise.race([body.transformToByteArray(), canceled]) }
+  finally { signal.removeEventListener('abort', abort) }
+}
 
 async function resolveInputLimits(): Promise<InputLimits> {
   try {
@@ -126,23 +129,24 @@ export async function loadAndValidateInputImages(
   const inputImages: Array<{ data: Buffer; mimeType: 'image/png' | 'image/jpeg' }> = []
 
   for (const row of rows.rows) {
-    let storage: StorageClientHandle
+    let storage: WorkerStorageDriver
     try {
-      storage = await getStorageClient()
+      storage = await getStorageDriver()
     } catch {
       throw new Error('STORAGE_NOT_CONFIGURED')
     }
     let s3Res
+    const inputDeadline = storageOperationSignal()
     try {
-      s3Res = await storage.s3.send(new GetObjectCommand({ Bucket: storage.bucket, Key: row.object_key }))
+      s3Res = await storage.open(row.object_key, inputDeadline)
     } catch {
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
     }
-    if (!s3Res.Body) {
+    if (!s3Res.body) {
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
     }
 
-    const contentLength = s3Res.ContentLength
+    const contentLength = s3Res.contentLength
     if (contentLength !== undefined) {
       if (contentLength <= 0 || contentLength > maxSingle) {
         throw new Error('INVALID_INPUT_IMAGE_SIZE')
@@ -154,7 +158,7 @@ export async function loadAndValidateInputImages(
 
     let data: Buffer
     try {
-      const bytes = await s3Res.Body.transformToByteArray()
+      const bytes = await readInputBody(s3Res.body, inputDeadline)
       data = Buffer.from(bytes)
     } catch {
       throw new Error('INPUT_IMAGE_UNAVAILABLE')
@@ -249,22 +253,23 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
     for (const row of rows) {
       const mime = String(row.mime_type || '')
       if (!mime.startsWith('image/')) continue
-      let storage: StorageClientHandle
+      let storage: WorkerStorageDriver
       try {
-        storage = await getStorageClient()
+        storage = await getStorageDriver()
       } catch {
         throw new Error('STORAGE_NOT_CONFIGURED')
       }
       let s3Res
+      const inputDeadline = storageOperationSignal()
       try {
-        s3Res = await storage.s3.send(new GetObjectCommand({ Bucket: storage.bucket, Key: String(row.object_key) }))
+        s3Res = await storage.open(String(row.object_key), inputDeadline)
       } catch {
         throw new Error('INPUT_IMAGE_UNAVAILABLE')
       }
-      if (!s3Res.Body) throw new Error('INPUT_IMAGE_UNAVAILABLE')
+      if (!s3Res.body) throw new Error('INPUT_IMAGE_UNAVAILABLE')
       let data: Buffer
       try {
-        data = Buffer.from(await s3Res.Body.transformToByteArray())
+        data = Buffer.from(await readInputBody(s3Res.body, inputDeadline))
       } catch {
         throw new Error('INPUT_IMAGE_UNAVAILABLE')
       }
@@ -387,16 +392,17 @@ export async function persistJobFailure(
 }
 
 async function deleteUploadedObjects(uploaded: Array<{ key: string }>): Promise<void> {
-  let storage: StorageClientHandle | null = null
+  let storage: WorkerStorageDriver | null = null
   try {
-    storage = await getStorageClient()
+    storage = await getStorageDriver()
   } catch {
     console.error('generated media cleanup skipped', { code: 'STORAGE_NOT_CONFIGURED' })
     return
   }
   for (const item of uploaded) {
+    assertProviderLease()
     try {
-      await storage.s3.send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: item.key }))
+      await storage.delete(item.key, providerLeaseSignal())
     } catch (error) {
       console.error('generated media cleanup failed', {
         key: item.key,
@@ -486,9 +492,19 @@ export function buildMediaRequest(job: Record<string, unknown>, prompt: string, 
     : params.duration !== undefined ? Number(params.duration) : undefined
   const fps = params.fps !== undefined ? Number(params.fps) : undefined
   const extra: Record<string, unknown> = {}
-  // TODO(media-params): this mirror exists only so the two video adapters keep
-  // reading `extra` unchanged. Once they read `request.parameters` the loop goes
-  // away; until then the worker test asserts the two agree on these six keys.
+  // TODO(media-params): remove this mirror once the two video adapters
+  // (packages/providers/src/plugins/veo-video, .../seedance-video) read their
+  // controls from `request.parameters` instead of `request.extra`.
+  // Missing: that migration is a design change, not a rename. Each adapter owns a
+  // per-control source chain (provider-native spellings, credential/config `extra`
+  // fallbacks, grammar and range checks) and reads keys beyond these six
+  // (`imageRoles`, `storageUri`, `personGeneration`, `negativePrompt`,
+  // `enhancePrompt`, `resizeMode`, `compressionQuality`, ...); `parameters` only
+  // carries the six post-validation controls, so the adapters cannot switch
+  // without reworking those chains and their config-level overrides.
+  // Impact until then: the loop is load-bearing — dropping a key makes a video
+  // adapter silently submit its vendor default while `parameters` still holds the
+  // intended value. media-request.test.ts fences the two bags against divergence.
   for (const key of ['aspectRatio', 'resolution', 'audio', 'duration', 'seed', 'fps']) {
     if (params[key] !== undefined) extra[key] = params[key]
   }
@@ -616,7 +632,7 @@ async function failRunTerminal(run: ProviderRunEntity, job: Record<string, unkno
       error: { code, message: code, retryable: false, details: diagnostic || undefined },
       releaseCapacity: true,
       completed: true,
-    }).catch(() => null)
+    })
     await persistJobFailure(client, {
       jobId: String(job.id),
       promptOptimizationId: (job.prompt_optimization_id as string | null) || null,
@@ -636,7 +652,7 @@ async function cancelJobWithRun(run: ProviderRunEntity, job: Record<string, unkn
       operationState: 'canceled',
       releaseCapacity: true,
       completed: true,
-    }).catch(() => null)
+    })
     await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running','retry_wait')", [job.id])
   })
 }
@@ -669,33 +685,7 @@ async function storeRunUnknown(run: ProviderRunEntity, result: OperationResult):
 }
 
 async function uploadBufferToS3(key: string, data: Buffer, contentType: string): Promise<string | null> {
-  const MULTIPART_THRESHOLD = 8_000_000
-  const PART_SIZE = 5_000_000
-  const storage = await getStorageClient()
-  if (data.length < MULTIPART_THRESHOLD) {
-    await storage.s3.send(new PutObjectCommand({ Bucket: storage.bucket, Key: key, Body: data, ContentType: contentType, Metadata: { checksum: createHash('sha256').update(data).digest('hex') } }))
-    return null
-  }
-  const created = await storage.s3.send(new CreateMultipartUploadCommand({ Bucket: storage.bucket, Key: key, ContentType: contentType }))
-  const uploadId = created.UploadId
-  if (!uploadId) {
-    await storage.s3.send(new PutObjectCommand({ Bucket: storage.bucket, Key: key, Body: data, ContentType: contentType }))
-    return null
-  }
-  try {
-    const parts: Array<{ ETag?: string; PartNumber: number }> = []
-    let partNumber = 1
-    for (let offset = 0; offset < data.length; offset += PART_SIZE, partNumber += 1) {
-      const chunk = data.subarray(offset, Math.min(offset + PART_SIZE, data.length))
-      const uploaded = await storage.s3.send(new UploadPartCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: chunk }))
-      parts.push({ ETag: uploaded.ETag, PartNumber: partNumber })
-    }
-    await storage.s3.send(new CompleteMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId, MultipartUpload: { Parts: parts } }))
-    return uploadId
-  } catch (error) {
-    try { await storage.s3.send(new AbortMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId })) } catch {}
-    throw error
-  }
+  return putStorageObjectLarge(key, data, contentType, providerLeaseSignal())
 }
 
 async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unknown>, revision: ModelConfigRevisionEntity, config: ProviderConfig, outputs: OutputDescriptor[], prompt: string): Promise<void> {
@@ -713,7 +703,7 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
   const mediaKind = job.media_kind === 'video' ? 'video' : 'image'
   const createdBy = String(job.created_by)
   const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
-  const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
+  const context = fenceProviderContext(createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config }))
   const manifest = stripOutputManifest(outputs)
   await updateProviderRunState(db(), {
     runId: run.id,
@@ -721,7 +711,7 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
     operationState: 'importing',
     outputManifest: (manifest as unknown as Record<string, unknown> | null) || null,
     nextActionAt: null,
-  }).then(updated => { if (updated) run = updated }).catch(() => {})
+  }).then(updated => { run = updated })
   const persistedKeys: string[] = []
   const uploaded: PersistJobSuccessInput['uploaded'] = []
   // Preview bytes are produced while the source buffer is still in hand, but
@@ -730,6 +720,7 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
   const derivedPreviews = new Map<string, DerivedPreview>()
   try {
     for (const descriptor of outputs) {
+      assertProviderLease()
       const existing = await getOutputIngestionByRunIndex(db(), run.id, descriptor.index).catch(() => null)
       if (existing && (existing as unknown as Record<string, unknown>).ingestionState === 'persisted' && (existing as unknown as Record<string, unknown>).assetId) {
         continue
@@ -750,19 +741,26 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
         bounded = plugin.openOutput
           ? await plugin.openOutput(descriptor, config, context)
           : await context.readOutput(descriptor, { maxBytes: config.maxBytes, timeoutMs: config.timeoutMs })
-      } catch {
+      } catch (error) {
+        if (error instanceof ProviderLeaseLostError) throw error
+        assertProviderLease()
         await updateOutputIngestion(db(), { id: ingestionId, ingestionState: 'failed', error: { code: 'PROVIDER_DOWNLOAD_FAILED', message: 'PROVIDER_DOWNLOAD_FAILED' } }).catch(() => null)
-        throw new Error('PROVIDER_DOWNLOAD_FAILED')
+        throw new Error('PROVIDER_DOWNLOAD_FAILED', { cause: error })
       }
+      assertProviderLease()
       const checksum = createHash('sha256').update(bounded.data).digest('hex')
       await updateOutputIngestion(db(), { id: ingestionId, ingestionState: 'uploading', checksum, sizeBytes: bounded.data.length, mimeType: bounded.mimeType }).catch(() => null)
       let multipartId: string | null = null
       try {
+        assertProviderLease()
         multipartId = await uploadBufferToS3(storageKey, bounded.data, bounded.mimeType)
-      } catch {
+      } catch (error) {
+        if (error instanceof ProviderLeaseLostError) throw error
+        assertProviderLease()
         await updateOutputIngestion(db(), { id: ingestionId, ingestionState: 'failed', error: { code: 'STORAGE_TEMPORARY_ERROR', message: 'STORAGE_TEMPORARY_ERROR' } }).catch(() => null)
-        throw new Error('STORAGE_TEMPORARY_ERROR')
+        throw new Error('STORAGE_TEMPORARY_ERROR', { cause: error })
       }
+      assertProviderLease()
       persistedKeys.push(storageKey)
       await updateOutputIngestion(db(), { id: ingestionId, ingestionState: 'verifying', multipartUploadId: multipartId, downloadCompleted: true }).catch(() => null)
       // Gallery preview, best effort: a preview is an optimisation, so nothing
@@ -788,14 +786,16 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
         mediaKind,
         sizeBytes: bounded.data.length,
       })
+      assertProviderLease()
       await updateOutputIngestion(db(), { id: ingestionId, ingestionState: 'persisted', attached: true }).catch(() => null)
     }
+    assertProviderLease()
     const latest = await getProviderRunById(db(), run.id)
     const revisionNow = latest ? latest.stateRevision : run.stateRevision
     const persisted = await transaction(async client => {
+      assertProviderLease()
       const ok = await persistJobSuccess(client, { jobId: String(job.id), createdBy, prompt, uploaded })
       if (!ok) {
-        await deleteUploadedObjects(persistedKeys.map(key => ({ key })))
         return false
       }
       for (const item of uploaded) {
@@ -815,14 +815,19 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
         releaseCapacity: true,
         completed: true,
         nextActionAt: null,
-      }).catch(() => null)
+      })
       return true
     })
     if (persisted) {
       await attachDerivedPreviews(String(job.id), mediaKind, uploaded.map(item => item.key), derivedPreviews)
     }
   } catch (error) {
-    await deleteUploadedObjects(persistedKeys.map(key => ({ key })))
+    // Deterministic run/index keys can be reused by a replacement owner. A
+    // fenced or uncertain owner must never delete objects it may now be using.
+    if (!(error instanceof ProviderLeaseLostError)) {
+      assertProviderLease()
+      await deleteUploadedObjects(persistedKeys.map(key => ({ key })))
+    }
     throw error
   }
 }
@@ -899,15 +904,12 @@ async function handleTerminalResult(run: ProviderRunEntity, job: Record<string, 
 
 /** Poll a single provider run under a Postgres lease. Exported for maintenance/dispatch. */
 export async function pollProviderRun(runId: string): Promise<boolean> {
-  const leaseToken = randomUUID()
-  const leased = await acquireWorkerLease(db(), { runId, leaseToken, leaseDurationSeconds: PROVIDER_LEASE_SECONDS }).catch(() => null)
-  if (!leased) return true
-  let run: ProviderRunEntity | null = leased
-  try {
+  return await withProviderLease(runId, async leased => {
+    let run: ProviderRunEntity = leased
     const jobRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [run.jobId])
     const job = jobRes.rows[0] as Record<string, unknown> | undefined
     if (!job) {
-      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'failed', error: { code: 'JOB_NOT_FOUND', message: 'JOB_NOT_FOUND' }, releaseCapacity: true, completed: true }).catch(() => null)
+      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'failed', error: { code: 'JOB_NOT_FOUND', message: 'JOB_NOT_FOUND' }, releaseCapacity: true, completed: true })
       return true
     }
     if (job.status === 'canceled' || isCancelRequested(job)) {
@@ -918,7 +920,7 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
     const { revision, config } = await resolveSnapshot(job)
     const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
     const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
-    const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
+    const context = fenceProviderContext(createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config }))
     if (!run.remoteId) {
       if (isSynchronousPlugin(plugin)) {
         const recoveryCode = syncNoRemotePollCode(run.operationState)
@@ -933,7 +935,7 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
         )
         return true
       }
-      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt() }).catch(() => null)
+      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt() })
       return true
     }
     let result: OperationResult
@@ -942,17 +944,21 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
         await failRunTerminal(run, job, 'PROVIDER_EMPTY_RESULT', { detail: 'SYNC_PLUGIN_UNEXPECTED_POLL' }, 'generation_failed')
         return true
       } else {
+        assertProviderLease()
         result = await plugin.poll(run.remoteId, opaque, config, context)
       }
     } catch (error) {
+      if (error instanceof ProviderLeaseLostError) throw error
+      assertProviderLease()
       const classified = classifySubmitError(error, revision.pluginId)
       if (classified.retryable) {
-        await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, nextActionAt: nextActionAtForRetryAfter(undefined) }).catch(() => null)
+        await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, nextActionAt: nextActionAtForRetryAfter(undefined) })
         return true
       }
       await failRunTerminal(run, job, classified.code, classified.diagnostic, 'generation_failed')
       return true
     }
+    assertProviderLease()
     const fresh = await getProviderRunById(db(), run.id)
     if (!fresh) return true
     run = fresh
@@ -968,28 +974,28 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
         encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : undefined,
         outputManifest: result.outputs ? (stripOutputManifest(result.outputs) as unknown as Record<string, unknown> | null) : undefined,
         providerAccepted: Boolean(result.remoteId),
-      }).catch(() => null)
+      })
       await db().query("UPDATE generation_jobs SET phase=$2,progress=COALESCE(progress,0),updated_at=now() WHERE id=$1 AND status='running'", [job.id, target === 'waiting' ? 'provider_waiting' : 'provider_submitting']).catch(() => {})
       return true
     }
     const promptRow = await db().query('SELECT prompt FROM generation_jobs WHERE id=$1', [job.id])
     await handleTerminalResult(run, job, revision, config, result, String(promptRow.rows[0]?.prompt || job.prompt || ''))
     return true
-  } finally {
-    await releaseWorkerLease(db(), runId, leaseToken).catch(() => {})
-  }
+  }) ?? true
 }
 
 async function requestRemoteCancel(run: ProviderRunEntity, job: Record<string, unknown>): Promise<void> {
   try {
     const { revision, config } = await resolveSnapshot(job)
     const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
-    const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
+    const context = fenceProviderContext(createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config }))
     const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
-    await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'canceling', nextActionAt: null }).catch(() => null)
+    await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'canceling', nextActionAt: null })
     await db().query("UPDATE generation_jobs SET phase='provider_canceling',updated_at=now() WHERE id=$1", [job.id]).catch(() => {})
     if (run.remoteId && plugin.cancel) {
+      assertProviderLease()
       const result = await plugin.cancel(run.remoteId, opaque, config, context).catch(() => ({ status: 'canceled' as const }))
+      assertProviderLease()
       if (result.status === 'succeeded' && result.outputs && result.outputs.length > 0) {
         return
       }
@@ -1030,13 +1036,13 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
   }
   if ((claimed as Record<string, unknown>).canceledAtClaim) return true
   try {
-    const prompt = await preprocessPrompt(claimed)
+    const prompt = await preprocessPrompt(claimed as PreprocessPromptJob)
     const currentRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [claimed.id])
     const current = currentRes.rows[0] as Record<string, unknown> | undefined
     if (decideClaimedJob(current) === 'cancel') {
       const latest = await getLatestProviderRunForJob(db(), String(claimed.id)).catch(() => null)
       if (latest && isNonTerminalRunState(latest.operationState)) {
-        await requestRemoteCancel(latest, current || claimed)
+        await withProviderLease(latest.id, leased => requestRemoteCancel(leased, current || claimed))
       } else if (current) {
         await db().query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [claimed.id]).catch(() => {})
       }
@@ -1073,85 +1079,88 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       await db().query("INSERT INTO outbox_events(event_type,aggregate_id,payload) VALUES('generation.retry',$1,$2)", [jobRow.id, { jobId: jobRow.id }]).catch(() => {})
       return true
     }
-    let run: ProviderRunEntity = idempotent.run as ProviderRunEntity
-    await db().query("UPDATE generation_jobs SET phase='provider_submitting',provider_id=$2,plugin_id=$3,plugin_version=$4,updated_at=now() WHERE id=$1", [jobRow.id, revision.providerId, revision.pluginId, revision.pluginVersion]).catch(() => {})
-    const inputImages = await resolveMediaInputImages(String(jobRow.id)).catch(error => {
-      const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'INVALID_INPUT_IMAGE'
-      throw new Error(code)
-    })
-    const request: MediaRequest = buildMediaRequest(jobRow, prompt, inputImages, revision)
-    const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
-    const context = createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config })
-    let result: OperationResult
-    try {
-      try { await plugin.validateRequest(request, config) } catch (error) {
-        const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'INVALID_REQUEST'
+    return await withProviderLease((idempotent.run as ProviderRunEntity).id, async run => {
+      await db().query("UPDATE generation_jobs SET phase='provider_submitting',provider_id=$2,plugin_id=$3,plugin_version=$4,updated_at=now() WHERE id=$1", [jobRow.id, revision.providerId, revision.pluginId, revision.pluginVersion]).catch(() => {})
+      const inputImages = await resolveMediaInputImages(String(jobRow.id)).catch(error => {
+        const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'INVALID_INPUT_IMAGE'
         throw new Error(code)
-      }
-      result = await plugin.submit(request, config, context)
-    } catch (error) {
-      if (error instanceof Error && /^(INVALID_REQUEST|INVALID_CONFIG|INVALID_CREDENTIAL|PROVIDER_REJECTED)$/.test(error.message)) {
-        await failRunTerminal(run, jobRow, error.message, null, 'generation_failed')
-        return true
-      }
-      const classified = classifySubmitError(error, revision.pluginId)
-      if (isSynchronousPlugin(plugin)) {
-        if (!planSyncSubmitRetry(attempt, classified.code, classified.diagnostic).retry) {
-          await failRunTerminal(run, jobRow, classified.code, classified.diagnostic, 'generation_failed')
+      })
+      const request: MediaRequest = buildMediaRequest(jobRow, prompt, inputImages, revision)
+      const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
+      const context = fenceProviderContext(createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config }))
+      let result: OperationResult
+      try {
+        try { await plugin.validateRequest(request, config) } catch (error) {
+          const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'INVALID_REQUEST'
+          throw new Error(code)
+        }
+        assertProviderLease()
+        result = await plugin.submit(request, config, context)
+      } catch (error) {
+        if (error instanceof ProviderLeaseLostError) throw error
+        assertProviderLease()
+        if (error instanceof Error && /^(INVALID_REQUEST|INVALID_CONFIG|INVALID_CREDENTIAL|PROVIDER_REJECTED)$/.test(error.message)) {
+          await failRunTerminal(run, jobRow, error.message, null, 'generation_failed')
           return true
         }
-        await retrySyncSubmit(run, jobRow, attempt, classified.code, classified.diagnostic)
+        const classified = classifySubmitError(error, revision.pluginId)
+        if (isSynchronousPlugin(plugin)) {
+          if (!planSyncSubmitRetry(attempt, classified.code, classified.diagnostic).retry) {
+            await failRunTerminal(run, jobRow, classified.code, classified.diagnostic, 'generation_failed')
+            return true
+          }
+          await retrySyncSubmit(run, jobRow, attempt, classified.code, classified.diagnostic)
+          return true
+        }
+        if (classified.retryable) {
+          await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt(), error: { code: classified.code, message: classified.code, retryable: true } })
+          await db().query("UPDATE generation_jobs SET status='running',phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
+          return true
+        }
+        await failRunTerminal(run, jobRow, classified.code, classified.diagnostic, classified.code.startsWith('PROMPT_') || classified.code.startsWith('LANGUAGE_') ? 'optimization_failed' : 'generation_failed')
         return true
       }
-      if (classified.retryable) {
-        await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt(), error: { code: classified.code, message: classified.code, retryable: true } }).catch(() => null)
-        await db().query("UPDATE generation_jobs SET status='running',phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
+      assertProviderLease()
+      if (result.status === 'failed' && isSynchronousPlugin(plugin) && isSyncRetryableResultError(result)) {
+        const retryError = (result.error || null) as unknown as Record<string, unknown> | null
+        const retryCode = result.error?.code || 'PROVIDER_TEMPORARY_ERROR'
+        if (planSyncSubmitRetry(attempt, retryCode, retryError).retry) {
+          await retrySyncSubmit(run, jobRow, attempt, retryCode, retryError)
+          return true
+        }
+      }
+      const resultDisposition = decideSubmitResult(result, isSynchronousPlugin(plugin))
+      if (resultDisposition === 'waiting' || resultDisposition === 'submission_unknown' || resultDisposition === 'empty_sync_remote') {
+        if (resultDisposition === 'empty_sync_remote') {
+          await failRunTerminal(run, jobRow, 'PROVIDER_EMPTY_RESULT', { detail: 'SYNC_PLUGIN_MISSING_REMOTE_ID' }, 'generation_failed')
+          return true
+        }
+        if (resultDisposition === 'waiting') {
+          await storeRunWaiting(run, result)
+          await db().query("UPDATE generation_jobs SET phase='provider_waiting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
+          return true
+        }
+        await storeRunUnknown(run, result)
+        await db().query("UPDATE generation_jobs SET phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
         return true
       }
-      await failRunTerminal(run, jobRow, classified.code, classified.diagnostic, classified.code.startsWith('PROMPT_') || classified.code.startsWith('LANGUAGE_') ? 'optimization_failed' : 'generation_failed')
+      if (resultDisposition === 'submitting') {
+        await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'waiting', remoteId: result.remoteId ?? null, nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs), encryptedStatePayload: encryptOpaqueState(result.opaqueState), encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : null, providerAccepted: Boolean(result.remoteId) })
+        return true
+      }
+      await handleTerminalResult(run, jobRow, revision, config, result, prompt)
       return true
-    }
-    if (result.status === 'failed' && isSynchronousPlugin(plugin) && isSyncRetryableResultError(result)) {
-      const retryError = (result.error || null) as unknown as Record<string, unknown> | null
-      const retryCode = result.error?.code || 'PROVIDER_TEMPORARY_ERROR'
-      if (planSyncSubmitRetry(attempt, retryCode, retryError).retry) {
-        await retrySyncSubmit(run, jobRow, attempt, retryCode, retryError)
-        return true
-      }
-    }
-    const resultDisposition = decideSubmitResult(result, isSynchronousPlugin(plugin))
-    if (resultDisposition === 'waiting' || resultDisposition === 'submission_unknown' || resultDisposition === 'empty_sync_remote') {
-      if (resultDisposition === 'empty_sync_remote') {
-        await failRunTerminal(run, jobRow, 'PROVIDER_EMPTY_RESULT', { detail: 'SYNC_PLUGIN_MISSING_REMOTE_ID' }, 'generation_failed')
-        return true
-      }
-      if (resultDisposition === 'waiting') {
-        await storeRunWaiting(run, result)
-        await db().query("UPDATE generation_jobs SET phase='provider_waiting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
-        return true
-      }
-      await storeRunUnknown(run, result)
-      await db().query("UPDATE generation_jobs SET phase='provider_submitting',updated_at=now() WHERE id=$1", [jobRow.id]).catch(() => {})
-      return true
-    }
-    if (resultDisposition === 'submitting') {
-      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'waiting', remoteId: result.remoteId ?? null, nextActionAt: nextActionAtForRetryAfter(result.retryAfterMs), encryptedStatePayload: encryptOpaqueState(result.opaqueState), encryptedStateKeyId: result.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : null, providerAccepted: Boolean(result.remoteId) }).catch(() => null)
-      return true
-    }
-    await handleTerminalResult(run, jobRow, revision, config, result, prompt)
-    return true
+    }) ?? true
   } catch (error) {
-    if (isSyncRetryPersistenceError(error)) throw error
+    if (isSyncRetryPersistenceError(error) || error instanceof ProviderLeaseLostError) throw error
     const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'GENERATION_FAILED'
     const temporary = ['PROVIDER_TEMPORARY_ERROR', 'PROVIDER_TIMEOUT', 'PROVIDER_DOWNLOAD_FAILED', 'PROVIDER_BUSY', 'INPUT_IMAGE_UNAVAILABLE', 'STORAGE_TEMPORARY_ERROR', 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR', 'LANGUAGE_MODEL_RESPONSE_INVALID', 'PROMPT_TEMPLATE_SELECTION_INVALID', 'PROMPT_OUTPUT_INVALID'].includes(code)
     const phase = code.startsWith('PROMPT_TEMPLATE') ? 'template_failed' : code.startsWith('PROMPT_') || code.startsWith('LANGUAGE_') ? 'optimization_failed' : 'generation_failed'
     const providerError = error instanceof LanguageModelHttpError ? error.diagnostic as unknown as Record<string, unknown> : null
     const latest = await getLatestProviderRunForJob(db(), String((claimed as Record<string, unknown>).id)).catch(() => null)
-    await transaction(async client => {
-      if (latest && shouldCreateNewRun(latest.operationState) === false) {
-        await updateProviderRunState(client, { runId: latest.id, expectedStateRevision: latest.stateRevision, nextActionAt: nextActionAtForRetryAfter(undefined) }).catch(() => null)
-      } else if (latest) {
-        await updateProviderRunState(client, { runId: latest.id, expectedStateRevision: latest.stateRevision, operationState: 'failed', error: { code, message: code, retryable: temporary }, releaseCapacity: true, completed: !temporary }).catch(() => null)
+    const persistFailure = async (leased?: ProviderRunEntity) => transaction(async client => {
+      if (leased) {
+        await updateProviderRunState(client, { runId: leased.id, expectedStateRevision: leased.stateRevision, nextActionAt: nextActionAtForRetryAfter(undefined) })
       }
       await persistJobFailure(client, {
         jobId: String((claimed as Record<string, unknown>).id),
@@ -1160,8 +1169,15 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         code,
         retryable: temporary,
         providerError,
-      }).catch(() => {})
-    }).catch(() => {})
+      })
+      return true
+    })
+    // This catch runs after the submission lease was released. Reacquire before
+    // recovery writes; another owner or terminal run must never be overwritten.
+    if (latest) {
+      if (shouldCreateNewRun(latest.operationState)) return true
+      if (await withProviderLease(latest.id, leased => persistFailure(leased)) === undefined) throw new ProviderLeaseLostError()
+    } else await persistFailure()
     return true
   }
 }

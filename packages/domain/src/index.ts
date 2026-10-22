@@ -58,7 +58,6 @@ export type {
 // ---------------------------------------------------------------------------
 
 export type JobStatus = 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'failed' | 'canceled'
-export const terminalStatuses = new Set<JobStatus>(['succeeded', 'failed', 'canceled'])
 
 // ---------------------------------------------------------------------------
 // Error Handling & Validation Types

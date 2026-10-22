@@ -1,5 +1,5 @@
-import { modelPresets, type ModelPreset, type ReasoningEffort } from '../admin/model-presets'
-import { isPrivateProviderHost } from '../../../../packages/providers/src/index'
+import { modelPresets, type ModelPreset, type ReasoningEffort } from '../admin/model-preset-defs'
+import { isPrivateProviderHost } from '@musecanvas/providers'
 
 export const reasoningEfforts: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh']
 

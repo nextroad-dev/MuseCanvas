@@ -1,9 +1,9 @@
 import { parseUpdateCanvasAgentSettingsRequest, type CanvasAgentSettingsDto } from '@musecanvas/contracts'
-import { transaction, getCanvasAgentSettings, updateCanvasAgentSettings as persistSettings } from '../../../../../packages/database/src/index'
+import { transaction, getCanvasAgentSettings, updateCanvasAgentSettings as persistSettings } from '@musecanvas/database'
 import type { Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { writeAudit } from '../../shared/audit'
-import { safeError, validateLanguageConfig } from '../canvas-agent/config'
+import { safeError, validateLanguageConfig } from '../canvases/agent/config'
 
 export function canvasAgentSettingsDto(settings: CanvasAgentSettingsDto): CanvasAgentSettingsDto {
   const { enabled, languageModelConfigId, maxToolCallsPerTurn, maxJobsPerTurn, timeoutMs, maxAutoContinuations, updatedAt } = settings

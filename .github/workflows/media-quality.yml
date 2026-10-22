@@ -50,7 +50,7 @@ jobs:
       - name: Set up Node.js with pnpm cache
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: pnpm
 
       - name: Install dependencies with frozen lockfile (no external services)
@@ -58,6 +58,9 @@ jobs:
 
       - name: Typecheck workspaces (no external services)
         run: pnpm -r --if-present typecheck
+
+      - name: Lint workspaces (no external services)
+        run: pnpm -r --if-present lint
 
       - name: Test providers package incl. media contract (no external services)
         run: pnpm --filter @musecanvas/providers test

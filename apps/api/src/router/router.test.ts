@@ -6,6 +6,7 @@ import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { DELETE_ROUTES, GET_ROUTES, PATCH_ROUTES, POST_ROUTES } from './routes'
 import { dispatchDelete, dispatchGet, dispatchPatch, dispatchPost, dispatchPut } from './pipeline'
 import { matchPath, matchRoute } from './match'
+import { mutationOriginValid } from '../shared/http'
 import type { Route } from './types'
 
 /**
@@ -29,6 +30,7 @@ const SAMPLE_UUID = '123e4567-e89b-12d3-a456-426614174000'
 /** A pattern is only comparable to a declared URL once its parameters are filled. */
 function concrete(path: string): string {
   return path
+    .replaceAll(':turnId', SAMPLE_UUID)
     .replaceAll(':hexid', SAMPLE_UUID)
     .replaceAll(':id', SAMPLE_UUID)
     .replaceAll(':oauth', 'github')
@@ -39,8 +41,8 @@ function concrete(path: string): string {
  * an oauth provider name, so one endpoint can have several legitimate concrete
  * spellings.
  */
-function declaredCandidates(value: (argument: string) => string): string[] {
-  return [value(SAMPLE_UUID), ...['github', 'google'].map(provider => value(provider))]
+function declaredCandidates(value: (argument: string, second?: string) => string): string[] {
+  return [value(SAMPLE_UUID, SAMPLE_UUID), ...['github', 'google'].map(provider => value(provider, SAMPLE_UUID))]
 }
 
 /** Every URL the registry declares, as its possible concrete paths. */
@@ -64,8 +66,8 @@ const ALL_ROUTES = ALL_TABLES.flatMap(([, routes]) => routes)
 /**
  * Endpoints the registry declares but no route serves yet. Listing them keeps the
  * gap visible and falsifiable: the assertion below fails if a path is routed while
- * still listed here, so this cannot quietly accumulate. It is empty today — and a
- * new entry needs a reason, not just an unfinished feature.
+ * still listed here, so this cannot quietly accumulate. A new entry needs a reason,
+ * not just an unfinished feature.
  */
 const DECLARED_WITHOUT_HANDLER: string[] = []
 
@@ -239,4 +241,45 @@ test('GET is never CSRF-gated', async () => {
   // adding one now would break image URLs the browser fetches cross-site.
   const [status] = await statusAndCode(await dispatchGet(fakeRequest({ origin: 'http://evil.test' }), 'does/not/exist'))
   assert.equal(status, 401)
+})
+
+test('setup database routes are public at the router and refused by the handler without setup access', async () => {
+  // The wizard has no session before the claim, so the router must not gate these.
+  // The handler's setup-access check answers first, so no database read or rate-limit
+  // counter is touched for an anonymous caller.
+  assert.equal(matchRoute(GET_ROUTES, 'setup/database')!.route.access, 'public')
+  assert.equal(matchRoute(POST_ROUTES, 'setup/database/test')!.route.access, 'public')
+  assert.deepEqual(await statusAndCode(await dispatchGet(fakeRequest(), 'setup/database')), [401, 'SETUP_SESSION_INVALID'])
+  assert.deepEqual(
+    await statusAndCode(await dispatchPost(fakeRequest({ origin: 'http://musecanvas.test' }), 'setup/database/test')),
+    [401, 'SETUP_SESSION_INVALID'],
+  )
+})
+
+test('turn recovery has a named turnId, is actor-only and real dispatch rejects anonymous before store access', async () => {
+  const path = API_ENDPOINTS.canvases.agent.turn(SAMPLE_UUID, SAMPLE_UUID).replace(/^\/api\//, '')
+  const matched = matchRoute(GET_ROUTES, path)!
+  assert.equal(matched.route.path, 'canvases/:id/agent/turns/:turnId'); assert.equal(matched.route.access, 'actor')
+  assert.deepEqual(matched.params, { id: SAMPLE_UUID, turnId: SAMPLE_UUID })
+  assert.deepEqual(await statusAndCode(await dispatchGet(fakeRequest(), path)), [401, 'UNAUTHORIZED'])
+  assert.deepEqual(await statusAndCode(await dispatchGet(fakeRequest(), `canvases/${SAMPLE_UUID}/agent/turns/deadbeef`)), [401, 'UNAUTHORIZED'])
+  assert.equal(matchRoute(GET_ROUTES, `canvases/${SAMPLE_UUID}/agent/turns/not-a-uuid`), null)
+  assert.equal(matchRoute(GET_ROUTES, `${path}/extra`), null)
+})
+
+test('media object and upload routes are public and match the contract paths', () => {
+  // Both are authorized by the signature in the URL, so the router must not add a session gate.
+  assert.equal(matchRoute(GET_ROUTES, 'media/object')!.route.access, 'public')
+  assert.equal(matchRoute(POST_ROUTES, 'media/upload')!.route.access, 'public')
+  assert.ok(matchRoute(GET_ROUTES, API_ENDPOINTS.media.object.replace(/^\/api\//, '')))
+  assert.ok(matchRoute(POST_ROUTES, API_ENDPOINTS.media.upload.replace(/^\/api\//, '')))
+})
+
+test('media upload has no origin exemption: same-origin passes the CSRF check, cross-origin is rejected', async () => {
+  // pipeline.ts special-cases nothing for media/upload. A browser upload carries the app's own
+  // Origin, which mutationOriginValid accepts, so the normal check is enough.
+  assert.equal(mutationOriginValid(fakeRequest({ origin: 'http://musecanvas.test' })), true)
+  const [status, code] = await statusAndCode(await dispatchPost(fakeRequest({ origin: 'http://evil.test' }), 'media/upload'))
+  assert.equal(status, 403)
+  assert.equal(code, 'CSRF_REJECTED')
 })

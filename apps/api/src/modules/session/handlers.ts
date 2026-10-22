@@ -1,4 +1,4 @@
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { writeAudit } from '../../shared/audit'
 import type { AuthedContext, PublicContext } from '../../router/types'
 import { fail, ok } from '../../shared/http'

@@ -564,7 +564,13 @@ export interface SmtpSettingsDto {
 
 export type StorageConnectionStatus = 'not_configured' | 'configured' | 'verified' | 'error'
 
+/** 's3' uses the S3-compatible fields; 'local' stores files under localRoot on a mounted volume. */
+export type StorageDriverKind = 's3' | 'local'
+
 export interface StorageSettingsInput {
+  driver?: StorageDriverKind | null
+  /** Absolute directory for driver 'local'. Never a secret. */
+  localRoot?: string | null
   endpoint?: string | null
   publicEndpoint?: string | null
   region?: string | null
@@ -576,6 +582,8 @@ export interface StorageSettingsInput {
 }
 
 export interface StorageSettingsDto {
+  driver: StorageDriverKind
+  localRoot: string | null
   endpoint: string | null
   publicEndpoint: string | null
   region: string
@@ -625,6 +633,52 @@ export interface RuntimeSettingsDto {
   updatedAt: string
 }
 
+export type DatabaseDriverKind = 'postgres' | 'sqlite'
+
+export interface DatabaseDriverDescriptor {
+  id: DatabaseDriverKind
+  label: string
+  available: boolean
+  /** Why the driver cannot be selected yet. Present only when available is false. */
+  reason?: string
+}
+
+/** Non-secret connection summary. No password field exists in any contract type. */
+export interface DatabaseConnectionSummary {
+  host: string | null
+  port: number | null
+  database: string | null
+  user: string | null
+}
+
+/** Read-only report for the setup flow. Never carries credentials. */
+export interface SetupDatabaseStatus {
+  driver: DatabaseDriverKind
+  availableDrivers: DatabaseDriverDescriptor[]
+  connection: DatabaseConnectionSummary
+  serverVersion?: string | null
+  schemaVersion?: string | null
+  reachable: boolean
+}
+
+export const SETUP_DATABASE_DRIVERS: readonly DatabaseDriverDescriptor[] = [
+  { id: 'postgres', label: 'PostgreSQL', available: true },
+  { id: 'sqlite', label: 'SQLite', available: false, reason: '后端尚未支持' },
+]
+
+/** Shape of GET /api/setup/config. `database` is optional until the endpoint emits it. */
+export interface SetupConfigDto {
+  site: SiteSettingsDto
+  smtp: SmtpSettingsDto
+  storage: StorageSettingsDto
+  runtime: RuntimeSettingsDto
+  database?: SetupDatabaseStatus
+  templates: {
+    active: Pick<PromptTemplateSetSummaryDto, 'id' | 'name' | 'version' | 'entryCount' | 'updatedAt'> | null
+    entries: { name: string; description: string; path: string }[]
+  }
+}
+
 export interface SetupClaimInput {
   code: string
 }
@@ -647,6 +701,12 @@ export interface SetupStatusResponse {
   bootstrap: BootstrapDiagnostics | null
   configRevision: number
   completedAt: string | null
+  /**
+   * Whether /setup needs a one-time claim code before it opens. Absent means true (the safe
+   * default for older servers). False only when the operator set SETUP_CLAIM_REQUIRED=false,
+   * in which case setup is open until the first admin exists and the wizard hides the claim step.
+   */
+  claimRequired?: boolean
 }
 
 export const SetupErrorCode = {
@@ -654,6 +714,7 @@ export const SetupErrorCode = {
   SETUP_SESSION_INVALID: 'SETUP_SESSION_INVALID',
   SETUP_SESSION_EXPIRED: 'SETUP_SESSION_EXPIRED',
   SETUP_SESSION_CONSUMED: 'SETUP_SESSION_CONSUMED',
+  SETUP_CLAIM_NOT_REQUIRED: 'SETUP_CLAIM_NOT_REQUIRED',
   SETUP_INCOMPLETE: 'SETUP_INCOMPLETE',
   INVALID_INPUT: 'INVALID_INPUT',
   INVALID_OTP: 'INVALID_OTP',

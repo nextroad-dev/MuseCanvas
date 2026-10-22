@@ -38,14 +38,26 @@ export const API_ENDPOINTS = {
     remove: (id: string) => `${P}/canvases/${id}`,
     agent: {
       messages: (id: string) => `${P}/canvases/${id}/agent/messages`,
+      turn: (id: string, turnId: string) => `${P}/canvases/${id}/agent/turns/${turnId}`,
       history: (id: string) => `${P}/canvases/${id}/agent/history`,
       confirm: (id: string) => `${P}/canvases/${id}/agent/confirm`,
+      apply: (id: string) => `${P}/canvases/${id}/agent/apply`,
     },
+  },
+
+  canvasAgent: {
+    status: `${P}/canvas-agent/status`,
   },
 
   // 局部修改：multipart 图片编辑，成功时返回与 POST /generations 相同的 job DTO
   images: {
     edit: `${P}/images/edit`,
+  },
+
+  // 媒体对象读取与上传：URL 由服务端签名生成（HMAC 查询串），web 客户端从不自行拼接这些地址
+  media: {
+    object: `${P}/media/object`,
+    upload: `${P}/media/upload`,
   },
 
   jobs: {
@@ -77,6 +89,9 @@ export const API_ENDPOINTS = {
     smtpTest: `${P}/setup/smtp/test`,
     storage: `${P}/setup/storage`,
     storageTest: `${P}/setup/storage/test`,
+    // GET reports the active database driver and connection summary (no password); POST tests the connection
+    database: `${P}/setup/database`,
+    databaseTest: `${P}/setup/database/test`,
     runtime: `${P}/setup/runtime`,
     promptTemplatesImport: `${P}/setup/prompt-templates/import`,
     adminRequest: `${P}/setup/admin/request`,
@@ -124,5 +139,7 @@ export const API_ENDPOINTS = {
     promptTemplatesExport: `${P}/admin/prompt-templates/export`,
     promptOptimizationSettings: `${P}/admin/prompt-optimization-settings`,
     canvasAgentSettings: `${P}/admin/canvas-agent-settings`,
+    // GET reads both kind defaults; PATCH elects or clears them. Both admin-only.
+    mediaModelDefaults: `${P}/admin/media-model-defaults`,
   },
 } as const

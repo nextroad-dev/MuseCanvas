@@ -1,21 +1,31 @@
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { fail, ok } from '../../shared/http'
 import { jobDto } from '../../shared/dto'
 import { limited } from '../../shared/redis'
+import { createAssetSigner } from '../../shared/services'
 import { loadJobInputs, loadSingleJobInputs, userJobSelect } from '../../shared/pagination'
 import { retryPreparation } from '../../generation/job-retry'
 import { validateRetryRequest, type RetryRejection } from '../../generation/retry-validation'
 import type { AuthedContext } from '../../router/types'
 import { deleteJobWithAssets } from '../generations/handlers'
-import { jobOutputSelect } from './queries'
+import { jobOutputSelect, jobOutputsSelect } from './queries'
 
 /** GET /api/jobs — the owning user's most recent fifty jobs. */
 export async function listJobs(context: AuthedContext) {
   const result = await db().query(`${userJobSelect} WHERE j.created_by=$1 AND j.deleted_at IS NULL ORDER BY j.created_at DESC LIMIT 50`, [context.actor.id])
   const jobIds = result.rows.map(row => row.id)
   const inputsByJobId = await loadJobInputs(db(), jobIds)
+  const outputs = jobIds.length ? (await db().query(jobOutputsSelect, [jobIds])).rows : []
+  const outputsByJobId = new Map<string, Record<string, unknown>[]>()
+  for (const output of outputs) {
+    const jobId = output.job_id as string
+    const group = outputsByJobId.get(jobId) || []
+    group.push(output)
+    outputsByJobId.set(jobId, group)
+  }
+  const sign = createAssetSigner()
   return ok({
-    items: await Promise.all(result.rows.map(async row => jobDto(row, (await db().query(jobOutputSelect, [row.id])).rows, inputsByJobId[row.id as string] || []))),
+    items: await Promise.all(result.rows.map(row => jobDto(row, outputsByJobId.get(row.id as string) || [], inputsByJobId[row.id as string] || [], sign))),
     total: result.rowCount,
     hasMore: false,
   })

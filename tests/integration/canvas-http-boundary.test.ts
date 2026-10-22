@@ -33,7 +33,8 @@ test('production Next canvas routes reject anonymous access and invalid mutation
     ['GET', API_ENDPOINTS.canvases.list], ['POST', API_ENDPOINTS.canvases.create],
     ['GET', API_ENDPOINTS.canvases.detail(id)], ['PATCH', API_ENDPOINTS.canvases.update(id)],
     ['DELETE', API_ENDPOINTS.canvases.remove(id)], ['POST', API_ENDPOINTS.canvases.agent.messages(id)],
-    ['GET', API_ENDPOINTS.canvases.agent.history(id)], ['POST', API_ENDPOINTS.canvases.agent.confirm(id)],
+    ['GET', API_ENDPOINTS.canvases.agent.turn(id, id)], ['GET', API_ENDPOINTS.canvases.agent.history(id)], ['POST', API_ENDPOINTS.canvases.agent.confirm(id)],
+    ['POST', API_ENDPOINTS.canvases.agent.apply(id)], ['GET', API_ENDPOINTS.canvasAgent.status],
     ['GET', API_ENDPOINTS.admin.canvasAgentSettings], ['PATCH', API_ENDPOINTS.admin.canvasAgentSettings],
   ]
   try {

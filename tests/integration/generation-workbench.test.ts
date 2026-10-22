@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRequire } from 'node:module'
-import { buildJobConfigReuse } from '../../apps/web-next/src/features/generate/lib/job-config-reuse'
-import { cacheCreatedJob, prependCreatedJob } from '../../apps/web-next/src/shared/lib/created-job-cache'
-import { useGenerateUiStore } from '../../apps/web-next/src/shared/stores/generate-ui-store'
-import type { GenerationJob, ModelConfig } from '../../apps/web-next/src/shared/types'
+import { buildJobConfigReuse } from '../../apps/web/src/features/generate/lib/job-config-reuse'
+import { cacheCreatedJob, prependCreatedJob } from '../../apps/web/src/shared/lib/created-job-cache'
+import { useGenerateUiStore } from '../../apps/web/src/shared/stores/generate-ui-store'
+import type { GenerationJob, ModelConfig } from '../../apps/web/src/shared/types'
 
-const { QueryClient } = createRequire(new URL('../../apps/web-next/package.json', import.meta.url))('@tanstack/react-query')
+const { QueryClient } = createRequire(new URL('../../apps/web/package.json', import.meta.url))('@tanstack/react-query')
 const model = {
   id: 'image-model', modelKind: 'image', parameters: [
     { name: 'quality', type: 'enum', options: ['auto', 'high'], defaultValue: 'auto' },

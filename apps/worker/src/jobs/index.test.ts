@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { inspectInputImage, validateInputImages } from '../../../../packages/providers/src/core/image-input'
-import { NormalizedProviderError } from '../../../../packages/providers/src/index'
+import { inspectInputImage, validateInputImages } from '@musecanvas/providers/core/image-input'
+import { NormalizedProviderError } from '@musecanvas/providers'
 import { resolveMediaPlugin } from '../plugins/availability'
-import { classifySubmitError, isSynchronousPlugin, validateStoredInputImage } from './index'
+import { classifySubmitError, isSynchronousPlugin, readInputBody, validateStoredInputImage } from './index'
 import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
 import { isNonTerminalRunState, shouldCreateNewRun } from '../provider-state'
 
@@ -239,3 +239,25 @@ test('classifySubmitError keeps the diagnostic an uploaded bundle carries', () =
 function normalizeDiagnostic(error: unknown): Record<string, unknown> {
   return (error as NormalizedProviderError).diagnostic as Record<string, unknown>
 }
+
+
+test('input body deadline destroys a stalled S3 stream and releases its waiter', async () => {
+  const controller = new AbortController()
+  let destroyed = 0
+  const body = { transformToByteArray: () => new Promise<Uint8Array>(() => {}), destroy: () => { destroyed++ } }
+  const pending = readInputBody(body, controller.signal)
+  const error = new Error('STORAGE_OPERATION_TIMEOUT')
+  controller.abort(error)
+  await assert.rejects(pending, value => value === error)
+  assert.equal(destroyed, 1)
+})
+
+test('completed input body removes its abort listener', async () => {
+  const controller = new AbortController()
+  let destroyed = 0
+  const bytes = new Uint8Array([1, 2, 3])
+  const body = { transformToByteArray: async () => bytes, destroy: () => { destroyed++ } }
+  assert.equal(await readInputBody(body, controller.signal), bytes)
+  controller.abort()
+  assert.equal(destroyed, 0)
+})

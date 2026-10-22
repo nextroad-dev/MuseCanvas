@@ -21,7 +21,7 @@
 MuseCanvas
 ├── apps/
 │   ├── api/          # Next.js 15 (App Router) 核心后端服务 (REST API, 鉴权, 路由)
-│   ├── web-next/     # Next.js 15 (App Router, React 19) + Zustand + TanStack Query 混合渲染前端应用（唯一前端）
+│   ├── web/     # Next.js 15 (App Router, React 19) + Zustand + TanStack Query 混合渲染前端应用（唯一前端）
 │   └── worker/       # Redis Streams + 事务性 Outbox 异步任务消费端 (生成、轮询与维护任务)
 ├── packages/
 │   ├── contracts/    # 共享 DTO (纯 TS 类型)、错误码、类型契约与 API_ENDPOINTS 端点路径常量表 (最底游依赖，无运行时校验库)
@@ -42,9 +42,9 @@ MuseCanvas
 
 ---
 
-## 前端架构与状态设计规范 (Frontend Standards: web-next)
+## 前端架构与状态设计规范 (Frontend Standards: web)
 
-在开发与维护 `apps/web-next` 时，必须严格遵循以下混合渲染与状态管理准则：
+在开发与维护 `apps/web` 时，必须严格遵循以下混合渲染与状态管理准则：
 
 ### 1. 业务驱动的混合渲染矩阵 (Hybrid Rendering Matrix)
 - **公共营销与法律条款页（SSG 纯静态生成）**：
@@ -130,7 +130,7 @@ MuseCanvas
   - 专注于 `apps/worker` 队列消费逻辑与 `packages/providers` 外部集成。
   - 处理异步重试、幂等性、超时控制与任务状态流转。
 - **前端交互 Agent (Frontend Coder)**：
-  - 专注于 `apps/web-next`（Next.js 15 + React 19 + Zustand + TanStack Query）的组件、状态、路由与页面逻辑。
+  - 专注于 `apps/web`（Next.js 15 + React 19 + Zustand + TanStack Query）的组件、状态、路由与页面逻辑。
   - 严格保持与 `contracts` 定义的前后端交互类型一致，遵循混合渲染与双端 API 客户端隔离规范。
 - **代码审查与质检 Agent (Reviewer / QA)**：
   - 对变更实施独立审查，检查安全性、类型健壮性、边界用例覆盖与项目规范符合度。

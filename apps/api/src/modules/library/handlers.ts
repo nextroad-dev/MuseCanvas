@@ -1,7 +1,7 @@
-import { db } from '../../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import { decodeCursor, encodeCursor, boundedLimit } from '../../shared/pagination'
 import { fail, ok } from '../../shared/http'
-import { signedAssetUrl } from '../../shared/services'
+import { createAssetSigner, signedAssetUrl } from '../../shared/services'
 import type { AuthedContext } from '../../router/types'
 import { deleteJobWithAssets } from '../generations/handlers'
 import { libraryAssetDto } from './dto'
@@ -41,13 +41,15 @@ export async function listLibrary(context: AuthedContext) {
   const totalValues = values.slice(0, cursor ? -2 : undefined)
   const totalWhere = cursor ? conditions.slice(0, -1).join(' AND ') : where
   values.push(limit + 1)
-  const page = await db().query(`${LIBRARY_SELECT_COLUMNS}
+  const page = await db().query(`${LIBRARY_SELECT_COLUMNS},
+      to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
       ${LIBRARY_FROM_CLAUSE} WHERE ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $${values.length}`, values)
   const total = await db().query(`SELECT count(*)::int total ${LIBRARY_FROM_CLAUSE} WHERE ${totalWhere}`, totalValues)
   const hasMore = page.rows.length > limit
   const rows = page.rows.slice(0, limit)
+  const sign = createAssetSigner()
   return ok({
-    items: await Promise.all(rows.map(libraryAssetDto)),
+    items: await Promise.all(rows.map(row => libraryAssetDto(row, sign))),
     total: total.rows[0]?.total ?? rows.length,
     hasMore,
     nextCursor: hasMore && rows.length ? encodeCursor(rows[rows.length - 1]) : undefined,

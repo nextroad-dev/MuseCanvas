@@ -3,7 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { encryptApiKey } from '../../../packages/providers/src/index'
+import { encryptApiKey } from '@musecanvas/providers'
 
 process.env.APP_MASTER_KEY ||= '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 process.env.PROVIDER_CREDENTIALS_ENCRYPTION_KEY ||= 'test-worker-encryption-key'
@@ -106,6 +106,7 @@ test('output ingestion keys are deterministic per output index', () => {
 test('worker uses leases, XAUTOCLAIM, capacity reservation without sleep loops', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)))
   const jobsSrc = readFileSync(join(root, 'jobs', 'index.ts'), 'utf8')
+  const leaseSrc = readFileSync(join(root, 'jobs', 'lease.ts'), 'utf8')
   const queueSrc = readFileSync(join(root, 'queue', 'index.ts'), 'utf8')
   const maintenanceSrc = readFileSync(join(root, 'maintenance', 'index.ts'), 'utf8')
   assert.ok(!/setTimeout|setInterval|sleep\(/.test(jobsSrc), 'jobs must not sleep around provider operations')
@@ -113,7 +114,7 @@ test('worker uses leases, XAUTOCLAIM, capacity reservation without sleep loops',
   assert.ok(/xAutoClaim/i.test(queueSrc), 'queue must XAUTOCLAIM stale pending messages')
   assert.ok(/xAck/i.test(queueSrc), 'queue must acknowledge each message')
   assert.ok(/acquireModelCapacity/.test(jobsSrc), 'jobs must reserve capacity per model')
-  assert.ok(/acquireWorkerLease/.test(jobsSrc), 'jobs must use Postgres leases')
+  assert.ok(/withProviderLease/.test(jobsSrc) && /acquireWorkerLease/.test(leaseSrc), 'jobs must use Postgres leases')
   assert.ok(/encryptOpaqueState|decryptOpaqueState/.test(jobsSrc), 'jobs must encrypt opaque provider state')
   assert.ok(/stripOutputManifest/.test(jobsSrc), 'jobs must strip signed URLs from manifests')
   assert.ok(/openOutput/.test(jobsSrc), 'jobs must use bounded plugin.openOutput for ingestion')

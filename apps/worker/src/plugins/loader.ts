@@ -4,21 +4,20 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { GetObjectCommand } from '@aws-sdk/client-s3'
-import { db } from '../../../../packages/database/src/index'
+import { db } from '@musecanvas/database'
 import {
   formatPluginKey,
   globalPluginRegistry,
   PLUGIN_ARTIFACT_MAX_BYTES,
   scanPluginSource,
   validatePluginManifest,
-} from '../../../../packages/providers/src/index'
+} from '@musecanvas/providers'
 import type {
   AnyProviderManifest,
   LanguageProviderPlugin,
   MediaProviderPlugin,
-} from '../../../../packages/providers/src/index'
-import { getStorageClient } from '../shared/storage'
+} from '@musecanvas/providers'
+import { getStorageDriver, storageOperationSignal } from '../shared/storage'
 import { redactForLog } from '../provider-state'
 import {
   forgetPluginStatus,
@@ -138,14 +137,14 @@ export function pluginCachePath(digest: string, cacheDir?: string): string {
 }
 
 async function readArtifactFromStorage(key: string): Promise<Uint8Array> {
-  const { s3, bucket } = await getStorageClient()
-  const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
-  if (!res.Body) throw new PluginLoadRejection('PLUGIN_ARTIFACT_UNAVAILABLE', 'object has no body', false)
+  const driver = await getStorageDriver()
+  const res = await driver.open(key, storageOperationSignal())
+  if (!res.body) throw new PluginLoadRejection('PLUGIN_ARTIFACT_UNAVAILABLE', 'object has no body', false)
   // Bound before buffering: a tampered or duplicated key must not allocate freely.
-  if (res.ContentLength !== undefined && res.ContentLength > PLUGIN_ARTIFACT_MAX_BYTES) {
+  if (res.contentLength !== undefined && res.contentLength > PLUGIN_ARTIFACT_MAX_BYTES) {
     throw new PluginLoadRejection('PLUGIN_ARTIFACT_TOO_LARGE', `artifact exceeds ${PLUGIN_ARTIFACT_MAX_BYTES} bytes`)
   }
-  const bytes = await res.Body.transformToByteArray()
+  const bytes = await res.body.transformToByteArray()
   if (bytes.length > PLUGIN_ARTIFACT_MAX_BYTES) {
     throw new PluginLoadRejection('PLUGIN_ARTIFACT_TOO_LARGE', `artifact exceeds ${PLUGIN_ARTIFACT_MAX_BYTES} bytes`)
   }

@@ -1,8 +1,10 @@
+import { NextResponse } from 'next/server'
 import { fail, ok } from '../shared/http'
 import type { OAuthProvider } from '../auth/oauth'
 import { adminOAuthSettings, oauthProviderList } from '../modules/auth/oauth-settings'
 import { completeOAuthInvitation, handleOAuthCallback, startOAuth } from '../modules/auth/oauth-flow'
 import { handleSetupPost, setupConfig, setupStatus } from '../modules/setup/handlers'
+import { setupDatabaseStatus } from '../modules/setup/database'
 import { readiness } from '../modules/health/handlers'
 import { readSession, registrationMode, setRegistrationMode } from '../modules/session/handlers'
 import { listLinkedIdentities, startLink, unlinkIdentity } from '../modules/auth/account'
@@ -13,9 +15,11 @@ import { cancelJob, deleteJob, getJob, listJobs, retryJob } from '../modules/job
 import { deleteAsset, downloadAsset, listLibrary } from '../modules/library/handlers'
 import { createGeneration } from '../modules/generations/create'
 import { listCanvases, createCanvas, getCanvas, updateCanvas, deleteCanvas } from '../modules/canvases/handlers'
-import { postCanvasAgentMessages, getCanvasAgentHistory, postCanvasAgentConfirm } from '../modules/canvas-agent'
+import { postCanvasAgentMessages, getCanvasAgentHistory, getCanvasAgentTurn, postCanvasAgentConfirm, postCanvasAgentApply, getCanvasAgentStatus } from '../modules/canvases/agent'
 import { readCanvasAgentSettings, updateCanvasAgentSettings } from '../modules/admin/canvas-agent-settings'
+import { readMediaModelDefaults, updateMediaModelDefaults } from '../modules/admin/media-model-defaults'
 import { editImage } from '../modules/image-edit/handlers'
+import { receiveMediaUpload, serveMediaObject } from '../modules/media'
 import {
   completeGenerationUpload,
   createGenerationUpload,
@@ -69,7 +73,11 @@ import type { Route } from './types'
  * answer without ever consuming the request stream.
  */
 
-/** The setup wizard posts to these eleven paths; all public, all pre-body. */
+/** The media handlers answer with the platform `Response`; the route table speaks `NextResponse`. */
+const asNextResponse = (response: Response) =>
+  new NextResponse(response.body, { status: response.status, statusText: response.statusText, headers: response.headers })
+
+/** The setup wizard posts to these twelve paths; all public, all pre-body. */
 const SETUP_POST_PATHS = [
   'setup/complete',
   'setup/claim',
@@ -78,6 +86,7 @@ const SETUP_POST_PATHS = [
   'setup/smtp/test',
   'setup/storage',
   'setup/storage/test',
+  'setup/database/test',
   'setup/runtime',
   'setup/prompt-templates/import',
   'setup/admin/request',
@@ -97,10 +106,14 @@ export const GET_ROUTES: Route[] = [
   { path: 'health/ready', access: 'public', handler: () => readiness() },
   { path: 'setup/status', access: 'public', handler: () => setupStatus() },
   { path: 'setup/config', access: 'public', handler: context => setupConfig(context.request) },
+  // Public at the router; the handler applies the setup-session or admin check itself.
+  { path: 'setup/database', access: 'public', handler: context => setupDatabaseStatus(context.request) },
   { path: 'registration', access: 'public', handler: context => registrationMode(context) },
   { path: 'auth/oauth/providers', access: 'public', handler: async () => ok({ providers: await oauthProviderList() }) },
   { path: 'auth/oauth/:oauth/start', access: 'public', handler: context => startOAuth(context.params.oauth as OAuthProvider, 'login') },
   { path: 'auth/oauth/:oauth/callback', access: 'public', handler: context => handleOAuthCallback(context.request, context.params.oauth as OAuthProvider) },
+  // Authorized by the HMAC signature in the query string, not by a session.
+  { path: 'media/object', access: 'public', handler: async context => asNextResponse(await serveMediaObject(context.request)) },
 
   // --- the caller's own account -------------------------------------------
   { path: 'session', access: 'actor', handler: context => readSession(context) },
@@ -112,6 +125,8 @@ export const GET_ROUTES: Route[] = [
   { path: 'canvases', access: 'actor', handler: context => listCanvases(context) },
   { path: 'canvases/:id', access: 'actor', handler: context => getCanvas(context) },
   { path: 'canvases/:id/agent/history', access: 'actor', handler: context => getCanvasAgentHistory(context) },
+  { path: 'canvases/:id/agent/turns/:turnId', access: 'actor', handler: context => getCanvasAgentTurn(context) },
+  { path: 'canvas-agent/status', access: 'actor', handler: context => getCanvasAgentStatus(context) },
   { path: 'jobs', access: 'actor', handler: context => listJobs(context) },
   { path: 'jobs/:id', access: 'actor', handler: context => getJob(context) },
   { path: 'library', access: 'actor', handler: context => listLibrary(context) },
@@ -136,6 +151,7 @@ export const GET_ROUTES: Route[] = [
   { path: 'admin/prompt-templates/sets/:hexid', access: 'admin', handler: context => getPromptTemplateSetDetail(context.params.hexid) },
   { path: 'admin/prompt-optimization-settings', access: 'admin', handler: () => readPromptOptimizationSettings() },
   { path: 'admin/canvas-agent-settings', access: 'admin', handler: () => readCanvasAgentSettings() },
+  { path: 'admin/media-model-defaults', access: 'admin', handler: context => readMediaModelDefaults(context.actor) },
   { path: 'admin/jobs', access: 'admin', handler: context => listAdminJobs(context) },
   { path: 'admin/invitations', access: 'admin', handler: () => listInvitations() },
   { path: 'admin/oauth-providers', access: 'admin', handler: async () => ok(await adminOAuthSettings()) },
@@ -155,6 +171,9 @@ export const POST_ROUTES: Route[] = [
   { path: 'auth/otp/verify', access: 'public', handler: context => verifyOtp(context) },
   { path: 'auth/logout', access: 'public', handler: context => logout(context) },
   { path: 'auth/oauth/invitation', access: 'public', handler: async context => completeOAuthInvitation(context.request, await context.json()) },
+  // Signed like `media/object`. Browser-initiated, so it is same-origin and passes the origin check in
+  // pipeline.ts; it never calls `context.json()`, since the body is the raw upload.
+  { path: 'media/upload', access: 'public', handler: async context => asNextResponse(await receiveMediaUpload(context.request)) },
 
   // --- authenticated ------------------------------------------------------
   { path: 'generation-uploads', access: 'actor', handler: async context => createGenerationUpload(context.actor, await context.json()) },
@@ -163,6 +182,7 @@ export const POST_ROUTES: Route[] = [
   { path: 'canvases', access: 'actor', handler: context => createCanvas(context) },
   { path: 'canvases/:id/agent/messages', access: 'actor', handler: context => postCanvasAgentMessages(context) },
   { path: 'canvases/:id/agent/confirm', access: 'actor', handler: context => postCanvasAgentConfirm(context) },
+  { path: 'canvases/:id/agent/apply', access: 'actor', handler: context => postCanvasAgentApply(context) },
   // Multipart like the plugin uploads above, and it never calls `context.json()`:
   // the source image and the mask arrive as file parts.
   { path: 'images/edit', access: 'actor', handler: context => editImage(context) },
@@ -183,6 +203,7 @@ export const POST_ROUTES: Route[] = [
 export const PATCH_ROUTES: Route[] = [
   { path: 'canvases/:id', access: 'actor', handler: context => updateCanvas(context) },
   { path: 'admin/canvas-agent-settings', access: 'admin', handler: async context => updateCanvasAgentSettings(context.actor, await context.json()) },
+  { path: 'admin/media-model-defaults', access: 'admin', handler: async context => updateMediaModelDefaults(context.actor, await context.json()) },
   { path: 'admin/registration', access: 'admin', handler: context => setRegistrationMode(context) },
   { path: 'admin/prompt-optimization-settings', access: 'admin', handler: async context => updatePromptOptimizationSettings(context.actor, await context.json()) },
   // The old single regex accepted both the bare id and the `/status` alias. Two

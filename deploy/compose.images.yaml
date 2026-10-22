@@ -9,6 +9,7 @@ name: musecanvas
 
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: musecanvas
@@ -24,6 +25,7 @@ services:
       retries: 20
 
   redis:
+    restart: unless-stopped
     image: redis:7.4-alpine
     command: [redis-server, --appendonly, "yes"]
     volumes:
@@ -35,6 +37,7 @@ services:
       retries: 20
 
   api:
+    restart: unless-stopped
     image: ghcr.io/nextroad-dev/musecanvas-api:${MUSECANVAS_IMAGE_TAG:-latest}
     depends_on:
       postgres:
@@ -43,8 +46,25 @@ services:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
+    volumes:
+      - media_data:/data/media
     environment: &backend-env
       NODE_ENV: production
+      SETUP_CLAIM_DELIVERY: ${SETUP_CLAIM_DELIVERY:-}
+      SETUP_CLAIM_REQUIRED: ${SETUP_CLAIM_REQUIRED:-}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-12}
+      DATABASE_CONNECTION_TIMEOUT_MS: ${DATABASE_CONNECTION_TIMEOUT_MS:-5000}
+      DATABASE_IDLE_TIMEOUT_MS: ${DATABASE_IDLE_TIMEOUT_MS:-30000}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_LOCK_TIMEOUT_MS: ${DATABASE_LOCK_TIMEOUT_MS:-5000}
+      DATABASE_IDLE_TRANSACTION_TIMEOUT_MS: ${DATABASE_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
+      REDIS_CONNECT_TIMEOUT_MS: ${REDIS_CONNECT_TIMEOUT_MS:-1000}
+      REDIS_COMMAND_TIMEOUT_MS: ${REDIS_COMMAND_TIMEOUT_MS:-1000}
+      WORKER_REDIS_COMMAND_TIMEOUT_MS: ${WORKER_REDIS_COMMAND_TIMEOUT_MS:-5000}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      WORKER_STORAGE_TIMEOUT_MS: ${WORKER_STORAGE_TIMEOUT_MS:-60000}
+      STREAM_RETENTION_SECONDS: ${STREAM_RETENTION_SECONDS:-604800}
+      STREAM_TRIM_BATCH_SIZE: ${STREAM_TRIM_BATCH_SIZE:-1000}
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
       REDIS_URL: redis://redis:6379
       APP_MASTER_KEY: ${APP_MASTER_KEY:?APP_MASTER_KEY is required}
@@ -62,6 +82,24 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       OAUTH_CREDENTIALS_ENCRYPTION_KEY: ${OAUTH_CREDENTIALS_ENCRYPTION_KEY:-}
       PROVIDER_CREDENTIALS_ENCRYPTION_KEY: ${PROVIDER_CREDENTIALS_ENCRYPTION_KEY:-}
+      # Object storage (S3-compatible) and SMTP fall back to these env values when
+      # no database row exists yet (see apps/api/src/modules/settings/runtime.ts).
+      # Fresh image-based installs set them in .env; the /setup wizard can later
+      # override per deployment (DB rows take precedence).
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_SIGNED_URL_TTL: ${S3_SIGNED_URL_TTL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-}
 
     healthcheck:
       test: [CMD, wget, -qO-, http://localhost:3001/api/health/ready]
@@ -96,16 +134,27 @@ services:
       APP_MASTER_KEY: ${APP_MASTER_KEY:?APP_MASTER_KEY is required}
 
   worker:
+    restart: unless-stopped
     image: ghcr.io/nextroad-dev/musecanvas-worker:${MUSECANVAS_IMAGE_TAG:-latest}
     depends_on:
       api:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
+    volumes:
+      - media_data:/data/media
     environment: *backend-env
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3010/health', {signal: AbortSignal.timeout(2000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 120s
+    stop_grace_period: 30s
 
-  web-next:
-    image: ghcr.io/nextroad-dev/musecanvas-web-next:${MUSECANVAS_IMAGE_TAG:-latest}
+  web:
+    restart: unless-stopped
+    image: ghcr.io/nextroad-dev/musecanvas-web:${MUSECANVAS_IMAGE_TAG:-latest}
     environment:
       INTERNAL_API_BASE_URL: http://api:3001
     depends_on:
@@ -119,11 +168,12 @@ services:
       start_period: 20s
 
   nginx:
+    restart: unless-stopped
     image: ghcr.io/nextroad-dev/musecanvas-nginx:${MUSECANVAS_IMAGE_TAG:-latest}
     depends_on:
       api:
         condition: service_healthy
-      web-next:
+      web:
         condition: service_healthy
     ports:
       - "${MUSECANVAS_HTTP_PORT:-18080}:80"
@@ -132,3 +182,4 @@ volumes:
   postgres_data: {}
   postgres_socket: {}
   redis_data: {}
+  media_data: {}

@@ -1,4 +1,4 @@
-import { db, transaction } from '../../../../../packages/database/src/index'
+import { db, transaction } from '@musecanvas/database'
 import { writeAudit } from '../../shared/audit'
 import { userDto } from '../../shared/dto'
 import { fail, ok } from '../../shared/http'
@@ -29,7 +29,9 @@ export async function listUsers(context: AuthedContext) {
   const totalValues = values.slice(0, cursor ? -2 : undefined)
   const totalWhere = cursor ? conditions.slice(0, -1).join(' AND ') : where
   values.push(limit + 1)
-  const page = await db().query(`SELECT u.id,u.email,u.role,u.status,u.created_at FROM users u WHERE ${where.replaceAll('deleted_at', 'u.deleted_at').replaceAll('created_at', 'u.created_at').replaceAll('(u.created_at,id)', '(u.created_at,u.id)')} ORDER BY u.created_at DESC,u.id DESC LIMIT $${values.length}`, values)
+  const page = await db().query(`SELECT u.id,u.email,u.role,u.status,u.created_at,
+      to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
+    FROM users u WHERE ${where.replaceAll('deleted_at', 'u.deleted_at').replaceAll('created_at', 'u.created_at').replaceAll('(u.created_at,id)', '(u.created_at,u.id)')} ORDER BY u.created_at DESC,u.id DESC LIMIT $${values.length}`, values)
   const total = await db().query(`SELECT count(*)::int total FROM users WHERE ${totalWhere}`, totalValues)
   const hasMore = page.rows.length > limit
   const rows = page.rows.slice(0, limit)

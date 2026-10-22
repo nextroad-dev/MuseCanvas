@@ -3,11 +3,11 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import * as canvas from '@musecanvas/contracts'
 import { DELETE_ROUTES, GET_ROUTES, PATCH_ROUTES, POST_ROUTES } from './routes'
-import { agentStream } from '../modules/canvas-agent/sse'
+import { agentStream } from '../modules/canvases/agent/sse'
 import { NextRequest } from 'next/server'
 import type pg from 'pg'
-import { createCanvasAgentHandlers } from '../modules/canvas-agent/handlers'
-import { PgAgentStore } from '../modules/canvas-agent/store'
+import { createCanvasAgentHandlers } from '../modules/canvases/agent/handlers'
+import { PgAgentStore } from '../modules/canvases/agent/store'
 import { listCanvases } from '../modules/canvases/handlers'
 import { mutationOriginValid } from '../shared/http'
 import type { AuthedContext, Route } from './types'
@@ -144,7 +144,9 @@ const parsers: Record<string, (value: unknown) => { success: boolean }> = {
   UpdateCanvasRequest: canvas.parseUpdateCanvasRequest,
   CanvasAgentMessageRequest: canvas.parseCanvasAgentMessageRequest,
   CanvasAgentConfirmRequest: canvas.parseCanvasAgentConfirmRequest,
+  CanvasAgentApplyRequest: canvas.parseCanvasAgentApplyRequest,
   UpdateCanvasAgentSettingsRequest: canvas.parseUpdateCanvasAgentSettingsRequest,
+  UpdateMediaModelDefaultsRequest: canvas.parseUpdateMediaModelDefaultsRequest,
   CanvasNode: canvas.parseCanvasNode,
   CanvasScene: canvas.parseCanvasScene,
   CanvasOp: canvas.parseCanvasOp,
@@ -166,19 +168,19 @@ test('canvas-openapi: native JSON/YAML 1.2, all references resolve and operation
   assert.ok(operations.every(item => item.operation.operationId.length > 0))
 })
 
-test('canvas-openapi: six paths/ten methods biject with canvas/settings routes, endpoints and access', () => {
+test('canvas-openapi: canvas and recovery routes biject with canvas/settings routes, endpoints and access', () => {
   const registered = tables.flatMap(([method, routes]) => routes
-    .filter(route => route.path === 'canvases' || route.path.startsWith('canvases/') || route.path === 'admin/canvas-agent-settings')
-    .map(route => ({ method, path: `/api/${route.path.replaceAll(':id', '{id}')}`, access: route.access })))
-  assert.equal(Object.keys(document.paths).length, 6)
-  assert.equal(operations.length, 10)
+    .filter(route => route.path === 'canvases' || route.path.startsWith('canvases/') || route.path === 'admin/canvas-agent-settings' || route.path === 'admin/media-model-defaults')
+    .map(route => ({ method, path: `/api/${route.path.replace(/:([A-Za-z]+)/g, '{$1}')}`, access: route.access })))
+  assert.equal(Object.keys(document.paths).length, 9)
+  assert.equal(operations.length, 14)
   const key = (item: { method: string; path: string }) => `${item.method} ${item.path}`
   assert.deepEqual(operations.map(key).sort(), registered.map(key).sort())
   const endpoints = canvas.API_ENDPOINTS
   const declared = [endpoints.canvases.list, endpoints.canvases.create,
     endpoints.canvases.detail('{id}'), endpoints.canvases.update('{id}'), endpoints.canvases.remove('{id}'),
     endpoints.canvases.agent.messages('{id}'), endpoints.canvases.agent.history('{id}'),
-    endpoints.canvases.agent.confirm('{id}'), endpoints.admin.canvasAgentSettings]
+    endpoints.canvases.agent.turn('{id}', '{turnId}'), endpoints.canvases.agent.confirm('{id}'), endpoints.canvases.agent.apply('{id}'), endpoints.admin.canvasAgentSettings, endpoints.admin.mediaModelDefaults]
   assert.deepEqual(Object.keys(document.paths).sort(), [...new Set(declared)].sort())
   assert.deepEqual(document.security, [{ museSession: [] }])
   const scheme = document.components.securitySchemes.museSession as Record<string, unknown>
@@ -202,8 +204,11 @@ test('canvas-openapi: exact HTTP status sets, envelopes and error codes for the 
     deleteCanvas: [200, 400, 401, 403, 404, 429],
     postCanvasAgentMessages: [200, 400, 401, 403, 404, 409, 429, 503],
     getCanvasAgentHistory: [200, 400, 401, 403, 404, 429, 503],
+    getCanvasAgentTurn: [200, 400, 401, 403, 404, 429, 503],
     postCanvasAgentConfirm: [200, 400, 401, 403, 404, 409, 429, 503],
+    postCanvasAgentApply: [200, 400, 401, 403, 404, 409, 429, 503],
     readCanvasAgentSettings: [200, 401, 403, 503], updateCanvasAgentSettings: [200, 400, 401, 403, 409, 503],
+    readMediaModelDefaults: [200, 401, 403], updateMediaModelDefaults: [200, 400, 401, 403, 503],
   }
   assert.deepEqual(schemas.CanvasErrorCode!.enum, Object.values(canvas.CanvasErrorCode))
   for (const { operation, method } of operations) {

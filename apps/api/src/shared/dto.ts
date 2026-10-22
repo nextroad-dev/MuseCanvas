@@ -1,5 +1,5 @@
-import { signedAssetUrl } from './services'
-import { hasStoredCredentialSecret, type StoredCredentialFields } from '../../../../packages/providers/src/index'
+import { createAssetSigner, type AssetSigner } from './services'
+import { hasStoredCredentialSecret, type StoredCredentialFields } from '@musecanvas/providers'
 import { enumOptionValues, validateModelCapabilities } from '@musecanvas/contracts'
 import type {
   GenerationMode,
@@ -197,6 +197,7 @@ export const publicModelDto = (row: Record<string, unknown>): PublicModelDto => 
     qualityOptions: legacy.qualityOptions,
     enabled: Boolean(row.enabled),
     sortOrder: Number(row.sort_order || 0),
+    isDefault: Boolean(row.is_default),
   }
 }
 
@@ -264,7 +265,7 @@ function outputDto(output: OutputRow) {
   }
 }
 
-export async function jobDto(row: Record<string, unknown>, outputs: Record<string, unknown>[] = [], inputs: Record<string, unknown>[] = []) {
+export async function jobDto(row: Record<string, unknown>, outputs: Record<string, unknown>[] = [], inputs: Record<string, unknown>[] = [], sign: AssetSigner = createAssetSigner()) {
   const inputPrompt = (row.input_prompt as string) || (row.prompt as string)
   const canReadFinalPrompt = Boolean(row.allow_user_read_final_prompt)
   const rawInputs = (inputs && inputs.length > 0) ? inputs : ((row.input_images as Record<string, unknown>[]) || (row.inputs as Record<string, unknown>[]) || [])
@@ -279,6 +280,10 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
     ? row.provider_error as { detail?: unknown }
     : undefined
   const providerDetail = typeof providerError?.detail === 'string' ? providerError.detail.trim() : ''
+  // Reuse one signature across the current and legacy input fields.
+  const inputUrls = await Promise.all(rawInputs.map(async input =>
+    (input.imageUrl as string) || (input.object_key ? await sign(input.object_key as string) : '')
+  ))
   return {
     id: row.id,
     createdBy: row.created_by,
@@ -328,8 +333,8 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
           source,
           role: (input.role as string) || 'reference_image',
           position: input.position !== undefined ? Number(input.position) : index,
-          imageUrl: (input.imageUrl as string) || (input.object_key ? await signedAssetUrl(input.object_key as string) : ''),
-          url: (input.imageUrl as string) || (input.object_key ? await signedAssetUrl(input.object_key as string) : ''),
+          imageUrl: inputUrls[index],
+          url: inputUrls[index],
           mimeType: (input.mime_type as string) || (input.mimeType as string),
           width: (input.width as number) || 0,
           height: (input.height as number) || 0,
@@ -339,9 +344,9 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
     ),
     // Legacy alias preserved for existing image clients.
     inputImages: await Promise.all(
-      rawInputs.map(async (input: Record<string, unknown>) => ({
+      rawInputs.map(async (input: Record<string, unknown>, index: number) => ({
         id: input.id as string,
-        imageUrl: (input.imageUrl as string) || (input.object_key ? await signedAssetUrl(input.object_key as string) : ''),
+        imageUrl: inputUrls[index],
         mimeType: (input.mime_type as string) || (input.mimeType as string),
         width: (input.width as number) || 0,
         height: (input.height as number) || 0,
@@ -352,10 +357,10 @@ export async function jobDto(row: Record<string, unknown>, outputs: Record<strin
       outputs.map(async output => {
         const signed = output.signed_url
           ? String(output.signed_url)
-          : await signedAssetUrl(output.object_key as string)
+          : await sign(output.object_key as string)
         let posterSigned: string | undefined
         if (output.poster_object_key) {
-          posterSigned = await signedAssetUrl(output.poster_object_key as string)
+          posterSigned = await sign(output.poster_object_key as string)
         }
         return outputDto({ ...output, signed_url: signed, poster_signed_url: posterSigned || output.poster_signed_url })
       })

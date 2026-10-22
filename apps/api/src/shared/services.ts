@@ -1,14 +1,9 @@
-import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
+import { MAX_MASK_BYTES } from '@musecanvas/contracts'
 import nodemailer from 'nodemailer'
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  HeadBucketCommand,
-  PutObjectCommand,
-  S3Client,
-} from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { PutObjectCommand } from '@aws-sdk/client-s3'
+import { StorageConfigError, isStorageConfigError, type ResolvedStorageConfig } from '@musecanvas/database'
+import { createStorageDriver, probeStorageDriver, STORAGE_OBJECT_TOO_LARGE, StorageDriverError, type StorageDriver } from './storage'
 import {
   resolveSmtpSettings,
   resolveStorageSettings,
@@ -118,38 +113,6 @@ export async function verifySmtpConnection(explicit?: SmtpExplicitConfig, timeou
   }
 }
 
-interface StorageEffective {
-  endpoint: string | null
-  publicEndpoint: string | null
-  region: string
-  bucket: string
-  accessKeyId: string
-  secretAccessKey: string
-  signedUrlTtlSeconds: number
-}
-
-async function effectiveStorage(explicit?: StorageExplicitConfig): Promise<StorageEffective> {
-  const base = await resolveStorageSettings().catch((): ResolvedStorageSettings | null => null)
-  return {
-    endpoint: explicit?.endpoint ?? base?.endpoint ?? null,
-    publicEndpoint: explicit?.publicEndpoint ?? base?.publicEndpoint ?? null,
-    region: explicit?.region ?? base?.region ?? 'us-east-1',
-    bucket: explicit?.bucket ?? base?.bucket ?? 'musecanvas',
-    accessKeyId: explicit?.accessKeyId ?? base?.accessKeyId ?? '',
-    secretAccessKey: explicit?.secretAccessKey ?? base?.secretAccessKey ?? '',
-    signedUrlTtlSeconds: explicit?.signedUrlTtlSeconds ?? base?.signedUrlTtlSeconds ?? 900,
-  }
-}
-
-function storageClient(endpoint: string | null, region: string, accessKeyId: string, secretAccessKey: string): S3Client {
-  return new S3Client({
-    endpoint: endpoint ?? undefined,
-    region,
-    forcePathStyle: true,
-    credentials: { accessKeyId, secretAccessKey },
-  })
-}
-
 function withTimeout<T>(work: Promise<T>, timeoutMs: number, code: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<T>((_, reject) => {
@@ -160,12 +123,73 @@ function withTimeout<T>(work: Promise<T>, timeoutMs: number, code: string): Prom
   })
 }
 
-export async function signedAssetUrl(objectKey: string, explicit?: StorageExplicitConfig): Promise<string> {
-  const cfg = await effectiveStorage(explicit)
-  const client = storageClient(cfg.publicEndpoint || cfg.endpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
-  return getSignedUrl(client, new GetObjectCommand({ Bucket: cfg.bucket, Key: objectKey }), {
-    expiresIn: cfg.signedUrlTtlSeconds,
+/**
+ * Effective object-storage configuration for a call. Ambient calls use the saved
+ * driver: 'local' yields a local config, anything else the S3 fields (with the
+ * historical defaults). An explicit config is always S3 and overlays the ambient
+ * S3 fields, so a setup test still works while the saved driver is 'local'.
+ */
+async function effectiveStorage(explicit?: StorageExplicitConfig): Promise<ResolvedStorageConfig> {
+  const base = await resolveStorageSettings().catch((error: unknown): ResolvedStorageSettings | null => {
+    // Ambient config errors fail closed. An explicit setup-test config carries its own values and does not need them.
+    if (!explicit && isStorageConfigError(error)) throw error
+    return null
   })
+  if (!explicit && base?.driver === 'local') {
+    if (!base.localRoot) throw new StorageConfigError('local storage root is not configured')
+    return {
+      driver: 'local',
+      source: 'database',
+      configured: true,
+      root: base.localRoot,
+      signedUrlTtlSeconds: base.signedUrlTtlSeconds,
+      revision: base.revision,
+    }
+  }
+  const endpoint = explicit?.endpoint ?? base?.endpoint ?? null
+  const publicEndpoint = explicit?.publicEndpoint ?? base?.publicEndpoint ?? null
+  const bucket = explicit?.bucket ?? base?.bucket ?? 'musecanvas'
+  const accessKeyId = explicit?.accessKeyId ?? base?.accessKeyId ?? ''
+  const secretAccessKey = explicit?.secretAccessKey ?? base?.secretAccessKey ?? ''
+  return {
+    driver: 's3',
+    source: base ? 'database' : 'environment',
+    configured: Boolean((endpoint || publicEndpoint) && bucket && accessKeyId && secretAccessKey),
+    endpoint,
+    publicEndpoint,
+    region: explicit?.region ?? base?.region ?? 'us-east-1',
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    signedUrlTtlSeconds: explicit?.signedUrlTtlSeconds ?? base?.signedUrlTtlSeconds ?? 900,
+    forcePathStyle: true,
+    revision: base?.revision ?? 0,
+  }
+}
+
+function isPreconditionFailure(error: unknown): boolean {
+  const status = (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode
+  return status === 409 || status === 412
+}
+
+export type AssetSigner = (objectKey: string) => Promise<string>
+
+/** Request-local only: settings and SDK client are shared, signed URLs are not
+ * cached across requests, users, or a credential/configuration change. */
+export function createAssetSigner(explicit?: StorageExplicitConfig): AssetSigner {
+  let initialized: Promise<{ driver: StorageDriver; ttlSeconds: number }> | undefined
+  return async objectKey => {
+    initialized ??= effectiveStorage(explicit).then(config => ({
+      driver: createStorageDriver(config),
+      ttlSeconds: config.signedUrlTtlSeconds,
+    }))
+    const { driver, ttlSeconds } = await initialized
+    return driver.signRead(objectKey, ttlSeconds)
+  }
+}
+
+export async function signedAssetUrl(objectKey: string, explicit?: StorageExplicitConfig): Promise<string> {
+  return createAssetSigner(explicit)(objectKey)
 }
 
 export async function createUploadPresignedPost(
@@ -175,24 +199,8 @@ export async function createUploadPresignedPost(
   expiresInSeconds = 900,
   explicit?: StorageExplicitConfig,
 ): Promise<{ url: string; fields: Record<string, string> }> {
-  const cfg = await effectiveStorage(explicit)
-  const client = storageClient(cfg.publicEndpoint || cfg.endpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
-  const result = await createPresignedPost(client, {
-    Bucket: cfg.bucket,
-    Key: objectKey,
-    Conditions: [
-      ['content-length-range', 1, maxSizeBytes],
-      { 'Content-Type': mimeType },
-    ],
-    Fields: {
-      'Content-Type': mimeType,
-    },
-    Expires: expiresInSeconds,
-  })
-  return {
-    url: result.url,
-    fields: result.fields,
-  }
+  const driver = createStorageDriver(await effectiveStorage(explicit))
+  return driver.signUpload(objectKey, mimeType, maxSizeBytes, expiresInSeconds)
 }
 
 /**
@@ -214,77 +222,64 @@ export async function putPrivateS3ObjectBytes(
   contentType = 'application/octet-stream',
   explicit?: StorageExplicitConfig,
 ): Promise<void> {
-  const cfg = await effectiveStorage(explicit)
-  const client = storageClient(cfg.endpoint || cfg.publicEndpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
-  await client.send(new PutObjectCommand({ Bucket: cfg.bucket, Key: objectKey, Body: bytes, ContentType: contentType }))
+  const driver = createStorageDriver(await effectiveStorage(explicit))
+  await driver.putBytes(objectKey, bytes, contentType)
+}
+
+function assertSameReservedMask(existing: Buffer, bytes: Buffer): void {
+  if (existing.length !== bytes.length || !existing.equals(bytes)
+    || createHash('sha256').update(existing).digest('hex') !== createHash('sha256').update(bytes).digest('hex')) throw new Error('PREPARATION_ARTIFACT_CONFLICT')
+}
+
+/** Reserved Agent masks are immutable, even when a stale preparation resumes.
+ * Only conditional conflicts may be read back. No unconditional retry or delete.
+ * `ports` is the test seam for the raw S3 conditional PUT; production uses the driver. */
+export async function putReservedImageMask(objectKey: string, bytes: Buffer, ports?: {
+  bucket: string; put: (command: PutObjectCommand) => Promise<unknown>; read: (maxBytes: number) => Promise<Buffer>
+}): Promise<void> {
+  if (!bytes.length || bytes.length > MAX_MASK_BYTES) throw new Error('MASK_BYTE_LIMIT_EXCEEDED')
+  if (ports) {
+    try {
+      await ports.put(new PutObjectCommand({ Bucket: ports.bucket, Key: objectKey, Body: bytes, ContentType: 'image/png', IfNoneMatch: '*' }))
+    } catch (error) {
+      if (!isPreconditionFailure(error)) throw error
+      assertSameReservedMask(await ports.read(MAX_MASK_BYTES), bytes)
+    }
+    return
+  }
+  const driver = createStorageDriver(await effectiveStorage())
+  const outcome = await driver.putIfAbsent(objectKey, bytes, 'image/png')
+  if (outcome === 'exists') {
+    const existing = await driver.getBytes(objectKey, MAX_MASK_BYTES).catch((error: unknown) => {
+      if (error instanceof StorageDriverError && error.code === STORAGE_OBJECT_TOO_LARGE) throw new Error('MASK_BYTE_LIMIT_EXCEEDED')
+      throw error
+    })
+    assertSameReservedMask(existing, bytes)
+  }
 }
 
 export async function getPrivateS3ObjectBytes(
   objectKey: string,
   explicit?: StorageExplicitConfig,
 ): Promise<Buffer> {
-  const cfg = await effectiveStorage(explicit)
-  const client = storageClient(cfg.endpoint || cfg.publicEndpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
-  const response = await client.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: objectKey }))
-  if (!response.Body) throw new Error('S3_OBJECT_EMPTY')
-  const bytes = await response.Body.transformToByteArray()
-  return Buffer.from(bytes)
+  const driver = createStorageDriver(await effectiveStorage(explicit))
+  return driver.getBytes(objectKey)
 }
 
 export async function deleteS3Object(objectKey: string, explicit?: StorageExplicitConfig): Promise<void> {
-  const cfg = await effectiveStorage(explicit)
-  const client = storageClient(cfg.endpoint || cfg.publicEndpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
-  await client.send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: objectKey }))
+  const driver = createStorageDriver(await effectiveStorage(explicit))
+  await driver.delete(objectKey)
 }
 
 /**
- * Storage round-trip check: HeadBucket plus a temporary Put/Get/Delete cycle.
- * Used by the setup storage test path with the submitted config. Failed
- * checks throw coded errors only — raw upstream text never propagates — and
- * the temporary object is removed best-effort. Nothing is persisted here.
+ * Storage round-trip check with the submitted (or stored) configuration. Failed
+ * checks throw a coded error only: raw upstream text never propagates. Nothing is
+ * persisted here. The driver owns the probe, so S3 and local share one contract.
  */
 export async function testStorageConnection(
   explicit?: StorageExplicitConfig,
   timeoutMs = 20000,
 ): Promise<void> {
-  const cfg = await effectiveStorage(explicit)
-  if (!cfg.bucket || !cfg.accessKeyId || !cfg.secretAccessKey) throw new Error('STORAGE_TEST_FAILED')
-  const client = storageClient(cfg.endpoint || cfg.publicEndpoint, cfg.region, cfg.accessKeyId, cfg.secretAccessKey)
-  const key = `setup-tests/${randomUUID()}.txt`
-  try {
-    await withTimeout(client.send(new HeadBucketCommand({ Bucket: cfg.bucket })), timeoutMs, 'STORAGE_TEST_FAILED')
-    await withTimeout(
-      client.send(new PutObjectCommand({
-        Bucket: cfg.bucket,
-        Key: key,
-        Body: 'musecanvas-setup-test',
-        ContentType: 'text/plain',
-      })),
-      timeoutMs,
-      'STORAGE_TEST_FAILED',
-    )
-    const got = await withTimeout(
-      client.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key })),
-      timeoutMs,
-      'STORAGE_TEST_FAILED',
-    )
-    try {
-      await got.Body?.transformToByteArray()
-    } catch {
-      throw new Error('STORAGE_TEST_FAILED')
-    }
-    await withTimeout(
-      client.send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: key })),
-      timeoutMs,
-      'STORAGE_TEST_FAILED',
-    )
-  } catch (error) {
-    try {
-      await client.send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: key }))
-    } catch {
-      // Best-effort cleanup of the temporary probe object.
-    }
-    if (error instanceof Error && error.message === 'STORAGE_TEST_FAILED') throw error
-    throw new Error('STORAGE_TEST_FAILED')
-  }
+  const result = await probeStorageDriver(await effectiveStorage(explicit), timeoutMs)
+  if (!result.ok) throw new Error('STORAGE_TEST_FAILED')
 }

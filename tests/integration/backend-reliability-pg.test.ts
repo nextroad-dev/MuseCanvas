@@ -34,7 +34,7 @@ test('isolated PostgreSQL: migrations, leases, rollback, microseconds and index 
   const report: Record<string, unknown> = { engine: 'PostgreSQL 17', fixture: true }
   try {
     const migration = await runMigrations({ pool })
-    assert.equal(migration.latest, '0039')
+    assert.equal(migration.latest, '0040')
     assert.deepEqual((await runMigrations({ pool })).applied, [])
     const owners = (await pool.query("INSERT INTO users(email) SELECT 'fixture-'||g||'@example.invalid' FROM generate_series(1,100) g RETURNING id")).rows.map(row => String(row.id))
     const actor = owners[0]!

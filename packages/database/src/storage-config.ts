@@ -23,7 +23,7 @@ export const STORAGE_SIGNED_URL_TTL_DEFAULT_SECONDS = 900
  * (exact match on 'INVALID_CONFIG'). The human-readable cause is in `reason`.
  */
 export class StorageConfigError extends Error {
-  readonly code: 'INVALID_CONFIG' = 'INVALID_CONFIG'
+  readonly code = 'INVALID_CONFIG' as const
   readonly reason: string
   constructor(reason: string) {
     super('INVALID_CONFIG')

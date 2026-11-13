@@ -1,38 +1,23 @@
 'use client'
 
-import { createContext, isValidElement, useContext } from 'react'
-import type { ReactNode, Ref, ThHTMLAttributes, TdHTMLAttributes } from 'react'
+import { createContext, useContext, isValidElement } from 'react'
+import type { ReactNode, Ref, TdHTMLAttributes, ThHTMLAttributes } from 'react'
 import { cn } from '@/shared/lib/cn'
 import { Card } from './card'
 
 /**
- * Table primitives for the admin surface.
+ * 后台表格原语（画板 07/08）。
  *
- * Before this module every admin view re-declared the same shell — `Card` +
- * `overflow-x-auto` + `<table>` + `sr-only` caption + a tonal `thead` + a
- * `divide-y` `tbody` — and then repeated `px-4 py-3` on every cell. The padding,
- * the row rhythm and the header treatment are one decision each, so they live
- * here instead of in seven files.
+ * 每个后台页面曾经都重复声明同一层壳（卡片 + `overflow-x-auto` + `<table>` +
+ * `sr-only` caption + 弱色表头 + 逐格 `px-4 py-3`），所以内边距、行节奏与表头样式
+ * 各自只在这里决定一次；密度通过 context 传，调用方只写一次。
  *
- * Two densities, because the app really has two tables:
- *  · `default` — the data grid: 40px row rhythm, tonal header, hairline row
- *    rules, colour-only row hover. This is `DataTable`.
- *  · `dense` — the manifest/code listing (a plugin's file list): `text-xs`, mono
- *    body, no header fill, no row rules, no hover, tighter `py-1`. It sits inside
- *    an already-styled disclosure, so it uses the bare `TableFrame`, never the
- *    `Card`.
- *
- * Density rides a context (same approach as `Card`'s density) so a call site
- * states it once on the frame and never threads it through every cell. The
- * alternative — a `density` prop on each of the six child components — would be
- * six chances to forget one and silently ship a half-dense table.
- *
- * Accessibility is not optional and is therefore baked in rather than left to the
- * caller: `caption` is required, header cells always carry `scope="col"`, the body
- * owns `aria-busy`, and sortable columns get `aria-sort` on the header cell.
+ * 可访问性内置而不是留给调用方：`caption` 必填、表头单元格始终 `scope="col"`、
+ * body 自带 `aria-busy`、可排序列有 `aria-sort`；行 hover 默认关闭，只有整行可点
+ * 的表格显式开启，静态表格不会暗示可操作。
  */
 
-type TableDensity = 'default' | 'dense'
+export type TableDensity = 'default' | 'dense'
 
 interface TableContextValue {
   density: TableDensity
@@ -55,14 +40,13 @@ const headClass: Record<TableDensity, string> = {
 }
 
 const bodyClass: Record<TableDensity, string> = {
-  // Rows are separated by a hairline; the card itself never gets an inner rule.
   default: 'divide-y divide-border',
   dense: 'font-mono text-foreground',
 }
 
 /** Cell box, shared by `<th>` and `<td>` so headers and columns always align. */
 const cellBox: Record<TableDensity, string> = {
-  default: 'px-4 py-3',
+  default: 'px-5 py-3',
   dense: 'py-1 pr-3',
 }
 
@@ -71,20 +55,16 @@ export interface TableFrameProps {
   caption: ReactNode
   density?: TableDensity
   /**
-   * Number of columns. Stated once here it becomes the `colSpan` of every
-   * `TableStateRow`, so a full-width state cell can never disagree with the header
-   * it spans. Keep it equal to the number of `TableHeadCell`s.
+   * 列数。在这里声明一次，`TableStateRow` 就能取到 colSpan，整行状态就不会与表头
+   * 对不上。
    */
   columns?: number
+  /** Merged onto the scrolling wrapper. */
   className?: string
   children: ReactNode
 }
 
-/**
- * Bare table shell — `<div>` + `<table>` + caption. Use `DataTable` for the
- * standard carded grid; reach for this when the table is already inside a
- * surface of its own (the plugin file manifest) or needs a different container.
- */
+/** Bare table shell — use `Table` for the standard carded grid. */
 export function TableFrame({ caption, density = 'default', columns, className, children }: TableFrameProps) {
   return (
     <TableContext.Provider value={{ density, columns }}>
@@ -98,7 +78,7 @@ export function TableFrame({ caption, density = 'default', columns, className, c
   )
 }
 
-export interface DataTableProps {
+export interface TableProps {
   caption: ReactNode
   /** See `TableFrameProps['columns']`. */
   columns?: number
@@ -109,14 +89,10 @@ export interface DataTableProps {
   children: ReactNode
 }
 
-/**
- * The standard admin grid: a card that clips its own corners, with the table
- * flush to the edges (`p-0`) and no gap between card and content (`gap-0`), so the
- * tonal header reads as part of the card rather than a floating band.
- */
-export function DataTable({ caption, columns, className, cardClassName, children }: DataTableProps) {
+/** Standard admin grid: a card that clips its corners, table flush to the edges. */
+export function Table({ caption, columns, className, cardClassName, children }: TableProps) {
   return (
-    <Card className={cn('gap-0 overflow-hidden p-0', cardClassName)}>
+    <Card density="none" className={cn('overflow-hidden', cardClassName)}>
       <TableFrame caption={caption} density="default" columns={columns} className={className}>
         {children}
       </TableFrame>
@@ -124,13 +100,16 @@ export function DataTable({ caption, columns, className, cardClassName, children
   )
 }
 
-export interface TableHeadProps {
+/** Alias — `Table` is the carded shell, `TableFrame` the bare one. */
+export const DataTable = Table
+
+export interface TableHeaderProps {
   className?: string
-  /** Header cells. `TableHead` owns the `<tr>`, so pass cells directly. */
+  /** Header cells. `TableHeader` owns the `<tr>`, so pass cells directly. */
   children: ReactNode
 }
 
-export function TableHead({ className, children }: TableHeadProps) {
+export function TableHeader({ className, children }: TableHeaderProps) {
   const density = useDensity()
   return (
     <thead className={cn(headClass[density], className)}>
@@ -138,6 +117,9 @@ export function TableHead({ className, children }: TableHeadProps) {
     </thead>
   )
 }
+
+/** Alias kept for the previous component name. */
+export const TableHead = TableHeader
 
 export interface TableHeadCellProps extends Omit<ThHTMLAttributes<HTMLTableCellElement>, 'scope' | 'align'> {
   align?: 'left' | 'right'
@@ -183,8 +165,7 @@ export function TableBody({ busy, className, children }: TableBodyProps) {
 
 export interface TableRowProps {
   /**
-   * Colour-only hover. Defaults off: only a table whose whole row is clickable
-   * opts in, so a static grid never implies an action (P2-7).
+   * 仅颜色变化的 hover。默认关闭：只有整行可点的表格才开启，静态表格不暗示操作。
    */
   hover?: boolean
   className?: string
@@ -193,9 +174,6 @@ export interface TableRowProps {
 
 export function TableRow({ hover = false, className, children }: TableRowProps) {
   const density = useDensity()
-  // `|| undefined` rather than an empty string: a row that only exists to hold
-  // placeholders (skeleton, dense manifest) should carry no `class` attribute at
-  // all, so its markup matches a plain `<tr>` exactly.
   return (
     <tr
       className={
@@ -207,7 +185,7 @@ export function TableRow({ hover = false, className, children }: TableRowProps) 
   )
 }
 
-/** Cell colour / weight. Orthogonal to `align`, `mono`, `tabular`. */
+/** Cell colour / weight; orthogonal to `align`, `mono`, `tabular`. */
 const cellTone = {
   default: '',
   muted: 'text-muted-foreground',
@@ -220,23 +198,12 @@ export interface TableCellProps extends Omit<TdHTMLAttributes<HTMLTableCellEleme
   tone?: keyof typeof cellTone
   /** Identifier/code column: `font-mono`. */
   mono?: boolean
-  /** Only meaningful with `mono`: the 12px step used for dense identifiers. */
-  textSize?: 'sm' | 'xs'
   /** Digit column: `tabular-nums` so numbers line up across rows. */
   tabular?: boolean
   ref?: Ref<HTMLTableCellElement>
 }
 
-export function TableCell({
-  align = 'left',
-  tone = 'default',
-  mono,
-  textSize,
-  tabular,
-  className,
-  children,
-  ...rest
-}: TableCellProps) {
+export function TableCell({ align = 'left', tone = 'default', mono, tabular, className, children, ...rest }: TableCellProps) {
   const density = useDensity()
   return (
     <td
@@ -245,7 +212,7 @@ export function TableCell({
         align === 'right' && 'text-right',
         cellTone[tone],
         mono && 'font-mono',
-        textSize === 'xs' && 'text-xs',
+        density === 'default' && mono && 'text-xs',
         tabular && 'tabular-nums',
         className,
       )}
@@ -258,25 +225,19 @@ export function TableCell({
 
 export interface TableStateRowProps {
   /**
-   * Columns to span. Omit it and the frame's `columns` is used, which is the
-   * intended form; passing it is only for a table that declares no `columns`.
+   * 跨列数。省略时用外层 `columns`（推荐用法）；只有未声明 `columns` 的表格才显式传。
    */
   colSpan?: number
   className?: string
   children: ReactNode
 }
 
-/**
- * Full-width row for the empty / no-results / error states. It deliberately does
- * not paint a hover or a row rule: it is a message, not a record.
- */
+/** Full-width row for empty / no-results / error states; no hover, no rule. */
 export function TableStateRow({ colSpan, className, children }: TableStateRowProps) {
   const { columns } = useContext(TableContext)
   const span = colSpan ?? columns
   if (span === undefined) {
-    // Fail loud: a silent fallback would render the message in a single cell and
-    // leave the rest of the row blank, which reads as broken data, not a bug report.
-    throw new Error('TableStateRow needs either its own `colSpan` or a `columns` value on the surrounding DataTable/TableFrame.')
+    throw new Error('TableStateRow needs either its own `colSpan` or a `columns` value on the surrounding Table/TableFrame.')
   }
   return (
     <tr>
@@ -295,21 +256,16 @@ export interface TableSkeletonCell {
 export interface TableSkeletonRowProps {
   /**
    * One entry per column. Pass the placeholder itself; wrap it in
-   * `{ align: 'right', content }` only when the column is right-aligned, so the
-   * common case stays a bare element.
+   * `{ align: 'right', content }` only when the column is right-aligned.
    */
   cells: Array<ReactNode | TableSkeletonCell>
   className?: string
 }
 
-/**
- * Placeholder row that keeps the table's geometry while data is in flight. The
- * placeholders themselves come from `SkeletonText` / `SkeletonTile` — this only
- * supplies the matching cell box, so nothing reflows when the data lands.
- */
+/** Placeholder row that keeps the table's geometry while data is in flight. */
 export function TableSkeletonRow({ cells, className }: TableSkeletonRowProps) {
   return (
-    <TableRow hover={false} className={className}>
+    <TableRow className={className}>
       {cells.map((cell, index) => {
         const spec: TableSkeletonCell =
           cell !== null && typeof cell === 'object' && !isValidElement(cell) && 'content' in cell

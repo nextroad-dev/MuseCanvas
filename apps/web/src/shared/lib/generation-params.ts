@@ -1,183 +1,208 @@
-// Staged input images: which roles a model accepts, in what positional order,
-// and how the browser turns that plan into a request.
+// 生成参数解析与请求体构造。纯模块（仅 type import + 本地常量），可被
+// `node --test` 直接加载；描述符驱动的控件构建见 `media-parameters.ts`。
 //
-// The parameter-descriptor engine that used to live above this comment now sits
-// in `media-parameters.ts`, and the value legality rules themselves live in
-// `@musecanvas/contracts`. That is the point of the move: the browser no longer
-// keeps a second, browser-only opinion about which sizes or qualities exist, so a
-// rule can no longer be enforced by the API and contradicted here.
+// 分工：本文件负责「画幅/张数/时长等参数值 → 规范化请求体」，
+// 不复制后端 descriptor 校验规则（合法性由 contracts 校验器与 API 共同保证）。
 
-import type {
-  GenerationInputItem,
-  InputSlotDescriptor,
-  ModelConfig,
-  StagedReferenceImage,
-} from '@/shared/types'
-import { RUNTIME_SETTINGS_DEFAULTS, isVideoModel } from '@/shared/types'
+import type { CreateGenerationRequest, GenerationInputItem } from '@musecanvas/contracts'
 
-const SLOT_ORDER: Record<string, number> = {
-  first_frame: 0,
-  last_frame: 1,
-  reference_image: 2,
-  // Masks sort last on purpose: they are a control channel attached to a base
-  // image, not another picture the model looks at.
-  mask: 3,
+export const DEFAULT_GENERATION_COUNT = 1
+/** generation_jobs.max_count 的历史 CHECK 上限（1..10）。 */
+export const MAX_GENERATION_COUNT = 10
+export const MIN_GENERATION_COUNT = 1
+/** 视频时长上限兜底：真实上限由模型 descriptor 的 max 决定。 */
+export const MAX_VIDEO_DURATION_SECONDS = 60
+
+export interface ParsedSize {
+  width: number
+  height: number
+  /** 约分后的宽高比，如 `3:4`。 */
+  ratio: string
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  first_frame: '首帧',
-  last_frame: '尾帧',
-  reference_image: '参考图',
-  prompt_image: '提示图',
-  source_video: '源视频',
-  mask: '选区遮罩',
+export interface ParsedGenerationParams {
+  /** 原始尺寸字符串（如 `3:4`、`1024x1365`、`auto`），无则 null。 */
+  size: string | null
+  aspectRatio: string | null
+  count: number
+  quality: string | null
+  durationSeconds: number | null
 }
 
-/** Roles never renderable as staged images: the upload endpoint accepts only
- *  image/png and image/jpeg. */
-const UNSUPPORTED_PLAN_ROLES = new Set<string>(['source_video'])
-
-/** Effective input slots: descriptor slots win; otherwise derive from maxInputImages. */
-export function resolveInputSlots(
-  model: Pick<ModelConfig, 'inputSlots' | 'maxInputImages'> | null | undefined,
-): InputSlotDescriptor[] {
-  if (model?.inputSlots && model.inputSlots.length > 0) return model.inputSlots
-  const max = model?.maxInputImages ?? 0
-  if (max <= 0) return []
-  return [{
-    role: 'reference_image',
-    required: false,
-    minCount: 0,
-    maxCount: max,
-    allowedMediaKinds: ['image'],
-  }]
+function gcd(a: number, b: number): number {
+  return b === 0 ? a : gcd(b, a % b)
 }
 
-/** Anything an input plan needs: a full model, or the legacy 2-key pick already
- *  used by the reference-image call sites (an absent `modelKind` reads as image). */
-export type ImageInputPlanModel =
-  Partial<Pick<ModelConfig, 'modelKind' | 'mediaKind'>> & Pick<ModelConfig, 'inputSlots' | 'maxInputImages'>
-
-export interface ImageInputPlan {
-  slots: InputSlotDescriptor[]
-  capacity: number
-  multiRole: boolean
+/** 约分宽高比；非法尺寸返回 null。 */
+export function reduceRatio(width: number, height: number): string | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  const factor = gcd(Math.round(width), Math.round(height))
+  return `${Math.round(width) / factor}:${Math.round(height) / factor}`
 }
 
-/** Image-only view of a model's input slots: which roles may be staged, in what
- *  positional order, and how many files fit. */
-export function resolveImageInputPlan(model: ImageInputPlanModel | null | undefined): ImageInputPlan {
-  const videoKind = isVideoModel({
-    modelKind: model?.modelKind ?? 'image',
-    mediaKind: model?.mediaKind,
-  })
-  const slots = resolveInputSlots(model).filter((slot) => {
-    if (slot.allowedMediaKinds.length > 0 && !slot.allowedMediaKinds.includes('image')) return false
-    if (UNSUPPORTED_PLAN_ROLES.has(slot.role)) return false
-    // Both video providers infer frame roles positionally, so mixing references
-    // with first/last frames is not representable in either request shape.
-    if (videoKind && slot.role === 'reference_image') return false
-    return true
-  })
-  const ordered = [...slots].sort(
-    (a, b) => (SLOT_ORDER[a.role] ?? Number.MAX_SAFE_INTEGER) - (SLOT_ORDER[b.role] ?? Number.MAX_SAFE_INTEGER),
-  )
-  const total = ordered.reduce((sum, slot) => sum + Math.max(0, slot.maxCount), 0)
-  const capacity = Math.max(0, Math.min(total, RUNTIME_SETTINGS_DEFAULTS.maxInputs))
-  return {
-    slots: ordered,
-    capacity,
-    multiRole: new Set(ordered.map((slot) => slot.role)).size > 1,
+/** 解析尺寸描述：`1024x1365` 或带比例前缀的 `3:4`（返回 null 宽度/高度）。 */
+export function parseSize(value: unknown): ParsedSize | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === 'auto') return null
+  const dimension = trimmed.match(/^(\d{1,5})\s*[x×]\s*(\d{1,5})$/i)
+  if (dimension) {
+    const width = Number(dimension[1])
+    const height = Number(dimension[2])
+    if (width <= 0 || height <= 0) return null
+    return { width, height, ratio: reduceRatio(width, height) ?? `${width}:${height}` }
   }
+  return null
 }
 
-/** Positional role for every accepted slot: a slot with `maxCount: n` contributes
- *  n positions, so staged order alone decides roles. */
-export function planRolePositions(plan: ImageInputPlan): string[] {
-  const positions: string[] = []
-  for (const slot of plan.slots) {
-    const repeats = Math.max(0, slot.maxCount)
-    for (let index = 0; index < repeats; index += 1) positions.push(slot.role)
-  }
-  return positions.slice(0, plan.capacity)
+/** 从 `3:4` 形式解析宽高比；非法返回 null。 */
+export function parseAspectRatio(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const match = value.trim().match(/^(\d{1,4})\s*[:/]\s*(\d{1,4})$/)
+  if (!match) return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (width <= 0 || height <= 0) return null
+  return `${width}:${height}`
 }
 
-/** Staged images -> unified inputs[] with stable positions. A local upload and a
- *  gallery pick differ only in which reference they carry; nothing downstream needs to
- *  know where the image came from. */
+export function normalizeCount(value: unknown): number {
+  const numeric = typeof value === 'string' ? Number(value) : value
+  if (typeof numeric !== 'number' || !Number.isFinite(numeric)) return DEFAULT_GENERATION_COUNT
+  const rounded = Math.trunc(numeric)
+  return Math.min(MAX_GENERATION_COUNT, Math.max(MIN_GENERATION_COUNT, rounded))
+}
+
+export function parseDurationSeconds(value: unknown): number | null {
+  const numeric =
+    typeof value === 'string'
+      ? Number(value.trim().replace(/s$/i, ''))
+      : typeof value === 'number'
+        ? value
+        : NaN
+  if (!Number.isFinite(numeric) || numeric <= 0) return null
+  const rounded = Math.round(numeric)
+  return rounded > MAX_VIDEO_DURATION_SECONDS ? MAX_VIDEO_DURATION_SECONDS : rounded
+}
+
+/**
+ * 解析任务 DTO 或参数袋中的画幅/张数/时长。
+ * 兼容 `parameters.size` / `size`、`durationSeconds`/`duration`、`aspectRatio`/`ratio`。
+ */
+export function parseGenerationParams(
+  source:
+    | {
+        parameters?: Record<string, unknown> | null
+        size?: string | null
+        quality?: string | null
+        count?: number | null
+      }
+    | null
+    | undefined,
+): ParsedGenerationParams {
+  const parameters = source?.parameters ?? {}
+  const pickedSize =
+    (typeof parameters.size === 'string' ? parameters.size : undefined) ??
+    (typeof parameters.aspect_ratio === 'string' ? parameters.aspect_ratio : undefined) ??
+    (typeof source?.size === 'string' ? source.size : undefined) ??
+    null
+  const parsedSize = parseSize(pickedSize)
+  const aspectRatio =
+    parseAspectRatio(pickedSize) ??
+    parseAspectRatio(parameters.aspectRatio) ??
+    parseAspectRatio(parameters.aspect_ratio) ??
+    parsedSize?.ratio ??
+    null
+  const quality =
+    (typeof parameters.quality === 'string' ? parameters.quality : undefined) ??
+    (typeof source?.quality === 'string' ? source.quality : undefined) ??
+    null
+  const durationSeconds =
+    parseDurationSeconds(parameters.durationSeconds) ??
+    parseDurationSeconds(parameters.duration) ??
+    parseDurationSeconds(parameters.duration_s)
+  const count = normalizeCount(parameters.count ?? source?.count)
+  return { size: pickedSize, aspectRatio, count, quality, durationSeconds }
+}
+
+/** 结果卡副标题：`3:4 · 1024 × 1365 · 1 张`，缺失项自动省略。 */
+export function formatSizeLabel(size: string | null | undefined, count?: number): string {
+  const parsed = parseSize(size)
+  const ratio = parsed?.ratio ?? parseAspectRatio(size) ?? (size && size !== 'auto' ? size : null)
+  const dimensions = parsed ? `${parsed.width} × ${parsed.height}` : null
+  const pieces = [ratio, dimensions].filter((piece): piece is string => Boolean(piece))
+  if (count !== undefined && count > 1) pieces.push(`${count} 张`)
+  return pieces.join(' · ') || '默认画幅'
+}
+
+/** 输入项规范化：只保留 ready 的引用、按顺序重排 position。 */
 export function buildGenerationInputs(
-  staged: Pick<StagedReferenceImage, 'uploadId' | 'assetId' | 'status' | 'role'>[],
+  inputs:
+    | ReadonlyArray<{
+        uploadId?: string | null
+        assetId?: string | null
+        role?: string | null
+        position?: number | null
+      }>
+    | null
+    | undefined,
 ): GenerationInputItem[] {
-  return staged
-    .filter((img) => img.status === 'ready' && Boolean(img.uploadId || img.assetId))
-    .map((img, index) => ({
-      ...(img.uploadId ? { uploadId: img.uploadId } : { assetId: img.assetId as string }),
-      role: (img.role || 'reference_image') as GenerationInputItem['role'],
-      position: index,
-    }))
+  if (!inputs) return []
+  const normalized: GenerationInputItem[] = []
+  for (const item of inputs) {
+    const uploadId = item.uploadId || undefined
+    const assetId = item.assetId || undefined
+    if (!uploadId && !assetId) continue
+    normalized.push({
+      ...(uploadId ? { uploadId } : { assetId: assetId as string }),
+      role: (item.role || 'reference_image') as GenerationInputItem['role'],
+      position: normalized.length,
+    })
+  }
+  return normalized
 }
 
-/** First/last-frame constraints: at most one each; first must lead, last must trail. */
-export function firstLastFrameViolations(
-  staged: Pick<StagedReferenceImage, 'role'>[],
-  plan?: ImageInputPlan | null,
-): string[] {
-  const errors: string[] = []
-  const firstIdx: number[] = []
-  const lastIdx: number[] = []
-  staged.forEach((img, i) => {
-    if (img.role === 'first_frame') firstIdx.push(i)
-    if (img.role === 'last_frame') lastIdx.push(i)
-  })
-  if (firstIdx.length > 1) errors.push('只能设置一张首帧图片')
-  if (lastIdx.length > 1) errors.push('只能设置一张尾帧图片')
-  if (firstIdx.length === 1 && firstIdx[0] !== 0) errors.push('首帧图片必须放在第一位')
-  if (lastIdx.length === 1 && lastIdx[0] !== staged.length - 1) errors.push('尾帧图片必须放在最后一位')
-  if (firstIdx.length === 1 && lastIdx.length === 1 && staged.length < 2) {
-    errors.push('首帧与尾帧不能是同一张图片')
-  }
-  if (lastIdx.length > 0 && firstIdx.length === 0) errors.push('设置尾帧前请先设置首帧')
-  if (plan) errors.push(...roleCountViolations(staged, plan))
-  return errors
-}
-
-function roleCountViolations(
-  staged: Pick<StagedReferenceImage, 'role'>[],
-  plan: ImageInputPlan,
-): string[] {
-  const errors: string[] = []
-  const counts = new Map<string, number>()
-  for (const img of staged) {
-    if (!img.role) continue
-    counts.set(img.role, (counts.get(img.role) ?? 0) + 1)
-  }
-  for (const [role, count] of counts) {
-    const slot = plan.slots.find((candidate) => candidate.role === role)
-    const label = slot?.label ?? ROLE_LABELS[role] ?? role
-    if (!slot) {
-      errors.push(`当前模型不支持${label}，请移除该图片`)
-      continue
+/** 去掉 undefined/null 的参数值；空对象整体省略。 */
+export function normalizeParameters(
+  parameters: Record<string, unknown> | null | undefined,
+): Record<string, string | number | boolean | null> | undefined {
+  if (!parameters) return undefined
+  const output: Record<string, string | number | boolean | null> = {}
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value === undefined || value === null) continue
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      output[key] = value
     }
-    // A single first/last frame is already covered by the dedicated rules above.
-    if ((role === 'first_frame' || role === 'last_frame') && slot.maxCount <= 1) continue
-    if (count > slot.maxCount) errors.push(`${label}最多设置 ${slot.maxCount} 张（当前 ${count} 张）`)
   }
-  return errors
+  return Object.keys(output).length > 0 ? output : undefined
 }
 
-/** Everything that blocks submission for the staged images under a plan. */
-export function inputPlanViolations(
-  staged: Pick<StagedReferenceImage, 'role'>[],
-  plan: ImageInputPlan,
-): string[] {
-  const errors: string[] = []
-  if (staged.length > plan.capacity) {
-    errors.push(
-      plan.capacity === 0
-        ? '当前模型不支持输入图片，请切换到支持图片输入的模型'
-        : `当前模型最多接受 ${plan.capacity} 张输入图片（已暂存 ${staged.length} 张）`,
-    )
+export interface GenerationRequestInput {
+  modelId: string
+  prompt: string
+  parameters?: Record<string, unknown> | null
+  inputs?: Array<{ uploadId?: string | null; assetId?: string | null; role?: string | null }> | null
+  idempotencyKey?: string
+  inputLanguage?: string
+}
+
+/** 构造 `POST /api/generations` 请求体（prompt 去首尾空白，输入按序重排）。 */
+export function toGenerationRequest(input: GenerationRequestInput): CreateGenerationRequest {
+  const parameters = normalizeParameters(input.parameters) ?? {}
+  const inputs = buildGenerationInputs(input.inputs)
+  return {
+    modelId: input.modelId,
+    prompt: input.prompt.trim(),
+    parameters,
+    ...(inputs.length > 0 ? { inputs } : {}),
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    ...(input.inputLanguage ? { inputLanguage: input.inputLanguage } : {}),
   }
-  for (const message of firstLastFrameViolations(staged, plan)) errors.push(message)
-  return [...new Set(errors)]
+}
+
+/** 新请求的幂等键：优先 crypto.randomUUID，环境不支持时退化为时间戳随机串。 */
+export function newIdempotencyKey(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.()
+  if (randomUuid) return randomUuid
+  return `gen-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }

@@ -4,92 +4,112 @@ import type { ReactNode } from 'react'
 import { CaretLeftIcon as ChevronLeft, CaretRightIcon as ChevronRight } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { IconButton, buttonVariants } from './button'
-import type { ButtonSize } from './button'
+import { buildPageItems, clampPage, describeRange } from './pagination-math'
 import { controlSquare } from './size'
 
-export interface PaginationProps {
-  /** 1-based current page. */
-  page: number
-  /** Row count for the `共 X 条` line on the left. */
-  total: number
-  /** Rows per page, used to derive `pageCount` when it is not given. */
-  pageSize?: number
-  /** Override the derived page count (server-side paging often knows it). */
-  pageCount?: number
-  onPageChange: (page: number) => void
+interface PaginationBaseProps {
   size?: 'sm' | 'md'
-  /** Pages shown on each side of the current one before truncating. */
-  siblingCount?: number
-  /** Hide the `共 X 条` line when the parent already shows it. */
-  showTotal?: boolean
   className?: string
   listClassName?: string
   'aria-label'?: string
 }
 
-type PageItem = { kind: 'page'; page: number } | { kind: 'gap'; key: string }
-
-/** First, last, a window around `page`, and `…` wherever numbers were skipped. */
-function buildItems(page: number, pageCount: number, siblingCount: number): PageItem[] {
-  const pages = new Set<number>([1, pageCount])
-  for (let offset = siblingCount; offset >= -siblingCount; offset -= 1) {
-    const candidate = page + offset
-    if (candidate >= 1 && candidate <= pageCount) pages.add(candidate)
-  }
-  const sorted = [...pages].sort((a, b) => a - b)
-  const items: PageItem[] = []
-  sorted.forEach((value, index) => {
-    const previous = sorted[index - 1]
-    if (previous !== undefined && value - previous > 1) items.push({ kind: 'gap', key: `gap-${previous}-${value}` })
-    items.push({ kind: 'page', page: value })
-  })
-  return items
+/** Numbered pagination for a list endpoint that reports a total. */
+export interface PagePaginationProps extends PaginationBaseProps {
+  mode?: 'page'
+  /** 1-based current page. */
+  page: number
+  total: number
+  pageSize?: number
+  /** Override the derived page count (server-side paging often knows it). */
+  pageCount?: number
+  onPageChange: (page: number) => void
+  /** Pages shown on each side of the current one before truncation. */
+  siblingCount?: number
+  /** Hide the count line when the parent already shows it. */
+  showTotal?: boolean
 }
 
+/** Cursor pagination: only previous/next + a count line, per the library API. */
+export interface CursorPaginationProps extends PaginationBaseProps {
+  mode: 'cursor'
+  hasPrevious: boolean
+  hasNext: boolean
+  onPrevious: () => void
+  onNext: () => void
+  /** How many items are loaded so far. */
+  count?: number
+  /** Text before the count, e.g. `已加载`. */
+  countLabel?: string
+}
+
+export type PaginationProps = PagePaginationProps | CursorPaginationProps
+
 /**
- * Listing footer (components.md Pagination row + 场景模式 → 数据表格页):
- * `共 X 条` left, 32/40px page controls right, the current page marked with
- * `bg-tonal-selected` + `aria-current="page"`, and boundaries that stay in the
- * tab order but block activation through `aria-disabled` (components.md requires
- * the mouse *and* keyboard blocking, which `Button` implements).
+ * 列表页脚：左侧计数行，右侧翻页控件。页码模式用 `aria-current="page"` +
+ * `bg-tonal-selected` 标记当前页；cursor 模式只渲染上一页/下一页，因为游标无法
+ * 跳到第 N 页。
  */
-export function Pagination({
-  page,
-  total,
-  pageSize = 20,
-  pageCount,
-  onPageChange,
-  size = 'md',
-  siblingCount = 1,
-  showTotal = true,
-  className,
-  listClassName,
-  'aria-label': ariaLabel = '分页',
-}: PaginationProps) {
-  const derivedPages = Math.ceil(total / (pageSize || 1))
-  const safePageCount = Math.max(1, pageCount ?? (Number.isFinite(derivedPages) ? derivedPages : 1))
-  const items = buildItems(page, safePageCount, siblingCount)
-  const controlSize: ButtonSize = size === 'sm' ? 'sm' : 'md'
+export function Pagination(props: PaginationProps) {
+  const { size = 'md', className, listClassName } = props
+  const ariaLabel = props['aria-label'] ?? '分页'
   const square = `${size === 'sm' ? controlSquare.sm : controlSquare.md} px-0`
-  const go = (next: number) => {
-    if (next < 1 || next > safePageCount || next === page) return
-    onPageChange(next)
+
+  if (props.mode === 'cursor') {
+    const { hasPrevious, hasNext, onPrevious, onNext, count, countLabel = '已加载' } = props
+    const label: ReactNode = typeof count === 'number' ? `${countLabel} ${count} 个` : null
+    return (
+      <nav aria-label={ariaLabel} className={cn('flex flex-wrap items-center justify-between gap-x-4 gap-y-2', className)}>
+        <p className="text-sm tabular-nums text-muted-foreground">{label}</p>
+        <div className={cn('flex items-center gap-1', listClassName)}>
+          <IconButton
+            variant="ghost"
+            size="icon"
+            aria-label="上一页"
+            aria-disabled={!hasPrevious || undefined}
+            onClick={hasPrevious ? onPrevious : undefined}
+            icon={<ChevronLeft weight="bold" aria-hidden="true" />}
+            className={size === 'sm' ? controlSquare.sm : controlSquare.md}
+          />
+          <IconButton
+            variant="ghost"
+            size="icon"
+            aria-label="下一页"
+            aria-disabled={!hasNext || undefined}
+            onClick={hasNext ? onNext : undefined}
+            icon={<ChevronRight weight="bold" aria-hidden="true" />}
+            className={size === 'sm' ? controlSquare.sm : controlSquare.md}
+          />
+        </div>
+      </nav>
+    )
   }
 
-  const label: ReactNode = showTotal ? `共 ${total} 条` : null
+  const { page, total, pageSize = 20, pageCount, onPageChange, siblingCount = 1, showTotal = true } = props
+  const derivedPages = Math.ceil(total / (pageSize || 1))
+  const safePageCount = Math.max(1, pageCount ?? (Number.isFinite(derivedPages) ? derivedPages : 1))
+  const safePage = clampPage(page, safePageCount)
+  const items = buildPageItems(safePage, safePageCount, siblingCount)
+
+  const go = (next: number) => {
+    const target = clampPage(next, safePageCount)
+    if (target === safePage) return
+    onPageChange(target)
+  }
 
   return (
     <nav aria-label={ariaLabel} className={cn('flex flex-wrap items-center justify-between gap-x-4 gap-y-2', className)}>
-      <p className="text-sm tabular-nums text-muted-foreground">{label}</p>
+      <p className="text-sm tabular-nums text-muted-foreground">{showTotal ? describeRange(safePage, pageSize, total) : null}</p>
 
       <div className={cn('flex items-center gap-1', listClassName)}>
         <IconButton
           variant="ghost"
-          size={controlSize}
+          size="icon"
           aria-label="上一页"
-          aria-disabled={page <= 1 || undefined}
-          onClick={() => go(page - 1)}
+          aria-disabled={safePage <= 1 || undefined}
+          onClick={() => go(safePage - 1)}
           icon={<ChevronLeft weight="bold" aria-hidden="true" />}
+          className={size === 'sm' ? controlSquare.sm : controlSquare.md}
         />
 
         {items.map((item) =>
@@ -101,12 +121,12 @@ export function Pagination({
             <button
               key={item.page}
               type="button"
-              aria-current={item.page === page ? 'page' : undefined}
+              aria-current={item.page === safePage ? 'page' : undefined}
               onClick={() => go(item.page)}
               className={cn(
-                buttonVariants({ variant: 'ghost', size: controlSize }),
+                buttonVariants({ variant: 'ghost', size: 'icon' }),
                 square,
-                item.page === page
+                item.page === safePage
                   ? 'bg-tonal-selected text-foreground not-disabled:hover:bg-tonal-selected'
                   : 'text-muted-foreground',
               )}
@@ -118,11 +138,12 @@ export function Pagination({
 
         <IconButton
           variant="ghost"
-          size={controlSize}
+          size="icon"
           aria-label="下一页"
-          aria-disabled={page >= safePageCount || undefined}
-          onClick={() => go(page + 1)}
+          aria-disabled={safePage >= safePageCount || undefined}
+          onClick={() => go(safePage + 1)}
           icon={<ChevronRight weight="bold" aria-hidden="true" />}
+          className={size === 'sm' ? controlSquare.sm : controlSquare.md}
         />
       </div>
     </nav>

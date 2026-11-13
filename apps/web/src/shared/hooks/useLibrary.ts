@@ -1,106 +1,129 @@
 'use client'
 
+// 图库读取：cursor 分页的 infinite query + 单资产详情（缓存优先）。
+// 后端没有 `GET /api/library/:id`（只有 /download），灯箱需要的完整 DTO
+// 通常已在网格页的列表缓存里；缓存缺失时回源最近 100 条兜底（契约缺口见报告）。
+
 import {
   useInfiniteQuery,
   useMutation,
+  useQuery,
   useQueryClient,
   type InfiniteData,
+  type UseInfiniteQueryResult,
+  type UseQueryResult,
 } from '@tanstack/react-query'
-import { api } from '@/shared/services/api'
-import type { Asset } from '@/shared/types'
+import { clientApi } from '@/shared/services/client-api'
+import { ApiError } from '@/shared/services/api'
+import type { AssetDto, AssetListDto, LibraryFilters } from '@/shared/types'
+import { queryKeys } from './query-keys'
 
-/** Root key for every library read. `useJobs` invalidates it after a generation
- *  succeeds, and the delete mutations invalidate it too, so both the gallery page and
- *  the image picker keep sharing one cache entry per filter. */
-export const LIBRARY_QUERY_KEY = ['library'] as const
+export const LIBRARY_PAGE_SIZE = 30
 
-/** What `GET /api/library` actually filters server-side. Media kind and the keyword
- *  are real SQL predicates now; anything else (favourites, sort, column count) stays
- *  a client-side concern over the pages fetched so far. */
-export interface LibraryQueryParams {
-  limit?: number
-  q?: string
-  kind?: 'image' | 'video'
-  /** Restrict to images usable as a generation input (PNG/JPEG). */
-  eligible?: boolean
+function toQueryParams(filters?: LibraryFilters) {
+  return {
+    limit: filters?.limit ?? LIBRARY_PAGE_SIZE,
+    ...(filters?.q ? { q: filters.q } : {}),
+    ...(filters?.kind ? { kind: filters.kind } : {}),
+    ...(filters?.eligible ? { eligible: true } : {}),
+  }
 }
 
-export interface LibraryPage {
-  items: Asset[]
-  total: number
-  hasMore: boolean
-  nextCursor?: string
+/** Keyset 分页：cursor 由服务端签发（不透明），只可能返回当前用户的行。 */
+export function useLibrary(
+  filters?: LibraryFilters,
+): UseInfiniteQueryResult<InfiniteData<AssetListDto, string | undefined>> {
+  const params = toQueryParams(filters)
+  return useInfiniteQuery({
+    queryKey: queryKeys.library.list(params),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      clientApi.library.list({ ...params, ...(pageParam ? { cursor: pageParam } : {}) }),
+    getNextPageParam: (lastPage) =>
+      lastPage.hasMore ? (lastPage.nextCursor ?? undefined) : undefined,
+  })
 }
 
-/** Flatten the accumulated pages into one ordered list. */
-export function libraryPageItems(data?: InfiniteData<LibraryPage, string | undefined>): Asset[] {
+/** 已加载的资产扁平列表（保持服务端顺序）。 */
+export function libraryItems(
+  data: InfiniteData<AssetListDto, string | undefined> | undefined,
+): AssetDto[] {
   return data?.pages.flatMap((page) => page.items) ?? []
 }
 
-/**
- * Keyset-paginated library list. `cursor` is opaque and server-issued, so a page can
- * only ever contain rows the current user owns.
- */
-export function useLibraryInfiniteQuery(params: LibraryQueryParams = {}, { enabled = true } = {}) {
-  return useInfiniteQuery<LibraryPage, Error, InfiniteData<LibraryPage, string | undefined>, readonly unknown[], string | undefined>({
-    queryKey: [...LIBRARY_QUERY_KEY, 'page', params] as const,
-    enabled,
-    initialPageParam: undefined,
-    queryFn: async ({ pageParam }) => {
-      const res = await api.getAssets({ ...params, cursor: pageParam } as Record<string, string | number | boolean | undefined>)
-      if (!res.success || !res.data) {
-        throw new Error(res.error?.message || '获取资产库列表失败')
-      }
-      return {
-        items: res.data.items || [],
-        total: res.data.total ?? 0,
-        hasMore: Boolean(res.data.hasMore),
-        nextCursor: res.data.nextCursor,
-      }
+/** 从当前图库缓存里按 id 找资产（灯箱打开时先查已加载页）。 */
+export function findCachedAsset(
+  queryClient: ReturnType<typeof useQueryClient>,
+  assetId: string,
+): AssetDto | null {
+  for (const [, value] of queryClient.getQueriesData<InfiniteData<AssetListDto, string | undefined>>({
+    queryKey: queryKeys.library.list().slice(0, 2),
+  })) {
+    if (!Array.isArray(value?.pages)) continue
+    for (const page of value.pages) {
+      if (!Array.isArray(page?.items)) continue
+      const found = page.items.find((item) => item?.id === assetId)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+export function useAssetDetail(assetId: string | null | undefined): UseQueryResult<AssetDto> {
+  const queryClient = useQueryClient()
+  return useQuery({
+    queryKey: queryKeys.library.detail(assetId ?? ''),
+    enabled: Boolean(assetId),
+    staleTime: 30_000,
+    queryFn: async () => {
+      const cached = findCachedAsset(queryClient, assetId as string)
+      if (cached) return cached
+      const page = await clientApi.library.list({ limit: 100 })
+      const found = page.items.find((item) => item.id === assetId)
+      if (!found) throw new ApiError(404, 'NOT_FOUND', '资产不存在或不在最近作品中')
+      return found
     },
-    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextCursor ?? undefined : undefined),
   })
 }
 
-export function useDeleteAssetMutation() {
-
-  const queryClient = useQueryClient()
-
+/** 重新签名下载地址（签名 URL 会过期，灯箱下载按钮点按时取新签名）。 */
+export function useAssetDownloadUrl() {
   return useMutation({
-    mutationFn: async (assetId: string) => {
-      const res = await api.deleteAsset(assetId)
-      if (!res.success) {
-        throw new Error(res.error?.message || '删除资产失败')
-      }
-      return assetId
-    },
+    mutationFn: (assetId: string) => clientApi.library.download(assetId),
+  })
+}
+
+export function useDeleteAsset() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (assetId: string) => clientApi.library.remove(assetId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.library.root })
+      // 删除资产会连带删除其任务（服务端语义），任务缓存同步失效。
+      void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.root })
     },
   })
 }
 
-export function useBatchDeleteAssetsMutation() {
+export function useBatchDeleteAssets() {
   const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: async (assetIds: string[]) => {
-      await Promise.all(
-        assetIds.map(async (id) => {
-          const res = await api.deleteAsset(id)
-          if (!res.success) {
-            throw new Error(res.error?.message || `删除资产 ${id} 失败`)
+      for (const id of assetIds) {
+        try {
+          await clientApi.library.remove(id)
+        } catch (error) {
+          // 删除任务会连带移除其他输出；后续选中资产可能已经不存在。
+          if (!(error instanceof ApiError && (error.status === 404 || error.code === 'NOT_FOUND'))) {
+            throw error
           }
-        }),
-      )
+        }
+      }
       return assetIds
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.library.root })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.root })
     },
   })
 }
-
-export const useDeleteAsset = useDeleteAssetMutation
-export const useBatchDeleteAssets = useBatchDeleteAssetsMutation
-

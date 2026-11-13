@@ -2,19 +2,20 @@
 
 import { useEffect, useId, useRef } from 'react'
 import type { ReactNode } from 'react'
+import { CheckIcon as Check, MinusIcon as Minus } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { colourTransition, focusRingPeer, peerOutlineHover } from './interaction'
-import { controlMinHeight, controlSquare } from './size'
+import { controlMinHeight, controlSquare, iconSize, touchTarget, touchTargetSquare } from './size'
 
 export interface CheckboxProps {
   checked: boolean
   onCheckedChange: (checked: boolean) => void
-  /** Visible clickable text. Omit for a standalone circle (icon tiles, table rows). */
+  /** Visible clickable text. Omit for a standalone control (tiles, table rows). */
   label?: ReactNode
+  /** Accessible name when there is no visible `label`. */
   'aria-label'?: string
   disabled?: boolean
-  /** Half-selected parent (a "select all" header over a partial batch).
-   *  Renders a centered horizontal dash (-) per Jude-Frontweb v22. */
+  /** Half-selected parent of a partial batch; renders a centred dash. */
   indeterminate?: boolean
   className?: string
   id?: string
@@ -23,13 +24,9 @@ export interface CheckboxProps {
 }
 
 /**
- * Jude-Frontweb v22 Circular Checkbox:
- * - 16px circular outline (`h-4 w-4 rounded-checkbox`, 50%).
- * - Unchecked: `bg-surface border border-border-control`, hover deepens border to foreground.
- * - Checked: Solid filled circle (●, `bg-primary border-primary`, no checkmark ✓, no hollow center).
- * - Indeterminate: Centered horizontal dash (-) in `bg-on-primary`.
- * - Hit target: 40px (`--control-md`) via comfortable label padding.
- * - Native keyboard accessibility: Space to toggle, focus-visible outline on keyboard focus.
+ * 圆形复选框（`--radius-checkbox`）：16px 描边，选中实心，部分选中显示横杠。
+ * 可见形状由视觉隐藏的原生 `peer` 输入驱动：Space 可切换、焦点真实、键盘环用
+ * `focusRingPeer` 转移到圆上；标签行保持 40px 热区。
  */
 export function Checkbox({
   checked,
@@ -42,23 +39,20 @@ export function Checkbox({
   'aria-label': ariaLabel,
   name,
   value,
-  ...rest
 }: CheckboxProps) {
   const generatedId = useId()
   const id = customId ?? (label ? generatedId : undefined)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.indeterminate = Boolean(indeterminate)
-    }
+    if (inputRef.current) inputRef.current.indeterminate = Boolean(indeterminate)
   }, [indeterminate])
 
-  const visualCircle = (
+  const visual = (
     <span
       aria-hidden="true"
       className={cn(
-        'relative flex h-4 w-4 shrink-0 items-center justify-center rounded-checkbox border',
+        'relative flex size-4 shrink-0 items-center justify-center rounded-checkbox border',
         colourTransition,
         focusRingPeer,
         indeterminate || checked
@@ -67,7 +61,9 @@ export function Checkbox({
       )}
     >
       {indeterminate ? (
-        <span className="h-[2px] w-2 rounded-pill bg-on-primary" />
+        <Minus weight="bold" aria-hidden="true" className={cn(iconSize.xs)} />
+      ) : checked ? (
+        <Check weight="bold" aria-hidden="true" className={cn(iconSize.xs)} />
       ) : null}
     </span>
   )
@@ -83,8 +79,7 @@ export function Checkbox({
       disabled={disabled}
       aria-label={label ? undefined : ariaLabel}
       onChange={(event) => onCheckedChange(event.target.checked)}
-      className="sr-only peer"
-      {...rest}
+      className="peer sr-only"
     />
   )
 
@@ -95,12 +90,13 @@ export function Checkbox({
         className={cn(
           'group inline-flex select-none items-center justify-center rounded-control',
           controlSquare.md,
+          touchTargetSquare,
           disabled ? 'is-disabled' : 'cursor-pointer',
           className,
         )}
       >
         {nativeInput}
-        {visualCircle}
+        {visual}
       </label>
     )
   }
@@ -111,12 +107,13 @@ export function Checkbox({
       className={cn(
         'group inline-flex select-none items-center gap-2.5 text-sm text-foreground',
         controlMinHeight.md,
+        touchTarget,
         disabled ? 'is-disabled' : 'cursor-pointer',
         className,
       )}
     >
       {nativeInput}
-      {visualCircle}
+      {visual}
       <span>{label}</span>
     </label>
   )

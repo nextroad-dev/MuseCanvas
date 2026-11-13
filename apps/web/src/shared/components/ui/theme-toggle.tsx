@@ -1,69 +1,108 @@
 'use client'
 
-import { useCallback, useSyncExternalStore } from 'react'
-import { MoonIcon as Moon, SunIcon as Sun } from '@phosphor-icons/react'
+import { Monitor, Moon, Sun } from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+
 import { cn } from '@/shared/lib/cn'
-import { ghostIconButtonVariants } from './button-variants'
-import { iconSize } from './size'
+import { IconButton } from './button'
 
-export type Theme = 'light' | 'dark'
+/** 三态主题：浅色 → 深色 → 跟随系统（循环）。 */
+export type ThemeMode = 'light' | 'dark' | 'system'
 
-const THEME_STORAGE_KEY = 'muse-theme'
+/** 与 `shared/components/theme-boot-script.tsx` 的内联脚本共用同一个键。 */
+const STORAGE_KEY = 'musecanvas-theme'
 
-export function getTheme(): Theme {
-  if (typeof document === 'undefined') return 'light'
-  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+const MODES: readonly ThemeMode[] = ['light', 'dark', 'system']
+
+const MODE_LABEL: Record<ThemeMode, string> = {
+  light: '浅色',
+  dark: '深色',
+  system: '跟随系统',
 }
 
-export function applyTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme
+const MODE_ICON = {
+  light: Sun,
+  dark: Moon,
+  system: Monitor,
+} as const
+
+function readStoredMode(): ThemeMode {
+  if (typeof window === 'undefined') return 'system'
   try {
-    localStorage.setItem(THEME_STORAGE_KEY, theme)
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (raw === 'light' || raw === 'dark' || raw === 'system') return raw
   } catch {
-    // Storage can be unavailable (private mode); the toggle still works for
-    // this session because the attribute drives every token.
+    /* localStorage 被禁用（隐私模式 / 沙箱 iframe）时按 system 处理 */
   }
+  return 'system'
 }
 
-/** The `data-theme` attribute is the single source of truth — the inline script in
- *  the root `<head>` sets it before first paint, and the OS preference can change
- *  under us — so the toggle subscribes to the attribute instead of holding its own
- *  copy of the state. */
-function subscribe(onStoreChange: () => void) {
-  const observer = new MutationObserver(onStoreChange)
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-  return () => observer.disconnect()
+function systemPrefersDark(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
 }
-
-const getServerTheme = (): Theme => 'light'
 
 /**
- * Sun/Moon control for the `[data-theme]` switch in `globals.css`.
+ * 把主题模式落到 `<html>`：`dark` class 驱动 CSS token，`data-theme` 供 QA/e2e
+ * 读取，`color-scheme` 让滚动条等原生控件同帧切换。规则与首帧启动脚本一致。
+ */
+function applyMode(mode: ThemeMode) {
+  const resolved: ThemeMode = mode === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : mode
+  const root = document.documentElement
+  root.classList.toggle('dark', resolved === 'dark')
+  root.dataset.theme = resolved
+  root.style.colorScheme = resolved
+}
+
+/**
+ * 主题切换按钮：36×36（`--control-compact`）、`rounded-control`、ghost 反馈。
  *
- * Both glyphs ship in the markup and CSS picks one through the `dark:` variant, so
- * the icon shown on the very first paint is already the right one: no wrong-icon
- * flash, and the server HTML matches the client's hydration output. `aria-pressed`
- * and `aria-label` carry the current state and the action, and the hit target is a
- * 40px control (`--control-md`).
+ * hydration 策略：首帧一律渲染 `system` 图标（与启动脚本的默认值一致，SSR 与
+ * 首次 CSR 输出相同），挂载后再读取 localStorage 并把图标换成真实状态；`system`
+ * 模式下监听系统外观变化，保持与操作系统同步。
  */
 export function ThemeToggle({ className }: { className?: string }) {
-  const theme = useSyncExternalStore(subscribe, getTheme, getServerTheme)
-  const isDark = theme === 'dark'
+  const [mode, setMode] = useState<ThemeMode>('system')
+  const [mounted, setMounted] = useState(false)
 
-  const toggle = useCallback(() => {
-    applyTheme(getTheme() === 'dark' ? 'light' : 'dark')
+  useEffect(() => {
+    const stored = readStoredMode()
+    setMode(stored)
+    setMounted(true)
+    applyMode(stored)
   }, [])
 
+  useEffect(() => {
+    if (mode !== 'system' || typeof window === 'undefined') return
+    const query = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!query) return
+    const onChange = () => applyMode('system')
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [mode])
+
+  const cycle = () => {
+    const next = MODES[(MODES.indexOf(mode) + 1) % MODES.length]
+    setMode(next)
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next)
+    } catch {
+      /* 存储失败只影响下次进入，当前会话仍然即时生效 */
+    }
+    applyMode(next)
+  }
+
+  const Icon = MODE_ICON[mode]
+  const title = mounted ? `切换主题（当前：${MODE_LABEL[mode]}）` : '切换主题'
+
   return (
-    <button
-      type="button"
-      onClick={toggle}
-      aria-label={isDark ? '切换到浅色模式' : '切换到深色模式'}
-      aria-pressed={isDark}
-      className={cn(ghostIconButtonVariants({ size: 'md' }), className)}
-    >
-      <Sun weight="bold" aria-hidden="true" className={`block ${iconSize.md} dark:hidden`} />
-      <Moon weight="bold" aria-hidden="true" className={`hidden ${iconSize.md} dark:block`} />
-    </button>
+    <IconButton
+      aria-label="切换主题"
+      title={title}
+      variant="ghost"
+      icon={<Icon size={18} aria-hidden="true" />}
+      onClick={cycle}
+      className={cn('size-[var(--control-compact)]', className)}
+    />
   )
 }

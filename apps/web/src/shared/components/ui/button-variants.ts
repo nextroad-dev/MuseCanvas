@@ -1,28 +1,19 @@
 import { cva, type VariantProps } from 'class-variance-authority'
-import { controlMinHeight, controlSquare, iconSlot } from './size'
+import { controlMinHeight, controlSquare, iconSlot, touchTarget, touchTargetSquare } from './size'
 
 export type ButtonVariant = NonNullable<VariantProps<typeof buttonCva>['variant']>
 export type ButtonSize = NonNullable<VariantProps<typeof buttonCva>['size']>
 
 /**
- * The one button recipe. Two rules shape it:
- *  · states.md §2 — primary is dark ink (never the brand green), secondary is
- *    tonal, ghost is a 6%/10% scrim, danger solid is reserved for destructive
- *    confirms, `danger-ghost` is for aborts.
- *  · states.md §9 — Loading outranks Hover, so hover/active paint is compiled
- *    out (`state: 'busy'`) instead of being "overridden".
- * Focus is deliberately absent here: globals.css owns the single ring.
- * Press and colour motion come from `.motion-press`, the same class every other
- * pressable control uses (see `interaction.ts`).
+ * 唯一的按钮配方。
  *
- * ## Why the guard is `:not(:disabled)` and not `enabled:`
- * Navigation wears this recipe too (components.md 通用 — 导航用链接、动作用 button),
- * and `:enabled` matches *form controls only*: on an `<a>` every
- * `enabled:hover:…` variant is dead, so a link built from this recipe looked
- * hoverable but never responded. `:not(:disabled)` matches an `<a href>` (it is
- * never in the disabled state) and still excludes a real `disabled` button, so
- * one set of classes covers both. `Button` adds `.is-disabled` for the cursor /
- * opacity treatment, and `aria-disabled` blocking lives in `Button` itself.
+ * · primary 黑底（品牌绿只用于 logo/状态）；secondary 弱色块；ghost 透明工具按钮；
+ *   danger 仅用于破坏性确认；danger-ghost 用于取消/中止；outline 带描边的中性
+ *   操作；link 像链接的行内文本操作。
+ * · 尺寸通过 `min-h` 走 `--control-*` 阶梯，缩放/换行只会撑高不会裁切；`icon` 为
+ *   方形纯图标尺寸，移动端自动补到 44px 触控下限。
+ * · 焦点环由 globals.css 统一提供；按压/颜色动效来自 `.motion-press`。
+ * · hover 守卫用 `:not(:disabled)` 而不是 `enabled:`，因为 `<a>` 也会穿这套配方。
  */
 const buttonCva = cva(
   [
@@ -37,35 +28,32 @@ const buttonCva = cva(
         primary: 'bg-primary text-on-primary',
         secondary: 'bg-tonal text-foreground',
         ghost: 'bg-transparent text-foreground',
-        'danger-ghost': 'bg-transparent text-danger',
         danger: 'bg-danger text-on-danger',
+        'danger-ghost': 'bg-transparent text-danger',
+        outline: 'border border-border-control bg-transparent text-foreground',
+        link: 'bg-transparent text-foreground underline-offset-4',
       },
-      // 40px default, 32px dense toolbars, 48px touch (components.md 通用).
       size: {
-        sm: `${controlMinHeight.sm} gap-2 px-3`,
-        md: `${controlMinHeight.md} gap-2 px-4`,
+        sm: `${controlMinHeight.sm} ${touchTarget} gap-1.5 px-3`,
+        md: `${controlMinHeight.md} ${touchTarget} gap-2 px-4`,
         lg: `${controlMinHeight.lg} gap-2 px-5 ${iconSlot.md}`,
+        icon: `${controlSquare.md} ${touchTargetSquare} gap-0 p-0`,
       },
       state: {
         idle: '',
         busy: '',
-      },
-      iconOnly: {
-        true: '',
-        false: '',
       },
       fullWidth: {
         true: 'w-full',
         false: '',
       },
     },
-    defaultVariants: { variant: 'primary', size: 'md', state: 'idle' },
+    defaultVariants: { variant: 'primary', size: 'md', state: 'idle', fullWidth: false },
     compoundVariants: [
       { variant: 'primary', state: 'idle', className: 'not-disabled:hover:bg-primary-hover not-disabled:active:bg-primary-active' },
       { variant: 'secondary', state: 'idle', className: 'not-disabled:hover:bg-tonal-hover not-disabled:active:bg-tonal-active' },
-      // Ghost scrim = `--opacity-ghost-hover` / `--opacity-ghost-active`, which
-      // already flip per theme (light .06/.10, dark .08/.14), so one pair of
-      // classes covers both themes — no `dark:` duplicates.
+      // ghost / danger-ghost 的 scrim 用 `--opacity-ghost-*`，token 已按主题翻转，
+      // 一套类名同时覆盖浅色与深色。
       {
         variant: 'ghost',
         state: 'idle',
@@ -79,10 +67,14 @@ const buttonCva = cva(
           'not-disabled:hover:bg-danger/(--opacity-ghost-hover) not-disabled:active:bg-danger/(--opacity-ghost-active)',
       },
       { variant: 'danger', state: 'idle', className: 'not-disabled:hover:bg-danger-hover not-disabled:active:bg-danger-active' },
-      // Square hit area, equal to the control height of the matching size.
-      { iconOnly: true, size: 'sm', className: `${controlSquare.sm} px-0` },
-      { iconOnly: true, size: 'md', className: `${controlSquare.md} px-0` },
-      { iconOnly: true, size: 'lg', className: `${controlSquare.lg} px-0` },
+      {
+        variant: 'outline',
+        state: 'idle',
+        className: 'not-disabled:hover:border-border-strong not-disabled:hover:bg-tonal not-disabled:active:bg-tonal-active',
+      },
+      { variant: 'link', state: 'idle', className: 'not-disabled:hover:underline' },
+      // 忙碌态优先于 hover：请求进行中颜色保持不变。
+      { state: 'busy', className: 'pointer-events-none' },
     ],
   },
 )
@@ -91,36 +83,28 @@ export interface ButtonVariantProps {
   variant?: ButtonVariant
   size?: ButtonSize
   fullWidth?: boolean
-  /** Icon-only control: becomes square. Supply an accessible name. */
-  iconOnly?: boolean
-  /** Drop hover/active paint the way a busy button really behaves. */
+  /** Busy paint: hover/active are suppressed while a request runs. */
   loading?: boolean
   className?: string
 }
 
 /**
- * Class-only escape hatch so a real `<Link>` (navigation) can wear the button
- * styling without the button role. Lives in its own directive-free module:
- * `button.tsx` needs `'use client'` for its refs and width lock, and a server
- * component may render a client module but never *call* its exports — this file
- * can be imported from either side.
+ * 只产出类名的逃生口：真实 `<Link>` 可以穿按钮样式而不承担 button 语义。
+ * 放在无 `'use client'` 的模块里，RSC 也能调用。
  */
 export function buttonVariants({
   variant = 'primary',
   size = 'md',
   fullWidth,
-  iconOnly,
   loading,
   className,
 }: ButtonVariantProps = {}): string {
-  return buttonCva({ variant, size, fullWidth, iconOnly, state: loading ? 'busy' : 'idle', className })
+  return buttonCva({ variant, size, fullWidth, state: loading ? 'busy' : 'idle', className })
 }
 
 /**
- * Quiet square icon button: a muted glyph that wears a tonal wash on hover and
- * press. The chrome of the dialog close, toast dismiss and theme toggle. It is a
- * different recipe from the `ghost` Button variant (a text-tone scrim), on purpose:
- * these sit on top of content and must read as chrome, not as an action.
+ * 安静的方形图标按钮：次级文字色，hover/按压时铺一层弱色块。用于对话框关闭、
+ * toast 关闭与主题切换等“工具”位，语气比 `ghost` 按钮更轻。
  */
 export const ghostIconButtonVariants = cva(
   [

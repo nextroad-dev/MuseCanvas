@@ -1,487 +1,573 @@
 'use client'
 
+// 登录页的客户端岛：邮箱 → 6 位验证码两步状态机 + 第三方整页跳转。
+// 服务端预检（已登录 307）在 `app/(auth)/login/page.tsx`；这里只做交互与提交。
+// 易失 UI 态（step / email / 是否需要邀请码）放 Zustand，服务端状态走 TanStack Query。
+
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
-import { createLoginRequestGate } from '../lib/login-request-state'
-import { OtpInput } from './otp-input'
-import type { FormEvent } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { API_ENDPOINTS } from '@musecanvas/contracts'
-import { ArrowLeftIcon as ArrowLeft, WarningCircleIcon as CircleAlert } from '@phosphor-icons/react'
-import { api, ApiError } from '@/shared/services/api'
-import { cn } from '@/shared/lib/cn'
-import { ACCOUNT_QUERY_KEY } from '@/shared/hooks/useAccount'
-import type { User, OAuthProviderInfo } from '@/shared/types'
-import { safeRedirectPath } from '@/shared/lib/app-routes'
+import { useRouter } from 'next/navigation'
+import type { FormEvent, KeyboardEvent } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { ArrowLeftIcon as ArrowLeft } from '@phosphor-icons/react'
+import { clientApi } from '@/shared/services/client-api'
+import { useAuth, useOAuthProviders, oauthLoginUrl } from '@/shared/hooks/useAuth'
+import { queryKeys } from '@/shared/hooks/query-keys'
+import { useAuthUiStore } from '@/shared/stores/auth-ui-store'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
 import {
   Alert,
   Button,
   Divider,
-  FieldGroup,
-  FormField,
-  IconButton,
+  Field,
   Input,
+  Skeleton,
   buttonVariants,
   iconSize,
 } from '@/shared/components/ui'
-import { GithubIcon, GoogleIcon } from '@/shared/components/brand-icons'
+import { cn } from '@/shared/lib/cn'
+import type { OAuthProvider } from '@/shared/types'
+import { OtpInput } from './otp-input'
+import { GithubIcon, GoogleIcon } from './brand-icons'
+import {
+  describeAuthError,
+  describeOAuthError,
+  formatCountdown,
+  normalizeEmail,
+  validateEmail,
+} from '../lib/auth-errors'
+import { OTP_LENGTH, sanitizeOtpChunk } from '../lib/otp'
 
-type Step = 'email' | 'invitation' | 'otp'
-/** Every step owns exactly one field, so a failed request has a home to report in. */
-type FieldKey = 'email' | 'invitation' | 'otp'
-type FieldErrors = Partial<Record<FieldKey, string>>
-/** `GET auth/oauth/providers` wraps the list: `data` is `{ providers }`, not a bare array. */
-type OAuthProvidersResponse = { providers: OAuthProviderInfo[] }
-
-const fieldOfStep: Record<Step, FieldKey> = {
-  email: 'email',
-  invitation: 'invitation',
-  otp: 'otp',
-}
-
-/** Shape check only — the backend stays the authority on whether an address exists. */
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-/** copy.md §4: 发生了什么 + 为什么 + 如何解决. */
-const NETWORK_ERROR = '网络连接失败。设备可能未联网或后端服务暂时不可用，请检查网络后重试。'
-const OTP_SEND_FAILED = '验证码发送失败。请确认邮箱地址填写无误，稍后重新发送。'
-
-/** 纯样式倒计时：冷却结束前禁用重发，到零即恢复调用既有 otp/request（后端无冷却状态）。 */
+/** 前端冷却纯样式：服务端只有限流（10 分钟窗口），没有可查询的冷却状态。 */
 const RESEND_COOLDOWN_SECONDS = 60
 
-/** Both OAuth slots always render (disabled until enabled), so the row never jumps when providers load. */
-const OAUTH_SLOTS = [
-  { provider: 'github', label: 'GitHub', Icon: GithubIcon },
-  { provider: 'google', label: 'Google', Icon: GoogleIcon },
-] as const
-
-function formatCountdown(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+/** 第三方按钮的展示顺序与图标；label 后端会返回，缺失时用这里的兜底。 */
+const OAUTH_PROVIDERS: Record<OAuthProvider, { label: string; Icon: typeof GithubIcon }> = {
+  github: { label: 'GitHub', Icon: GithubIcon },
+  google: { label: 'Google', Icon: GoogleIcon },
 }
 
-export function LoginForm() {
+export interface LoginFormProps {
+  /** 登录成功后的白名单内部路径（RSC 已用 `safeRedirectPath` 归一化）。 */
+  nextPath: string
+  /** RSC 预检发现后端不可用：仍渲染表单，但先说明「提交可能失败」。 */
+  backendUnavailable?: boolean
+  /** OAuth 回调失败码（`?error=`）。 */
+  oauthError?: string | null
+  /** 邀请制 OAuth 新用户：先补邀请码再完成注册。 */
+  oauthChallenge?: string | null
+  oauthEmail?: string | null
+  oauthProvider?: string | null
+  /** `GET /registration` 的注册模式；true 时邮箱步直接展示邀请码输入。 */
+  requiresInvitation?: boolean
+}
+
+type FieldKey = 'email' | 'invitation'
+type FieldErrors = Partial<Record<FieldKey, string>>
+
+/**
+ * 登录表单。步骤：
+ * 1. `email`：邮箱（邀请制时同时出现邀请码）→ `POST /auth/otp/request`；
+ * 2. `code`：6 位验证码 → `POST /auth/otp/verify`，成功后写会话并跳转；
+ * 3. `oauth-invitation`：第三方回调要求邀请码时 → `POST /auth/oauth/invitation`。
+ */
+export function LoginForm({
+  nextPath,
+  backendUnavailable = false,
+  oauthError,
+  oauthChallenge,
+  oauthEmail,
+  oauthProvider,
+  requiresInvitation = false,
+}: LoginFormProps) {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const from = safeRedirectPath(searchParams.get('from'))
-  const oauthError = searchParams.get('error')
+  const queryClient = useQueryClient()
+  const { requestOtp, verifyOtp } = useAuth()
+  const providersQuery = useOAuthProviders()
 
-  const [step, setStep] = useState<Step>('email')
-  const [email, setEmail] = useState('')
-  const [otpCode, setOtpCode] = useState('')
+  const step = useAuthUiStore((state) => state.step)
+  const email = useAuthUiStore((state) => state.email)
+  const setStep = useAuthUiStore((state) => state.setStep)
+  const setEmail = useAuthUiStore((state) => state.setEmail)
+  const storedRequiresInvitation = useAuthUiStore((state) => state.requiresInvitation)
+  const setRequiresInvitation = useAuthUiStore((state) => state.setRequiresInvitation)
+  const resetAuthUi = useAuthUiStore((state) => state.reset)
+
+  const [code, setCode] = useState('')
   const [invitationCode, setInvitationCode] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [errors, setErrors] = useState<FieldErrors>({})
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
+  const [formError, setFormError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [oauthSubmitting, setOauthSubmitting] = useState(false)
   const [resendIn, setResendIn] = useState(0)
-  const [requestGate] = useState(createLoginRequestGate)
-  useEffect(() => () => requestGate.cancel(), [requestGate])
 
-  // 进入验证码步即开始重发倒计时；归零后按钮恢复为既有 otp/request 调用。
+  const emailInputRef = useRef<HTMLInputElement | null>(null)
+  const invitationInputRef = useRef<HTMLInputElement | null>(null)
+  const otpFirstRef = useRef<HTMLInputElement | null>(null)
+  const inFlightRef = useRef(false)
+
+  // 两种邀请语义分开：
+  // · `invitationRequired` = 后端已明确「这个邮箱未注册且站点邀请制」，提交时必须填；
+  // · `requiresInvitation`（RSC 读 GET /registration）= 站点邀请制，首次登录需要邀请码，
+  //   但已有账号可以直接登录，所以只显示输入框、不强制（后端 nextStep 会兜底）。
+  const invitationRequired = storedRequiresInvitation
+  const invitationVisible = invitationRequired || requiresInvitation
+  const oauthChallengeActive = Boolean(oauthChallenge)
+  const oauthCallbackError = describeOAuthError(oauthError)
+  const enabledProviders = (providersQuery.data ?? []).filter((provider) => provider.enabled)
+
+  // 验证码步缺少邮箱（例如刷新后 store 仍有旧 step）时退回第一步。
   useEffect(() => {
-    if (step === 'otp') setResendIn(RESEND_COOLDOWN_SECONDS)
-  }, [step])
+    if (step === 'code' && !email) setStep('email')
+  }, [step, email, setStep])
+
+  // 邮箱步把焦点交给邮箱输入框（从验证码步返回时也回到这里）；验证码步由 OtpInput 自己聚焦。
   useEffect(() => {
-    if (step !== 'otp' || resendIn <= 0) return
-    const timer = setTimeout(() => setResendIn((left) => Math.max(0, left - 1)), 1000)
-    return () => clearTimeout(timer)
+    if (oauthChallengeActive || step !== 'email') return
+    emailInputRef.current?.focus()
+  }, [step, oauthChallengeActive])
+
+  // 进入验证码步开始前端冷却倒计时（纯样式，到零即允许重发）。
+  useEffect(() => {
+    if (step !== 'code' || resendIn <= 0) return
+    const timer = window.setTimeout(() => setResendIn((left) => Math.max(0, left - 1)), 1000)
+    return () => window.clearTimeout(timer)
   }, [step, resendIn])
-  const providers = useQuery({
-    queryKey: ['auth', 'oauth-providers'],
-    queryFn: async ({ signal }) => {
-      const res = await api<OAuthProvidersResponse>(API_ENDPOINTS.auth.oauthProviders, { signal })
-      if (!res.success || !Array.isArray(res.data?.providers)) throw new ApiError('PROVIDERS_UNAVAILABLE', '暂时无法读取第三方登录方式。请重试或使用邮箱验证码。')
-      return res.data.providers
-    },
-    retry: false,
-    staleTime: 60_000,
-  })
 
-  function invalidateRequest() {
-    requestGate.cancel()
-    setLoading(false)
-  }
-
-  // Focus lands on the first invalid field after a submit (components.md → Inline
-  // error), never while the user is still typing.
-  const inputRefs = useRef<Partial<Record<FieldKey, HTMLInputElement | null>>>({})
-  const focusFirstError = useCallback((next: FieldErrors) => {
-    const first = (Object.keys(fieldOfStep) as FieldKey[]).find((key) => Boolean(next[key]))
-    if (first) inputRefs.current[first]?.focus()
+  const beginRequest = useCallback(() => {
+    if (inFlightRef.current) return false
+    inFlightRef.current = true
+    setSubmitting(true)
+    return true
   }, [])
 
-  const queryClient = useQueryClient()
-  useEffect(() => { inputRefs.current[fieldOfStep[step]]?.focus() }, [step])
+  const endRequest = useCallback(() => {
+    inFlightRef.current = false
+    setSubmitting(false)
+  }, [])
 
-  /** Typing clears only the field's own error, so a hint never fights another. */
   function clearFieldError(key: FieldKey) {
-    setErrors((previous) => {
+    setFieldErrors((previous) => {
       if (!previous[key]) return previous
-      const next: FieldErrors = { ...previous }
+      const next = { ...previous }
       delete next[key]
       return next
     })
   }
 
-  function reportFailure(message: string) {
-    const next: FieldErrors = {}
-    next[fieldOfStep[step]] = message
-    setErrors(next)
-    focusFirstError(next)
+  function focusFirstError(next: FieldErrors) {
+    if (next.email) emailInputRef.current?.focus()
+    else if (next.invitation) invitationInputRef.current?.focus()
   }
 
-  async function handleSendOtp(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  function enterCodeStep() {
+    setStep('code')
+    // 请求已被接受，说明邀请码不再缺失（首次注册会在 verify 时消费邀请码）。
+    setRequiresInvitation(false)
+    setFormError(null)
+    setResendIn(RESEND_COOLDOWN_SECONDS)
+  }
 
-    const trimmedEmail = email.trim()
+  function backToEmail() {
+    setStep('email')
+    setFormError(null)
+    setFieldErrors({})
+  }
+
+  /** Esc 取消：验证码步回退到修改邮箱；其余步骤不拦截。 */
+  function handleFormKeyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.key !== 'Escape') return
+    if (step === 'code') backToEmail()
+  }
+
+  async function sendOtp() {
+    const trimmedEmail = normalizeEmail(email)
+    const emailError = validateEmail(email)
+    const invitationMissing = invitationRequired && !invitationCode.trim()
     const next: FieldErrors = {}
-    if (!trimmedEmail) {
-      next.email = '邮箱地址不能为空。请填写用于接收登录验证码的邮箱地址。'
-    } else if (!EMAIL_PATTERN.test(trimmedEmail)) {
-      next.email = '邮箱地址格式不正确。请确认包含 @ 和完整域名，例如 name@example.com。'
-    }
-    if (step === 'invitation' && !invitationCode.trim()) {
-      next.invitation = '邀请码不能为空。请填写收到的邀请码，每个邀请码通常只能使用一次。'
-    }
-
-    setErrors(next)
+    if (emailError) next.email = emailError
+    if (invitationMissing) next.invitation = '请填写邀请码后再发送验证码。'
+    setFieldErrors(next)
     if (next.email || next.invitation) {
       focusFirstError(next)
       return
     }
 
-    const request = requestGate.begin()
-    if (!request) return
-    setLoading(true)
-
+    setFormError(null)
+    if (!beginRequest()) return
     try {
-      const res = await api<{ accepted: boolean; nextStep: 'invitation' | 'otp' }>(
-        API_ENDPOINTS.auth.otpRequest,
-        {
-          method: 'POST',
-          body: { email: trimmedEmail, invitationCode: invitationCode.trim() || undefined },
-          signal: request.signal,
-        },
-      )
-      if (!requestGate.current(request.id)) return
-      requestGate.finish(request.id)
-      setLoading(false)
-
-      if (res.success && res.data) {
-        setStep(res.data.nextStep)
-        return
+      const result = await requestOtp(trimmedEmail, invitationCode.trim() || undefined)
+      setEmail(trimmedEmail)
+      if (result.accepted) {
+        enterCodeStep()
+      } else if (result.nextStep === 'invitation') {
+        // 后端判定该邮箱首次注册且站点为邀请制：补齐邀请码后再发一次。
+        setRequiresInvitation(true)
+        setFormError('该邮箱尚未注册，本站为邀请制。请填写邀请码后继续；已有账号可留空。')
+        invitationInputRef.current?.focus()
+      } else {
+        enterCodeStep()
       }
-      reportFailure(res.error?.message || OTP_SEND_FAILED)
-    } catch {
-      if (!requestGate.current(request.id)) return
-      requestGate.finish(request.id)
-      setLoading(false)
-      reportFailure(NETWORK_ERROR)
+    } catch (error) {
+      setFormError(describeAuthError(error, '验证码发送失败，请稍后重试。'))
+    } finally {
+      endRequest()
     }
   }
 
-  /** 重发验证码：复用既有 otp/request，后端目前没有冷却状态，前端只做倒计时样式。 */
-  async function handleResendOtp() {
-    const trimmedEmail = email.trim()
-    const request = requestGate.begin()
-    if (!request) return
-    setLoading(true)
-
-    try {
-      const res = await api<{ accepted: boolean; nextStep: 'invitation' | 'otp' }>(
-        API_ENDPOINTS.auth.otpRequest,
-        {
-          method: 'POST',
-          body: { email: trimmedEmail, invitationCode: invitationCode.trim() || undefined },
-          signal: request.signal,
-        },
-      )
-      if (!requestGate.current(request.id)) return
-      requestGate.finish(request.id)
-      setLoading(false)
-
-      if (res.success && res.data) {
-        setStep(res.data.nextStep)
-        setResendIn(RESEND_COOLDOWN_SECONDS)
-        return
-      }
-      reportFailure(res.error?.message || OTP_SEND_FAILED)
-    } catch {
-      if (!requestGate.current(request.id)) return
-      requestGate.finish(request.id)
-      setLoading(false)
-      reportFailure(NETWORK_ERROR)
-    }
+  async function handleSendOtp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await sendOtp()
   }
 
-  async function verifyCode(code: string) {
-    if (!code.trim()) {
-      const next: FieldErrors = { otp: '验证码不能为空。请输入邮件中收到的 6 位验证码。' }
-      setErrors(next)
-      focusFirstError(next)
+  async function verifyCode(value: string) {
+    const normalized = sanitizeOtpChunk(value, OTP_LENGTH)
+    if (normalized.length < OTP_LENGTH) {
+      setFormError('请输入完整的 6 位验证码。')
+      otpFirstRef.current?.focus()
       return
     }
 
-    const request = requestGate.begin()
-    if (!request) return
-    setLoading(true)
-
+    setFormError(null)
+    if (!beginRequest()) return
     try {
-      const res = await api<{ user: User }>(API_ENDPOINTS.auth.otpVerify, {
-        method: 'POST',
-        body: {
-          email: email.trim(),
-          code: code.trim(),
-          invitationCode: invitationCode.trim() || undefined,
-        },
-        signal: request.signal,
-      })
-      if (!requestGate.current(request.id)) return
-      requestGate.finish(request.id)
-      setLoading(false)
-
-      if (res.success && res.data?.user) {
-        // Seed the session query so the signed-in user is the single source of
-        // truth the moment we navigate away from the login screen.
-        queryClient.setQueryData(ACCOUNT_QUERY_KEY, res.data.user)
-        router.push(from)
-        router.refresh()
-        return
-      }
-      reportFailure(
-        res.error?.message || '验证码错误或已过期。请输入邮件中最新的一条验证码，或返回上一步重新发送。',
-      )
-    } catch {
-      if (!requestGate.current(request.id)) return
-      requestGate.finish(request.id)
-      setLoading(false)
-      reportFailure(NETWORK_ERROR)
+      await verifyOtp(normalizeEmail(email), normalized)
+      // verify 已把 session 写入缓存；再失效一次，让其它页面拿到服务端权威态。
+      // 成功后直接离开：不在这里 resetAuthUi，避免导航完成前闪回邮箱表单；
+      // 退出登录时账户页会重置登录 UI 态。
+      await queryClient.invalidateQueries({ queryKey: queryKeys.session })
+      router.replace(nextPath)
+      router.refresh()
+    } catch (error) {
+      setFormError(describeAuthError(error, '验证码校验失败，请确认后重试。'))
+      otpFirstRef.current?.focus()
+    } finally {
+      endRequest()
     }
   }
 
   async function handleVerifyOtp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    await verifyCode(otpCode)
+    await verifyCode(code)
   }
 
-  /** 六格输满（键入或粘贴）即自动提交；单飞行门保证与按钮提交不重发。 */
-  function handleOtpComplete(code: string) {
-    void verifyCode(code)
+  async function handleResend() {
+    if (resendIn > 0 || inFlightRef.current) return
+    setFormError(null)
+    if (!beginRequest()) return
+    try {
+      const result = await requestOtp(normalizeEmail(email), invitationCode.trim() || undefined)
+      if (result.accepted) {
+        setResendIn(RESEND_COOLDOWN_SECONDS)
+        setCode('')
+        otpFirstRef.current?.focus()
+      } else if (result.nextStep === 'invitation') {
+        setRequiresInvitation(true)
+        setStep('email')
+        setFormError('该邮箱尚未注册，本站为邀请制。请填写邀请码后继续。')
+      } else {
+        setResendIn(RESEND_COOLDOWN_SECONDS)
+      }
+    } catch (error) {
+      setFormError(describeAuthError(error, '验证码重新发送失败，请稍后重试。'))
+    } finally {
+      endRequest()
+    }
   }
 
-  /** Returns to the email step; the typed values stay in state (失败保留输入). */
-  function backToEmail() {
-    invalidateRequest()
-    setErrors({})
-    setStep('email')
+  async function handleOAuthInvitation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!oauthChallenge) return
+    if (!invitationCode.trim()) {
+      setFieldErrors({ invitation: '请填写邀请码后完成注册。' })
+      invitationInputRef.current?.focus()
+      return
+    }
+
+    setFormError(null)
+    if (oauthSubmitting) return
+    setOauthSubmitting(true)
+    try {
+      const session = await clientApi.auth.completeOAuthInvitation(oauthChallenge, invitationCode.trim())
+      queryClient.setQueryData(queryKeys.session, session)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.session })
+      router.replace(nextPath)
+      router.refresh()
+    } catch (error) {
+      setFormError(describeAuthError(error, '邀请码注册未完成，请稍后重试。'))
+    } finally {
+      setOauthSubmitting(false)
+    }
   }
+
+  const oauthProviderLabel = oauthProvider
+    ? (OAUTH_PROVIDERS[oauthProvider as OAuthProvider]?.label ?? oauthProvider)
+    : '第三方'
 
   return (
-    <div className="flex flex-col">
-      <header className="mb-7 flex flex-col gap-2">
-        {step === 'otp' ? (
-          <button
-            type="button"
-            onClick={backToEmail}
-            className="-ml-1 inline-flex min-h-[var(--control-sm)] items-center gap-1.5 self-start rounded-control px-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft weight="bold" aria-hidden="true" className={iconSize.sm} />
-            修改邮箱
-          </button>
-        ) : null}
-        <h1 className="text-title tracking-tight text-foreground">
-          {step === 'otp' ? '输入验证码' : step === 'invitation' ? '需要邀请码' : '登录 MuseCanvas'}
-        </h1>
-        <p
-          className={`min-w-0 text-[15px] text-muted-foreground [text-wrap:pretty] ${
-            step === 'otp' ? '[overflow-wrap:anywhere]' : ''
-          }`}
-        >
-          {step === 'otp' ? (
-            <>6 位验证码已发送到 <span className="font-medium text-foreground">{email}</span></>
-          ) : step === 'invitation' ? (
-            '当前平台处于邀请测试期，请填写有效邀请码。'
-          ) : (
-            '开始你的创意'
-          )}
-        </p>
-      </header>
+    <div className="flex flex-col gap-7">
+      {oauthChallengeActive ? (
+        <section aria-label="完成邀请码注册" className="flex flex-col gap-7">
+          <header className="flex flex-col gap-2">
+            <h1 className="text-title text-foreground">完成邀请码注册</h1>
+            <p className="text-compact text-muted-foreground [text-wrap:pretty]">
+              {oauthProviderLabel} 账号
+              {oauthEmail ? (
+                <>
+                  {' '}
+                  <span className="break-all font-medium text-foreground">{oauthEmail}</span>{' '}
+                </>
+              ) : null}
+              尚未注册 MuseCanvas。本站为邀请制，请填写邀请码完成注册。
+            </p>
+          </header>
 
-      {oauthError && (
-        <Alert tone="warning" title="第三方登录未完成" className="mb-4">
-          授权可能已取消或暂不可用。请重试已启用的登录方式，或使用邮箱验证码；回调不会自动提交新请求。
-        </Alert>
-      )}
+          {formError ? (
+            <Alert tone="danger" role="alert" title="无法完成注册">
+              {formError}
+            </Alert>
+          ) : null}
 
-      {step === 'email' && (
-        <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-4">
-          <FieldGroup>
-            <FormField id="email" label="邮箱地址" required error={errors.email} hint="邮箱只用于登录与作品找回。">
+          <form noValidate onSubmit={handleOAuthInvitation} className="flex flex-col gap-4">
+            <Field
+              id="oauth-invitation"
+              label="邀请码"
+              required
+              error={fieldErrors.invitation}
+              hint="邀请码由站点管理员提供，通常只能使用一次。"
+            >
               <Input
+                ref={invitationInputRef}
+                value={invitationCode}
+                onChange={(event) => {
+                  setInvitationCode(event.target.value)
+                  clearFieldError('invitation')
+                }}
+                autoComplete="off"
+                size="lg"
+                className="px-3.5 text-compact"
+                disabled={oauthSubmitting}
+                placeholder="请填写邀请码"
+              />
+            </Field>
+            <Button type="submit" size="lg" fullWidth loading={oauthSubmitting} className="text-compact">
+              完成注册并登录
+            </Button>
+          </form>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-1 self-center px-2 text-compact"
+            onClick={() => {
+              resetAuthUi()
+              router.replace(APP_ROUTES.login)
+            }}
+          >
+            返回登录
+          </Button>
+        </section>
+      ) : step === 'code' ? (
+        <section aria-label="输入验证码" className="flex flex-col gap-7">
+          <header className="flex flex-col gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<ArrowLeft weight="bold" aria-hidden="true" />}
+              onClick={backToEmail}
+              disabled={submitting}
+              className="-ml-1 self-start px-2 text-compact text-muted-foreground"
+            >
+              修改邮箱
+            </Button>
+            <h1 className="text-title text-foreground">输入验证码</h1>
+            <p className="text-compact text-muted-foreground [overflow-wrap:anywhere]">
+              6 位验证码已发送到 <span className="font-medium text-foreground">{email}</span>
+            </p>
+          </header>
+
+          {formError ? (
+            <Alert tone="danger" role="alert" title="登录未完成">
+              {formError}
+            </Alert>
+          ) : null}
+
+          <form
+            noValidate
+            onSubmit={handleVerifyOtp}
+            onKeyDown={handleFormKeyDown}
+            className="flex flex-col gap-4"
+          >
+            <OtpInput
+              id="login-otp"
+              value={code}
+              onChange={(next) => {
+                setCode(next)
+                if (formError) setFormError(null)
+              }}
+              onComplete={(value) => {
+                void verifyCode(value)
+              }}
+              disabled={submitting}
+              autoFocus
+              length={OTP_LENGTH}
+              invalid={Boolean(formError)}
+              describedBy={formError ? undefined : 'login-otp-hint'}
+              firstInputRef={otpFirstRef}
+            />
+
+            {formError ? null : (
+              <p id="login-otp-hint" className="text-ui text-muted-foreground">
+                支持直接粘贴整串验证码，输满 6 位自动提交。
+              </p>
+            )}
+
+            <Button type="submit" size="lg" fullWidth loading={submitting} className="text-compact">
+              验证并登录
+            </Button>
+
+            <div className="flex items-center justify-between gap-3 text-ui">
+              <span className="text-muted-foreground">没收到？检查垃圾邮件</span>
+              <button
+                type="button"
+                onClick={() => void handleResend()}
+                disabled={submitting || resendIn > 0}
+                className="inline-flex min-h-[var(--control-sm)] items-center rounded-control px-2 font-mono tabular-nums text-foreground transition-colors disabled:text-muted-foreground not-disabled:hover:bg-tonal"
+              >
+                {resendIn > 0 ? `重新发送 · ${formatCountdown(resendIn)}` : '重新发送'}
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : (
+        <section aria-label="邮箱登录" className="flex flex-col gap-7">
+          <header className="flex flex-col gap-2">
+            <h1 className="text-title text-foreground">登录 MuseCanvas</h1>
+            <p className="text-compact text-muted-foreground">开始你的创意</p>
+          </header>
+
+          {backendUnavailable ? (
+            <Alert tone="warning" title="服务暂时不可用">
+              无法连接登录服务，提交可能会失败。请检查网络后重试。
+            </Alert>
+          ) : null}
+
+          {oauthCallbackError ? (
+            <Alert tone="warning" title="第三方登录未完成">
+              {oauthCallbackError}
+            </Alert>
+          ) : null}
+
+          {formError ? (
+            <Alert tone="danger" role="alert" title="无法发送验证码">
+              {formError}
+            </Alert>
+          ) : null}
+
+          <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-4">
+            <Field
+              id="login-email"
+              label="邮箱地址"
+              required
+              error={fieldErrors.email}
+              hint="邮箱只用于登录与作品找回。"
+            >
+              <Input
+                ref={emailInputRef}
                 type="email"
+                inputMode="email"
                 autoComplete="email"
                 size="lg"
                 value={email}
                 onChange={(event) => {
-                  invalidateRequest()
                   setEmail(event.target.value)
                   clearFieldError('email')
+                  if (formError) setFormError(null)
                 }}
                 placeholder="name@example.com"
-                className="rounded-control px-4 py-3"
-                ref={(node) => {
-                  inputRefs.current.email = node
-                }}
+                className="px-3.5 text-compact"
+                disabled={submitting}
               />
-            </FormField>
-          </FieldGroup>
+            </Field>
 
-          <Button
-            type="submit"
-            size="lg"
-            loading={loading}
-            fullWidth
-            className="rounded-control"
-          >
-            发送验证码
-          </Button>
-        </form>
-      )}
+            {invitationVisible ? (
+              <Field
+                id="login-invitation"
+                label="邀请码"
+                required={invitationRequired}
+                error={fieldErrors.invitation}
+                hint={
+                  invitationRequired
+                    ? '该邮箱尚未注册，请填写管理员提供的邀请码。'
+                    : '本站为邀请制：首次登录需要邀请码，已有账号可留空。'
+                }
+              >
+                <Input
+                  ref={invitationInputRef}
+                  value={invitationCode}
+                  onChange={(event) => {
+                    setInvitationCode(event.target.value)
+                    clearFieldError('invitation')
+                    if (formError) setFormError(null)
+                  }}
+                  autoComplete="off"
+                  size="lg"
+                  className="px-3.5 text-compact"
+                  disabled={submitting}
+                  placeholder="请填写邀请码"
+                />
+              </Field>
+            ) : null}
 
-      {step === 'invitation' && (
-        <form noValidate onSubmit={handleSendOtp} className="flex flex-col gap-4">
-          <FieldGroup>
-            <FormField id="invite" label="邀请码" required error={errors.invitation}>
-              <Input
-                type="text"
-                autoComplete="off"
-                size="lg"
-                value={invitationCode}
-                onChange={(event) => {
-                  invalidateRequest()
-                  setInvitationCode(event.target.value)
-                  clearFieldError('invitation')
-                }}
-                placeholder="请填写邀请码"
-                className="rounded-control px-4 py-3"
-                ref={(node) => {
-                  inputRefs.current.invitation = node
-                }}
-              />
-            </FormField>
-          </FieldGroup>
-
-          <div className="flex items-center gap-3">
-            <IconButton
-              variant="secondary"
-              size="lg"
-              aria-label="返回上一步，检查邮箱地址"
-              onClick={backToEmail}
-              icon={<ArrowLeft weight="bold" aria-hidden="true" />}
-              className="rounded-control"
-            />
-            <Button type="submit" size="lg" loading={loading} className="flex-1 rounded-control">
-              确认并发送验证码
+            <Button type="submit" size="lg" fullWidth loading={submitting} className="text-compact">
+              {invitationRequired ? '确认并发送验证码' : '发送验证码'}
             </Button>
-          </div>
-        </form>
-      )}
+          </form>
 
-      {step === 'otp' && (
-        <form noValidate onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
-          {/* The cells sit in their own fieldset with a visible 验证码 legend, so no separate
-              FormField label is rendered. The hint and error text follow the cells here. */}
-          <div className="flex flex-col">
-            <OtpInput
-              id="otp"
-              value={otpCode}
-              onChange={(next) => {
-                invalidateRequest()
-                setOtpCode(next)
-                clearFieldError('otp')
-              }}
-              onComplete={handleOtpComplete}
-              disabled={loading}
-              autoFocus
-              invalid={Boolean(errors.otp)}
-              describedBy={errors.otp ? 'otp-error' : 'otp-hint'}
-              firstInputRef={(node) => {
-                inputRefs.current.otp = node
-              }}
-            />
-            {errors.otp ? (
-              <p id="otp-error" className="mt-1 flex items-start gap-1 text-xs text-danger">
-                <CircleAlert weight="fill" aria-hidden="true" className={`mt-0.5 ${iconSize.xs} shrink-0`} />
-                <span>{errors.otp}</span>
-              </p>
-            ) : (
-              <p id="otp-hint" className="mt-1 text-xs text-muted-foreground">
-                支持直接粘贴整串验证码，输满 6 位自动提交。
-              </p>
-            )}
-          </div>
-
-          <Button type="submit" size="lg" loading={loading} fullWidth className="rounded-control">
-            验证并登录
-          </Button>
-
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-muted-foreground">没收到？检查垃圾邮件</span>
-            {/* Cooling down is a disabled button, not a label, so the control keeps its place and state. */}
-            <button
-              type="button"
-              onClick={() => void handleResendOtp()}
-              disabled={loading || resendIn > 0}
-              className="inline-flex min-h-[var(--control-sm)] items-center rounded-control px-3 font-mono text-xs tabular-nums text-foreground transition-colors hover:bg-tonal disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent"
-            >
-              {resendIn > 0 ? `重新发送 · ${formatCountdown(resendIn)}` : '重新发送'}
-            </button>
-          </div>
-        </form>
-      )}
-
-      {step === 'email' && (
-        <section className="flex flex-col" aria-label="第三方账号登录">
-          <Divider label="或使用第三方账号" labelClassName="bg-canvas" className="my-7" />
-          {providers.isPending ? <p role="status" className="mb-4 text-center text-xs text-muted-foreground">正在读取可用登录方式…</p> : null}
-          {providers.error && <div className="mb-4"><Alert tone="warning" action={<Button variant="secondary" size="sm" loading={providers.isFetching} onClick={() => void providers.refetch()}>重试</Button>}>暂时无法读取第三方登录方式，请重试或使用邮箱验证码。</Alert></div>}
-          <div className="grid grid-cols-2 gap-2.5">
-            {OAUTH_SLOTS.map(({ provider, label, Icon }) => {
-              const info = providers.data?.find((entry) => entry.provider === provider)
-              const enabled = info?.enabled === true
-              const className = cn(
-                buttonVariants({ variant: 'secondary', size: 'md' }),
-                'h-11 min-w-0 gap-2.5 disabled:cursor-not-allowed disabled:opacity-[var(--opacity-disabled)]',
-              )
-              const content = (
-                <>
-                  <Icon className={`${iconSize.md} shrink-0`} aria-hidden="true" />
-                  <span>{info?.label ?? label}</span>
-                </>
-              )
-              return enabled ? (
-                <a key={provider} href={API_ENDPOINTS.auth.oauthStart(provider)} className={className}>
-                  {content}
-                </a>
-              ) : (
-                <button key={provider} type="button" disabled className={className}>
-                  {content}
-                </button>
-              )
-            })}
-          </div>
-          {providers.data && !providers.data.some(provider => provider.enabled) && <p className="mt-4 text-center text-xs text-muted-foreground">当前没有启用第三方登录，请使用邮箱验证码。</p>}
+          {enabledProviders.length > 0 ? (
+            <section aria-label="第三方账号登录" className="flex flex-col gap-4">
+              <Divider label="或使用第三方账号" labelClassName="bg-canvas" />
+              <div className="grid grid-cols-2 gap-2.5">
+                {enabledProviders.map((provider) => {
+                  const meta = OAUTH_PROVIDERS[provider.provider]
+                  if (!meta) return null
+                  const Icon = meta.Icon
+                  return (
+                    <a
+                      key={provider.provider}
+                      href={oauthLoginUrl(provider.provider)}
+                      className={cn(
+                        buttonVariants({ variant: 'secondary' }),
+                        'min-h-[var(--control-touch)] gap-2.5 text-compact',
+                      )}
+                    >
+                      <Icon className={cn('shrink-0', iconSize.md)} />
+                      <span>{provider.label || meta.label}</span>
+                    </a>
+                  )
+                })}
+              </div>
+            </section>
+          ) : providersQuery.isPending ? (
+            <div className="flex flex-col gap-4" aria-busy="true">
+              <span className="sr-only">正在读取可用的第三方登录方式</span>
+              <Skeleton className="h-px w-full rounded-none" />
+              <div className="grid grid-cols-2 gap-2.5" aria-hidden="true">
+                <Skeleton className="h-[var(--control-touch)] rounded-control" />
+                <Skeleton className="h-[var(--control-touch)] rounded-control" />
+              </div>
+            </div>
+          ) : null}
         </section>
       )}
 
-      <p className="mt-8 text-center text-xs text-muted-foreground [text-wrap:pretty]">
-        登录即代表你已阅读并同意
-        <Link href="/terms" className="rounded-control text-foreground">
+      <p className="text-center text-xs text-muted-foreground [text-wrap:pretty]">
+        登录即代表你已阅读并同意{' '}
+        <Link href={APP_ROUTES.terms} className="rounded-control text-foreground">
           用户协议
-        </Link>
-        与
-        <Link href="/privacy" className="rounded-control text-foreground">
+        </Link>{' '}
+        与{' '}
+        <Link href={APP_ROUTES.privacy} className="rounded-control text-foreground">
           隐私政策
         </Link>
         。

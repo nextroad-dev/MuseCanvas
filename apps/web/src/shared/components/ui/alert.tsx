@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react'
-import { WarningCircleIcon as CircleAlert, CheckCircleIcon as CircleCheck, InfoIcon as Info, WarningIcon as TriangleAlert, XIcon as X } from '@phosphor-icons/react/ssr'
+import {
+  WarningCircleIcon as CircleAlert,
+  CheckCircleIcon as CircleCheck,
+  InfoIcon as InfoIcon,
+  WarningIcon as TriangleAlert,
+  XIcon as X,
+} from '@phosphor-icons/react/ssr'
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { IconButton } from './button'
@@ -8,7 +14,7 @@ import { iconSize, iconSlot } from './size'
 export type AlertTone = 'info' | 'success' | 'warning' | 'danger'
 
 const toneClasses: Record<AlertTone, { wrap: string; icon: string }> = {
-  // Jude-Frontweb v22 pure banner: 1px subtle border + softened background. Strictly no left 4px stripe.
+  // 纯色横幅：1px 语义描边 + `-soft` 底色，不用左侧装饰竖条。
   info: { wrap: 'border-info-border bg-info-soft', icon: 'text-info' },
   success: { wrap: 'border-success-border bg-success-soft', icon: 'text-success' },
   warning: { wrap: 'border-warning-border bg-warning-soft', icon: 'text-warning' },
@@ -16,7 +22,7 @@ const toneClasses: Record<AlertTone, { wrap: string; icon: string }> = {
 }
 
 const toneIcons: Record<AlertTone, PhosphorIcon> = {
-  info: Info,
+  info: InfoIcon,
   success: CircleCheck,
   warning: TriangleAlert,
   danger: CircleAlert,
@@ -25,28 +31,23 @@ const toneIcons: Record<AlertTone, PhosphorIcon> = {
 export interface AlertProps {
   tone?: AlertTone
   title?: ReactNode
-  /** Body copy. Keep it to the fix, not just the failure (copy.md §4). */
+  /** Body copy: keep it to the fix, not just the failure. */
   children?: ReactNode
-  /** Action link/button placed after the text, e.g. a `<Button size="sm">`. */
+  /** Action node placed after the text, e.g. a `<Button size="sm">`. */
   action?: ReactNode
-  /** Renders the close button. Without it the banner stays until the data changes. */
+  /** Renders the close button; without it the banner stays until the data changes. */
   onDismiss?: () => void
   dismissLabel?: string
   /** `false` drops the leading icon; pass a node to replace it. */
   icon?: ReactNode | false
   /**
-   * `status` (default) is a polite live region — components.md: 普通反馈使用
-   * polite，紧急信息才使用 alert. `alert` also steals announcement, so opt in.
+   * `status`（默认）是 polite 直播区；`alert` 会抢占播报，只在紧急信息时开启。
    */
   role?: 'status' | 'alert'
   className?: string
 }
 
-/**
- * Banner / callout: an in-flow full-width block, never a floating layer. Sized by
- * `rounded-control`, tinted by `{tone}-soft`, enclosed in a 1px `{tone}-border`.
- * Jude-Frontweb v22: Strictly no left 4px decorative vertical stripe.
- */
+/** Banner / callout: in-flow full-width block, never a floating layer. */
 export function Alert({
   tone = 'info',
   title,
@@ -59,18 +60,13 @@ export function Alert({
   className,
 }: AlertProps) {
   const Icon = toneIcons[tone]
-  const shownIcon = icon === false ? null : icon ?? <Icon weight="fill" aria-hidden="true" className={iconSize.md} />
+  const shownIcon = icon === false ? null : (icon ?? <Icon weight="fill" aria-hidden="true" className={iconSize.md} />)
 
   return (
-    <div
-      role={role}
-      className={cn(
-        'flex items-start gap-3 rounded-control border p-4',
-        toneClasses[tone].wrap,
-        className,
-      )}
-    >
-      {shownIcon ? <span className={cn(`mt-0.5 shrink-0 ${iconSlot.md}`, toneClasses[tone].icon)}>{shownIcon}</span> : null}
+    <div role={role} className={cn('flex items-start gap-3 rounded-control border p-4', toneClasses[tone].wrap, className)}>
+      {shownIcon ? (
+        <span className={cn('mt-0.5 shrink-0', iconSlot.md, toneClasses[tone].icon)}>{shownIcon}</span>
+      ) : null}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         {title ? <p className="text-sm font-medium text-foreground">{title}</p> : null}
         {children ? <div className="text-sm text-muted-foreground">{children}</div> : null}
@@ -79,7 +75,7 @@ export function Alert({
       {onDismiss ? (
         <IconButton
           variant="ghost"
-          size="sm"
+          size="icon"
           aria-label={dismissLabel}
           onClick={onDismiss}
           icon={<X weight="bold" aria-hidden="true" className={iconSize.sm} />}

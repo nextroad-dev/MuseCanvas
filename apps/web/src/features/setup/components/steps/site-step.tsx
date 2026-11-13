@@ -1,84 +1,118 @@
 'use client'
 
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { API_ENDPOINTS } from '@musecanvas/contracts'
-import type { SiteSettingsDto } from '@musecanvas/contracts'
-import { api } from '@/shared/services/api'
-import { Badge, Button } from '@/shared/components/ui'
-import { SiteSettingsForm } from '@/features/settings-forms/site-settings-form'
-import { focusFirstInvalidField } from '@/features/settings-forms/settings-form-shared'
-import {
-  siteDraftFromDto,
-  toSiteInput,
-  validateSiteDraft,
-} from '@/features/settings-forms/settings-form-state'
-import type { FieldErrors, SiteDraft } from '@/features/settings-forms/settings-form-state'
-import { invalidateSetupQueries, requireSetupData, stepErrorMessage } from '../../lib/setup-requests'
-import { stepDefinition } from '../../lib/setup-wizard-state'
-import { StepFrame, StepNotice } from './step-frame'
-import type { StepNoticeState } from './step-frame'
-import { useServerDraft } from './use-server-draft'
+import type { FormEvent } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import type { SetupConfigDto } from '@musecanvas/contracts'
+import { clientApi } from '@/shared/services/client-api'
+import { Alert, Badge, Button, Field, Input } from '@/shared/components/ui'
+import { describeSetupError, isSetupSessionError } from '../../lib/setup-errors'
+import { siteDraftFromDto, toSiteInput, validateSiteDraft } from '../../lib/setup-forms'
+import type { SiteDraft } from '../../lib/setup-forms'
+import { SetupStepShell } from '../setup-step-shell'
 
-const FORM_ID = 'setup-site-form'
-const { title, description } = stepDefinition('site')
+export interface SiteStepProps {
+  config: SetupConfigDto
+  /** 服务端 site 段是否已完成。 */
+  complete: boolean
+  onDone: () => void | Promise<void>
+  onSessionLost: (message: string) => void
+}
 
-export function SiteStep({ settings, complete }: { settings: SiteSettingsDto; complete: boolean }) {
-  const queryClient = useQueryClient()
-  const { draft, setDraft, adopt } = useServerDraft(settings, siteDraftFromDto)
-  const [errors, setErrors] = useState<FieldErrors<keyof SiteDraft>>({})
-  const [notice, setNotice] = useState<StepNoticeState | null>(null)
+/** 站点信息：本站名称与公开访问 origin（影响邮件链接、OAuth 回调与签名 URL 的 origin）。 */
+export function SiteStep({ config, complete, onDone, onSessionLost }: SiteStepProps) {
+  const [draft, setDraft] = useState<SiteDraft>(() => siteDraftFromDto(config.site))
+  const [errors, setErrors] = useState<Partial<Record<keyof SiteDraft, string>>>({})
+  const [notice, setNotice] = useState<string | null>(null)
 
   const save = useMutation({
-    mutationFn: async () => {
-      const res = await api<SiteSettingsDto>(API_ENDPOINTS.setup.site, { method: 'POST', body: toSiteInput(draft) })
-      return requireSetupData(res, '保存站点信息失败。')
+    mutationFn: () => clientApi.setup.updateSite(toSiteInput(draft)),
+    onSuccess: async () => {
+      setNotice(null)
+      await onDone()
     },
-    onSuccess: async (saved) => {
-      adopt(saved)
-      setNotice({ tone: 'success', text: '站点信息已保存。' })
-      await invalidateSetupQueries(queryClient)
+    onError: (error: unknown) => {
+      if (isSetupSessionError(error)) {
+        onSessionLost(describeSetupError(error, '初始化会话已失效。'))
+        return
+      }
+      setNotice(describeSetupError(error, '保存站点信息失败，请稍后重试。'))
     },
-    onError: (err) => setNotice({ tone: 'danger', text: stepErrorMessage(err, '保存站点信息失败，请稍后重试。') }),
   })
 
-  function submit() {
+  const saved = config.site.revision > 0
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
     if (save.isPending) return
     const next = validateSiteDraft(draft)
     setErrors(next)
     setNotice(null)
-    if (Object.keys(next).length > 0) {
-      requestAnimationFrame(() => focusFirstInvalidField(FORM_ID))
-      return
-    }
+    if (Object.keys(next).length > 0) return
     save.mutate()
   }
 
   return (
-    <StepFrame
-      headingId="setup-step-site"
-      title={title}
-      description={description}
-      status={<Badge tone={complete ? 'success' : 'neutral'}>{complete ? '已保存' : '待保存'}</Badge>}
+    <SetupStepShell
+      headingId="setup-site-title"
+      title="站点信息"
+      description="站点名称用于页面标题与邮件署名；公开地址用于邮件链接、OAuth 回调与分享地址。"
+      status={<Badge tone={complete ? 'success' : 'neutral'}>{complete ? '已完成' : saved ? '待确认' : '待配置'}</Badge>}
     >
-      <StepNotice notice={notice} />
-      <SiteSettingsForm
-        formId={FORM_ID}
-        draft={draft}
-        onDraftChange={(patch) => {
-          setErrors({})
-          setDraft((previous) => ({ ...previous, ...patch }))
-        }}
-        onSubmit={submit}
-        disabled={save.isPending}
-        errors={errors}
-        noValidate
-      />
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" form={FORM_ID} loading={save.isPending}>
-          保存站点信息
-        </Button>
-      </div>
-    </StepFrame>
+      {notice ? (
+        <Alert tone="danger" role="alert" title="无法保存站点信息">
+          {notice}
+        </Alert>
+      ) : null}
+
+      <form noValidate className="flex flex-col gap-5" onSubmit={submit}>
+        <Field
+          id="setup-site-name"
+          label="站点名称"
+          required
+          error={errors.siteName}
+          hint="显示在浏览器标题与邮件里，最多 120 个字符。"
+        >
+          <Input
+            value={draft.siteName}
+            disabled={save.isPending}
+            placeholder="MuseCanvas"
+            onChange={(event) => {
+              setDraft((previous) => ({ ...previous, siteName: event.target.value }))
+              setErrors((previous) => ({ ...previous, siteName: undefined }))
+              if (notice) setNotice(null)
+            }}
+          />
+        </Field>
+
+        <Field
+          id="setup-site-url"
+          label="公开访问地址"
+          error={errors.siteUrl}
+          hint="可选，例如 https://canvas.example.com。必须是 HTTPS origin（本地开发可用 localhost 的 HTTP），不能带路径。"
+        >
+          <Input
+            type="url"
+            inputMode="url"
+            autoComplete="url"
+            spellCheck={false}
+            value={draft.siteUrl}
+            disabled={save.isPending}
+            placeholder="https://canvas.example.com"
+            onChange={(event) => {
+              setDraft((previous) => ({ ...previous, siteUrl: event.target.value }))
+              setErrors((previous) => ({ ...previous, siteUrl: undefined }))
+              if (notice) setNotice(null)
+            }}
+          />
+        </Field>
+
+        <div>
+          <Button type="submit" loading={save.isPending}>
+            保存并继续
+          </Button>
+        </div>
+      </form>
+    </SetupStepShell>
   )
 }

@@ -1,147 +1,71 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { API_ENDPOINTS } from '@musecanvas/contracts'
-import type { RuntimeSettingsDto, SetupCompletionPayload } from '@musecanvas/contracts'
-import { api } from '@/shared/services/api'
-import { Badge, Button, Divider } from '@/shared/components/ui'
-import { RuntimeSettingsForm } from '@/features/settings-forms/runtime-settings-form'
-import { focusFirstInvalidField } from '@/features/settings-forms/settings-form-shared'
+import { useMutation } from '@tanstack/react-query'
+import type { SetupStatusResponse } from '@musecanvas/contracts'
+import { clientApi } from '@/shared/services/client-api'
+import { Alert, Badge, Button } from '@/shared/components/ui'
+import { describeSetupError, isSetupAlreadyComplete, isSetupSessionError } from '../../lib/setup-errors'
 import {
-  runtimeDraftFromValues,
-  resolveRuntimeValues,
-  runtimeDraftChanged,
-  validateRuntimeDraft,
-} from '@/features/settings-forms/settings-form-state'
-import type { FieldErrors, RuntimeKey } from '@/features/settings-forms/settings-form-state'
-import {
-  errorCodeOf,
-  invalidateSetupQueries,
-  requireSetupData,
-  stepErrorMessage,
-} from '../../lib/setup-requests'
-import { stepDefinition } from '../../lib/setup-wizard-state'
-import type { SetupChecklistItem } from '../../lib/setup-wizard-state'
-import { StepFrame, StepNotice } from './step-frame'
-import type { StepNoticeState } from './step-frame'
-import { useServerDraft } from './use-server-draft'
+  buildCompletionChecklist,
+  canCompleteSetup,
+  incompleteChecklistLabels,
+} from '../../lib/setup-steps'
+import { SetupStepShell } from '../setup-step-shell'
 
-const FORM_ID = 'setup-runtime-form'
-const { title, description } = stepDefinition('complete')
+export interface CompleteStepProps {
+  status: SetupStatusResponse
+  /** 完成成功：向导会重新读取 status 并切到「安装已完成」视图。 */
+  onCompleted: () => void | Promise<void>
+  onSessionLost: (message: string) => void
+}
 
 /**
- * Runtime parameters, the review checklist and the final action. Completion is the
- * only write that flips the server state; the checklist mirrors the gate it enforces.
+ * 最后一步：检查清单（六个必填段）+ `POST /setup/complete`。
+ * 服务端在同一事务里再次校验必填段与管理员，缺段返回 `SETUP_INCOMPLETE`。
  */
-export function CompleteStep({
-  runtime,
-  checklist,
-  canComplete,
-}: {
-  runtime: RuntimeSettingsDto
-  checklist: SetupChecklistItem[]
-  canComplete: boolean
-}) {
-  const router = useRouter()
-  const queryClient = useQueryClient()
-  const { baseline, draft, setDraft, adopt } = useServerDraft(runtime, runtimeDraftFromValues)
-  const [errors, setErrors] = useState<FieldErrors<RuntimeKey>>({})
-  const [notice, setNotice] = useState<StepNoticeState | null>(null)
-  const dirty = runtimeDraftChanged(draft, baseline)
-
-  const saveRuntime = useMutation({
-    mutationFn: async () => {
-      const res = await api<RuntimeSettingsDto>(API_ENDPOINTS.setup.runtime, {
-        method: 'POST',
-        body: resolveRuntimeValues(draft, baseline),
-      })
-      return requireSetupData(res, '保存运行时限制失败。')
-    },
-    onSuccess: async (saved) => {
-      adopt(saved)
-      setNotice({ tone: 'success', text: '运行时限制已保存。Worker 将在缓存刷新后生效。' })
-      await invalidateSetupQueries(queryClient)
-    },
-    onError: (err) => setNotice({ tone: 'danger', text: stepErrorMessage(err, '保存运行时限制失败，请稍后重试。') }),
-  })
+export function CompleteStep({ status, onCompleted, onSessionLost }: CompleteStepProps) {
+  const [error, setError] = useState<string | null>(null)
+  const checklist = buildCompletionChecklist(status.sections)
+  const ready = canCompleteSetup(checklist)
+  const missing = incompleteChecklistLabels(checklist)
 
   const finish = useMutation({
-    mutationFn: async () => {
-      const res = await api<SetupCompletionPayload>(API_ENDPOINTS.setup.complete, { method: 'POST' })
-      return requireSetupData(res, '完成初始化失败。')
-    },
+    mutationFn: () => clientApi.setup.complete(),
     onSuccess: async () => {
-      await invalidateSetupQueries(queryClient)
-      router.push('/admin')
+      setError(null)
+      await onCompleted()
     },
-    onError: (err) => {
-      setNotice({
-        tone: 'danger',
-        text: errorCodeOf(err) === 'SETUP_INCOMPLETE'
-          ? '仍有必填步骤未完成，请检查下方清单。'
-          : stepErrorMessage(err, '完成初始化失败，请稍后重试。'),
-      })
+    onError: (cause: unknown) => {
+      if (isSetupSessionError(cause)) {
+        onSessionLost(describeSetupError(cause, '初始化会话已失效。'))
+        return
+      }
+      // 已经完成（并发/重复提交）：刷新状态即可切到完成页。
+      if (isSetupAlreadyComplete(cause)) {
+        void onCompleted()
+        return
+      }
+      setError(describeSetupError(cause, '完成初始化失败，请稍后重试。'))
     },
   })
 
-  const busy = saveRuntime.isPending || finish.isPending
-  const blockedReason = dirty
-    ? '运行时限制有未保存的更改，请先保存。'
-    : !canComplete
-      ? '尚有未完成的步骤，请在对应步骤中完成后再回到这里。'
-      : null
-
-  function submitRuntime() {
-    if (busy) return
-    const next = validateRuntimeDraft(draft, baseline)
-    setErrors(next)
-    setNotice(null)
-    if (Object.keys(next).length > 0) {
-      requestAnimationFrame(() => focusFirstInvalidField(FORM_ID))
-      return
-    }
-    saveRuntime.mutate()
-  }
-
   return (
-    <StepFrame
-      headingId="setup-step-complete"
-      title={title}
-      description={description}
-      status={<Badge tone={canComplete ? 'success' : 'warning'}>{canComplete ? '可以完成' : '尚未就绪'}</Badge>}
+    <SetupStepShell
+      headingId="setup-complete-title"
+      title="完成初始化"
+      description="初始化完成后向导会关闭，后续配置请以管理员身份登录后台修改。"
+      status={<Badge tone={ready ? 'success' : 'warning'}>{ready ? '可以完成' : '尚未就绪'}</Badge>}
     >
-      <StepNotice notice={notice} />
+      {error ? (
+        <Alert tone="danger" role="alert" title="无法完成初始化">
+          {error}
+        </Alert>
+      ) : null}
 
-      <section aria-labelledby="setup-runtime-title" className="flex min-w-0 flex-col gap-4">
-        <h3 id="setup-runtime-title" className="text-module text-foreground">
-          运行时限制
-        </h3>
-        <RuntimeSettingsForm
-          formId={FORM_ID}
-          draft={draft}
-          onDraftChange={(patch) => {
-            setErrors({})
-            setDraft((previous) => ({ ...previous, ...patch }))
-          }}
-          onSubmit={submitRuntime}
-          disabled={busy}
-          errors={errors}
-          noValidate
-        />
-        <div>
-          <Button type="submit" form={FORM_ID} variant="secondary" loading={saveRuntime.isPending} disabled={busy}>
-            保存运行时限制
-          </Button>
-        </div>
-      </section>
-
-      <Divider />
-
-      <section aria-labelledby="setup-checklist-title" className="flex min-w-0 flex-col gap-3">
-        <h3 id="setup-checklist-title" className="text-module text-foreground">
-          检查清单
+      <section aria-labelledby="setup-checklist-title" className="flex flex-col gap-3">
+        <h3 id="setup-checklist-title" className="text-sm font-medium text-foreground">
+          必填步骤检查清单
         </h3>
         <ul className="flex flex-col divide-y divide-border rounded-control bg-tonal px-4">
           {checklist.map((item) => (
@@ -153,26 +77,22 @@ export function CompleteStep({
         </ul>
       </section>
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2">
         <div>
-          <Button
-            type="button"
-            loading={finish.isPending}
-            disabled={busy || dirty || !canComplete}
-            onClick={() => {
-              setNotice(null)
-              finish.mutate()
-            }}
-          >
+          <Button loading={finish.isPending} disabled={!ready || finish.isPending} onClick={() => finish.mutate()}>
             完成初始化
           </Button>
         </div>
-        {blockedReason ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {blockedReason}
+        {ready ? (
+          <p className="text-xs text-muted-foreground">
+            注意：完成后初始化入口关闭，当前管理员会话保留；如需调整配置请登录后台。
           </p>
-        ) : null}
+        ) : (
+          <p role="status" className="text-sm text-muted-foreground">
+            还有未完成的步骤：{missing.join('、')}。请返回对应步骤完成后回到这里。
+          </p>
+        )}
       </div>
-    </StepFrame>
+    </SetupStepShell>
   )
 }

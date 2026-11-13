@@ -1,5 +1,6 @@
-import { AdminPageSkeleton } from './_components/admin-page-skeleton'
+import { AdminDashboardSkeleton } from './_components/admin-dashboard-skeleton'
 
-export default function Loading() {
-  return <AdminPageSkeleton title="系统概览" description="查看系统汇总指标和最近任务状态。" variant="dashboard" />
+/** `/admin` 路由段加载态：外壳（layout）已渲染，这里只占内容区。 */
+export default function AdminLoading() {
+  return <AdminDashboardSkeleton />
 }

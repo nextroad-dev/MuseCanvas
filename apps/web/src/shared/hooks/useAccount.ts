@@ -1,20 +1,29 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
-import { api } from '@/shared/services/api'
-import type { UserProfile } from '@/shared/types'
+// 账户聚合读取：会话用户 + 已绑定第三方身份（GET /session + /account/oauth）。
 
-export const ACCOUNT_QUERY_KEY = ['account'] as const
+import { useQuery, type UseQueryResult } from '@tanstack/react-query'
+import { clientApi } from '@/shared/services/client-api'
+import type { AccountDto, OAuthIdentityDto } from '@/shared/types'
+import { queryKeys } from './query-keys'
+import { useSession } from './useSession'
 
-export function useAccountQuery() {
+export function useAccount(): UseQueryResult<AccountDto> {
+  const session = useSession()
   return useQuery({
-    queryKey: ACCOUNT_QUERY_KEY,
-    queryFn: async () => {
-      const res = await api.getMe()
-      if (!res.success || !res.data) {
-        throw new Error(res.error?.message || '获取用户账户失败')
-      }
-      return res.data as UserProfile
-    },
+    queryKey: queryKeys.account,
+    queryFn: () => clientApi.account.get(),
+    enabled: Boolean(session.data),
+    staleTime: 30_000,
+  })
+}
+
+export function useLinkedOAuthIdentities(): UseQueryResult<OAuthIdentityDto[]> {
+  const session = useSession()
+  return useQuery({
+    queryKey: [...queryKeys.account, 'oauth'] as const,
+    queryFn: () => clientApi.account.getOAuthIdentities(),
+    enabled: Boolean(session.data),
+    staleTime: 30_000,
   })
 }

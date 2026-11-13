@@ -1,559 +1,69 @@
 'use client'
 
-import { cn } from '@/shared/lib/cn'
-import { adminTouchTargetsSquare, adminPageActions, adminPageHeader, adminPageRoot } from '../lib/admin-layout'
-import { useCallback, useEffect, useState } from 'react'
-import { useMutation,
-  useQuery,
-  useQueryClient } from '@tanstack/react-query'
-import { API_ENDPOINTS } from '@musecanvas/contracts'
-import { api } from '@/shared/services/api'
-import { requireAdminData } from '../lib/admin-query'
-import { hasNewerAdminSettingsRevision, requireVerifiedAdminSettings } from '../lib/admin-settings-state'
-import { AdminCanvasAgentSettings } from './admin-canvas-agent-settings'
-import type {
-  RuntimeSettingsDto,
-  SetupConfigResponse,
-  SetupSmtpTestResult,
-  SetupStorageTestResult,
-  SiteSettingsDto,
-  SmtpSettingsDto,
-  StorageSettingsDto,
-  } from '@/shared/types'
-import {
-  Alert,
-  Badge,
-  Button,
-  CardDescription,
-  CardTitle,
-  Dialog,
-  PageHeader,
-  SkeletonText,
-  SkeletonTile,
-  Tabs,
-  iconSize,
-} from '@/shared/components/ui'
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowClockwiseIcon as RefreshCw } from '@phosphor-icons/react'
-import { ConnectionBadge } from '@/features/settings-forms/settings-form-shared'
-import { SiteSettingsForm } from '@/features/settings-forms/site-settings-form'
-import { SmtpSettingsForm } from '@/features/settings-forms/smtp-settings-form'
-import { StorageSettingsForm } from '@/features/settings-forms/storage-settings-form'
-import { RuntimeSettingsForm } from '@/features/settings-forms/runtime-settings-form'
-import {
-  runtimeDraftChanged,
-  runtimeDraftFromValues,
-  resolveRuntimeValues,
-  runtimeTotalBelowImage,
-  siteDraftChanged,
-  siteDraftFromDto,
-  smtpDraftChanged,
-  smtpDraftFromDto,
-  storageDraftChanged,
-  storageDraftFromDto,
-  toSiteInput,
-  toSmtpInput,
-  toStorageInput,
-} from '@/features/settings-forms/settings-form-state'
-import type { RuntimeDraft, SiteDraft, SmtpDraft, StorageDraft } from '@/features/settings-forms/settings-form-state'
+import type { SetupConfigDto } from '@musecanvas/contracts'
+import { Alert } from '@/shared/components/ui/alert'
+import { Badge } from '@/shared/components/ui/badge'
+import { Button } from '@/shared/components/ui/button'
+import { Card, CardBody, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card'
+import { EmptyState } from '@/shared/components/ui/empty-state'
+import { PageHeader } from '@/shared/components/ui/page-header'
+import { Tabs } from '@/shared/components/ui/tabs'
+import { iconSize } from '@/shared/components/ui/size'
+import { queryKeys } from '@/shared/hooks/query-keys'
+import { formatDateTime } from '@/shared/lib/format'
+import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
+import { clientApi } from '@/shared/services/client-api'
+import { AdminSettingsGeneral } from './admin-settings-general'
+import { AdminSettingsSmtp } from './admin-settings-smtp'
+import { AdminSettingsStorage } from './admin-settings-storage'
+import { AdminSettingsRuntime } from './admin-settings-runtime'
 
-const settingsQueryKey = ['admin', 'settings'] as const
-
-interface Feedback {
-  ok: boolean
-  msg: string
-}
-
-interface SectionState { dirty: boolean; busy: boolean }
-type SectionStateReporter = (section: SectionId, state: SectionState) => void
-
-function SettingsSectionFeedback({ feedback, newerRevision, dirty, busy, onReload }: {
-  feedback: Feedback | null; newerRevision: boolean; dirty: boolean; busy: boolean; onReload: () => void
-}) {
-  const [confirmReload, setConfirmReload] = useState(false)
-  return <>
-    {feedback && <Alert tone={feedback.ok ? 'success' : 'danger'} role={feedback.ok ? 'status' : 'alert'}>{feedback.msg}</Alert>}
-    {newerRevision && <Alert tone="info" title="服务端配置已更新" action={
-      <Button variant="secondary" disabled={busy} onClick={() => { if (dirty) setConfirmReload(true); else onReload() }}>重新载入本分区</Button>
-    }>当前草稿与已载入基线均保留。重新载入才会采用服务端新版本，并清空本分区的敏感输入。</Alert>}
-    <Dialog open={confirmReload} onClose={() => setConfirmReload(false)} title="放弃草稿并重新载入？" size="narrow" panelClassName={cn('max-h-[90dvh]', adminTouchTargetsSquare)} footer={<>
-      <Button variant="ghost" disabled={busy} onClick={() => setConfirmReload(false)}>保留草稿</Button>
-      <Button variant="danger" disabled={busy} onClick={() => { onReload(); setConfirmReload(false) }}>放弃草稿并载入</Button>
-    </>}><p className="text-sm">本分区尚有未保存内容。重新载入会替换此草稿，密钥输入也会清空；其它分区不受影响。</p></Dialog>
-  </>
-}
-
-/** Persistent section panels preserve drafts and write-only secret inputs across tab changes. */
-type SectionId = 'site' | 'smtp' | 'storage' | 'runtime' | 'canvasAgent'
-
-/** Section header: title + description on the left, status metadata on the right. */
-function SectionHeader({
-  title,
-  description,
-  status,
-}: {
-  title: string
-  description: string
-  status?: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-b border-border pb-6">
-      <div className="flex min-w-0 flex-col gap-1">
-        <CardTitle level={2}>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </div>
-      {status ? <div className="flex shrink-0 items-center gap-2">{status}</div> : null}
-    </div>
-  )
-}
+type Section = 'general' | 'smtp' | 'storage' | 'runtime'
 
 /**
- * 危险操作区 (components.md 场景模式 → 设置页): its own block at the bottom of the
- * segment — a 4px danger bar on the `danger-soft` surface. It sits between cards,
- * never inside one, so no divider rule is needed.
+ * 系统配置页：站点/注册、SMTP、对象存储、运行时限制四个分区。
+ *
+ * 读取统一走 `GET /setup/config`（管理员可直接访问向导端点），写入用 `POST /setup/*`；
+ * 密钥字段只写不回显。保存/测试成功后用返回 DTO 覆盖当前分区，避免整页闪烁与草稿丢失。
  */
-function DangerZone({ description, children }: { description: string; children: React.ReactNode }) {
-  return (
-    <section
-      aria-label="危险操作"
-      className="flex flex-col gap-4 rounded-card border border-danger-border bg-danger-soft p-4"
-    >
-      <div className="flex flex-col gap-1">
-        <h3 className="text-module text-danger">危险操作</h3>
-        <p className="max-w-reading text-sm text-muted-foreground">{description}</p>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">{children}</div>
-    </section>
-  )
-}
-
-/**
- * Sticky save bar (设置页 footer): 取消 ghost + 保存 primary. The buttons submit the
- * segment's form through its `id`, so each section keeps its own mutation.
- */
-function SaveBar({
-  formId,
-  dirty,
-  saving,
-  busy,
-  onCancel,
-}: {
-  formId: string
-  dirty: boolean
-  saving: boolean
-  busy: boolean
-  onCancel: () => void
-}) {
-  return (
-    <div className="sticky bottom-0 z-sticky flex flex-wrap items-center justify-between gap-3 rounded-card bg-surface p-4 shadow-floating">
-      <p role="status" className="text-sm text-muted-foreground">{busy ? '本分区操作中，表单已锁定。' : dirty ? '有未保存的更改。' : '当前没有可提交的更改。'}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="ghost" className="min-h-[var(--control-lg)] md:min-h-[var(--control-md)]" disabled={busy} onClick={onCancel}>
-          取消
-        </Button>
-        <Button type="submit" className="min-h-[var(--control-lg)] md:min-h-[var(--control-md)]" form={formId} loading={saving} disabled={busy || !dirty}>
-          保存
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-const FORM_ID = {
-  site: 'admin-settings-site-form',
-  smtp: 'admin-settings-smtp-form',
-  storage: 'admin-settings-storage-form',
-  runtime: 'admin-settings-runtime-form',
-} as const
-
-const updatedAtStatus = (updatedAt: string) => (
-  <p className="text-xs text-muted-foreground">更新于 {updatedAt.slice(0, 10)}</p>
-)
-
-function SiteSection({
-  settings: latestSettings,
-  onStateChange,
-}: {
-  settings: SiteSettingsDto
-  onStateChange: SectionStateReporter
-}) {
-  const queryClient = useQueryClient()
-  const [settings, setSettings] = useState(latestSettings)
-  const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [draft, setDraft] = useState<SiteDraft>(() => siteDraftFromDto(latestSettings))
-
-  const dirty = siteDraftChanged(draft, settings)
-
-  const save = useMutation({
-    mutationFn: async () => {
-      const body = toSiteInput(draft)
-      if (!body.siteName) throw new Error('请输入站点名称')
-      const res = await api<SiteSettingsDto>(API_ENDPOINTS.setup.site, { method: 'POST', body })
-      if (!res.success) throw new Error(res.error?.message || '保存站点配置失败')
-      return requireAdminData(res, '保存响应缺少配置数据')
-    },
-    onSuccess: async (data) => {
-      loadSettings(data)
-      setFeedback({ ok: true, msg: '站点配置已保存' })
-      await queryClient.invalidateQueries({ queryKey: settingsQueryKey })
-    },
-    onError: (err: Error) => setFeedback({ ok: false, msg: err.message || '保存站点配置失败' }),
-  })
-
-  function reset() {
-    setDraft(siteDraftFromDto(settings))
-  }
-
-  function loadSettings(next: SiteSettingsDto) {
-    setSettings(next)
-    setFeedback(null)
-    setDraft(siteDraftFromDto(next))
-  }
-
-  const busy = save.isPending
-  useEffect(() => { onStateChange('site', { dirty, busy }) }, [dirty, busy, onStateChange])
-
-  return (
-    <>
-      <SettingsSectionFeedback feedback={feedback} newerRevision={hasNewerAdminSettingsRevision(settings, latestSettings)} dirty={dirty} busy={busy} onReload={() => loadSettings(latestSettings)} />
-      <section className="@container/fields flex min-w-0 flex-col gap-6">
-        <SectionHeader
-          title="站点信息"
-          description="用于邮件、OAuth 回调与分享链接中的实例公开地址。"
-          status={updatedAtStatus(settings.updatedAt)}
-        />
-        <SiteSettingsForm
-          formId={FORM_ID.site}
-          draft={draft}
-          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
-          onSubmit={() => {
-            if (!busy && dirty) save.mutate()
-          }}
-          disabled={busy}
-        />
-      </section>
-      <SaveBar formId={FORM_ID.site} dirty={dirty} saving={save.isPending} busy={busy} onCancel={reset} />
-    </>
-  )
-}
-
-function SmtpSection({
-  settings: latestSettings,
-  onStateChange,
-}: {
-  settings: SmtpSettingsDto
-  onStateChange: SectionStateReporter
-}) {
-  const queryClient = useQueryClient()
-  const [settings, setSettings] = useState(latestSettings)
-  const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [draft, setDraft] = useState<SmtpDraft>(() => smtpDraftFromDto(latestSettings))
-
-  const dirty = smtpDraftChanged(draft, settings)
-
-  const save = useMutation({
-    mutationFn: async () => {
-      const res = await api<SmtpSettingsDto>(API_ENDPOINTS.setup.smtp, { method: 'POST', body: toSmtpInput(draft, settings) })
-      if (!res.success) throw new Error(res.error?.message || '保存 SMTP 设置失败')
-      return requireAdminData(res, '保存响应缺少配置数据')
-    },
-    onSuccess: async (data) => {
-      loadSettings(data)
-      setFeedback({ ok: true, msg: 'SMTP 设置已保存，建议验证连接；保存本身不代表可以投递邮件。' })
-      await queryClient.invalidateQueries({ queryKey: settingsQueryKey })
-    },
-    onError: (err: Error) => setFeedback({ ok: false, msg: err.message || '保存 SMTP 设置失败' }),
-  })
-
-  const test = useMutation({
-    mutationFn: async () => {
-      const res = await api<SetupSmtpTestResult>(API_ENDPOINTS.setup.smtpTest, {
-        method: 'POST',
-        body: toSmtpInput(draft, settings),
-      })
-      return requireVerifiedAdminSettings(res, 'SMTP 连接验证未通过或响应缺少设置数据')
-    },
-    onSuccess: async (data) => {
-      loadSettings(data)
-      setFeedback({ ok: true, msg: '当前草稿的 SMTP 连接验证通过，设置已保存；此测试不发送邮件，也不保证邮件投递。' })
-      await queryClient.invalidateQueries({ queryKey: settingsQueryKey })
-    },
-    onError: (err: Error) => setFeedback({ ok: false, msg: err.message || 'SMTP 连通性测试未通过' }),
-  })
-
-  function reset() {
-    setDraft(smtpDraftFromDto(settings))
-  }
-
-  function loadSettings(next: SmtpSettingsDto) {
-    setSettings(next)
-    setFeedback(null)
-    setDraft(smtpDraftFromDto(next))
-  }
-
-  const busy = save.isPending || test.isPending
-  useEffect(() => { onStateChange('smtp', { dirty, busy }) }, [dirty, busy, onStateChange])
-
-  return (
-    <>
-      <SettingsSectionFeedback feedback={feedback} newerRevision={hasNewerAdminSettingsRevision(settings, latestSettings)} dirty={dirty} busy={busy} onReload={() => loadSettings(latestSettings)} />
-      <section className="@container/fields flex min-w-0 flex-col gap-6">
-        <SectionHeader
-          title="SMTP 邮件服务"
-          description="用于发送登录验证码与通知邮件。"
-          status={<ConnectionBadge status={settings.status} />}
-        />
-        <SmtpSettingsForm
-          formId={FORM_ID.smtp}
-          baseline={settings}
-          draft={draft}
-          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
-          onSubmit={() => {
-            if (!busy && dirty) save.mutate()
-          }}
-          disabled={busy}
-        />
-      </section>
-
-      <DangerZone description="验证当前草稿的 SMTP 连接，不发送邮件；连接成功后才保存设置，连接失败不保存。测试会真实连接外部服务；成功保存后登录密钥可能被覆盖，旧值无法取回。">
-        <Button variant="secondary" loading={test.isPending} disabled={busy} onClick={() => { if (!busy) test.mutate() }}>
-          验证 SMTP 连接
-        </Button>
-      </DangerZone>
-
-      <SaveBar formId={FORM_ID.smtp} dirty={dirty} saving={save.isPending} busy={busy} onCancel={reset} />
-    </>
-  )
-}
-
-function StorageSection({
-  settings: latestSettings,
-  onStateChange,
-}: {
-  settings: StorageSettingsDto
-  onStateChange: SectionStateReporter
-}) {
-  const queryClient = useQueryClient()
-  const [settings, setSettings] = useState(latestSettings)
-  const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [draft, setDraft] = useState<StorageDraft>(() => storageDraftFromDto(latestSettings))
-
-  const dirty = storageDraftChanged(draft, settings)
-
-  const save = useMutation({
-    mutationFn: async () => {
-      const res = await api<StorageSettingsDto>(API_ENDPOINTS.setup.storage, { method: 'POST', body: toStorageInput(draft, settings) })
-      if (!res.success) throw new Error(res.error?.message || '保存对象存储设置失败')
-      return requireAdminData(res, '保存响应缺少配置数据')
-    },
-    onSuccess: async (data) => {
-      loadSettings(data)
-      setFeedback({ ok: true, msg: '对象存储设置已保存，建议执行连通性测试完成验证。' })
-      await queryClient.invalidateQueries({ queryKey: settingsQueryKey })
-    },
-    onError: (err: Error) => setFeedback({ ok: false, msg: err.message || '保存对象存储设置失败' }),
-  })
-
-  const test = useMutation({
-    mutationFn: async () => {
-      const res = await api<SetupStorageTestResult>(API_ENDPOINTS.setup.storageTest, {
-        method: 'POST',
-        body: toStorageInput(draft, settings),
-      })
-      return requireVerifiedAdminSettings(res, '对象存储连通性测试未通过或响应缺少设置数据')
-    },
-    onSuccess: async (data) => {
-      loadSettings(data)
-      setFeedback({ ok: true, msg: '当前草稿的对象存储连通性测试通过，设置已保存并标记为已验证。' })
-      await queryClient.invalidateQueries({ queryKey: settingsQueryKey })
-    },
-    onError: (err: Error) => setFeedback({ ok: false, msg: err.message || '对象存储连通性测试未通过' }),
-  })
-
-  function reset() {
-    setDraft(storageDraftFromDto(settings))
-  }
-
-  function loadSettings(next: StorageSettingsDto) {
-    setSettings(next)
-    setFeedback(null)
-    setDraft(storageDraftFromDto(next))
-  }
-
-  const busy = save.isPending || test.isPending
-  useEffect(() => { onStateChange('storage', { dirty, busy }) }, [dirty, busy, onStateChange])
-
-  return (
-    <>
-      <SettingsSectionFeedback feedback={feedback} newerRevision={hasNewerAdminSettingsRevision(settings, latestSettings)} dirty={dirty} busy={busy} onReload={() => loadSettings(latestSettings)} />
-      <section className="@container/fields flex min-w-0 flex-col gap-6">
-        <SectionHeader
-          title="对象存储"
-          description="S3 兼容存储（含 MinIO / OSS / COS / R2）或本地磁盘目录，用于持久化生成的图像与视频资产。"
-          status={<ConnectionBadge status={settings.status} />}
-        />
-        <StorageSettingsForm
-          formId={FORM_ID.storage}
-          baseline={settings}
-          draft={draft}
-          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
-          onSubmit={() => {
-            if (!busy && dirty) save.mutate()
-          }}
-          disabled={busy}
-        />
-      </section>
-
-      <DangerZone description="测试当前草稿，会真实读写存储桶中的测试对象；测试成功后才保存设置，失败不保存。成功保存后 Secret Access Key 可能被覆盖，旧值无法取回。">
-        <Button variant="secondary" loading={test.isPending} disabled={busy} onClick={() => { if (!busy) test.mutate() }}>
-          运行连通性测试
-        </Button>
-      </DangerZone>
-
-      <SaveBar formId={FORM_ID.storage} dirty={dirty} saving={save.isPending} busy={busy} onCancel={reset} />
-    </>
-  )
-}
-
-function RuntimeSection({
-  settings: latestSettings,
-  onStateChange,
-}: {
-  settings: RuntimeSettingsDto
-  onStateChange: SectionStateReporter
-}) {
-  const queryClient = useQueryClient()
-  const [settings, setSettings] = useState(latestSettings)
-  const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [draft, setDraft] = useState<RuntimeDraft>(() => runtimeDraftFromValues(latestSettings))
-
-  const dirty = runtimeDraftChanged(draft, settings)
-
-  // The same cross-check the mutation runs, surfaced on the field that caused it.
-  const totalBelowImage = runtimeTotalBelowImage(resolveRuntimeValues(draft, settings))
-
-  const save = useMutation({
-    mutationFn: async () => {
-      // Every field is always submitted: the server only cross-checks the keys present
-      // in the request, so a partial submit could store a total cap below the
-      // single-image cap that stays in the row. Blank inputs fall back to the stored value.
-      const values = resolveRuntimeValues(draft, settings)
-      if (runtimeTotalBelowImage(values)) {
-        throw new Error('总大小上限不能小于单图大小上限')
-      }
-      const res = await api<RuntimeSettingsDto>(API_ENDPOINTS.setup.runtime, { method: 'POST', body: values })
-      if (!res.success) throw new Error(res.error?.message || '保存运行时限制失败')
-      return requireAdminData(res, '保存响应缺少配置数据')
-    },
-    onSuccess: async (data) => {
-      loadSettings(data)
-      setFeedback({ ok: true, msg: '运行时限制已保存，Worker 将在缓存刷新后生效。' })
-      await queryClient.invalidateQueries({ queryKey: settingsQueryKey })
-    },
-    onError: (err: Error) => setFeedback({ ok: false, msg: err.message || '保存运行时限制失败' }),
-  })
-
-  function loadSettings(next: RuntimeSettingsDto) {
-    setSettings(next)
-    setFeedback(null)
-    setDraft(runtimeDraftFromValues(next))
-  }
-
-  const busy = save.isPending
-  useEffect(() => { onStateChange('runtime', { dirty, busy }) }, [dirty, busy, onStateChange])
-
-  return (
-    <>
-      <SettingsSectionFeedback feedback={feedback} newerRevision={hasNewerAdminSettingsRevision(settings, latestSettings)} dirty={dirty} busy={busy} onReload={() => loadSettings(latestSettings)} />
-      <section className="@container/fields flex min-w-0 flex-col gap-6">
-        <SectionHeader
-          title="运行时限制"
-          description="上传、生成任务与上游调用的护栏参数，留空的字段保持原值。"
-          status={updatedAtStatus(settings.updatedAt)}
-        />
-        <RuntimeSettingsForm
-          formId={FORM_ID.runtime}
-          draft={draft}
-          onDraftChange={(patch) => setDraft((previous) => ({ ...previous, ...patch }))}
-          onSubmit={() => {
-            if (!busy && dirty) save.mutate()
-          }}
-          disabled={busy}
-          errors={totalBelowImage ? { maxTotalBytes: '总大小上限不能小于单图大小上限。' } : undefined}
-        />
-      </section>
-
-      <SaveBar
-        formId={FORM_ID.runtime}
-        dirty={dirty}
-        saving={save.isPending}
-        busy={busy}
-        onCancel={() => setDraft(runtimeDraftFromValues(settings))}
-      />
-    </>
-  )
-}
-
-function SettingsSkeleton() {
-  return <div className="flex min-w-0 flex-col gap-4" aria-hidden="true">
-    <div className="flex max-w-full gap-2 overflow-hidden">{[0, 1, 2, 3, 4].map((index) => <SkeletonTile key={index} className="aspect-auto h-10 w-28 shrink-0 rounded-control" />)}</div>
-    <div className="w-full max-w-form">
-      <div className="@container/fields flex min-w-0 flex-col gap-6">
-        <SkeletonText width="12rem" /><SkeletonText lines={2} />
-        <div className="flex flex-col gap-6">{[0, 1].map((index) => <div key={index} className="flex flex-col gap-2"><SkeletonText width="8rem" /><SkeletonTile className="aspect-auto h-10 w-full rounded-control" /></div>)}</div>
-      </div>
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-card bg-surface p-4 shadow-floating"><SkeletonText width="10rem" /><SkeletonTile className="aspect-auto h-10 w-32 rounded-control" /></div>
-    </div>
-  </div>
-}
-
 export function AdminSettingsView() {
-  const [sectionStates, setSectionStates] = useState<Partial<Record<SectionId, SectionState>>>({})
-  const [refreshConfirm, setRefreshConfirm] = useState(false)
-  const reportSectionState = useCallback<SectionStateReporter>((section, state) => {
-    setSectionStates((previous) => ({ ...previous, [section]: state }))
-  }, [])
-  const reportCanvasAgentState = useCallback((state: SectionState) => {
-    reportSectionState('canvasAgent', state)
-  }, [reportSectionState])
-  const anyDirty = Object.values(sectionStates).some((state) => state?.dirty)
-  const anyBusy = Object.values(sectionStates).some((state) => state?.busy)
-  const [active, setActive] = useState<SectionId>('site')
+  const [section, setSection] = useState<Section>('general')
+  const queryClient = useQueryClient()
 
-  const {
-    data: config,
-    isLoading,
-    isFetching,
-    isError,
-    error,
-    refetch,
-  } = useQuery({
-    queryKey: settingsQueryKey,
-    queryFn: async () => {
-      const res = await api<SetupConfigResponse>(API_ENDPOINTS.setup.config)
-      if (!res.success || !res.data) throw new Error(res.error?.message || '读取系统配置失败')
-      return res.data
-    },
+  const configQuery = useQuery({
+    queryKey: queryKeys.setup.config,
+    queryFn: () => clientApi.setup.getConfig(),
+    staleTime: 30_000,
+  })
+  const statusQuery = useQuery({
+    queryKey: queryKeys.setup.status,
+    queryFn: () => clientApi.setup.getStatus(),
+    staleTime: 60_000,
   })
 
-  function requestRefresh() {
-    if (anyBusy) return
-    if (anyDirty) setRefreshConfirm(true)
-    else void refetch()
+  const config = configQuery.data
+  const status = statusQuery.data
+  const database = config?.database
+
+  function applySection<K extends keyof SetupConfigDto>(key: K, value: SetupConfigDto[K]) {
+    queryClient.setQueryData<SetupConfigDto>(queryKeys.setup.config, (current) =>
+      current ? { ...current, [key]: value } : current,
+    )
   }
 
   return (
-    <div className={adminPageRoot}>
+    <div className="flex min-w-0 flex-col gap-6">
       <PageHeader
-        className={adminPageHeader}
-        actionsClassName={adminPageActions}
         title="系统配置"
-        description="实例初始化后的站点、邮件、存储与运行时参数维护入口。"
+        description="实例初始化后的站点、邮件、对象存储与运行时参数维护入口。字段留空表示保持原值；密钥只写不回显。"
         actions={
           <Button
             variant="secondary"
-            onClick={requestRefresh}
-            loading={isFetching}
-            disabled={anyBusy}
+            onClick={() => void configQuery.refetch()}
+            loading={configQuery.isFetching}
             icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
           >
             刷新
@@ -561,49 +71,98 @@ export function AdminSettingsView() {
         }
       />
 
-      <Dialog open={refreshConfirm} onClose={() => setRefreshConfirm(false)} title="有未保存草稿，仍要刷新？" size="narrow" panelClassName={cn('max-h-[90dvh]', adminTouchTargetsSquare)} footer={<>
-        <Button variant="ghost" onClick={() => setRefreshConfirm(false)}>取消刷新</Button>
-        <Button variant="secondary" disabled={anyBusy || isFetching} onClick={() => { setRefreshConfirm(false); void refetch() }}>获取服务端最新配置</Button>
-      </>}>
-        <p className="text-sm">刷新仅获取服务端状态，不会覆盖任何分区草稿。检测到新版本后，可在对应分区确认放弃草稿并重新载入。</p>
-      </Dialog>
+      <Card>
+        <CardHeader>
+          <CardTitle level={2}>实例状态</CardTitle>
+          <CardDescription>初始化完成情况与数据库连接摘要；配置修订号用于判断是否有并发修改。</CardDescription>
+        </CardHeader>
+        <CardBody className="gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={status?.setupComplete ? 'success' : 'warning'} dot>
+              {status?.setupComplete ? '初始化已完成' : '初始化未完成'}
+            </Badge>
+            {typeof config?.site.revision === 'number' ? (
+              <Badge tone="neutral">配置修订 #{config.site.revision}</Badge>
+            ) : null}
+            {status?.completedAt ? (
+              <span className="font-mono text-xs text-muted-foreground">
+                完成于 {formatDateTime(status.completedAt)}
+              </span>
+            ) : null}
+          </div>
+          {database ? (
+            <p className="text-sm text-foreground">
+              数据库：<span className="font-mono text-xs">{database.driver}</span>
+              {database.connection.host ? ` · ${database.connection.host}:${database.connection.port ?? ''}` : ''}
+              {database.serverVersion ? ` · ${database.serverVersion}` : ''}
+              <span className={database.reachable ? 'text-success' : 'text-danger'}>
+                {database.reachable ? ' · 连接正常' : ' · 连接不可用'}
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">数据库状态暂不可用。</p>
+          )}
+        </CardBody>
+      </Card>
 
-      {isLoading ? (
-        <div role="status" aria-busy="true">
-          <span className="sr-only">正在加载系统配置</span>
-          <SettingsSkeleton />
-        </div>
+      {configQuery.isError && !config ? (
+        <Card>
+          <EmptyState
+            icon={RefreshCw}
+            title="无法加载系统配置"
+            description={adminErrorMessage(configQuery.error, '请检查管理员会话与网络后重试。')}
+            onAction={() => void configQuery.refetch()}
+            actionLabel="重试"
+          />
+        </Card>
       ) : null}
 
-      {isError ? (
-        <Alert
-          tone="danger"
-          role="alert"
-          title={config ? '系统配置刷新失败' : '无法加载系统配置'}
-          action={
-            <Button variant="secondary" size="sm" loading={isFetching} disabled={anyBusy} onClick={requestRefresh}>
-              刷新重试
-            </Button>
-          }
-        >
-          {error instanceof Error ? error.message : '读取系统配置失败'}。{config ? '已保留载入的配置和当前草稿。' : '请稍后重试。'}
-        </Alert>
+      {!config && configQuery.isLoading ? (
+        <Card>
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载系统配置…
+          </p>
+        </Card>
       ) : null}
 
       {config ? (
         <Tabs
-          variant="underline" value={active} onValueChange={(id) => setActive(id as SectionId)} lazy={false}
-          aria-label="设置分组" className="w-full min-w-0"
-          listClassName="max-w-full overflow-x-auto"
+          aria-label="系统配置分区"
+          variant="segment"
+          value={section}
+          onChange={(next) => setSection(next as Section)}
           tabs={[
-            { id: 'site', label: <>站点信息 {sectionStates.site?.dirty && <Badge tone="warning">未保存</Badge>}</>, content: <div className="flex w-full max-w-form min-w-0 flex-col gap-6"><SiteSection settings={config.site} onStateChange={reportSectionState} /></div> },
-            { id: 'smtp', label: <>SMTP 邮件 {sectionStates.smtp?.dirty && <Badge tone="warning">未保存</Badge>}</>, content: <div className="flex w-full max-w-form min-w-0 flex-col gap-6"><SmtpSection settings={config.smtp} onStateChange={reportSectionState} /></div> },
-            { id: 'storage', label: <>对象存储 {sectionStates.storage?.dirty && <Badge tone="warning">未保存</Badge>}</>, content: <div className="flex w-full max-w-form min-w-0 flex-col gap-6"><StorageSection settings={config.storage} onStateChange={reportSectionState} /></div> },
-            { id: 'runtime', label: <>运行时限制 {sectionStates.runtime?.dirty && <Badge tone="warning">未保存</Badge>}</>, content: <div className="flex w-full max-w-form min-w-0 flex-col gap-6"><RuntimeSection settings={config.runtime} onStateChange={reportSectionState} /></div> },
-            { id: 'canvasAgent', label: <>Canvas Agent {sectionStates.canvasAgent?.dirty && <Badge tone="warning">未保存</Badge>}</>, content: <div className="flex w-full max-w-form min-w-0 flex-col gap-6"><AdminCanvasAgentSettings onStateChange={reportCanvasAgentState} /></div> },
+            {
+              id: 'general',
+              label: '站点与注册',
+              content: <AdminSettingsGeneral config={config} onSiteSaved={(site) => applySection('site', site)} />,
+            },
+            {
+              id: 'smtp',
+              label: 'SMTP 邮件',
+              content: <AdminSettingsSmtp settings={config.smtp} onSaved={(smtp) => applySection('smtp', smtp)} />,
+            },
+            {
+              id: 'storage',
+              label: '对象存储',
+              content: (
+                <AdminSettingsStorage settings={config.storage} onSaved={(storage) => applySection('storage', storage)} />
+              ),
+            },
+            {
+              id: 'runtime',
+              label: '运行时限制',
+              content: (
+                <AdminSettingsRuntime settings={config.runtime} onSaved={(runtime) => applySection('runtime', runtime)} />
+              ),
+            },
           ]}
         />
       ) : null}
+
+      <Alert tone="info" title="写操作会校验来源">
+        所有保存与测试请求都受同源（Origin）校验约束；如果出现「请求来源校验失败」，请刷新页面后重试，不要从其它域名转发后台页面。
+      </Alert>
     </div>
   )
 }

@@ -1,34 +1,16 @@
-import { API_ENDPOINTS } from '@musecanvas/contracts'
-import { serverApi } from '@/shared/services/server-api'
+import type { Metadata } from 'next'
+
 import { AdminDashboardView } from '@/features/admin/components/admin-dashboard-view'
-import type { AdminJob } from '@/shared/types'
 
-export const dynamic = 'force-dynamic'
-
-export const metadata = {
-  title: '系统概览 - MuseCanvas 管理后台',
+/**
+ * 后台概览（画板 07）。守卫与外壳在 `admin/layout.tsx`；
+ * 本页保持 Server Component，数据由客户端岛用 TanStack Query 拉取。
+ */
+export const metadata: Metadata = {
+  title: '系统概览',
+  description: 'MuseCanvas 管理后台概览：用户、生成任务、近 7 天趋势与默认模型。',
 }
 
-interface DashboardMetrics {
-  totalUsers: number
-  totalJobs: number
-  successRate7d: number
-  failedJobs7d: number
-}
-
-export default async function AdminDashboardPage() {
-  const [metricsRes, jobsRes] = await Promise.all([
-    serverApi.get<DashboardMetrics>(API_ENDPOINTS.admin.dashboard),
-    serverApi.get<{ items: AdminJob[] }>(API_ENDPOINTS.admin.jobs, { params: { limit: '10' } }),
-  ])
-
-  const initialMetrics = metricsRes.success ? metricsRes.data : null
-  const initialJobs = jobsRes.success && jobsRes.data?.items ? jobsRes.data.items : []
-
-  return (
-    <AdminDashboardView
-      initialMetrics={initialMetrics}
-      initialJobs={initialJobs}
-    />
-  )
+export default function AdminDashboardPage() {
+  return <AdminDashboardView />
 }

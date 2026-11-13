@@ -1,67 +1,17 @@
 'use client'
 
 import { useEffect } from 'react'
-import type { CSSProperties } from 'react'
-// The root layout is replaced by this boundary, so its stylesheet is not in the
-// tree: import the token sheet here so the `var(--…)` references resolve. The
-// fallbacks below only apply if that sheet fails to load.
-import './globals.css'
 
-const pageStyle: CSSProperties = {
-  margin: 0,
-  minHeight: '100vh',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '16px',
-  boxSizing: 'border-box',
-  background: 'var(--color-canvas, Canvas)',
-  color: 'var(--color-foreground, CanvasText)',
-  fontFamily: 'var(--font-sans, system-ui, sans-serif)',
-}
-
-const cardStyle: CSSProperties = {
-  width: '100%',
-  maxWidth: '28rem',
-  boxSizing: 'border-box',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '12px',
-  padding: '32px 24px',
-  borderRadius: 'var(--radius-card, 14px)',
-  border: '1px solid var(--color-border, ButtonBorder)',
-  background: 'var(--color-surface, Canvas)',
-  boxShadow: 'var(--shadow-soft, none)',
-}
-
-const buttonBaseStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: 'var(--control-md, 40px)',
-  padding: '0 16px',
-  border: 'none',
-  borderRadius: 'var(--radius-control, 10px)',
-  fontWeight: 500,
-  textDecoration: 'none',
-  cursor: 'pointer',
-}
-
-const primaryButtonStyle: CSSProperties = {
-  ...buttonBaseStyle,
-  background: 'var(--color-primary, ButtonText)',
-  color: 'var(--color-on-primary, ButtonFace)',
-}
-
-const secondaryButtonStyle: CSSProperties = {
-  ...buttonBaseStyle,
-  background: 'var(--color-tonal, ButtonFace)',
-  color: 'var(--color-foreground, ButtonText)',
-}
+import { BrandMark } from '@/shared/components/brand-mark'
+import { Button } from '@/shared/components/ui/button'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
 
 /**
- * Last-resort boundary for failures in the root layout. It replaces `<html>` and
- * `<body>`, so it renders its own minimal document and uses no app components.
+ * 根布局级错误边界（`app/global-error.tsx`）：根布局本身崩溃时由它接管整份文档，
+ * 所以必须自带 `<html>` / `<body>`，且不能依赖 `AppProviders`。
+ *
+ * 仅使用 token 工具类；返回首页用原生 `<a>` 而不是 `<Link>`——全局错误时不能假设
+ * 客户端路由上下文完好。样式表万一没加载，原生控件本身仍然可点。
  */
 export default function GlobalError({
   error,
@@ -71,42 +21,32 @@ export default function GlobalError({
   reset: () => void
 }) {
   useEffect(() => {
-    console.error(error)
+    console.error('[app] global error:', error)
   }, [error])
 
   return (
-    <html lang="zh-CN">
-      <body style={pageStyle}>
-        <main style={cardStyle}>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 'var(--text-module, 18px)',
-              fontWeight: 'var(--text-module--font-weight, 500)',
-              lineHeight: 'var(--text-module--line-height, 1.4)',
-            }}
-          >
-            应用出现异常
-          </h1>
-          <p
-            style={{
-              margin: 0,
-              color: 'var(--color-muted-foreground, GrayText)',
-              lineHeight: 'var(--text-sm--line-height, 1.5)',
-            }}
-          >
-            页面无法正常加载。可以先重试一次；如果仍然失败，请稍后再访问。
-          </p>
-          {error.digest ? (
-            <p style={{ margin: 0, color: 'var(--color-muted-foreground, GrayText)' }}>错误编号：{error.digest}</p>
-          ) : null}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' }}>
-            <button type="button" onClick={() => reset()} style={primaryButtonStyle}>
-              重试
-            </button>
-            <a href="/" style={secondaryButtonStyle}>
-              返回首页
-            </a>
+    <html lang="zh-CN" suppressHydrationWarning>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </head>
+      <body className="bg-canvas font-sans text-foreground antialiased">
+        <main className="flex min-h-dvh flex-col items-center justify-center gap-8 px-6 py-16">
+          <BrandMark size={44} />
+          <div className="flex w-full max-w-[var(--container-dialog-narrow)] flex-col items-center gap-3 text-center">
+            <p className="font-mono text-overline text-muted-foreground">MuseCanvas</p>
+            <h1 className="text-title text-foreground">应用没能启动</h1>
+            <p className="text-sm text-muted-foreground">
+              根布局阶段发生了未捕获错误。可以先重试；若持续失败，请检查服务端日志与运行环境配置。
+            </p>
+            {error.digest ? (
+              <p className="font-mono text-caption text-muted-foreground">错误编号 {error.digest}</p>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Button onClick={reset}>重试</Button>
+            <Button variant="secondary" asChild>
+              <a href={APP_ROUTES.home}>返回首页</a>
+            </Button>
           </div>
         </main>
       </body>

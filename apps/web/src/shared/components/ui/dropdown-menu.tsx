@@ -1,55 +1,64 @@
 'use client'
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
-import Link from 'next/link'
+import { Children, Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode } from 'react'
 import { cn } from '@/shared/lib/cn'
 import { exitDurationMs } from '@/shared/lib/motion'
-import { Spinner } from './spinner'
-import { iconSlot } from './size'
+import { iconSlot, touchTarget } from './size'
 
+/**
+ * DropdownMenu：应用的操作菜单。
+ *
+ * 用法（trigger 必须是单个元素，并且自带可访问名——通常直接用 `<Button>`）：
+ *
+ * ```tsx
+ * <DropdownMenu
+ *   trigger={<Button size="icon" aria-label="账户菜单" icon={<UserIcon />} />}
+ *   align="end"
+ *   items={[
+ *     { id: 'account', label: '账户设置', onSelect: () => router.push('/account') },
+ *     { id: 'logout', label: '退出登录', danger: true, separator: true, onSelect: logout },
+ *   ]}
+ * />
+ * ```
+ *
+ * 行为：trigger 上有 `aria-haspopup="menu"` / `aria-expanded`，面板 `role="menu"`、
+ * 项 `role="menuitem"`；上下/Home/End 漫游、Enter/Space 激活、Esc 与外部
+ * `pointerdown` 关闭并把焦点还给 trigger。表面 `rounded-popover` +
+ * `shadow-dropdown` + `z-dropdown`；入场 `.motion-menu`，退场 `.motion-fade-out`。
+ */
 export interface DropdownMenuItem {
-  id: string
+  /** Stable key. Defaults to the array index. */
+  id?: string
   label: ReactNode
-  /** Leading icon. Sized by the item recipe, so callers pass a bare glyph. */
+  /** Leading icon; the recipe sizes the slot. */
   icon?: ReactNode
-  /**
-   * Renders the item as a real link — components.md 通用: 导航用链接、动作用
-   * button. An `href` item still closes the menu and returns focus.
-   */
-  href?: string
   onSelect?: () => void
-  /** Destructive entry: danger text on a danger-soft wash, never a red solid. */
+  /** Destructive entry: danger text on a `danger-soft` wash, never a red solid. */
   danger?: boolean
   /** `aria-disabled` + `.is-disabled`, kept out of the roving sequence. */
   disabled?: boolean
-  /** Async in flight: the icon slot becomes a spinner, repeat activation is blocked. */
-  loading?: boolean
+  /** Draw a separator rule before this item (grouping). */
+  separator?: boolean
 }
 
 export interface DropdownMenuProps {
-  /** Trigger contents (an icon, an `Avatar`…). Wrapped in the `<button>` this owns. */
-  trigger: ReactNode
-  /** Accessible name for the trigger button — it has no label text of its own. */
-  triggerLabel: string
-  /** Shape/surface of the trigger; the menu stays presentation-neutral. */
-  triggerClassName?: string
+  /** Single element cloned with the menu trigger props; it owns its accessible name. */
+  trigger: ReactElement
   items: DropdownMenuItem[]
-  /** Free node above the items (the signed-in address, a summary line…). */
-  header?: ReactNode
-  /** Grouped menu: an overline heading between `header` and the items. */
-  overline?: string
-  /** Accessible name of the `role="menu"` panel. Defaults to `triggerLabel`. */
-  menuLabel?: string
-  /** Item hit targets: 40px (default) or 32px dense. Labels stay 14px either way. */
-  size?: 'sm' | 'md'
   /** Which edge of the trigger the panel lines up with. */
   align?: 'start' | 'end'
-  /** Class for the wrapper (positioning) — the wrapper is `relative`. */
+  /** Free node above the items (the signed-in address, a summary line…). */
+  header?: ReactNode
+  /** Accessible name of the `role="menu"` panel. Falls back to no name. */
+  menuLabel?: string
+  /** Item hit targets: 40px (default) or 32px dense. */
+  size?: 'sm' | 'md'
+  /** Class for the positioning wrapper. */
   className?: string
-  /** Class for the panel, e.g. a wider menu (`w-56` is the default). */
+  /** Class for the panel (width, padding). */
   menuClassName?: string
-  /** Controlled visibility; omit both and the menu owns its state. */
+  /** Controlled visibility; omit and the menu owns its state. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
 }
@@ -63,40 +72,21 @@ const ITEM_BASE = [
 
 const ITEM_TONE = {
   default: 'not-disabled:hover:bg-tonal-hover not-disabled:active:bg-tonal-active',
-  danger: 'text-danger not-disabled:hover:bg-danger-soft not-disabled:active:bg-danger-border',
+  danger: 'text-danger not-disabled:hover:bg-danger-soft',
 } as const
 
 const ITEM_SIZE = {
-  sm: 'h-[var(--control-sm)] min-h-[var(--control-sm)]',
-  md: 'h-[var(--control-md)] min-h-[var(--control-md)]',
+  sm: `min-h-[var(--control-sm)] ${touchTarget}`,
+  md: `min-h-[var(--control-md)] ${touchTarget}`,
 } as const
 
-/**
- * The app's action menu, single-sourced (components.md Dropdown menu row):
- * a `button` trigger carrying `aria-haspopup="menu"` / `aria-expanded`, a
- * `role="menu"` panel of `role="menuitem"` entries, ArrowUp/Down/Home/End roving
- * focus with wrap, Enter/Space activation, Escape and outside `pointerdown`
- * closing with the focus handed back to the trigger.
- *
- * Surface is `rounded-popover` + `shadow-dropdown` at `z-dropdown` — the popup
- * radius and the dropdown rung of the elevation ladder, not the modal one. The
- * panel enters on `.motion-menu` (`--motion-base`) and leaves on `.motion-fade-out`
- * (`--motion-exit`, faster than the entrance, per globals.css).
- *
- * Initial focus is set synchronously in the effect after the panel commits:
- * a `requestAnimationFrame` hand-off would strand focus (and the whole open) in a
- * background or hidden tab, where frames are never produced.
- */
 export function DropdownMenu({
   trigger,
-  triggerLabel,
-  triggerClassName,
   items,
+  align = 'end',
   header,
-  overline,
   menuLabel,
   size = 'md',
-  align = 'end',
   className,
   menuClassName,
   open,
@@ -105,12 +95,11 @@ export function DropdownMenu({
   const uid = useId()
   const panelId = `${uid}-menu`
   const wrapperRef = useRef<HTMLDivElement | null>(null)
-  const triggerRef = useRef<HTMLButtonElement | null>(null)
-  const itemRefs = useRef(new Map<string, HTMLElement | null>())
+  const triggerRef = useRef<HTMLElement | null>(null)
+  const itemRefs = useRef(new Map<number, HTMLButtonElement | null>())
   const [internalOpen, setInternalOpen] = useState(false)
   const isOpen = open ?? internalOpen
-  // `mounted` trails `isOpen` by the exit animation, so the panel is still on
-  // screen while it fades instead of vanishing on unmount.
+  // `mounted` 比 `isOpen` 多停留一个退场动画；计时器是 `animationend` 没触发时的兜底。
   const [mounted, setMounted] = useState(isOpen)
   const [closing, setClosing] = useState(false)
 
@@ -131,7 +120,6 @@ export function DropdownMenu({
     if (mounted) setClosing(true)
   }, [isOpen, mounted])
 
-  // Teardown runs for the exit token's duration (`--motion-exit`), read at runtime.
   useEffect(() => {
     if (!closing) return
     const timer = window.setTimeout(() => {
@@ -141,14 +129,6 @@ export function DropdownMenu({
     return () => window.clearTimeout(timer)
   }, [closing])
 
-  const enabledItems = items.filter((item) => !item.disabled)
-
-  function focusItem(index: number) {
-    if (enabledItems.length === 0) return
-    const target = enabledItems[(index + enabledItems.length) % enabledItems.length]
-    itemRefs.current.get(target.id)?.focus()
-  }
-
   const close = useCallback(
     (restoreFocus: boolean) => {
       setOpen(false)
@@ -157,20 +137,16 @@ export function DropdownMenu({
     [setOpen],
   )
 
-  // Open → focus the first entry, so the keyboard never has to guess that the
-  // panel appeared somewhere reachable. `mounted` is a dependency on purpose: the
-  // render that flips `isOpen` does not have a panel in the DOM yet, and keying on
-  // the open transition alone would run this once against an empty ref map.
-  // Deliberately *not* keyed on `items`: a re-render while the menu is up (a
-  // mutation flipping to busy) must not yank focus back to the top of the list.
+  // 打开后聚焦第一个可用项，键盘用户不必自己找入口。
   useEffect(() => {
     if (!isOpen || !mounted || closing) return
-    const first = items.find((item) => !item.disabled)
-    if (first) itemRefs.current.get(first.id)?.focus()
+    const firstIndex = items.findIndex((item) => !item.disabled)
+    if (firstIndex >= 0) itemRefs.current.get(firstIndex)?.focus()
+    // 刻意不依赖 `items`：打开期间的普通重渲染不能把焦点拽回第一项。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, mounted, closing])
 
-  // Click / tap outside. A document listener, not a full-viewport catcher div:
-  // the catcher would need its own stacking level under the ladder.
+  // 点击/触摸外部关闭。用 document 监听，而不是铺一层全屏接球层。
   useEffect(() => {
     if (!isOpen) return
     function onPointerDown(event: PointerEvent) {
@@ -183,23 +159,37 @@ export function DropdownMenu({
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [isOpen, setOpen])
 
-  function activate(item: DropdownMenuItem) {
-    if (item.disabled || item.loading) return
+  function activate(index: number) {
+    const item = items[index]
+    if (!item || item.disabled) return
     setOpen(false)
+    triggerRef.current?.focus()
     item.onSelect?.()
   }
 
+  const enabledIndexes = items.map((item, i) => (item.disabled ? -1 : i)).filter((i) => i >= 0)
+
+  function focusItem(index: number) {
+    if (enabledIndexes.length === 0) return
+    const position = ((index % enabledIndexes.length) + enabledIndexes.length) % enabledIndexes.length
+    itemRefs.current.get(enabledIndexes[position])?.focus()
+  }
+
+  function currentIndex(): number {
+    const active = document.activeElement
+    if (!active) return -1
+    return enabledIndexes.findIndex((index) => itemRefs.current.get(index) === active)
+  }
+
   function onPanelKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const current = active ? enabledItems.findIndex((item) => itemRefs.current.get(item.id) === active) : -1
     switch (event.key) {
       case 'ArrowDown':
         event.preventDefault()
-        focusItem(current + 1)
+        focusItem(currentIndex() + 1)
         break
       case 'ArrowUp':
         event.preventDefault()
-        focusItem(current <= 0 ? enabledItems.length - 1 : current - 1)
+        focusItem(currentIndex() - 1)
         break
       case 'Home':
         event.preventDefault()
@@ -207,11 +197,11 @@ export function DropdownMenu({
         break
       case 'End':
         event.preventDefault()
-        focusItem(Math.max(0, enabledItems.length - 1))
+        focusItem(-1)
         break
       case 'Escape':
       case 'Tab':
-        // Tab does not roam a menu: leave it, and hand focus back to the trigger.
+        // Tab 不在菜单里漫游：直接离开并把焦点还给 trigger。
         event.preventDefault()
         close(true)
         break
@@ -220,122 +210,87 @@ export function DropdownMenu({
     }
   }
 
-  function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
-    if (event.key === 'Escape') {
-      if (!isOpen) return
+  function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape' && isOpen) {
       event.preventDefault()
       close(true)
       return
     }
-    // Enter / Space open the menu through the trigger's own native click.
     if (isOpen || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return
-    // Arrow keys are the APG affordance for "open and land me on the first item".
+    // 方向键打开菜单并落到首项，是 APG 的既有交互。
     event.preventDefault()
     setOpen(true)
   }
 
-  function renderItem(item: DropdownMenuItem) {
-    const classes = cn(
-      ITEM_BASE,
-      ITEM_SIZE[size],
-      ITEM_TONE[item.danger ? 'danger' : 'default'],
-      item.disabled && 'is-disabled',
-    )
-    const ref = (node: HTMLElement | null) => {
-      itemRefs.current.set(item.id, node)
-    }
-
-    if (item.href) {
-      return (
-        <Link
-          key={item.id}
-          ref={ref}
-          href={item.href}
-          role="menuitem"
-          tabIndex={-1}
-          aria-disabled={item.disabled ? true : undefined}
-          onClick={(event) => {
-            if (item.disabled) {
-              event.preventDefault()
-              return
-            }
-            setOpen(false)
-            item.onSelect?.()
-          }}
-          onKeyDown={(event) => {
-            // Enter activates an `<a>` natively; Space does not, so trigger click
-            // to navigate via Link while closing the menu, instead of scrolling.
-            if (event.key !== ' ') return
-            event.preventDefault()
-            if (item.disabled) return
-            event.currentTarget.click()
-          }}
-          className={classes}
-        >
-          {item.icon}
-          {item.label}
-        </Link>
-      )
-    }
-
-    return (
-      <button
-        key={item.id}
-        ref={ref}
-        type="button"
-        role="menuitem"
-        tabIndex={-1}
-        aria-disabled={item.disabled || undefined}
-        aria-busy={item.loading || undefined}
-        className={classes}
-        onClick={() => activate(item)}
-      >
-        {item.loading ? <Spinner size="sm" /> : item.icon}
-        {item.label}
-      </button>
-    )
+  const triggerElement = Children.only(trigger)
+  if (!isValidElement(triggerElement)) {
+    throw new Error('DropdownMenu: `trigger` must be a single React element.')
   }
 
+  const clonedTrigger = cloneElement(triggerElement as ReactElement<Record<string, unknown>>, {
+    ref: (node: HTMLElement | null) => {
+      triggerRef.current = node
+    },
+    'aria-haspopup': 'menu',
+    'aria-expanded': isOpen,
+    'aria-controls': mounted ? panelId : undefined,
+    onClick: (event: unknown) => {
+      const original = (triggerElement.props as { onClick?: (e: unknown) => void }).onClick
+      original?.(event)
+      setOpen(!isOpen)
+    },
+    onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
+      const original = (triggerElement.props as { onKeyDown?: (e: ReactKeyboardEvent<HTMLElement>) => void }).onKeyDown
+      original?.(event)
+      if (event.defaultPrevented) return
+      onTriggerKeyDown(event)
+    },
+  })
+
   return (
-    <div ref={wrapperRef} className={cn('relative', className)}>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => (isOpen ? close(false) : setOpen(true))}
-        onKeyDown={onTriggerKeyDown}
-        aria-label={triggerLabel}
-        aria-haspopup="menu"
-        aria-expanded={isOpen}
-        aria-controls={mounted ? panelId : undefined}
-        className={cn(
-          'inline-flex shrink-0 select-none items-center justify-center overflow-hidden rounded-pill',
-          'transition-colors',
-          triggerClassName,
-        )}
-      >
-        {trigger}
-      </button>
+    <div ref={wrapperRef} className={cn('relative inline-flex', className)}>
+      {clonedTrigger}
 
       {mounted ? (
         <div
           id={panelId}
           role="menu"
-          aria-label={menuLabel ?? triggerLabel}
+          aria-label={menuLabel}
           tabIndex={-1}
           onKeyDown={onPanelKeyDown}
           className={cn(
-            'absolute top-full z-dropdown mt-2 flex w-56 flex-col gap-1',
-            'rounded-popover bg-surface border border-border p-1.5 shadow-dropdown',
+            'absolute top-full z-dropdown mt-2 flex w-56 flex-col gap-0.5 rounded-popover border border-border bg-surface p-1.5 shadow-dropdown',
             align === 'end' ? 'right-0' : 'left-0',
             closing ? 'pointer-events-none motion-fade-out' : 'motion-menu',
             menuClassName,
           )}
         >
           {header}
-          {overline ? (
-            <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground tracking-normal">{overline}</p>
-          ) : null}
-          {items.map(renderItem)}
+          {items.map((item, index) => (
+            <Fragment key={item.id ?? index}>
+              {item.separator ? <div aria-hidden="true" className="my-1 h-px bg-border" /> : null}
+              <button
+                ref={(node) => {
+                  itemRefs.current.set(index, node)
+                }}
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                aria-disabled={item.disabled || undefined}
+                disabled={item.disabled}
+                onClick={() => activate(index)}
+                className={cn(
+                  ITEM_BASE,
+                  ITEM_SIZE[size],
+                  ITEM_TONE[item.danger ? 'danger' : 'default'],
+                  item.disabled && 'is-disabled',
+                )}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            </Fragment>
+          ))}
         </div>
       ) : null}
     </div>

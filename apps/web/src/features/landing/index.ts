@@ -1,0 +1,6 @@
+export { Hero } from './components/hero'
+export { WorksGallery } from './components/works-gallery'
+export { FeaturesStrip } from './components/features-strip'
+export { Capabilities } from './components/capabilities'
+export { Workflow } from './components/workflow'
+export { CtaSection } from './components/cta'

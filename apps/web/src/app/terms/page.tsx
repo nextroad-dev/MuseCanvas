@@ -1,44 +1,33 @@
 import { LegalShell } from '@/shared/components/legal-shell'
-import type { LegalSection } from '@/shared/components/legal-shell'
 import { Alert } from '@/shared/components/ui/alert'
 
 export const dynamic = 'force-static'
 
 export const metadata = {
-  title: '用户协议 - MuseCanvas',
+  title: '用户协议',
   description: 'MuseCanvas 用户协议与服务条款',
 }
 
-const termsSections: LegalSection[] = [
-  { id: 'notice', title: '适用对象与地域限制' },
-  { id: 'section-1', title: '一、服务说明' },
-  { id: 'section-2', title: '二、账户与注册' },
-  { id: 'section-3', title: '三、用户输入内容' },
-  { id: 'section-4', title: '四、第三方服务与数据共享' },
-  { id: 'section-5', title: '五、生成内容的使用' },
-  { id: 'section-6', title: '六、用户行为规范' },
-  { id: 'section-7', title: '七、知识产权' },
-  { id: 'section-8', title: '八、服务变更与终止' },
-  { id: 'section-9', title: '九、免责声明' },
-  { id: 'section-10', title: '十、其他' },
-]
-
+/**
+ * 用户协议（/terms）：force-static，正文沿用既有条款文本，
+ * 版式由 `LegalShell` 统一（单栏 72ch、衬线节标题、hairline 分节、回到顶部）。
+ */
 export default function TermsPage() {
   return (
-    <LegalShell title="用户协议" updatedAt="2026-06-25" current="terms" sections={termsSections}>
-      <div id="notice" className="scroll-mt-20">
-        <Alert tone="warning">
-          <h2>适用对象与地域限制</h2>
-          <p>
-            <strong>本服务不面向中国大陆用户。</strong>我们不向位于中国大陆境内的用户提供本服务，亦不接受来自中国大陆的注册、访问与使用。
-          </p>
-          <p>
-            如你位于中国大陆，请勿注册、登录、访问或使用本服务；如你在使用过程中所在地变更为中国大陆，或我们合理判断你属于中国大陆用户，我们可拒绝提供服务、限制访问或终止账户。
-          </p>
+    <LegalShell title="用户协议" updatedAt="2026-06-25" current="terms">
+      <section id="notice">
+        <h2>适用对象与地域限制</h2>
+        <Alert tone="warning" title="本服务不面向中国大陆用户。" icon={false}>
+          <div className="flex flex-col gap-2">
+            <p>我们不向位于中国大陆境内的用户提供本服务，亦不接受来自中国大陆的注册、访问与使用。</p>
+            <p>
+              如你位于中国大陆，请勿注册、登录、访问或使用本服务；如你在使用过程中所在地变更为中国大陆，或我们合理判断你属于中国大陆用户，我们可拒绝提供服务、限制访问或终止账户。
+            </p>
+          </div>
         </Alert>
-      </div>
+      </section>
 
-      <section id="section-1" className="scroll-mt-20">
+      <section id="section-1">
         <h2>一、服务说明</h2>
         <p>
           MuseCanvas（以下简称“本服务”）是一款基于人工智能技术的图像生成平台。你可通过本服务提交提示词、参数及其他内容，调用我们接入的模型与配套能力生成图像及相关输出。
@@ -51,7 +40,7 @@ export default function TermsPage() {
         </p>
       </section>
 
-      <section id="section-2" className="scroll-mt-20">
+      <section id="section-2">
         <h2>二、账户与注册</h2>
         <p>
           本服务的注册模式可能为开放注册或邀请注册，具体以注册页面和系统当前配置为准。在开放注册模式下，新用户可按页面流程直接完成注册；在邀请注册模式下，新用户除完成相应注册流程外，还需提供有效的邀请码，邀请码可能具有次数、期限或一次性使用限制。
@@ -69,7 +58,7 @@ export default function TermsPage() {
         </p>
       </section>
 
-      <section id="section-3" className="scroll-mt-20">
+      <section id="section-3">
         <h2>三、用户输入内容</h2>
         <p>
           你提交至本服务的提示词、参数、上传素材、文字说明及其他内容，统称为“用户输入”。你对用户输入享有合法权利或已取得充分授权，并对其真实性、合法性、准确性和适用性承担全部责任。
@@ -82,20 +71,23 @@ export default function TermsPage() {
         </p>
       </section>
 
-      <section id="section-4" className="scroll-mt-20">
+      <section id="section-4">
         <h2>四、第三方服务与数据共享</h2>
         <p>
           本服务的图像生成能力由我们合作的第三方模型与服务供应商提供，<strong>包括但不限于 OpenAI、火山引擎等</strong>。为完成你的生成请求：
         </p>
         <ul>
           <li>你的用户输入及相关数据将被传输至上述第三方进行处理；</li>
-          <li>上述第三方可能在其服务条款与隐私政策允许的范围内，<strong>将收到的数据用于其自身服务改进或模型训练</strong>；</li>
+          <li>
+            上述第三方可能在其服务条款与隐私政策允许的范围内，
+            <strong>将收到的数据用于其自身服务改进或模型训练</strong>；
+          </li>
           <li>数据在第三方处的收集、使用与处理，以相应第三方的隐私政策与服务条款为准，我们无法完全控制。</li>
         </ul>
         <p>你理解并同意上述数据共享安排。如不接受，请勿使用本服务。相关个人信息的处理细节，详见《隐私政策》。</p>
       </section>
 
-      <section id="section-5" className="scroll-mt-20">
+      <section id="section-5">
         <h2>五、生成内容的使用</h2>
         <p>
           本服务基于用户输入和模型处理结果生成图像及其他输出内容，统称为“生成内容”。你可在遵守适用法律法规、本协议、第三方权利及模型供应商使用规则的前提下使用生成内容。
@@ -108,7 +100,7 @@ export default function TermsPage() {
         </p>
       </section>
 
-      <section id="section-6" className="scroll-mt-20">
+      <section id="section-6">
         <h2>六、用户行为规范</h2>
         <p>使用本服务时，你不得：</p>
         <ul>
@@ -124,7 +116,7 @@ export default function TermsPage() {
         </p>
       </section>
 
-      <section id="section-7" className="scroll-mt-20">
+      <section id="section-7">
         <h2>七、知识产权</h2>
         <p>
           本服务的软件、界面、标识、文案、编排、技术实现及其他相关内容的知识产权，归我们或相应权利人所有。除非取得书面授权，你不得复制、修改、传播、公开展示、反向工程或以其他方式使用前述内容。
@@ -137,7 +129,7 @@ export default function TermsPage() {
         </p>
       </section>
 
-      <section id="section-8" className="scroll-mt-20">
+      <section id="section-8">
         <h2>八、服务变更与终止</h2>
         <p>
           我们可基于业务安排、合规要求、安全风控、第三方能力变化、运营策略或其他合理原因，随时变更、升级、限制、暂停或终止本服务的全部或部分功能，包括调整注册模式、可用模型、处理规则、账户权限或页面内容。
@@ -148,7 +140,7 @@ export default function TermsPage() {
         <p>如你不同意更新后的条款，应停止使用本服务。你继续访问或使用本服务的，视为接受更新后的条款。</p>
       </section>
 
-      <section id="section-9" className="scroll-mt-20">
+      <section id="section-9">
         <h2>九、免责声明</h2>
         <p>
           本服务按“现状”和“可提供”状态提供。在法律允许的最大范围内，我们不就本服务的连续性、稳定性、准确性、及时性、安全性、特定目的适用性、无错误性、无中断性或生成结果质量作任何明示或默示保证。
@@ -161,7 +153,7 @@ export default function TermsPage() {
         </p>
       </section>
 
-      <section id="section-10" className="scroll-mt-20">
+      <section id="section-10">
         <h2>十、其他</h2>
         <p>
           本协议的订立、效力、解释、履行及争议解决，适用中华人民共和国法律，但不包括其冲突规范。因本协议或本服务引起的争议，双方应先友好协商；协商不成的，提交我们所在地有管辖权的人民法院处理。

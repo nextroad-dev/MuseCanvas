@@ -1,38 +1,33 @@
-import { cn } from '@/shared/lib/cn'
 import type { CSSProperties } from 'react'
+import { cn } from '@/shared/lib/cn'
 import { controlMinHeight } from './size'
 
 /**
- * Loading placeholders. The shimmer sweep (1.5s, `--motion-shimmer`) lives in
- * `globals.css` and its base state is a static tonal block, so reduced-motion
- * users still get a legible placeholder. Placeholders are `aria-hidden`: the
- * region says it is busy, the boxes never get read out.
+ * 加载占位块。
  *
- * Pick the shape that matches what is coming — a row of text for a paragraph, a
- * `SkeletonTile` for a media cell, a `SkeletonRow` for a table line — so nothing
- * reflows when the real content swaps in. A spinner is the wrong tool for any of
- * these three.
+ * `.motion-shimmer` 已同时包含弱色底与扫光，占位块只需再给尺寸——再叠 `bg-tonal`
+ * 会重复上色。占位块是 `aria-hidden`：忙碌区域由所有者播报，盒子本身不朗读。
  */
-interface SkeletonProps {
+
+export interface SkeletonProps {
   /** Size the block close to the content it replaces so layout does not jump. */
   className?: string
 }
 
-export function Skeleton({ className = '' }: SkeletonProps) {
-  return <span aria-hidden="true" className={cn('motion-shimmer block rounded-control', className)} />
+/** One block placeholder (defaults to a 16px text line box). */
+export function Skeleton({ className }: SkeletonProps) {
+  return <span aria-hidden="true" className={cn('motion-shimmer block h-4 rounded-control', className)} />
 }
 
-interface SkeletonTextProps {
+export interface SkeletonTextProps {
   /** Number of lines to reserve. */
   lines?: number
-  /** Measure of the block; the last line ends at 75% so the paragraph keeps a
-   *  ragged edge instead of looking like a stack of bars. */
+  /** Max width of the paragraph placeholder. */
   width?: number | string
   className?: string
 }
 
-/** Paragraph placeholder: each line is 1.4em tall, i.e. the surrounding type's own
- *  line box, so it matches whatever text class the caller already has. */
+/** Paragraph placeholder: the last line ends at 75% so it keeps a ragged edge. */
 export function SkeletonText({ lines = 1, width = '100%', className }: SkeletonTextProps) {
   const total = Math.max(1, Math.floor(lines))
   return (
@@ -48,23 +43,17 @@ export function SkeletonText({ lines = 1, width = '100%', className }: SkeletonT
   )
 }
 
-interface SkeletonTileProps {
-  /** Override the box (e.g. `aspect-video` or a rail width); defaults to the
-   *  library grid's square media cell with the card radius. */
+export interface SkeletonTileProps {
+  /** Override the box (e.g. `aspect-video` or a rail width). */
   className?: string
 }
 
 /** Media / card tile placeholder — same radius as the card that replaces it. */
 export function SkeletonTile({ className }: SkeletonTileProps) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn('motion-shimmer block aspect-square w-full rounded-card', className)}
-    />
-  )
+  return <span aria-hidden="true" className={cn('motion-shimmer block aspect-square w-full rounded-card', className)} />
 }
 
-interface SkeletonRowProps {
+export interface SkeletonRowProps {
   /** Cells per row: 1 reads as a list item, 3-5 as a table line. */
   cells?: number
   /** flex-basis of each cell, e.g. `120px` for a leading column. */
@@ -72,8 +61,7 @@ interface SkeletonRowProps {
   className?: string
 }
 
-/** List / table row placeholder at the 40px control height, so a table keeps its
- *  rhythm while the data is in flight. */
+/** List / table row placeholder at the 40px control height. */
 export function SkeletonRow({ cells = 1, cellWidth, className }: SkeletonRowProps) {
   const total = Math.max(1, Math.floor(cells))
   const style: CSSProperties | undefined = cellWidth === undefined ? undefined : { flexBasis: cellWidth }

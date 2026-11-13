@@ -1,21 +1,32 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
-import { api } from '@/shared/services/api'
-import type { ModelConfig } from '@/shared/types'
+// 模型目录（GET /models）：含 isDefault / capabilities / 描述符。
+// 目录变更低频，staleTime 5 分钟；后台改默认模型后可手动 invalidate。
 
-export const MODELS_QUERY_KEY = ['models'] as const
+import { useQuery, type UseQueryResult } from '@tanstack/react-query'
+import { clientApi } from '@/shared/services/client-api'
+import type { MediaKind, PublicModelDto } from '@/shared/types'
+import { queryKeys } from './query-keys'
+import { resolveActiveModel } from '@/shared/lib/model-capabilities'
 
-export function useModelsQuery() {
+export function useModels(): UseQueryResult<PublicModelDto[]> {
   return useQuery({
-    queryKey: MODELS_QUERY_KEY,
-    queryFn: async () => {
-      const res = await api.getModels()
-      if (!res.success || !res.data) {
-        throw new Error(res.error?.message || '获取模型列表失败')
-      }
-      return res.data as ModelConfig[]
-    },
-    staleTime: 5 * 60 * 1000,
+    queryKey: queryKeys.models,
+    queryFn: () => clientApi.models.list(),
+    staleTime: 5 * 60_000,
   })
+}
+
+/** 某类型下当前应使用的模型：rememberedId → isDefault → 首个非 deprecated。 */
+export function useActiveModel(
+  kind: MediaKind,
+  storedId: string | null,
+): { model: PublicModelDto | null; models: PublicModelDto[]; isLoading: boolean } {
+  const query = useModels()
+  const models = query.data ?? []
+  return {
+    model: resolveActiveModel(models, kind, storedId),
+    models,
+    isLoading: query.isLoading,
+  }
 }

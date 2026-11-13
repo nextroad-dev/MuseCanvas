@@ -1,39 +1,49 @@
-import type { GenerationJob, JobStatus } from '@/shared/types'
+// 任务状态/阶段的文案与语气。颜色不是唯一载体：label 始终随 tone 一起渲染。
+// 纯模块（仅 type import），可直接被 `node --test` 加载。
 
+import type { JobStatus } from '@/shared/types'
+
+/** 视为「进行中」的状态：列表轮询与结果卡占位都由它决定。 */
 export const ACTIVE_JOB_STATUSES = ['queued', 'running', 'retry_wait'] as const
 
-export function isJobActive(job: Pick<GenerationJob, 'status'>): boolean {
+export type StatusTone = 'info' | 'success' | 'warning' | 'danger' | 'neutral'
+
+export function isJobActive(job: Pick<{ status: JobStatus }, 'status'>): boolean {
   return (ACTIVE_JOB_STATUSES as readonly string[]).includes(job.status)
 }
 
-export interface JobStatusMeta {
-  /** The state in words. Colour is never the only carrier — this label is always
-   *  rendered next to the dot. */
-  label: string
-  /** Weak-background + strong-foreground pair (`{status}-soft` + `{status}`): the
-   *  badge never wears a solid semantic fill, and certainly not a solid brand
-   *  green. Every pair clears 4.5:1 at 12px in *both* themes — light e.g.
-   *  `text-info` #1e40af on `bg-info-soft` #eff6ff (~8:1), dark e.g. `text-info`
-   *  #60a5fa on `bg-info-soft` #172554 (~6:1), because the tokens invert together.
-   *  `running` shares the info pair with `queued` (the design mock's in-progress
-   *  pill), so brand green stays off the in-flight state. */
-  badge: string
-  /** The 8px status dot: a graphic, so it only needs 3:1 against the badge's own
-   *  soft background, which every solid here clears. */
-  dot: string
+export function isJobTerminal(status: JobStatus): boolean {
+  return status === 'succeeded' || status === 'failed' || status === 'canceled'
 }
 
-const JOB_STATUS_META: Record<JobStatus, JobStatusMeta> = {
-  queued: { label: '排队中', badge: 'bg-info-soft text-info', dot: 'bg-info' },
-  running: { label: '生成中', badge: 'bg-info-soft text-info', dot: 'bg-info' },
-  retry_wait: { label: '重试等待', badge: 'bg-warning-soft text-warning', dot: 'bg-warning' },
-  succeeded: { label: '已完成', badge: 'bg-success-soft text-success', dot: 'bg-success' },
-  failed: { label: '失败', badge: 'bg-danger-soft text-danger', dot: 'bg-danger' },
-  canceled: { label: '已取消', badge: 'bg-neutral-soft text-neutral-status', dot: 'bg-neutral-status' },
+const JOB_STATUS_LABEL: Record<JobStatus, string> = {
+  queued: '排队中',
+  running: '生成中',
+  retry_wait: '重试等待',
+  succeeded: '已完成',
+  failed: '失败',
+  canceled: '已取消',
 }
 
-export function jobStatusMeta(status: JobStatus): JobStatusMeta {
-  return JOB_STATUS_META[status] ?? JOB_STATUS_META.queued
+const JOB_STATUS_TONE: Record<JobStatus, StatusTone> = {
+  queued: 'info',
+  running: 'info',
+  retry_wait: 'warning',
+  succeeded: 'success',
+  failed: 'danger',
+  canceled: 'neutral',
+}
+
+export function jobStatusLabel(status: JobStatus | string): string {
+  return JOB_STATUS_LABEL[status as JobStatus] ?? '未知状态'
+}
+
+export function jobStatusTone(status: JobStatus | string): StatusTone {
+  return JOB_STATUS_TONE[status as JobStatus] ?? 'neutral'
+}
+
+export function jobStatusMeta(status: JobStatus | string): { label: string; tone: StatusTone } {
+  return { label: jobStatusLabel(status), tone: jobStatusTone(status) }
 }
 
 const PHASE_LABEL: Record<string, string> = {
@@ -55,20 +65,37 @@ const PHASE_LABEL: Record<string, string> = {
   completed: '已完成',
 }
 
-/** `phase` is the only truthful stage signal; `progress` is written as 0 or 100
- *  by the worker, so no percentage may be rendered from it. */
+const PHASE_TONE: Record<string, StatusTone> = {
+  template_selecting: 'info',
+  template_selected: 'info',
+  template_skipped: 'neutral',
+  template_failed: 'warning',
+  prompt_optimizing: 'info',
+  prompt_ready: 'info',
+  optimization_failed: 'warning',
+  preprocessing: 'info',
+  provider_submitting: 'info',
+  provider_waiting: 'info',
+  provider_canceling: 'warning',
+  artifact_importing: 'info',
+  asset_persisting: 'info',
+  image_generating: 'info',
+  generation_failed: 'danger',
+  completed: 'success',
+}
+
+/** `phase` 是唯一可信的阶段信号；`progress` 由 worker 写成 0/100，不能当百分比。 */
 export function phaseLabel(phase?: string | null): string {
   return (phase && PHASE_LABEL[phase]) || '准备中'
 }
 
-/** `MM:SS` of work spent, measured from `startedAt` and falling back to submission. */
-export function formatElapsed(
-  job: Pick<GenerationJob, 'startedAt' | 'createdAt'>,
-  now: number = Date.now(),
-): string {
-  const raw = job.startedAt || job.createdAt
-  const started = raw ? Date.parse(raw) : NaN
-  if (!Number.isFinite(started)) return '00:00'
-  const total = Math.max(0, Math.floor((now - started) / 1000))
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+export function phaseTone(phase?: string | null): StatusTone {
+  return (phase && PHASE_TONE[phase]) || 'neutral'
 }
+
+/** JSON 导出（供测试与调试断言用）。 */
+export const JOB_STATUS_META = {
+  labels: JOB_STATUS_LABEL,
+  tones: JOB_STATUS_TONE,
+  phases: PHASE_LABEL,
+} as const

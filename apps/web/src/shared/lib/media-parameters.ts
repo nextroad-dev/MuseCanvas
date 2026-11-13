@@ -1,30 +1,23 @@
-// Browser-safe media parameter engine.
+// 媒体参数控件引擎：所有控件都由服务端下发的 descriptor 驱动，
+// 合法性校验直接调用 `@musecanvas/contracts`（与 API/插件同一份实现），
+// 因此「浏览器能提交的值」与「服务端接受的值」按构造一致。
 //
-// Everything here is driven by the parameter descriptors the server sends, which
-// the provider plugin authored. There is deliberately no model id, provider name
-// or adapter string anywhere in this file: if a control appears or a value is
-// rejected, the descriptor set is why. That absence is the requirement, not a
-// style preference — the previous console hardcoded five size options, which is
-// how the UI came to offer `1024x768` to models that accept no such thing.
-//
-// Validation is imported from `@musecanvas/contracts`, the same module the API
-// and the plugin adapters call. A size the browser will let you submit and a
-// size the server will accept are therefore the same set by construction, and a
-// future provider that widens its band needs no change here.
+// 本模块包含运行时依赖（contracts 校验器），只供 UI/客户端 hook 使用；
+// 纯参数解析与请求体构造在 `generation-params.ts`，可在 node --test 下运行。
 
 import {
+  AUTO_SIZE_VALUE,
+  describeImageSize,
   enumOptionValues,
   evaluateCrossFieldConstraints,
+  imageConstraintViolations,
   isAdvancedParameter,
   isParameterVisible,
   normalizeParameterOptions,
+  parseImageSize,
   reconcileParameters,
   reduceRatio,
   validateParameterValue,
-  describeImageSize,
-  imageConstraintViolations,
-  parseImageSize,
-  AUTO_SIZE_VALUE,
 } from '@musecanvas/contracts'
 import type {
   ImageSizeConstraints,
@@ -35,9 +28,11 @@ import type {
   NumberParameterDescriptor,
   ParameterCrossFieldConstraint,
   ParameterDescriptor,
+  ParameterOption,
 } from '@musecanvas/contracts'
+import type { ParameterState, ParameterValue } from '@/shared/types'
 
-/** Canonical parameter name -> accepted descriptor names (canonical first). */
+/** 规范参数名 → descriptor 可能声明过的别名（规范名在首位）。 */
 export const PARAM_ALIASES: Record<string, string[]> = {
   durationSeconds: ['durationSeconds', 'duration', 'duration_s'],
   aspectRatio: ['aspectRatio', 'aspect_ratio', 'ratio'],
@@ -62,26 +57,23 @@ const CANONICAL_LABELS: Record<string, string> = {
   quality: '质量',
 }
 
-/**
- * Descriptor types this module can render.
- *
- * An explicit allowlist rather than the previous `type !== 'text'` exclusion,
- * because the old heuristic was tuned against a server stub that declared image
- * sizes as free text: with the real descriptors in place that same filter would
- * have hidden every size control in the UI. A new type must arrive with a
- * control, so silently falling through is the failure this prevents.
- */
+/** 有对应控件的 descriptor 类型；新增类型必须同时落地控件，避免静默漏渲染。 */
 const RENDERABLE_TYPES = new Set(['enum', 'integer', 'number', 'boolean', 'image-size'])
 
-export type ParameterValue = string | number | boolean
-export type ParameterState = Record<string, ParameterValue>
-
-/** Minimal view of a model this engine needs. */
+/** 本引擎需要读取的模型字段（PublicModelDto 的子集）。 */
 export type ParameterCarrier = {
   parameters?: ParameterDescriptor[] | null
   defaults?: Record<string, unknown> | null
   maxCount?: number | null
   crossFieldConstraints?: ParameterCrossFieldConstraint[] | null
+}
+
+export interface DescriptorOption {
+  value: ParameterValue
+  label: string
+  description?: string
+  experimental?: boolean
+  isDefault: boolean
 }
 
 export function findDescriptor(
@@ -91,43 +83,29 @@ export function findDescriptor(
   return model?.parameters?.find((descriptor) => descriptor.name === name)
 }
 
-/** Look a descriptor up by canonical name, tolerating legacy alias spellings. */
+/** 按规范名查找 descriptor，容忍历史别名写法。 */
 export function resolveDescriptor(
   model: ParameterCarrier | null | undefined,
   canonicalName: string,
 ): ParameterDescriptor | undefined {
-  const names = new Set<string>([canonicalName, ...(PARAM_ALIASES[canonicalName] ?? [])])
-  for (const name of names) {
+  for (const name of new Set([canonicalName, ...(PARAM_ALIASES[canonicalName] ?? [])])) {
     const descriptor = findDescriptor(model, name)
     if (descriptor) return descriptor
   }
   return undefined
 }
 
-/** Declared descriptor name -> canonical name (identity for unknown names). */
+/** descriptor 的声明名 → 规范名（未知名称原样返回）。 */
 export function canonicalNameOf(descriptor: Pick<ParameterDescriptor, 'name'>): string {
   return ALIAS_TO_CANONICAL[descriptor.name] ?? descriptor.name
 }
 
-/** The single key we ever put on the wire: whatever the model declared. */
+/** 请求体里唯一写入的 key：模型自己声明的名字。 */
 export function wireType(descriptor: Pick<ParameterDescriptor, 'name'>): string {
   return descriptor.name
 }
 
-export interface DescriptorOption {
-  /** Stays in the descriptor's own value type: enum and size options are
-   *  verbatim strings, integer options are numbers, boolean are booleans. */
-  value: ParameterValue
-  label: string
-  /** Secondary text under the label, e.g. what an experimental size means. */
-  description?: string
-  experimental?: boolean
-  isDefault: boolean
-}
-
-/** Below this many integers in range, enumerate them; above it, use a ladder. */
 const INTEGER_EXHAUSTIVE_MAX = 12
-/** Ladder used when an integer range is too wide to enumerate. */
 const INTEGER_LADDER = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 60]
 
 function integerOptions(descriptor: IntegerParameterDescriptor): DescriptorOption[] {
@@ -147,29 +125,24 @@ function integerOptions(descriptor: IntegerParameterDescriptor): DescriptorOptio
       values.push(candidate)
     }
   }
-  const defaultValue = descriptor.defaultValue
-  // The descriptor's own default must always be selectable even when it sits
-  // off-ladder (Seedance defaults to 5s, which no curated ladder contained).
-  if (typeof defaultValue === 'number' && Number.isInteger(defaultValue)) values.push(defaultValue)
+  // descriptor 默认值即使不在梯子上也必须可选（如 Seedance 默认 5 秒）。
+  if (typeof descriptor.defaultValue === 'number' && Number.isInteger(descriptor.defaultValue)) {
+    values.push(descriptor.defaultValue)
+  }
   return [...new Set(values)]
     .sort((left, right) => left - right)
-    .map((value) => ({ value, label: String(value), isDefault: value === defaultValue }))
+    .map((value) => ({ value, label: String(value), isDefault: value === descriptor.defaultValue }))
 }
 
 function numberOptions(descriptor: NumberParameterDescriptor): DescriptorOption[] {
-  // A float range has no enumerable option set, so the control is a direct
-  // input bounded by the descriptor; `min` and the default are the only
-  // suggested values offered.
-  const suggested = [...new Set(
-    [descriptor.min, descriptor.defaultValue].filter((value): value is number => typeof value === 'number'),
-  )]
+  const suggested = [
+    ...new Set([descriptor.min, descriptor.defaultValue].filter((value): value is number => typeof value === 'number')),
+  ]
   return suggested.map((value) => ({ value, label: String(value), isDefault: value === descriptor.defaultValue }))
 }
 
-/** The `image-size` presets as options, so a size control degrades to a plain
- *  select on a surface that has no dedicated picker. */
 export function imageSizeOptions(descriptor: ImageSizeParameterDescriptor): DescriptorOption[] {
-  return descriptor.presets.map((preset) => ({
+  return descriptor.presets.map((preset: ImageSizePreset) => ({
     value: preset.value,
     label: describeImageSize(preset),
     description: preset.description,
@@ -178,89 +151,71 @@ export function imageSizeOptions(descriptor: ImageSizeParameterDescriptor): Desc
   }))
 }
 
-/** Every value a descriptor offers, in the descriptor's own value type. */
+/** descriptor 提供的全部可选值，保持 descriptor 自身的值类型。 */
 export function descriptorOptions(descriptor: ParameterDescriptor | undefined): DescriptorOption[] {
   if (!descriptor) return []
   switch (descriptor.type) {
-    case 'enum': {
-      const fallback = descriptor.defaultValue
-      return normalizeParameterOptions(descriptor.options).map((option) => ({
+    case 'enum':
+      return normalizeParameterOptions(descriptor.options as Array<string | ParameterOption>).map((option) => ({
         value: option.value,
         label: option.label ?? option.value,
         description: option.description,
         experimental: option.experimental,
-        isDefault: option.value === fallback,
+        isDefault: option.value === descriptor.defaultValue,
       }))
-    }
     case 'integer':
       return integerOptions(descriptor)
     case 'number':
       return numberOptions(descriptor)
     case 'image-size':
       return imageSizeOptions(descriptor)
-    case 'boolean': {
-      const active = descriptor.defaultValue ?? true
+    case 'boolean':
       return [
-        { value: true, label: '开', isDefault: active === true },
-        { value: false, label: '关', isDefault: active === false },
+        { value: true, label: '开', isDefault: descriptor.defaultValue === true },
+        { value: false, label: '关', isDefault: descriptor.defaultValue === false },
       ]
-    }
     default:
       return []
   }
 }
 
-/** Coerce a picked value into the JSON type the descriptor declares. */
+/** 把控件值强制成 descriptor 声明的 JSON 类型。 */
 export function marshalDescriptorValue(
   descriptor: ParameterDescriptor,
-  raw: ParameterValue,
+  value: ParameterValue,
 ): ParameterValue {
-  if (descriptor.type === 'integer' || descriptor.type === 'number') return Number(raw)
-  if (descriptor.type === 'boolean') return raw === true || raw === 'true'
-  return String(raw)
+  if (descriptor.type === 'integer' || descriptor.type === 'number') return Number(value)
+  if (descriptor.type === 'boolean') return value === true || value === 'true'
+  return String(value)
 }
 
-/**
- * The value to show before the user touches anything: descriptor default, then
- * the model's own `defaults` map, then the caller's fallback.
- */
+/** 初始展示值：descriptor 默认 → 模型 defaults → 调用方兜底。 */
 export function descriptorDefault(
   model: ParameterCarrier | null | undefined,
   name: string,
   fallback: unknown,
 ): unknown {
   const descriptor = resolveDescriptor(model, name)
-  const names = new Set<string>([
-    ...(descriptor ? [descriptor.name, name, canonicalNameOf(descriptor)] : [name]),
-  ])
   if (descriptor && 'defaultValue' in descriptor && descriptor.defaultValue !== undefined) {
     return marshalDescriptorValue(descriptor, descriptor.defaultValue as ParameterValue)
   }
   const defaults = model?.defaults as Record<string, unknown> | undefined
+  const names = new Set<string>([name, ...(descriptor ? [descriptor.name, canonicalNameOf(descriptor)] : [])])
   for (const alias of names) {
-    const fromDefaults = defaults?.[alias]
-    if (fromDefaults !== undefined) {
-      return descriptor
-        ? marshalDescriptorValue(descriptor, fromDefaults as ParameterValue)
-        : fromDefaults
-    }
+    const value = defaults?.[alias]
+    if (value === undefined) continue
+    return descriptor ? marshalDescriptorValue(descriptor, value as ParameterValue) : value
   }
   return fallback
 }
 
-/** Whether this descriptor belongs in the control bar at all. */
 export function isRenderableDescriptor(descriptor: ParameterDescriptor): boolean {
   return RENDERABLE_TYPES.has(descriptor.type)
 }
 
 /**
- * The descriptors that should render right now: declared, renderable, not
- * `count` (the console shows it last with its own unit), and not suppressed by
- * an unsatisfied `dependsOn`.
- *
- * Suppression is evaluated against the live values, which is what makes
- * `output_compression` vanish the moment `output_format` goes back to `png`
- * without this file knowing either parameter's name.
+ * 当前应渲染的控件：已声明、可渲染、排除 `count`（单独展示单位）、
+ * 且 `dependsOn` 依赖已满足。按 `ui.order` 排序。
  */
 export function mediaControlDescriptors(
   model: ParameterCarrier | null | undefined,
@@ -268,14 +223,14 @@ export function mediaControlDescriptors(
 ): ParameterDescriptor[] {
   const controls = (model?.parameters ?? []).filter((descriptor) => {
     if (!isRenderableDescriptor(descriptor)) return false
-    if (descriptor.name === 'count' || canonicalNameOf(descriptor) === 'count') return false
+    if (canonicalNameOf(descriptor) === 'count') return false
     return isParameterVisible(descriptor, values)
   })
   const rank = (descriptor: ParameterDescriptor) => descriptor.ui?.order ?? Number.MAX_SAFE_INTEGER
   return [...controls].sort((left, right) => rank(left) - rank(right))
 }
 
-/** The descriptor's own label, else the shared Chinese name, else its key. */
+/** 控件标题：descriptor label → 同规范名的兄弟 label → 共享中文名 → key。 */
 export function descriptorLabel(
   descriptor: ParameterDescriptor,
   model?: ParameterCarrier | null,
@@ -283,60 +238,44 @@ export function descriptorLabel(
   if (descriptor.label) return descriptor.label
   const canonical = canonicalNameOf(descriptor)
   const sibling = model?.parameters?.find(
-    (other) => other.name !== descriptor.name && canonicalNameOf(other) === canonical && !!other.label,
+    (other) => other.name !== descriptor.name && canonicalNameOf(other) === canonical && Boolean(other.label),
   )
   if (sibling?.label) return sibling.label
   return CANONICAL_LABELS[canonical] ?? descriptor.name
 }
 
-/** `true` when this value would survive server-side validation. */
 export function isLegalValue(descriptor: ParameterDescriptor, value: ParameterValue): boolean {
-  return validateParameterValue(descriptor, value).length === 0
+  return validateParameterValue(descriptor, value as JsonValue).length === 0
 }
 
-/**
- * Every reason the current selection would be refused, as
- * `{ parameter, message }` pairs.
- *
- * This is what separates the two ways a value can be wrong. A pick left over
- * from another model is *stale* and gets reconciled to the new model's default;
- * a size the user typed that breaks the band is *invalid*, and quietly
- * substituting a default would submit something they never asked for. Invalid
- * input must block the button instead, and this is the single call that decides
- * whether it does — the same validator the server runs, so the gate can never
- * be looser than the API's.
- */
+/** 会阻断提交的问题列表（与 API 同一校验器，因此不会比服务端更松）。 */
 export function parameterIssues(
   model: ParameterCarrier | null | undefined,
   values: ParameterState | undefined,
 ): Array<{ parameter: string; message: string }> {
-  const declared = model?.parameters ?? []
   const issues: Array<{ parameter: string; message: string }> = []
   const effective: Record<string, JsonValue> = {}
-
-  for (const descriptor of declared) {
-    const canonical = canonicalNameOf(descriptor)
-    const picked = values?.[canonical] ?? values?.[descriptor.name]
+  for (const descriptor of model?.parameters ?? []) {
+    const picked = values?.[canonicalNameOf(descriptor)] ?? values?.[descriptor.name]
     if (picked === undefined) {
       const fallback = descriptorDefault(model, descriptor.name, undefined)
       if (fallback !== undefined) effective[descriptor.name] = fallback as JsonValue
       continue
     }
     if (!isParameterVisible(descriptor, values)) continue
-    const marshalled = marshalDescriptorValue(descriptor, picked)
-    effective[descriptor.name] = marshalled as JsonValue
-    for (const issue of validateParameterValue(descriptor, marshalled as JsonValue)) {
+    const marshalled = marshalDescriptorValue(descriptor, picked) as JsonValue
+    effective[descriptor.name] = marshalled
+    for (const issue of validateParameterValue(descriptor, marshalled)) {
       issues.push({ parameter: descriptor.name, message: issue.message })
     }
   }
-
   for (const issue of evaluateCrossFieldConstraints(model?.crossFieldConstraints ?? undefined, effective)) {
     issues.push({ parameter: issue.parameter, message: issue.message })
   }
   return issues
 }
 
-/** The value a control should show: the user's pick if still legal, else default. */
+/** 控件应显示的值：用户选择仍合法则用它，否则用默认值。 */
 export function effectiveValue(
   model: ParameterCarrier | null | undefined,
   descriptor: ParameterDescriptor,
@@ -351,14 +290,8 @@ export function effectiveValue(
 }
 
 /**
- * Build the `parameters` payload for the selected model.
- *
- * Iterates the model's descriptors rather than the user's state keys, and drops
- * any value that is illegal or whose `dependsOn` is unsatisfied. That makes this
- * function structurally incapable of emitting a request the server would reject:
- * switching from a model where `quality=max` was valid to one where it is not
- * produces the new model's default instead of forwarding a stale value, and it
- * holds regardless of whether the reconciliation effect below has run yet.
+ * 构造请求 `parameters`：遍历模型声明的 descriptor（而非用户 state 的 key），
+ * 丢弃不合法/依赖不满足的值。切换模型后不会把旧模型的值发给新模型。
  */
 export function buildMediaParameters(
   model: ParameterCarrier | null | undefined,
@@ -366,67 +299,39 @@ export function buildMediaParameters(
 ): ParameterState {
   const parameters: ParameterState = {}
   for (const descriptor of model?.parameters ?? []) {
-    // A dependent parameter is skipped outright — value *and* default — exactly
-    // as the server's validator does. Any divergence here would mean the console
-    // sends a field the API strips, or vice versa.
     if (!isParameterVisible(descriptor, state)) continue
-    const canonical = canonicalNameOf(descriptor)
-    const picked = state?.[canonical] ?? state?.[descriptor.name]
+    const picked = state?.[canonicalNameOf(descriptor)] ?? state?.[descriptor.name]
     if (picked !== undefined && isLegalValue(descriptor, picked)) {
       parameters[wireType(descriptor)] = marshalDescriptorValue(descriptor, picked)
       continue
     }
-    if (picked !== undefined) {
-      // Chosen but no longer legal: fall through to the default rather than send
-      // it. Silently dropping it would let the provider apply its own guess.
-      const fallback = descriptorDefault(model, descriptor.name, undefined)
-      if (fallback !== undefined) parameters[wireType(descriptor)] = marshalDescriptorValue(descriptor, fallback as ParameterValue)
-      continue
-    }
     const fallback = descriptorDefault(model, descriptor.name, undefined)
-    if (fallback === undefined) continue
-    parameters[wireType(descriptor)] = marshalDescriptorValue(descriptor, fallback as ParameterValue)
+    if (fallback !== undefined) {
+      parameters[wireType(descriptor)] = marshalDescriptorValue(descriptor, fallback as ParameterValue)
+    }
   }
   return parameters
 }
 
-/**
- * Reconcile carried-over selections against a newly selected model, so the
- * rendered controls agree with what `buildMediaParameters` will actually send.
- *
- * Pure and idempotent, which is what lets it run from an effect keyed on the
- * model id without risking an update loop: once the values are reconciled, the
- * next pass returns the same map.
- */
+/** 切换模型后把携带值收敛到新模型；纯函数、幂等，可在 effect 中安全调用。 */
 export function reconcileModelParameters(
   model: ParameterCarrier | null | undefined,
   values: ParameterState | undefined,
 ): ParameterState {
   const descriptors = model?.parameters ?? []
-  // UI state is canonical, whereas validation uses the model's wire names.
   const declared: ParameterState = {}
   for (const descriptor of descriptors) {
     const value = values?.[canonicalNameOf(descriptor)] ?? values?.[descriptor.name]
     if (value !== undefined) declared[descriptor.name] = value
   }
   const reconciled = reconcileParameters(descriptors, declared)
-  return Object.fromEntries(descriptors.flatMap((descriptor) =>
-    descriptor.name in reconciled
-      ? [[canonicalNameOf(descriptor), reconciled[descriptor.name]]]
-      : [],
-  ))
+  return Object.fromEntries(
+    descriptors.flatMap((descriptor) =>
+      descriptor.name in reconciled ? [[canonicalNameOf(descriptor), reconciled[descriptor.name]]] : [],
+    ),
+  )
 }
 
-export { AUTO_SIZE_VALUE, describeImageSize, parseImageSize, reduceRatio, isAdvancedParameter }
-export type { ImageSizeConstraints, ImageSizePreset }
-
-/**
- * Validate a hand-typed custom size, returning one message per violated rule.
- *
- * Thin wrapper that exists so the size picker passes the *pair* (the constraint
- * block is shared by both edges) while the contract validator keeps the single
- * implementation the server also calls.
- */
 export function customSizeViolations(
   constraints: ImageSizeConstraints | undefined,
   width: number,
@@ -440,19 +345,17 @@ export function customSizeViolations(
   return imageConstraintViolations(constraints, width, height, parameterName).map((issue) => issue.message)
 }
 
-/** Everything the size picker needs about a descriptor, already narrowed. */
 export function asImageSizeDescriptor(
   descriptor: ParameterDescriptor | undefined,
 ): ImageSizeParameterDescriptor | undefined {
   return descriptor?.type === 'image-size' ? descriptor : undefined
 }
 
-/** Values a size parameter accepts, for callers that treat it generically. */
 export function sizeValues(descriptor: ImageSizeParameterDescriptor): string[] {
   return descriptor.presets.map((preset) => preset.value)
 }
 
-/** Constraint hints rendered next to the custom-size inputs. */
+/** 自定义尺寸输入旁的约束提示。 */
 export function describeConstraints(constraints: ImageSizeConstraints | undefined): string[] {
   if (!constraints) return []
   const hints: string[] = []
@@ -467,25 +370,19 @@ export function describeConstraints(constraints: ImageSizeConstraints | undefine
   if (constraints.heightMultipleOf) hints.push(`高为 ${constraints.heightMultipleOf} 的倍数`)
   if (constraints.minPixels || constraints.maxPixels) {
     const format = (value: number) => value.toLocaleString('en-US')
-    if (constraints.minPixels && constraints.maxPixels) {
-      hints.push(`总像素 ${format(constraints.minPixels)}–${format(constraints.maxPixels)}`)
-    } else if (constraints.maxPixels) {
-      hints.push(`总像素 ≤ ${format(constraints.maxPixels)}`)
-    } else if (constraints.minPixels) {
-      hints.push(`总像素 ≥ ${format(constraints.minPixels)}`)
-    }
+    if (constraints.minPixels && constraints.maxPixels) hints.push(`总像素 ${format(constraints.minPixels)}–${format(constraints.maxPixels)}`)
+    else if (constraints.maxPixels) hints.push(`总像素 ≤ ${format(constraints.maxPixels)}`)
+    else if (constraints.minPixels) hints.push(`总像素 ≥ ${format(constraints.minPixels)}`)
   }
   if (constraints.maxAspectRatio) hints.push(`宽高比 ≤ ${constraints.maxAspectRatio}:1`)
   return hints
 }
 
-/** Re-exported so the console can render a business error verbatim. */
+/** enum descriptor 的裸值列表。 */
 export function optionValueList(descriptor: ParameterDescriptor | undefined): string[] {
   if (!descriptor || descriptor.type !== 'enum') return []
-  return enumOptionValues(descriptor.options)
+  return enumOptionValues(descriptor.options as Array<string | ParameterOption>)
 }
 
-/** JSON view of a state map, for request bodies. */
-export function toParameterPayload(state: ParameterState): Record<string, JsonValue> {
-  return { ...state }
-}
+export { AUTO_SIZE_VALUE, describeImageSize, parseImageSize, reduceRatio, isAdvancedParameter }
+export type { ImageSizeConstraints, ImageSizePreset, ParameterDescriptor }

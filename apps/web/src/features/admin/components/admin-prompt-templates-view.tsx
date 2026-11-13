@@ -1,353 +1,378 @@
 'use client'
 
-import type { CSSProperties } from 'react'
-import { adminTouchTargetsSquare, adminPageActions, adminPageHeader, adminPageRoot } from '../lib/admin-layout'
-import {
-  useRef, useState } from 'react'
-import { useQuery,
-  useMutation,
-  useQueryClient } from '@tanstack/react-query'
-import { API_ENDPOINTS,
-  type PromptTemplateSetDetailDto } from '@musecanvas/contracts'
-import { api } from '@/shared/services/api'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowClockwiseIcon as RefreshCw, UploadSimpleIcon as Upload } from '@phosphor-icons/react'
+import type {
+  ImportPromptTemplateSetInput,
+  PromptTemplateEntryDto,
+  PromptTemplateSetSummaryDto,
+} from '@musecanvas/contracts'
+import { Alert } from '@/shared/components/ui/alert'
+import { Button } from '@/shared/components/ui/button'
+import { Card } from '@/shared/components/ui/card'
 import { Dialog } from '@/shared/components/ui/dialog'
-import { useAdminActions } from '../lib/use-admin-actions'
-import { AdminActionErrors } from './admin-confirm-dialog'
-import { AdminQueryFeedback } from './admin-query-feedback'
-import { AdminListToolbar } from './admin-list-toolbar'
-import { AdminRecordDetailDialog, AdminRecordFields } from './admin-record-detail-dialog'
-import { searchAdminPromptTemplates } from '../lib/admin-list-state'
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  CardBody,
-  CardDescription,
-  CardTitle,
-  EmptyState,
-  FormField,
-  IconButton,
-  Input,
-  PageHeader,
-  SkeletonText,
-  SkeletonTile,
-  Textarea,
-  buttonVariants,
-  controlSquare,
-  iconSize,
-  useToast,
-} from '@/shared/components/ui'
-import { DownloadSimpleIcon as Download, FileTextIcon as FileText, PlusIcon as Plus, ArrowClockwiseIcon as RefreshCw, TrashIcon as Trash2 } from '@phosphor-icons/react'
+import { PageHeader } from '@/shared/components/ui/page-header'
+import { useToast } from '@/shared/components/ui/toast'
+import { iconSize } from '@/shared/components/ui/size'
+import { queryKeys } from '@/shared/hooks/query-keys'
+import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
+import { sortPromptEntries } from '@/features/admin/lib/admin-prompt-templates'
+import { clientApi } from '@/shared/services/client-api'
+import { AdminPromptEntriesCard } from './admin-prompt-entries-card'
+import { AdminPromptEntryDialog } from './admin-prompt-entry-dialog'
+import type { AdminPromptEntrySubmit } from './admin-prompt-entry-dialog'
+import { AdminPromptImportDialog } from './admin-prompt-import-dialog'
+import { AdminPromptPreviewDialog } from './admin-prompt-preview-dialog'
+import { AdminPromptSetsCard } from './admin-prompt-sets-card'
+import { AdminPromptOptimizationCard, AdminPromptAgentCard } from './admin-prompt-settings'
 
+type EntryDialogState = { mode: 'create' | 'edit'; entry: PromptTemplateEntryDto | null }
+type DeleteTarget =
+  | { kind: 'entry'; id: string; name: string }
+  | { kind: 'set'; id: string; name: string }
+
+const detailQueryKey = (setId: string) => [...queryKeys.admin.promptTemplateSets, 'detail', setId] as const
+
+/**
+ * 提示词模板页：模板集列表 + 条目编辑（copy-on-write）+ 导入/导出/预览
+ * + 提示词优化与创作助手两张语言模型设置表单。
+ */
 export function AdminPromptTemplatesView() {
   const queryClient = useQueryClient()
-  const recordListRef = useRef<HTMLDivElement | null>(null)
-  const toast = useToast()
-  const [createModalOpen, setCreateModalOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [instruction, setInstruction] = useState('')
-  const [actionError, setActionError] = useState('')
-  const [search, setSearch] = useState('')
-  const [detailTemplate, setDetailTemplate] = useState<PromptTemplateSetDetailDto['entries'][number] | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<PromptTemplateSetDetailDto['entries'][number] | null>(null)
-  const actions = useAdminActions()
-  // Deletions fork the entire active set, so all entries share this serial lock.
-  const deletionKey = 'active-template-set'
+  const { toast } = useToast()
 
-  const {
-    data: activeSet,
-    isLoading,
-    isError,
-    error,
-    isFetching,
-    refetch,
-  } = useQuery<PromptTemplateSetDetailDto | null>({
-    queryKey: ['admin', 'prompt-templates'],
-    queryFn: async () => {
-      const res = await api<PromptTemplateSetDetailDto | null>(API_ENDPOINTS.admin.promptTemplates)
-      if (!res.success) throw new Error(res.error?.message || '加载提示词模板失败')
-      return res.data ?? null
-    },
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [entryDialog, setEntryDialog] = useState<EntryDialogState | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [previewEntry, setPreviewEntry] = useState<PromptTemplateEntryDto | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  const [busySetId, setBusySetId] = useState<string | null>(null)
+  const [busyEntryId, setBusyEntryId] = useState<string | null>(null)
+
+  const activeQuery = useQuery({
+    queryKey: queryKeys.admin.promptTemplates,
+    queryFn: () => clientApi.admin.getActivePromptTemplates(),
+    staleTime: 30_000,
+  })
+  const setsQuery = useQuery({
+    queryKey: queryKeys.admin.promptTemplateSets,
+    queryFn: () => clientApi.admin.listPromptTemplateSets(),
+    staleTime: 30_000,
+  })
+  const modelsQuery = useQuery({
+    queryKey: queryKeys.admin.models,
+    queryFn: () => clientApi.admin.listModels(),
+    staleTime: 60_000,
   })
 
-  const entries = searchAdminPromptTemplates(activeSet?.entries ?? [], search)
-  function requestDeleteTemplate(template: PromptTemplateSetDetailDto['entries'][number]) {
-    setDeleteTarget(template)
+  const active = activeQuery.data ?? null
+  const sets = useMemo(() => setsQuery.data ?? [], [setsQuery.data])
+  const languageModels = (modelsQuery.data ?? []).filter((model) => model.modelKind === 'language')
+
+  // 默认选中启用集；启用集变化（编辑派生新版本）后自动跟随。
+  useEffect(() => {
+    if (selectedId !== null) return
+    const first = active?.id ?? sets[0]?.id ?? null
+    if (first) setSelectedId(first)
+  }, [selectedId, active?.id, sets])
+
+  const activeSelected = selectedId !== null && active?.id === selectedId
+  const detailQuery = useQuery({
+    queryKey: detailQueryKey(selectedId ?? 'none'),
+    queryFn: () => clientApi.admin.getPromptTemplateSet(selectedId ?? ''),
+    enabled: selectedId !== null && !activeSelected,
+    staleTime: 30_000,
+  })
+
+  const selectedSet = activeSelected ? active : (detailQuery.data ?? null)
+  const editable = selectedSet?.isActive === true
+
+  function refreshLists() {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.promptTemplates })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.promptTemplateSets })
   }
 
-  const createMutation = useMutation({
-    mutationFn: async () => {
-      if (!activeSet) throw new Error('当前没有激活的模板集，请先完成实例的模板集配置')
-      if (!name.trim() || !instruction.trim()) throw new Error('请完整填写名称与提示词内容')
-      const res = await api(API_ENDPOINTS.admin.promptTemplateSetEntries(activeSet.id), {
-        method: 'POST',
-        body: {
-          name: name.trim(),
-          description: description.trim() || undefined,
-          instruction: instruction.trim(),
-        },
-      })
-      if (!res.success) throw new Error(res.error?.message || '创建模板失败')
-      return res.data
+  const activateMutation = useMutation({
+    mutationFn: (setId: string) => clientApi.admin.activatePromptTemplateSet(setId),
+    onMutate: (setId) => setBusySetId(setId),
+    onSuccess: (summary) => {
+      refreshLists()
+      setSelectedId(summary.id)
+      toast.success(`已激活 ${summary.name} v${summary.version}`)
     },
-    onSuccess: async () => {
-      setCreateModalOpen(false)
-      setName('')
-      setDescription('')
-      setInstruction('')
-      toast.push({ variant: 'success', title: '模板已创建' })
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'prompt-templates'] })
-    },
-    onError: (err: unknown) => {
-      setActionError(err instanceof Error ? err.message : '创建模板失败')
-    },
+    onError: (error) => toast.error('激活模板集失败', adminErrorMessage(error)),
+    onSettled: () => setBusySetId(null),
   })
 
-  // Deleting an entry forks a new set version on the backend, so the whole
-  // active-set query must be refetched rather than patched locally.
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await api(API_ENDPOINTS.admin.promptTemplateEntry(id), { method: 'DELETE' })
-      if (!res.success) throw new Error(res.error?.message || '删除模板失败')
-      return res.data
+  const deleteSetMutation = useMutation({
+    mutationFn: (setId: string) => clientApi.admin.deletePromptTemplateSet(setId),
+    onMutate: (setId) => setBusySetId(setId),
+    onSuccess: (_result, setId) => {
+      refreshLists()
+      if (selectedId === setId) setSelectedId(active?.id ?? null)
+      setDeleteTarget(null)
+      toast.success('模板集版本已删除')
     },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'prompt-templates'] })
-    },
+    onError: (error) => toast.error('删除模板集失败', adminErrorMessage(error)),
+    onSettled: () => setBusySetId(null),
   })
+
+  const createEntryMutation = useMutation({
+    mutationFn: (variables: { setId: string; input: AdminPromptEntrySubmit }) =>
+      clientApi.admin.createPromptTemplateEntry(variables.setId, {
+        name: variables.input.name,
+        description: variables.input.description,
+        instruction: variables.input.instruction,
+        ...(variables.input.sortOrder === undefined ? {} : { sortOrder: variables.input.sortOrder }),
+      }),
+    onMutate: () => setBusyEntryId('create'),
+    onSuccess: (detail) => {
+      refreshLists()
+      setSelectedId(detail.id)
+      setEntryDialog(null)
+      toast.success(`已新增条目并生成 v${detail.version}`)
+    },
+    onError: (error) => toast.error('新增提示词条目失败', adminErrorMessage(error)),
+    onSettled: () => setBusyEntryId(null),
+  })
+
+  const updateEntryMutation = useMutation({
+    mutationFn: (variables: { entryId: string; input: AdminPromptEntrySubmit }) =>
+      clientApi.admin.updatePromptTemplateEntry(variables.entryId, {
+        name: variables.input.name,
+        description: variables.input.description,
+        instruction: variables.input.instruction,
+        ...(variables.input.sortOrder === undefined ? {} : { sortOrder: variables.input.sortOrder }),
+      }),
+    onMutate: (variables) => setBusyEntryId(variables.entryId),
+    onSuccess: (detail) => {
+      refreshLists()
+      setSelectedId(detail.id)
+      setEntryDialog(null)
+      toast.success(`条目已保存并生成 v${detail.version}`)
+    },
+    onError: (error) => toast.error('保存提示词条目失败', adminErrorMessage(error)),
+    onSettled: () => setBusyEntryId(null),
+  })
+
+  const deleteEntryMutation = useMutation({
+    mutationFn: (entryId: string) => clientApi.admin.deletePromptTemplateEntry(entryId),
+    onMutate: (entryId) => setBusyEntryId(entryId),
+    onSuccess: (result) => {
+      refreshLists()
+      if (result.setId) setSelectedId(result.setId)
+      setDeleteTarget(null)
+      toast.success('条目已删除并生成新版本')
+    },
+    onError: (error) => toast.error('删除提示词条目失败', adminErrorMessage(error)),
+    onSettled: () => setBusyEntryId(null),
+  })
+
+  /** 上移/下移：两次 PATCH 交换 sortOrder；每次返回新的 fork，第二次用新 id。 */
+  const reorderMutation = useMutation({
+    mutationFn: async (variables: { entry: PromptTemplateEntryDto; direction: -1 | 1 }) => {
+      if (!selectedSet) throw new Error('当前没有可编辑的模板集。')
+      const entries = sortPromptEntries(selectedSet.entries)
+      const index = entries.findIndex((candidate) => candidate.id === variables.entry.id)
+      const neighbor = entries[index + variables.direction]
+      if (index < 0 || !neighbor) throw new Error('已经到达排序边界。')
+      if (neighbor.sortOrder === variables.entry.sortOrder) {
+        throw new Error('两条模板排序值相同，请通过「编辑」直接修改排序值。')
+      }
+      const first = await clientApi.admin.updatePromptTemplateEntry(variables.entry.id, {
+        sortOrder: neighbor.sortOrder,
+      })
+      const movedNeighbor = first.entries.find((candidate) => candidate.name === neighbor.name)
+      if (!movedNeighbor) throw new Error('排序后未能定位相邻条目，请刷新后重试。')
+      return clientApi.admin.updatePromptTemplateEntry(movedNeighbor.id, {
+        sortOrder: variables.entry.sortOrder,
+      })
+    },
+    onMutate: (variables) => setBusyEntryId(variables.entry.id),
+    onSuccess: (detail) => {
+      refreshLists()
+      setSelectedId(detail.id)
+      toast.success('排序已更新')
+    },
+    onError: (error) => toast.error('调整排序失败', adminErrorMessage(error)),
+    onSettled: () => setBusyEntryId(null),
+  })
+
+  const importMutation = useMutation({
+    mutationFn: (input: ImportPromptTemplateSetInput) => clientApi.admin.importPromptTemplates(input),
+    onSuccess: (result) => {
+      refreshLists()
+      setImportOpen(false)
+      setSelectedId(result.setId)
+      toast.success(
+        `已导入 ${result.entryCount} 条模板`,
+        result.isActive ? `已激活 ${result.name} v${result.version}` : '已保存为历史版本，可手动激活。',
+      )
+    },
+    onError: (error) => toast.error('导入模板集失败', adminErrorMessage(error)),
+  })
+
+  function handleEntrySubmit(values: AdminPromptEntrySubmit) {
+    if (!entryDialog) return
+    if (entryDialog.mode === 'edit' && entryDialog.entry) {
+      updateEntryMutation.mutate({ entryId: entryDialog.entry.id, input: values })
+      return
+    }
+    if (!selectedSet) return
+    createEntryMutation.mutate({ setId: selectedSet.id, input: values })
+  }
+
+  function handleDeleteConfirm() {
+    if (!deleteTarget) return
+    if (deleteTarget.kind === 'entry') deleteEntryMutation.mutate(deleteTarget.id)
+    else deleteSetMutation.mutate(deleteTarget.id)
+  }
+
+  const queryError = activeQuery.error ?? setsQuery.error
+  const busyEntryDialog = createEntryMutation.isPending || updateEntryMutation.isPending
+  const busyDelete = deleteEntryMutation.isPending || deleteSetMutation.isPending
 
   return (
-    <div className={adminPageRoot}>
+    <div className="flex min-w-0 flex-col gap-6">
       <PageHeader
-        className={adminPageHeader}
-        actionsClassName={adminPageActions}
         title="提示词模板"
-        description={
-          activeSet
-            ? `当前激活模板集：${activeSet.name}（第 ${activeSet.version} 版，${activeSet.entryCount} 个条目），供创作台快捷调用。`
-            : '管理系统预置与分类提示词模板，供用户在创作台快捷调用。'
-        }
+        description="管理生成用的提示词模板集与语言模型相关设置。模板按版本 copy-on-write：编辑条目会自动生成新的启用版本，历史版本仍可查看与回滚。"
         actions={
           <>
-            {activeSet ? (
-              <a
-                href={`${API_ENDPOINTS.admin.promptTemplatesExport}?setId=${encodeURIComponent(activeSet.id)}`}
-                className={buttonVariants({ variant: 'secondary' })}
-              >
-                <Download weight="bold" aria-hidden="true" className={iconSize.sm} />
-                导出模板集
-              </a>
-            ) : null}
-            <Button
-              onClick={() => {
-                setActionError('')
-                setCreateModalOpen(true)
-              }}
-              disabled={!activeSet || actions.isPending(deletionKey) || createMutation.isPending}
-              title={activeSet ? undefined : '请先导入并激活模板集'}
-              icon={<Plus weight="bold" aria-hidden="true" className={iconSize.sm} />}
-            >
-              创建模板
-            </Button>
             <Button
               variant="secondary"
-              onClick={() => void refetch()}
-              loading={isFetching}
+              onClick={() => void Promise.all([activeQuery.refetch(), setsQuery.refetch()])}
+              loading={activeQuery.isFetching || setsQuery.isFetching}
               icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
             >
               刷新
+            </Button>
+            <Button
+              onClick={() => setImportOpen(true)}
+              icon={<Upload weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            >
+              导入模板集
             </Button>
           </>
         }
       />
 
-      <AdminListToolbar title="激活集条目" description="搜索当前版本的名称、描述和指令全文，不包含其它模板集。"
-        summary={`匹配 ${entries.length} / ${activeSet?.entries.length ?? 0} 条`}
-        activeCount={Number(!!search.trim())} appliedSummary={`搜索 ${search.trim()}`}
-        filters={<FormField label="搜索当前激活模板集"><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="名称、描述或指令关键词" disabled={!activeSet} /></FormField>}
-        filterActions={search.trim() && <Button variant="ghost" onClick={() => setSearch('')}>清除搜索</Button>}
-      />
-
-      <AdminActionErrors errors={actions.errors} />
-
-      {activeSet !== undefined && <AdminQueryFeedback error={error} hasData label="提示词模板" onRetry={() => { void refetch() }} />}
-      {isError && activeSet === undefined ? (
+      {queryError ? (
         <Alert
           tone="danger"
-          role="alert"
-          title="无法加载提示词模板"
+          title="读取模板数据失败"
           action={
-            <Button variant="secondary" size="sm" loading={isFetching} onClick={() => void refetch()}>
-              刷新重试
+            <Button variant="secondary" size="sm" onClick={refreshLists}>
+              重试
             </Button>
           }
         >
-          {error instanceof Error ? `${error.message}。请确认管理后台会话仍然有效。` : '加载数据时出现问题，请稍后重试。'}
+          {adminErrorMessage(queryError, '请检查管理员会话与网络后重试。')}
         </Alert>
       ) : null}
 
-      {!isLoading && activeSet !== undefined && !activeSet ? (
-        <Alert tone="info" role="status" title="当前没有激活的模板集">
-          <span className="flex items-start gap-2">
-            <FileText weight="duotone" aria-hidden="true" className={`mt-0.5 ${iconSize.sm} shrink-0`} />
-            条目管理在服务端激活的模板集上进行。当前页面不提供导入或激活接口；请先完成实例的模板集配置，再返回创建条目。
-          </span>
-        </Alert>
+      {activeQuery.isLoading && setsQuery.isLoading ? (
+        <Card>
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载提示词模板…
+          </p>
+        </Card>
       ) : null}
 
-      <div ref={recordListRef} tabIndex={-1} role="region" aria-label="当前提示词模板列表" className="min-w-0">
-      {isLoading ? (
-        <div className="grid grid-cols-1 gap-4 @min-[640px]/admin:grid-cols-2 @min-[1040px]/admin:grid-cols-3" role="status" aria-busy="true">
-          <span className="sr-only">正在加载提示词模板</span>
-          {Array.from({ length: 6 }, (_, index) => (
-            <Card key={index} aria-hidden="true" density="compact">
-              <div className="flex items-start justify-between gap-3">
-                <SkeletonTile className="aspect-auto h-6 w-24 rounded-pill" />
-                <SkeletonTile className={`aspect-auto ${controlSquare.sm} rounded-control`} />
-              </div>
-              <SkeletonText width={index % 2 === 0 ? '11rem' : '9rem'} />
-              <SkeletonText lines={3} />
-            </Card>
-          ))}
-        </div>
-      ) : null}
+      <AdminPromptSetsCard
+        active={active}
+        sets={sets}
+        selectedId={selectedId}
+        busySetId={busySetId}
+        exportHref={(setId) => clientApi.admin.promptTemplatesExportUrl(setId)}
+        onSelect={setSelectedId}
+        onActivate={(setId) => activateMutation.mutate(setId)}
+        onDelete={(set: PromptTemplateSetSummaryDto) => setDeleteTarget({ kind: 'set', id: set.id, name: set.name })}
+      />
 
-      {!isLoading && activeSet ? (
-        entries.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4 @min-[640px]/admin:grid-cols-2 @min-[1040px]/admin:grid-cols-3">
-            {entries.map((t, index) => (
-              <Card key={t.id} density="compact" className="motion-reveal motion-stagger" style={{ '--stagger-index': index } as CSSProperties}>
-                <CardBody className="h-full gap-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <Badge tone="neutral">模板指令</Badge>
-                    <IconButton
-                    className="min-h-[var(--control-md)] min-w-[var(--control-md)]"
-                      variant="danger-ghost"
-                      size="sm"
-                      aria-label={`删除提示词模板：${t.name}`}
-                      loading={!!deleteTarget && deleteTarget.id === t.id && actions.isPending(deletionKey)}
-                      disabled={actions.isPending(deletionKey) || createMutation.isPending}
-                      onClick={() => requestDeleteTemplate(t)}
-                      icon={<Trash2 weight="bold" aria-hidden="true" className={iconSize.sm} />}
-                    />
-                  </div>
-                  <CardTitle level={3} className="break-words [overflow-wrap:anywhere]">{t.name}</CardTitle>
-                  <p className="break-words text-sm text-muted-foreground">{t.description || '通用模板'}</p>
-                  <CardDescription className="line-clamp-3 whitespace-pre-wrap">{t.instruction}</CardDescription>
-                  <Button variant="secondary" className="mt-auto" onClick={() => setDetailTemplate(t)}>查看指令全文</Button>
-                </CardBody>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <Card>
-            <EmptyState
-              variant={search.trim() ? 'no-results' : 'first-use'}
-              objectName="提示词模板"
-              title={search.trim() ? '当前激活集中没有匹配模板' : undefined}
-              description={search.trim() ? '请调整或清除搜索词；搜索不包含其它模板集版本。' : undefined}
-              actionLabel={search.trim() ? '清除搜索' : '创建第一个模板'}
-              onAction={() => {
-                if (search.trim()) setSearch('')
-                else { setActionError(''); setCreateModalOpen(true) }
-              }}
-            />
-          </Card>
-        )
-      ) : null}
+      <AdminPromptEntriesCard
+        set={selectedSet}
+        editable={editable}
+        busyEntryId={busyEntryId}
+        onAdd={() => setEntryDialog({ mode: 'create', entry: null })}
+        onEdit={(entry) => setEntryDialog({ mode: 'edit', entry })}
+        onDelete={(entry) => setDeleteTarget({ kind: 'entry', id: entry.id, name: entry.name })}
+        onPreview={setPreviewEntry}
+        onMove={(entry, direction) => reorderMutation.mutate({ entry, direction })}
+        onExport={() => {
+          if (selectedSet) window.open(clientApi.admin.promptTemplatesExportUrl(selectedSet.id), '_blank', 'noopener')
+        }}
+      />
+
+      <div className="flex min-w-0 flex-col gap-2">
+        <h2 className="text-section text-foreground">语言模型相关设置</h2>
+        <p className="text-sm text-muted-foreground">
+          两张表单共用 /admin/language-models 中已启用的语言模型；启用任一功能前必须先选择模型。
+        </p>
+        {modelsQuery.isError ? (
+          <Alert tone="warning" title="语言模型列表加载失败">
+            {adminErrorMessage(modelsQuery.error, '请刷新页面后重试；保存时仍会做服务端校验。')}
+          </Alert>
+        ) : null}
+      </div>
+      <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+        <AdminPromptOptimizationCard models={languageModels} />
+        <AdminPromptAgentCard models={languageModels} />
       </div>
 
-      <AdminRecordDetailDialog open={detailTemplate !== null || deleteTarget !== null} onClose={() => { setDetailTemplate(null); setDeleteTarget(null) }} title="提示词模板全文"
-        listFocusRef={recordListRef}
-        confirmation={deleteTarget ? {
-          objectName: `${deleteTarget.name}（${deleteTarget.id}）`,
-          impact: '删除将派生并激活新的模板集版本，影响创作台可用模板；不会直接编辑旧版本。操作与目录刷新完成前，不能删除其它条目。',
-          pending: actions.isPending(deletionKey),
-          error: actions.errors[deletionKey],
-          cancelLabel: detailTemplate ? '返回详情' : '取消',
-          onCancel: () => setDeleteTarget(null),
-          onConfirm: () => {
-            if (!deleteTarget || createMutation.isPending || actions.isPending(deletionKey)) return
-            const target = deleteTarget
-            void actions.run(deletionKey, target.name, () => deleteMutation.mutateAsync(target.id), '模板已删除', 'delete')
-              .then(() => {
-                setDeleteTarget((current) => current?.id === target.id ? null : current)
-                setDetailTemplate((current) => current?.id === target.id ? null : current)
-              }).catch(() => {})
-          },
-        } : undefined}
-        danger={detailTemplate && <Button variant="danger-ghost" disabled={actions.isPending(deletionKey) || createMutation.isPending} onClick={() => requestDeleteTemplate(detailTemplate)}>删除此模板</Button>}>
-        {detailTemplate && <>
-          <AdminRecordFields fields={[
-            { label: '名称', value: detailTemplate.name },
-            { label: '描述', value: detailTemplate.description || '通用模板' },
-          ]} />
-          <div className="min-w-0"><h3 className="mb-2 text-sm font-medium">完整指令（Instruction）</h3>
-            <pre className="select-text whitespace-pre-wrap break-words font-mono text-sm [overflow-wrap:anywhere]">{detailTemplate.instruction}</pre>
-          </div>
-        </>}
-      </AdminRecordDetailDialog>
+      <AdminPromptEntryDialog
+        open={entryDialog !== null}
+        mode={entryDialog?.mode ?? 'create'}
+        entry={entryDialog?.entry ?? null}
+        busy={busyEntryDialog}
+        onClose={() => setEntryDialog(null)}
+        onSubmit={handleEntrySubmit}
+      />
 
-      {/* Create Modal */}
+      <AdminPromptImportDialog
+        open={importOpen}
+        busy={importMutation.isPending}
+        onClose={() => setImportOpen(false)}
+        onSubmit={(input) => importMutation.mutate(input)}
+      />
+
+      <AdminPromptPreviewDialog
+        open={previewEntry !== null}
+        entry={previewEntry}
+        onClose={() => setPreviewEntry(null)}
+      />
+
       <Dialog
-        open={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
-        title="创建提示词模板"
-        size="narrow"
-        panelClassName={`max-h-[90dvh] ${adminTouchTargetsSquare}`}
-        footer={<>
-          <Button variant="ghost" onClick={() => setCreateModalOpen(false)}>取消</Button>
-          <Button type="submit" form="admin-create-template-form" disabled={!name.trim() || !instruction.trim() || actions.isPending(deletionKey)} loading={createMutation.isPending}>创建模板</Button>
-        </>}
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        title={deleteTarget?.kind === 'set' ? '删除模板集版本？' : '删除这条模板？'}
+        description={
+          deleteTarget?.kind === 'set'
+            ? '删除的是该历史版本；启用中的版本不能删除。'
+            : '删除会派生一个不含该条目的新版本，历史版本保持不变。'
+        }
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)} disabled={busyDelete}>
+              取消
+            </Button>
+            <Button variant="danger" onClick={handleDeleteConfirm} loading={busyDelete}>
+              确认删除
+            </Button>
+          </>
+        }
       >
-        <form
-          id="admin-create-template-form"
-          className="flex flex-col gap-6"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!actions.isPending(deletionKey) && !createMutation.isPending) createMutation.mutate()
-          }}
-        >
-          {actionError ? (
-            <Alert tone="danger" role="alert">
-              {actionError}
-            </Alert>
-          ) : null}
-
-          <FormField label="模板名称" required>
-            <Input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如：赛博朋克都市风格"
-            />
-          </FormField>
-
-          <FormField label="说明描述" hint="用于创作台的标签位置，留空时显示为通用模板。">
-            <Input
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="例如：增强色彩对比与霓虹光效"
-            />
-          </FormField>
-
-          <FormField
-            label="模板指令内容（Instruction）"
-            required
-            hint="发送给模型的正文模板，支持 {{input_prompt}} 插值。"
-          >
-            <Textarea
-              rows={4}
-              value={instruction}
-              onChange={(e) => setInstruction(e.target.value)}
-              placeholder="输入详细的提示词引导模板…"
-            />
-          </FormField>
-
-        </form>
+        <p className="text-sm text-foreground">
+          {deleteTarget
+            ? `将删除「${deleteTarget.name}」${deleteTarget.kind === 'set' ? '模板集版本' : '条目'}。此操作不可撤销。`
+            : ''}
+        </p>
+        {deleteTarget?.kind === 'entry' ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            模板集至少要保留一条模板；如果这是最后一条，删除会被拒绝。
+          </p>
+        ) : null}
       </Dialog>
     </div>
   )

@@ -1,187 +1,179 @@
 'use client'
 
-import { useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { ClipboardEvent, KeyboardEvent, Ref } from 'react'
 import { cn } from '@/shared/lib/cn'
-
-/** The backend issues 6-digit numeric codes; the grid is fixed at six cells. */
-export const OTP_LENGTH = 6
-
-/** Keep ASCII digits only, capped at the code length. */
-export function sanitizeOtpChunk(raw: string): string {
-  return raw.replace(/[^0-9]/g, '').slice(0, OTP_LENGTH)
-}
+import { activeOtpIndex, mergeOtpChunk, OTP_LENGTH, removeOtpDigit, sanitizeOtpChunk } from '../lib/otp'
 
 export interface OtpInputProps {
   value: string
   onChange: (next: string) => void
-  /** Fires once the sixth digit lands (typing or pasting). The parent submits. */
-  onComplete?: (code: string) => void
+  /** 格子数量；后端固定 6 位，保留参数是为了复用与测试。 */
+  length?: number
   disabled?: boolean
   autoFocus?: boolean
-  /** Receives the first cell so a failed submit can move focus to the group. */
-  firstInputRef?: Ref<HTMLInputElement>
-  /** Id for the first cell, so an external label or `htmlFor` can still target the code. */
-  id?: string
-  /** Mirrors the parent's error state: red cells and `aria-invalid` on every cell. */
+  /** 输满（键入或粘贴）时回调；登录页据此自动提交。 */
+  onComplete?: (code: string) => void
+  /** 父级错误态：红边 + `aria-invalid`，错误文案由父级用 `describedBy` 关联。 */
   invalid?: boolean
-  /** Space-separated ids of the parent's hint or error node, for `aria-describedby`. */
   describedBy?: string
+  /** 暴露第一格，便于父级在提交失败后把焦点送回验证码组。 */
+  firstInputRef?: Ref<HTMLInputElement>
+  /** 第一格的 id，供外部 label / 测试定位。 */
+  id?: string
+  /** 按 Esc 时由父级决定是否返回上一步（不阻断其它键）。 */
+  onEscape?: () => void
+  /** 可见的组标题；默认「验证码」。传 `null` 则只保留读屏用的 aria-label。 */
+  label?: string | null
 }
 
 /**
- * Six-cell verification code input (login design board 06).
+ * 六格数字验证码输入（设计画板 06）。
  *
- * The cells sit in a `fieldset` whose visible legend names the code, so the group
- * is announced by its legend rather than a separate label. Each cell carries
- * `aria-label` 第 n 位 so a screen reader names every stop. Typing the sixth digit
- * (or pasting a full code) calls `onComplete`; Backspace on an empty cell steps back
- * and clears the previous one. Enter still submits the surrounding form. The parent
- * owns the hint and error text and passes their id in as `describedBy`.
+ * · 每格都有 `aria-label="第 n 位输入框"`，读屏能逐位读出当前进度；
+ * · 整串粘贴 / 移动端一次性验证码自动填充会从当前格起逐位落座；
+ * · 退格：本格有值就删本格并左移焦点，本格为空则回退删上一格；
+ * · ArrowLeft / ArrowRight / Home / End 在组内移动，Enter 交给外层表单提交；
+ * · 输满第 6 位（键入或粘贴）通过 `onComplete` 通知父级自动提交。
+ *
+ * 组件受控：取值、提交与错误文案都由登录表单持有，这里只处理事件与渲染。
  */
 export function OtpInput({
   value,
   onChange,
+  length = OTP_LENGTH,
+  disabled = false,
+  autoFocus = false,
   onComplete,
-  disabled,
-  autoFocus,
-  firstInputRef,
-  id,
   invalid = false,
   describedBy,
+  firstInputRef,
+  id,
+  onEscape,
+  label = '验证码',
 }: OtpInputProps) {
   const cellsRef = useRef<Array<HTMLInputElement | null>>([])
   const completedRef = useRef<string | null>(null)
-  const digits = sanitizeOtpChunk(value)
+  const digits = value.slice(0, length)
+  const activeIndex = activeOtpIndex(digits, length)
 
-  function focusCell(index: number) {
-    const clamped = Math.max(0, Math.min(OTP_LENGTH - 1, index))
-    cellsRef.current[clamped]?.focus()
-    cellsRef.current[clamped]?.select()
-  }
+  const focusCell = useCallback(
+    (index: number) => {
+      const clamped = Math.max(0, Math.min(length - 1, index))
+      // 受控值要等这一帧提交后再聚焦；直接 focus 会落在旧节点上。
+      requestAnimationFrame(() => {
+        const cell = cellsRef.current[clamped]
+        cell?.focus()
+        cell?.select()
+      })
+    },
+    [length],
+  )
 
-  function commit(next: string, focusIndex: number | null) {
-    onChange(next)
-    if (next.length === OTP_LENGTH) {
-      if (completedRef.current !== next) {
-        completedRef.current = next
-        onComplete?.(next)
-      }
-    } else {
-      completedRef.current = null
-    }
-    if (focusIndex !== null) {
-      // The newly rendered cell exists after this commit paints.
-      requestAnimationFrame(() => focusCell(focusIndex))
-    }
-  }
+  useEffect(() => {
+    if (!autoFocus) return
+    focusCell(activeOtpIndex(digits, length))
+    // 只在挂载时定位一次；后续焦点由用户操作驱动。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoFocus])
 
-  function setCellRef(index: number) {
-    return (node: HTMLInputElement | null) => {
-      cellsRef.current[index] = node
-      if (index === 0) {
-        if (typeof firstInputRef === 'function') firstInputRef(node)
-        else if (firstInputRef) (firstInputRef as { current: HTMLInputElement | null }).current = node
-      }
-      if (node && autoFocus && index === 0 && document.activeElement !== node) {
-        const firstEmpty = digits.split('').findIndex((digit) => !digit)
-        if (index === 0) {
-          // Focus lands on the first empty cell (or the first cell when full)
-          // once, right after the group mounts on the code step.
-          const target = firstEmpty === -1 ? 0 : firstEmpty
-          if (target === 0) node.focus()
-          else requestAnimationFrame(() => focusCell(target))
+  const commit = useCallback(
+    (next: string, focusIndex: number | null) => {
+      onChange(next)
+      if (next.length === length) {
+        if (completedRef.current !== next) {
+          completedRef.current = next
+          onComplete?.(next)
         }
+      } else {
+        completedRef.current = null
       }
-    }
-  }
+      if (focusIndex !== null) focusCell(focusIndex)
+    },
+    [focusCell, length, onChange, onComplete],
+  )
 
-  function handleCellChange(index: number, raw: string) {
+  function handleChange(index: number, raw: string) {
     if (disabled) return
-    const chunk = sanitizeOtpChunk(raw)
-    const current = digits.split('')
+    const chunk = sanitizeOtpChunk(raw, length)
     if (chunk.length > 1) {
-      // Autocomplete / IME / mobile autofill dropped a run into one cell.
-      const next = [...current]
-      for (let offset = 0; offset < chunk.length && index + offset < OTP_LENGTH; offset += 1) {
-        next[index + offset] = chunk[offset]
-      }
-      const joined = next.join('').slice(0, OTP_LENGTH)
-      const filled = joined.length
-      commit(joined, filled >= OTP_LENGTH ? OTP_LENGTH - 1 : Math.min(index + chunk.length, OTP_LENGTH - 1))
+      // 自动填充 / 移动端一次性验证码把整串塞进单格：从当前格起逐位落座。
+      commit(mergeOtpChunk(digits, chunk, index, length), Math.min(index + chunk.length, length - 1))
       return
     }
-    const next = [...current]
     if (chunk === '') {
-      delete next[index]
-    } else {
-      next[index] = chunk
+      commit(removeOtpDigit(digits, index, length), Math.max(0, index))
+      return
     }
-    const joined = next.join('').slice(0, OTP_LENGTH)
-    commit(joined, chunk === '' ? index : Math.min(index + 1, OTP_LENGTH - 1))
+    commit(mergeOtpChunk(digits, chunk, index, length), Math.min(index + 1, length - 1))
   }
 
-  function handleCellKeyDown(index: number, event: KeyboardEvent<HTMLInputElement>) {
+  function handleKeyDown(index: number, event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape') {
+      onEscape?.()
+      return
+    }
     if (disabled) return
-    const current = digits.split('')
+
     if (event.key === 'Backspace') {
-      if (!current[index]) {
-        // Empty cell: step back and clear the previous digit in one gesture.
-        event.preventDefault()
-        if (index > 0) {
-          const next = [...current]
-          delete next[index - 1]
-          commit(next.join('').slice(0, OTP_LENGTH), index - 1)
-        }
-      } else if (current.length === OTP_LENGTH && index === OTP_LENGTH - 1) {
-        // Full code: one Backspace clears the last cell without leaving.
-        event.preventDefault()
-        const next = [...current]
-        delete next[index]
-        commit(next.join('').slice(0, OTP_LENGTH), index)
+      event.preventDefault()
+      if (digits[index]) {
+        // 删本格并停在本格，方便直接重输这一位。
+        commit(removeOtpDigit(digits, index, length), index)
+      } else if (index > 0) {
+        // 空格子：回退并删掉上一格。
+        commit(removeOtpDigit(digits, index - 1, length), index - 1)
       }
-    } else if (event.key === 'ArrowLeft') {
+      return
+    }
+    if (event.key === 'ArrowLeft') {
       event.preventDefault()
       focusCell(index - 1)
-    } else if (event.key === 'ArrowRight') {
+      return
+    }
+    if (event.key === 'ArrowRight') {
       event.preventDefault()
       focusCell(index + 1)
-    } else if (event.key === 'Home') {
+      return
+    }
+    if (event.key === 'Home') {
       event.preventDefault()
       focusCell(0)
-    } else if (event.key === 'End') {
+      return
+    }
+    if (event.key === 'End') {
       event.preventDefault()
-      focusCell(OTP_LENGTH - 1)
+      focusCell(length - 1)
     }
   }
 
-  function handlePaste(event: ClipboardEvent<HTMLInputElement>, index: number) {
+  function handlePaste(index: number, event: ClipboardEvent<HTMLInputElement>) {
     if (disabled) return
-    const chunk = sanitizeOtpChunk(event.clipboardData?.getData('text') ?? '')
+    const chunk = sanitizeOtpChunk(event.clipboardData?.getData('text') ?? '', length)
     if (!chunk) return
     event.preventDefault()
-    const next = digits.split('')
-    for (let offset = 0; offset < chunk.length && index + offset < OTP_LENGTH; offset += 1) {
-      next[index + offset] = chunk[offset]
-    }
-    const joined = next.join('').slice(0, OTP_LENGTH)
-    const lastFilled = Math.min(index + chunk.length, OTP_LENGTH) - 1
-    commit(joined, joined.length >= OTP_LENGTH ? OTP_LENGTH - 1 : lastFilled)
+    commit(mergeOtpChunk(digits, chunk, index, length), Math.min(index + chunk.length, length - 1))
   }
 
-  const firstEmpty = digits.split('').findIndex((digit) => !digit)
-  const activeIndex = firstEmpty === -1 ? OTP_LENGTH - 1 : firstEmpty
+  function assignCell(index: number) {
+    return (node: HTMLInputElement | null) => {
+      cellsRef.current[index] = node
+      if (index !== 0) return
+      if (typeof firstInputRef === 'function') firstInputRef(node)
+      else if (firstInputRef) (firstInputRef as { current: HTMLInputElement | null }).current = node
+    }
+  }
 
   return (
-    <fieldset className="m-0 min-w-0 border-0 p-0">
-      <legend className="mb-2 text-sm font-medium text-foreground">验证码</legend>
+    <fieldset className="m-0 flex min-w-0 flex-col border-0 p-0">
+      {label ? <legend className="mb-2 text-ui font-medium text-foreground">{label}</legend> : null}
       <div className="grid grid-cols-6 gap-2">
-        {Array.from({ length: OTP_LENGTH }, (_, index) => {
+        {Array.from({ length }, (_, index) => {
           const isActive = index === activeIndex
           return (
             <input
               key={index}
-              ref={setCellRef(index)}
+              ref={assignCell(index)}
               id={index === 0 ? id : undefined}
               type="text"
               inputMode="numeric"
@@ -189,22 +181,22 @@ export function OtpInput({
               autoCapitalize="off"
               autoCorrect="off"
               spellCheck={false}
-              maxLength={OTP_LENGTH}
+              maxLength={length}
               value={digits[index] ?? ''}
               disabled={disabled}
-              aria-label={`第 ${index + 1} 位`}
-              aria-invalid={invalid ? true : undefined}
+              aria-label={`第 ${index + 1} 位输入框`}
+              aria-invalid={invalid || undefined}
               aria-describedby={describedBy}
-              onChange={(event) => handleCellChange(index, event.target.value)}
-              onKeyDown={(event) => handleCellKeyDown(index, event)}
-              onPaste={(event) => handlePaste(event, index)}
+              onChange={(event) => handleChange(index, event.target.value)}
+              onKeyDown={(event) => handleKeyDown(index, event)}
+              onPaste={(event) => handlePaste(index, event)}
               onFocus={(event) => event.target.select()}
               className={cn(
-                'h-[var(--control-xl)] min-w-0 rounded-control border bg-surface text-center font-mono text-[22px] tabular-nums text-foreground transition-colors placeholder:text-muted-foreground',
+                'h-[var(--control-xl)] min-w-0 rounded-control border bg-surface text-center font-mono text-subtitle tabular-nums text-foreground transition-colors',
                 invalid
                   ? 'border-danger bg-danger-soft'
                   : isActive
-                    ? 'border-2 border-border-focus'
+                    ? 'border-2 border-primary'
                     : 'border-border-control',
                 disabled && 'is-disabled',
               )}

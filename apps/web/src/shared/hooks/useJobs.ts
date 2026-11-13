@@ -1,111 +1,104 @@
 'use client'
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api, ApiError } from '@/shared/services/api'
+// 任务列表/详情 + 取消/重试。列表在有进行中任务时按 JOB_POLL_MS 轮询；
+// 401 立即停轮询（避免过期会话下持续 401 风暴），全部终态也停。
+
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from '@tanstack/react-query'
+import { clientApi } from '@/shared/services/client-api'
+import { isApiError } from '@/shared/services/api'
 import { isJobActive } from '@/shared/lib/job-status'
-import type { CreateGenerationRequest, GenerationJob } from '@/shared/types'
-import { LIBRARY_QUERY_KEY } from './useLibrary'
-import { cacheCreatedJob } from '../lib/created-job-cache'
+import { cacheCreatedJob } from '@/shared/lib/created-job-cache'
+import type {
+  GenerationJobDto,
+  GenerationJobListDto,
+  JobFilters,
+} from '@/shared/types'
+import { JOB_POLL_MS, queryKeys } from './query-keys'
 
-export const JOBS_QUERY_KEY = ['jobs'] as const
+export { JOB_POLL_MS }
 
-export function useJobsQuery(limit?: number) {
+function filterJobs(items: GenerationJobDto[], filters?: JobFilters): GenerationJobDto[] {
+  let list = items
+  if (filters?.status === 'active') list = list.filter((job) => isJobActive(job))
+  else if (filters?.status) list = list.filter((job) => job.status === filters.status)
+  return filters?.limit ? list.slice(0, filters.limit) : list
+}
+
+/** GET /jobs（后端固定最近 50 条）；filters 为客户端筛选 + 轮询提示。 */
+export function useJobs(filters?: JobFilters): UseQueryResult<GenerationJobListDto> {
   return useQuery({
-    queryKey: limit ? [...JOBS_QUERY_KEY, limit] : JOBS_QUERY_KEY,
+    queryKey: queryKeys.jobs.list(filters),
     queryFn: async () => {
-      const res = await api.getJobs()
-      if (!res.success || !res.data) {
-        throw new ApiError(res.error?.code || 'UNKNOWN', res.error?.message || '获取任务列表失败')
-      }
-      const items = (res.data.items || []) as GenerationJob[]
-      return limit ? items.slice(0, limit) : items
+      const page = await clientApi.jobs.list()
+      const items = filterJobs(page.items, filters)
+      return { items, total: page.total, hasMore: page.hasMore }
     },
     refetchInterval: (query) => {
-      // Expired session must stop the 2.5s polling storm, not keep hammering 401s.
-      if (query.state.error instanceof ApiError && query.state.error.code === 'UNAUTHORIZED') {
-        return false
-      }
-      const jobs = query.state.data
-      if (!jobs || jobs.length === 0) return false
-      return jobs.some(isJobActive) ? 2500 : false
+      const error = query.state.error
+      if (isApiError(error) && (error.status === 401 || error.code === 'UNAUTHORIZED')) return false
+      const items = query.state.data?.items
+      if (!items || items.length === 0) return false
+      return items.some((job) => isJobActive(job)) ? JOB_POLL_MS : false
     },
   })
 }
 
-export function useCreateJobMutation() {
+/** 单任务详情；进行中时同频轮询，未登录时停止。 */
+export function useJob(jobId: string | null | undefined): UseQueryResult<GenerationJobDto> {
+  return useQuery({
+    queryKey: queryKeys.jobs.detail(jobId ?? ''),
+    queryFn: () => clientApi.jobs.detail(jobId as string),
+    enabled: Boolean(jobId),
+    refetchInterval: (query) => {
+      const error = query.state.error
+      if (isApiError(error) && (error.status === 401 || error.code === 'UNAUTHORIZED')) return false
+      const job = query.state.data
+      return job && isJobActive(job) ? JOB_POLL_MS : false
+    },
+  })
+}
 
+/** 202 新建任务后写缓存，结果卡无需等下一轮刷新。 */
+export function useSeedCreatedJob() {
   const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async (payload: CreateGenerationRequest) => {
-      const res = await api.createGeneration(payload)
-      if (!res.success || !res.data) {
-        throw new Error(res.error?.message || '创建生成任务失败')
-      }
-      return res.data as GenerationJob
-    },
-    retry: false,
-    onSuccess: async (job) => {
-      await cacheCreatedJob(queryClient, job)
-      void queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-      void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
-    },
-  })
+  return (job: GenerationJobDto) => cacheCreatedJob(queryClient, job)
 }
 
-export function useCancelJobMutation() {
+function useInvalidateJobScopes() {
   const queryClient = useQueryClient()
+  return (jobId?: string) => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.root })
+    if (jobId) void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.detail(jobId) })
+    // 任务终态会写入 assets，图库缓存同步失效。
+    void queryClient.invalidateQueries({ queryKey: queryKeys.library.root })
+  }
+}
 
+export function useCancelJob() {
+  const invalidate = useInvalidateJobScopes()
   return useMutation({
-    mutationFn: async (jobId: string) => {
-      const res = await api.cancelJob(jobId)
-      if (!res.success || !res.data) {
-        throw new Error(res.error?.message || '取消任务失败')
-      }
-      return res.data as GenerationJob
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-    },
+    mutationFn: (jobId: string) => clientApi.jobs.cancel(jobId),
+    onSuccess: (job) => invalidate(job.id),
   })
 }
 
-export function useRetryJobMutation() {
-  const queryClient = useQueryClient()
-
+export function useRetryJob() {
+  const invalidate = useInvalidateJobScopes()
   return useMutation({
-    mutationFn: async (jobId: string) => {
-      const res = await api.retryJob(jobId)
-      if (!res.success || !res.data) {
-        throw new Error(res.error?.message || '重试任务失败')
-      }
-      return res.data as GenerationJob
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-    },
+    mutationFn: (jobId: string) => clientApi.jobs.retry(jobId),
+    onSuccess: (job) => invalidate(job.id),
   })
 }
 
-export function useDeleteJobMutation() {
-  const queryClient = useQueryClient()
-
+export function useDeleteJob() {
+  const invalidate = useInvalidateJobScopes()
   return useMutation({
-    mutationFn: async (jobId: string) => {
-      const res = await api.deleteJob(jobId)
-      if (!res.success) {
-        throw new Error(res.error?.message || '删除任务失败')
-      }
-      return jobId
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-      queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
-    },
+    mutationFn: (jobId: string) => clientApi.jobs.remove(jobId),
+    onSuccess: (_result, jobId) => invalidate(jobId),
   })
 }
-
-export const useCreateJob = useCreateJobMutation
-export const useCancelJob = useCancelJobMutation
-export const useRetryJob = useRetryJobMutation
-

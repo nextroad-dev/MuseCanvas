@@ -1,200 +1,228 @@
 'use client'
 
-import { useState } from 'react'
-import type { ReactNode } from 'react'
-import Link from 'next/link'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
-import { Alert, Badge, Button, Divider, PageHeader, Stepper, iconSize } from '@/shared/components/ui'
-import { ContentFrame } from '@/shared/components/content-frame'
-import { BrandMark } from '@/shared/components/brand-mark'
+// 安装向导客户端岛：步骤条、状态读取、步骤切换与跨步骤的会话失效处理。
+// 完成状态只读 `GET /setup/status`；`GET /setup/config` 成功即代表初始化访问已开放
+// （claim 会话 / 管理员会话 / claim-optional 的开放模式），因此不需要额外探测。
+
+import { useCallback, useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CaretLeftIcon as ChevronLeft, CaretRightIcon as ChevronRight } from '@phosphor-icons/react'
+import type { SetupConfigDto, SetupStatusResponse } from '@musecanvas/contracts'
+import { clientApi } from '@/shared/services/client-api'
+import { Alert, Button, PageHeader, Stepper, buttonVariants, iconSize } from '@/shared/components/ui'
+import { describeSetupError, isSetupSessionError } from '../lib/setup-errors'
+import { setupQueryKeys } from '../lib/setup-queries'
 import {
-  canCompleteSetup,
-  isSetupSessionError,
-  OPEN_SETUP_NOTICE,
-  parseSetupStepId,
+  isSetupClaimRequired,
   resolveActiveStepIndex,
-  resolveCompletionChecklist,
   resolveResumeIndex,
   resolveSetupSteps,
   setupIntroDescription,
   setupStepPosition,
-  shouldShowOpenSetupNotice,
-} from '../lib/setup-wizard-state'
-import type { SetupStepId } from '../lib/setup-wizard-state'
-import {
-  errorCodeOf,
-  fetchSetupConfig,
-  fetchSetupDatabase,
-  fetchSetupStatus,
-  setupQueryKeys,
-} from '../lib/setup-requests'
-import { SetupWizardSkeleton } from './setup-wizard-skeleton'
+} from '../lib/setup-steps'
+import type { SetupStepId } from '../lib/setup-steps'
+import { SetupCompleteView } from './setup-complete-view'
+import { SetupStepShell } from './setup-step-shell'
+import { AdminStep } from './steps/admin-step'
+import { BootstrapStep } from './steps/bootstrap-step'
 import { ClaimStep } from './steps/claim-step'
+import { CompleteStep } from './steps/complete-step'
+import { RuntimeStep } from './steps/runtime-step'
 import { SiteStep } from './steps/site-step'
 import { SmtpStep } from './steps/smtp-step'
-import { AdminStep } from './steps/admin-step'
-import { DatabaseStep } from './steps/database-step'
 import { StorageStep } from './steps/storage-step'
-import { CompleteStep } from './steps/complete-step'
+import { TemplatesStep } from './steps/templates-step'
 
-/**
- * Client island for the installer. The server guard in `app/setup/layout.tsx` has
- * already decided who may be here; this component reads state only through the
- * `setup` endpoints and resumes at the first step the stored state does not complete.
- */
-export function SetupWizard() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
+export interface SetupWizardProps {
+  initialStatus: SetupStatusResponse
+  /** RSC 已成功读到 `/setup/config` 时传入（说明初始化访问已开放）。 */
+  initialConfig: SetupConfigDto | null
+  /** `?step=` 深链。 */
+  initialStep: SetupStepId | null
+}
 
-  const statusQuery = useQuery({ queryKey: setupQueryKeys.status, queryFn: fetchSetupStatus, retry: false })
-  const configQuery = useQuery({ queryKey: setupQueryKeys.config, queryFn: fetchSetupConfig, retry: false })
-  // The config read is guarded by the setup session, so a successful read is the claim signal.
-  const claimed = configQuery.isSuccess
-  const databaseQuery = useQuery({
-    queryKey: setupQueryKeys.database,
-    queryFn: fetchSetupDatabase,
-    enabled: claimed,
+export function SetupWizard({ initialStatus, initialConfig, initialStep }: SetupWizardProps) {
+  const queryClient = useQueryClient()
+  const [hasAccess, setHasAccess] = useState(Boolean(initialConfig))
+  const [stepId, setStepId] = useState<SetupStepId | null>(initialStep)
+  const [templatesSkipped, setTemplatesSkipped] = useState(false)
+  const [reached, setReached] = useState(0)
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null)
+
+  const statusQuery = useQuery({
+    queryKey: setupQueryKeys.status,
+    queryFn: () => clientApi.setup.getStatus(),
+    initialData: initialStatus,
+    staleTime: 0,
     retry: false,
   })
 
-  const status = statusQuery.data
-  const config = configQuery.data
-  const database = databaseQuery.data ?? config?.database
-  // Absent `claimRequired` (no status yet, or an older server) keeps the claim step.
-  const claimRequired = status?.claimRequired
+  const configQuery = useQuery({
+    queryKey: setupQueryKeys.config,
+    queryFn: () => clientApi.setup.getConfig(),
+    enabled: hasAccess,
+    ...(initialConfig ? { initialData: initialConfig } : {}),
+    staleTime: 0,
+    retry: false,
+  })
+
+  const status = statusQuery.data ?? initialStatus
+  const config = configQuery.data ?? null
+
+  // 任意受保护读取返回会话错误：退回领取步骤，并让用户看到原因。
+  useEffect(() => {
+    if (!configQuery.isError || !hasAccess) return
+    if (!isSetupSessionError(configQuery.error)) return
+    queryClient.removeQueries({ queryKey: setupQueryKeys.config })
+    setHasAccess(false)
+    setSessionNotice(describeSetupError(configQuery.error, '初始化会话已失效。'))
+    setStepId('claim')
+  }, [configQuery.isError, configQuery.error, hasAccess, queryClient])
+
   const steps = resolveSetupSteps({
-    claimed,
-    claimRequired,
-    setupComplete: status?.setupComplete === true,
-    sections: status?.sections,
-    databaseReachable: database?.reachable === true,
+    hasAccess,
+    claimRequired: status.claimRequired,
+    setupComplete: status.setupComplete,
+    sections: status.sections,
+    bootstrapReady: status.bootstrap?.ready === true,
+    templatesSkipped,
   })
   const resumeIndex = resolveResumeIndex(steps)
-  const checklist = resolveCompletionChecklist(status?.sections)
-  const canComplete = canCompleteSetup(checklist)
-
-  const [requestedId, setRequestedId] = useState<SetupStepId | null>(() => parseSetupStepId(searchParams.get('step')))
-  const [reached, setReached] = useState(0)
-
-  if (statusQuery.isLoading || configQuery.isLoading) {
-    return <SetupWizardSkeleton />
-  }
-
-  // A deep link to a step that is not in this list (e.g. `claim` when no claim is required) resumes instead.
-  const activeIndex = resolveActiveStepIndex(steps, requestedId)
+  const activeIndex = resolveActiveStepIndex(steps, stepId)
   const active = steps[activeIndex] ?? steps[0]
   const furthest = Math.max(reached, resumeIndex)
-  const smtpReady = steps.find((step) => step.id === 'smtp')?.complete === true
-  const configErrorIsSession = configQuery.isError && isSetupSessionError(errorCodeOf(configQuery.error))
-  const openSetupNotice = shouldShowOpenSetupNotice(claimRequired, activeIndex)
 
-  function goTo(index: number) {
-    const target = steps[index]
-    if (!target) return
-    setRequestedId(target.id)
-    setReached((previous) => Math.max(previous, index))
-    router.replace(`/setup?step=${target.id}`, { scroll: false })
-  }
+  useEffect(() => {
+    setReached((previous) => (previous >= resumeIndex ? previous : resumeIndex))
+  }, [resumeIndex])
 
-  const alerts = (
-    <>
-      {statusQuery.isError ? (
-        status ? (
-          <Alert tone="danger" role="alert" title="状态刷新失败">
-            仍显示上次读取的状态。请稍后刷新，不要将旧结果当作当前检查通过。
-          </Alert>
-        ) : (
-          <Alert
-            tone="danger"
-            role="alert"
-            title="无法读取初始化状态"
-            action={
-              <Button variant="secondary" size="sm" onClick={() => void statusQuery.refetch()}>
-                刷新状态
-              </Button>
-            }
-          >
-            当前状态未知，请检查服务连接后刷新。本页不会将读取失败显示为待配置。
-          </Alert>
-        )
-      ) : null}
-      {configQuery.isError && !configErrorIsSession ? (
-        <Alert tone="warning" role="status" title="无法读取系统配置">
-          {configQuery.error instanceof Error ? configQuery.error.message : '请稍后刷新页面后重试。'}
-        </Alert>
-      ) : null}
-    </>
+  const refresh = useCallback(async () => {
+    await statusQuery.refetch()
+    if (hasAccess) await configQuery.refetch()
+  }, [statusQuery, configQuery, hasAccess])
+
+  const goTo = useCallback(
+    (index: number) => {
+      const target = steps[index]
+      if (!target) return
+      setStepId(target.id)
+      setReached((previous) => Math.max(previous, index))
+      if (typeof window !== 'undefined') {
+        window.history.replaceState(null, '', `/setup?step=${target.id}`)
+      }
+    },
+    [steps],
   )
 
-  function blockedStep(): ReactNode {
-    if (claimRequired !== false && (configErrorIsSession || !configQuery.isError)) {
-      const claimIndex = steps.findIndex((step) => step.id === 'claim')
-      return (
-        <Alert
-          tone="info"
-          role="status"
-          title="请先领取初始化码"
-          action={
-            <Button variant="secondary" size="sm" onClick={() => goTo(claimIndex)}>
-              前往领取
-            </Button>
-          }
-        >
-          领取码验证通过后才能配置本步骤。
-        </Alert>
-      )
-    }
-    return (
-      <Alert tone="warning" role="status" title="系统配置暂不可读取">
-        请稍后刷新页面后重试。
-      </Alert>
-    )
+  /** 步骤成功后：先刷新服务端状态（段完成 / bootstrap 标记），再前进。 */
+  const advance = useCallback(async () => {
+    await refresh()
+    const nextIndex = activeIndex + 1
+    if (steps[nextIndex]) goTo(nextIndex)
+  }, [refresh, activeIndex, steps, goTo])
+
+  const handleSessionLost = useCallback(
+    (message: string) => {
+      setSessionNotice(message)
+      setHasAccess(false)
+      setTemplatesSkipped(false)
+      queryClient.removeQueries({ queryKey: setupQueryKeys.config })
+      if (isSetupClaimRequired(status.claimRequired)) setStepId('claim')
+      void statusQuery.refetch()
+    },
+    [queryClient, status.claimRequired, statusQuery],
+  )
+
+  const handleClaimed = useCallback(async () => {
+    setSessionNotice(null)
+    setHasAccess(true)
+    await statusQuery.refetch()
+    const claimIndex = steps.findIndex((step) => step.id === 'claim')
+    goTo(claimIndex >= 0 ? Math.min(claimIndex + 1, steps.length - 1) : 0)
+  }, [statusQuery, steps, goTo])
+
+  if (status.setupComplete) {
+    return <SetupCompleteView completedAt={status.completedAt} />
   }
 
-  function renderStep(): ReactNode {
-    if (active.id === 'claim') return <ClaimStep claimed={claimed} />
-    if (!config) return blockedStep()
+  const openSetupNotice = !isSetupClaimRequired(status.claimRequired) && activeIndex === 0
+
+  function renderStep() {
+    if (active.id === 'claim') {
+      return <ClaimStep hasAccess={hasAccess} bootstrap={status.bootstrap} onClaimed={handleClaimed} />
+    }
+    if (active.id === 'bootstrap') {
+      return <BootstrapStep status={status} onRefresh={refresh} onSessionLost={handleSessionLost} />
+    }
+    if (!config) {
+      return (
+        <SetupStepShell headingId="setup-step-blocked" title={active.title} description={active.description}>
+          <Alert
+            tone="warning"
+            role="status"
+            title="暂时无法读取初始化配置"
+            action={
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={() => void configQuery.refetch()}>
+                  重试
+                </Button>
+                <a href="/login?next=/setup" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+                  以管理员登录
+                </a>
+              </div>
+            }
+          >
+            配置读取失败或初始化访问未开放。请刷新页面；如果仍无法继续，重新领取初始化码，或使用已有的管理员账号登录。
+          </Alert>
+        </SetupStepShell>
+      )
+    }
+
     switch (active.id) {
       case 'site':
-        return <SiteStep settings={config.site} complete={active.complete} />
+        return <SiteStep config={config} complete={active.complete} onDone={advance} onSessionLost={handleSessionLost} />
       case 'smtp':
-        return <SmtpStep settings={config.smtp} />
+        return <SmtpStep config={config} complete={active.complete} onDone={advance} onSessionLost={handleSessionLost} />
       case 'admin':
-        return <AdminStep complete={active.complete} smtpReady={smtpReady} />
-      case 'database':
         return (
-          <DatabaseStep
-            database={database}
-            loadError={databaseQuery.isError ? '数据库状态暂不可读取。可点击“重新检测”再试一次。' : null}
+          <AdminStep
+            complete={active.complete}
+            smtpReady={steps.find((step) => step.id === 'smtp')?.complete === true}
+            onDone={advance}
+            onSessionLost={handleSessionLost}
           />
         )
       case 'storage':
-        return <StorageStep settings={config.storage} />
+        return <StorageStep config={config} complete={active.complete} onDone={advance} onSessionLost={handleSessionLost} />
+      case 'runtime':
+        return <RuntimeStep config={config} complete={active.complete} onDone={advance} onSessionLost={handleSessionLost} />
+      case 'templates':
+        return (
+          <TemplatesStep
+            config={config}
+            complete={active.complete}
+            onDone={advance}
+            onSkip={() => {
+              setTemplatesSkipped(true)
+              void goTo(activeIndex + 1)
+            }}
+            onSessionLost={handleSessionLost}
+          />
+        )
       case 'complete':
-        return <CompleteStep runtime={config.runtime} checklist={checklist} canComplete={canComplete} />
+        return <CompleteStep status={status} onCompleted={refresh} onSessionLost={handleSessionLost} />
+      default:
+        return null
     }
   }
 
-  return (
-    <div className="flex min-h-screen flex-col bg-canvas text-foreground">
-      {/* Header — a page-level rule is allowed here (this is not a card). */}
-      <header className="border-b border-border bg-surface">
-        <ContentFrame className="flex min-h-[var(--layout-header)] flex-wrap items-center justify-between gap-3 py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <Link href="/" aria-label="MuseCanvas 首页" className="rounded-control">
-              <BrandMark variant="wordmark" className="h-6 w-auto" />
-            </Link>
-            <Badge tone="accent">初始化向导</Badge>
-          </div>
-          {status?.setupComplete ? <span className="text-sm text-muted-foreground">系统已完成初始配置</span> : null}
-        </ContentFrame>
-      </header>
+  const nextLabel = active.id === 'templates' && !active.complete ? '跳过此步' : '下一步'
+  const canAdvance = active.id === 'templates' ? true : active.complete
 
-      {/* Stepper: horizontal from 640px (`sm`) up, vertical below it, labels always visible. */}
-      <div className="shrink-0 bg-tonal py-6 sm:py-8">
-        <ContentFrame>
+  return (
+    <div className="flex flex-1 flex-col">
+      <div className="bg-tonal py-6 md:py-8">
+        <div className="mx-auto w-full max-w-[var(--container-content)] px-4 md:px-8">
           <Stepper
             steps={steps.map((step, index) => ({
               id: step.id,
@@ -206,46 +234,88 @@ export function SetupWizard() {
             onStepSelect={(index) => goTo(index)}
             aria-label="初始化步骤"
           />
-        </ContentFrame>
+        </div>
       </div>
 
-      <main className="motion-page-enter flex flex-1 justify-center py-10 sm:py-14">
-        <ContentFrame className="flex justify-center">
-          <div className="flex w-full max-w-form flex-col gap-8">
-            <PageHeader
-              title="系统初始化"
-              description={setupIntroDescription(claimRequired)}
-            />
-            {alerts}
+      <main className="flex flex-1 justify-center px-4 py-8 md:px-8 md:py-12">
+        <div className="flex w-full max-w-[var(--container-form)] flex-col gap-6">
+          <PageHeader title="系统初始化" description={setupIntroDescription(status.claimRequired)} />
 
-            {/* Keyed by step: moving between steps replays the entrance on the new content only. */}
-            <div key={active.id} className="motion-page-enter flex flex-col gap-8">
-              {openSetupNotice ? <Alert tone="info" title="初始化期间开放配置">{OPEN_SETUP_NOTICE}</Alert> : null}
-              {renderStep()}
-            </div>
+          {sessionNotice ? (
+            <Alert
+              tone="warning"
+              role="alert"
+              title="初始化会话已失效"
+              action={
+                <a href="/setup" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+                  重新加载
+                </a>
+              }
+            >
+              {sessionNotice}
+            </Alert>
+          ) : null}
 
-            <Divider />
-            <nav aria-label="步骤导航" className="flex flex-wrap items-center justify-between gap-3">
-              <Button
-                variant="secondary"
-                onClick={() => goTo(activeIndex - 1)}
-                disabled={activeIndex === 0}
-                icon={<ChevronLeft weight="bold" aria-hidden="true" className={iconSize.sm} />}
-              >
-                上一步
-              </Button>
-              <span className="text-sm text-muted-foreground">{setupStepPosition(steps, activeIndex)}</span>
-              {activeIndex < steps.length - 1 ? (
-                <Button
-                  onClick={() => goTo(activeIndex + 1)}
-                  icon={<ChevronRight weight="bold" aria-hidden="true" className={iconSize.sm} />}
-                >
-                  下一步
+          {openSetupNotice ? (
+            <Alert tone="info" role="status" title="初始化期间开放配置">
+              本次部署未要求领取码：初始化期间任何能访问此地址的人都可以配置，创建管理员后会自动关闭开放入口。
+            </Alert>
+          ) : null}
+
+          {statusQuery.isError ? (
+            <Alert tone="warning" role="status" title="状态刷新失败">
+              当前显示上次读取的完成状态，请稍后刷新页面重试。
+            </Alert>
+          ) : null}
+
+          {configQuery.isError && !isSetupSessionError(configQuery.error) ? (
+            <Alert
+              tone="warning"
+              role="status"
+              title="无法读取系统配置"
+              action={
+                <Button variant="secondary" size="sm" onClick={() => void configQuery.refetch()}>
+                  重试
                 </Button>
-              ) : null}
-            </nav>
+              }
+            >
+              {describeSetupError(configQuery.error, '请稍后刷新页面后重试。')}
+            </Alert>
+          ) : null}
+
+          <div key={active.id} className="motion-page-enter">
+            {renderStep()}
           </div>
-        </ContentFrame>
+
+          <nav aria-label="步骤导航" className="flex flex-wrap items-center justify-between gap-3">
+            <Button
+              variant="secondary"
+              onClick={() => goTo(activeIndex - 1)}
+              disabled={activeIndex === 0}
+              icon={<ChevronLeft weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            >
+              上一步
+            </Button>
+            <span className="text-sm text-muted-foreground">{setupStepPosition(steps, activeIndex)}</span>
+            {active.id === 'complete' ? null : (
+              <Button
+                onClick={() => {
+                  if (active.id === 'templates' && !active.complete) setTemplatesSkipped(true)
+                  void advance()
+                }}
+                disabled={!canAdvance}
+                icon={<ChevronRight weight="bold" aria-hidden="true" className={iconSize.sm} />}
+              >
+                {nextLabel}
+              </Button>
+            )}
+          </nav>
+          {!canAdvance && active.id !== 'complete' ? (
+            <p role="status" className="text-center text-xs text-muted-foreground">
+              完成本步骤的提交后才能继续。
+            </p>
+          ) : null}
+        </div>
       </main>
     </div>
   )

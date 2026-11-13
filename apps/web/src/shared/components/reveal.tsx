@@ -1,44 +1,19 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import { cn } from '@/shared/lib/cn'
 
-interface RevealProps {
+export interface RevealProps {
   children: ReactNode
   className?: string
-  /**
-   * `load` plays the page entrance once on first paint (the hero). `scroll`
-   * (default) fades the block in as it scrolls into view.
-   */
-  trigger?: 'load' | 'scroll'
-  /** 0-based step for `load` blocks that enter together. The spacing comes from
-   *  `--stagger-step-page` (100ms). Ignored for `scroll`: each scroll block enters
-   *  on its own, so a stagger would only make it wait. */
-  staggerIndex?: number
 }
 
 /**
- * Page-level entrance for marketing sections (fade-in-up, `--motion-page`).
+ * 滚动揭示：首屏之外的分节在进入视口时淡入上移。
  *
- * Pure CSS on purpose, so it stays fail-visible: the base state of every block is
- * its final visible state and nothing is ever toggled to `opacity-0` from script.
- * `scroll` uses a scroll-driven animation (`.motion-scroll-reveal`) that only
- * exists where the browser supports `animation-timeline: view()` and the user has
- * not asked for reduced motion; everywhere else the section is simply there.
+ * 纯 CSS，且只做「增强」：`.motion-scroll-reveal` 仅在浏览器支持
+ * `animation-timeline: view()` 且未要求 reduced-motion 时存在，其余情况
+ * 区块就是它的最终可见态（fail-visible），因此无 JS、旧浏览器都不会藏内容。
+ * 首屏（hero）不要包：那是加载即入场的区块，滚动揭示会在首帧留下半透明。
  */
-export function Reveal({ children, className = '', trigger = 'scroll', staggerIndex }: RevealProps) {
-  if (trigger === 'scroll') {
-    return <div className={`${className} motion-scroll-reveal`}>{children}</div>
-  }
-  return (
-    <div
-      style={
-        {
-          '--stagger-index': staggerIndex ?? 0,
-          // The marketing rhythm is 100ms per section, not the 50ms list step.
-          '--stagger-step': 'var(--stagger-step-page)',
-        } as CSSProperties
-      }
-      className={`${className} motion-page motion-stagger`}
-    >
-      {children}
-    </div>
-  )
+export function Reveal({ children, className }: RevealProps) {
+  return <div className={cn('motion-scroll-reveal', className)}>{children}</div>
 }

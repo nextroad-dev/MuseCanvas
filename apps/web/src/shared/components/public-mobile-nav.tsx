@@ -5,119 +5,107 @@ import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useDialog } from '@/shared/hooks/useDialog'
 import { buttonVariants } from '@/shared/components/ui/button-variants'
-import { iconSize } from '@/shared/components/ui/size'
-import { GENERATE_ROUTE } from '@/shared/lib/app-routes'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 
-/**
- * Mobile navigation for the public pages (`/`, `/terms`, `/privacy`).
- *
- * The smallest possible client island: the server-rendered `PublicHeader` owns
- * the desktop navigation, this component only adds the <640px menu button and
- * the top drop-down panel. Trigger is `sm:hidden`, so it never renders on
- * desktop widths (a `matchMedia` effect below also closes the panel if the
- * viewport grows while it is open).
- *
- * Motion reuses the existing top-drop keyframes (`mc-slide-in-down` /
- * `mc-slide-out-down`) through the `.motion-toast-in` / `.motion-toast-out`
- * utilities — no new keyframes, no `motion` dependency. Note `useDialog` only
- * matches its own enter/exit animation names for the `animationend` fast path,
- * so the exit here unmounts through its backstop timer instead; the lifecycle
- * (`enter -> close -> unmounted`) and the focus trap / Escape / scroll lock
- * from `modalStack` are unaffected.
- */
+const PANEL_ID = 'public-mobile-nav-panel'
 
-const panelId = 'public-mobile-nav-panel'
-
-/** Anchors use `/#…` so they work from `/terms` and `/privacy` too, not just `/`. */
-const mobileNavItems: { href: string; label: string }[] = [
+/** 锚点带 `/#`，从 `/terms`、`/privacy` 点进来也能回到首页对应区块。 */
+const NAV_ITEMS: { href: string; label: string }[] = [
   { href: '/#works', label: '作品' },
   { href: '/#capabilities', label: '能力' },
   { href: '/#workflow', label: '流程' },
-  { href: '/terms', label: '用户协议' },
-  { href: '/privacy', label: '隐私政策' },
+  { href: APP_ROUTES.terms, label: '用户协议' },
+  { href: APP_ROUTES.privacy, label: '隐私政策' },
 ]
 
-/** Scrim: `--color-overlay` at `--opacity-overlay` (mirrors the workspace drawer). */
-const SCRIM_BACKGROUND =
-  'color-mix(in srgb, var(--color-overlay) calc(var(--opacity-overlay) * 100%), transparent)'
+const iconBox = 'inline-flex size-11 shrink-0 items-center justify-center rounded-control'
 
-function MenuIcon({ open }: { open: boolean }) {
+function MenuGlyph({ open }: { open: boolean }) {
   return open ? (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={iconSize.md}>
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      className="size-[var(--icon-md)]"
+    >
       <path d="M6 6l12 12M18 6L6 18" />
     </svg>
   ) : (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={iconSize.md}>
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      className="size-[var(--icon-md)]"
+    >
       <path d="M4 7h16M4 12h16M4 17h16" />
     </svg>
   )
 }
 
+/**
+ * <640px 公共页导航面板（画板 04）。
+ *
+ * 唯一职责是移动菜单：44px 触发器 + 顶部下拉面板（菜单 / 五个导航项 /
+ * 登录与开始创作）。焦点陷阱、Esc、背景滚动锁定与焦点恢复全部交给
+ * `useDialog`，面板入场/退场复用 globals.css 的下滑关键帧，不新增动画。
+ */
 export function PublicMobileNav() {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
-  const {
-    mounted,
-    phase,
-    labelId,
-    closeButtonRef,
-    portalTarget,
-    rootProps,
-    dialogProps,
-  } = useDialog({ open, onClose: close })
+  const { mounted, phase, labelId, closeButtonRef, portalTarget, overlayProps, dialogProps } = useDialog({
+    open,
+    onClose: close,
+  })
 
-  // The trigger hides at `sm` via CSS; also drop the state so reopening
-  // after a resize starts closed instead of reviving a stale panel.
+  // 视口放大到桌面断点时丢弃打开状态，避免下次回到窄屏时旧面板复活。
   useEffect(() => {
     if (!open) return
     const query = window.matchMedia('(min-width: 40rem)')
-    const closeOnDesktop = (event: MediaQueryListEvent) => {
+    const onChange = (event: MediaQueryListEvent) => {
       if (event.matches) setOpen(false)
     }
     if (query.matches) setOpen(false)
-    query.addEventListener('change', closeOnDesktop)
-    return () => query.removeEventListener('change', closeOnDesktop)
-  }, [open ])
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [open])
 
   return (
     <>
       <button
         type="button"
         aria-expanded={open}
-        aria-controls={panelId}
+        aria-controls={PANEL_ID}
         aria-label={open ? '关闭导航菜单' : '打开导航菜单'}
         onClick={() => setOpen((value) => !value)}
-        className="motion-press inline-flex size-11 items-center justify-center rounded-control text-foreground hover:bg-tonal-hover active:bg-tonal-active sm:hidden"
+        className={cn(iconBox, 'text-foreground hover:bg-tonal-hover active:bg-tonal-active motion-press sm:hidden')}
       >
-        <MenuIcon open={open} />
+        <MenuGlyph open={open} />
       </button>
 
       {mounted && portalTarget
         ? createPortal(
             <div
-              {...rootProps}
-              className={cn(
-                'fixed inset-0 z-modal sm:hidden',
-                phase === 'close' ? 'motion-fade-out pointer-events-none' : 'motion-fade-in',
-              )}
+              {...overlayProps}
+              className={cn('fixed inset-0 z-modal sm:hidden', phase === 'exit' ? 'motion-fade-out' : 'motion-fade-in')}
             >
-              <div
-                aria-hidden="true"
-                onClick={close}
-                className="fixed inset-0"
-                style={{ backgroundColor: SCRIM_BACKGROUND }}
-              />
+              <div aria-hidden="true" onClick={close} className="absolute inset-0 bg-overlay/40 dark:bg-overlay/55" />
               <div
                 {...dialogProps}
-                id={panelId}
+                id={PANEL_ID}
                 className={cn(
-                  'fixed inset-x-0 top-0 rounded-b-panel bg-canvas px-4 pb-5 shadow-modal',
-                  phase === 'close' ? 'motion-toast-out' : 'motion-toast-in',
+                  'absolute inset-x-0 top-0 rounded-b-panel bg-canvas px-4 pb-5 shadow-modal',
+                  phase === 'exit' ? 'motion-toast-out' : 'motion-toast-in',
                 )}
               >
-                <div className="flex h-[var(--layout-header)] items-center justify-between">
-                  <h2 id={labelId} className="text-base font-medium text-foreground">
+                <div className="flex h-[var(--layout-public-header)] items-center justify-between">
+                  <h2 id={labelId} className="text-compact font-medium text-foreground">
                     菜单
                   </h2>
                   <button
@@ -125,20 +113,20 @@ export function PublicMobileNav() {
                     type="button"
                     aria-label="关闭导航菜单"
                     onClick={close}
-                    className="motion-press inline-flex size-11 items-center justify-center rounded-control text-foreground hover:bg-tonal-hover active:bg-tonal-active"
+                    className={cn(iconBox, 'text-foreground hover:bg-tonal-hover active:bg-tonal-active motion-press')}
                   >
-                    <MenuIcon open />
+                    <MenuGlyph open />
                   </button>
                 </div>
 
                 <nav aria-label="移动导航">
-                  <ul className="flex flex-col divide-y divide-border">
-                    {mobileNavItems.map((item) => (
-                      <li key={item.href}>
+                  <ul className="m-0 flex list-none flex-col p-0">
+                    {NAV_ITEMS.map((item) => (
+                      <li key={item.href} className="border-b border-border last:border-b-0">
                         <Link
                           href={item.href}
                           onClick={close}
-                          className="motion-press flex min-h-[var(--control-lg)] items-center text-lg text-foreground"
+                          className="flex min-h-[var(--control-lg)] items-center text-copy text-foreground"
                         >
                           {item.label}
                         </Link>
@@ -149,16 +137,16 @@ export function PublicMobileNav() {
 
                 <div className="mt-4 flex gap-2.5">
                   <Link
-                    href="/login"
+                    href={APP_ROUTES.login}
                     onClick={close}
-                    className={cn(buttonVariants({ variant: 'secondary', size: 'lg' }), 'flex-1')}
+                    className={cn(buttonVariants({ variant: 'secondary', size: 'lg' }), 'flex-1 max-sm:min-h-[var(--control-lg)]')}
                   >
                     登录
                   </Link>
                   <Link
-                    href={GENERATE_ROUTE}
+                    href={APP_ROUTES.generate}
                     onClick={close}
-                    className={cn(buttonVariants({ variant: 'primary', size: 'lg' }), 'flex-1')}
+                    className={cn(buttonVariants({ variant: 'primary', size: 'lg' }), 'flex-1 max-sm:min-h-[var(--control-lg)]')}
                   >
                     开始创作
                   </Link>

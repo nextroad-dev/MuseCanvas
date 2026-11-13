@@ -1,31 +1,39 @@
+import type { ReactNode } from 'react'
 import Image from 'next/image'
-import { showcasePrompt, showcaseSrc } from '@/shared/lib/showcase'
 import { cn } from '@/shared/lib/cn'
+import { showcasePrompt, showcaseSrc } from '@/shared/lib/showcase'
 
-interface ShowcaseFrameProps {
-  /** File name under `public/showcase/`; the only image source on the landing page. */
+export interface ShowcaseFrameProps {
+  /** `public/showcase/` 下的文件名。 */
   file: string
-  /** Ratio label, used only for the fallback alt text (e.g. `3:4`). */
+  /** 画幅标签（`3:4` 等），只在缺图占位与回退 alt 里使用。 */
   label: string
-  /** Repeated thumbnails next to a labelled image pass this and get `alt=""`. */
-  decorative?: boolean
-  /** Shape and size only: the caller sets width, height or aspect ratio. */
+  /** 形状与尺寸由调用方给（aspect-ratio / 固定高度）。 */
   className?: string
   sizes?: string
+  /** 重复出现的配图传 true，读屏跳过。 */
+  decorative?: boolean
+  /** 首屏 LCP 图片传 true，让浏览器提前取图。 */
+  priority?: boolean
+  /** 叠在图片上的内容（作品名渐变条等）。 */
+  children?: ReactNode
 }
 
 /**
- * Showcase image in a box the caller sizes. A missing asset renders a `bg-tonal`
- * placeholder, so the page builds and renders without the binary files.
+ * 作品图框：`next/image` 撑满调用方给的形状，`object-cover` 裁切。
+ * 找不到素材地址时渲染 `bg-tonal` 占位，所以缺图也不会把版式撑坏。
  */
 export function ShowcaseFrame({
   file,
   label,
-  decorative = false,
   className,
-  sizes = '(max-width: 640px) 100vw, 50vw',
+  sizes = '(max-width: 768px) 100vw, 50vw',
+  decorative = false,
+  priority = false,
+  children,
 }: ShowcaseFrameProps) {
   const src = showcaseSrc(file)
+
   return (
     <div className={cn('relative overflow-hidden bg-tonal', className)}>
       {src ? (
@@ -34,30 +42,16 @@ export function ShowcaseFrame({
           alt={decorative ? '' : showcasePrompt(file, label)}
           fill
           sizes={sizes}
+          priority={priority}
+          fetchPriority={priority ? 'high' : 'low'}
           className="object-cover"
         />
       ) : (
-        <span
-          aria-hidden="true"
-          className="flex h-full w-full flex-col items-center justify-center gap-2 text-decorative-muted"
-        >
-          <svg
-            width="28"
-            height="28"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <circle cx="9" cy="10" r="2" />
-            <path d="M21 16l-5-5-9 9" />
-          </svg>
-          <span className="font-mono text-xs tabular-nums">[作品图]</span>
+        <span aria-hidden="true" className="flex h-full w-full items-center justify-center font-mono text-xs text-decorative-muted">
+          {label}
         </span>
       )}
+      {children}
     </div>
   )
 }

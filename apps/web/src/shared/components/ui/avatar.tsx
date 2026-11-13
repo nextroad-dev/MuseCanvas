@@ -7,25 +7,17 @@ import { cn } from '@/shared/lib/cn'
 import { controlSquare, iconSize } from './size'
 
 /**
- * The spec's size ladder (components.md Avatar row): xs 24 / sm 32 / md 40 /
- * lg 48 / xl 64. The letter grows with the box (12px at xs, 14px through md, then
- * 16 / 18px). The four smaller boxes ARE the control ladder, so they reference it
- * instead of repeating its pixels; `xl` is the one literal here because the control
- * ladder stops at 56.
+ * 尺寸阶梯 xs 24 / sm 32 / md 40 / lg 48 / xl 64；前四档直接复用控件阶梯。
  */
 const SIZE_CLASS = {
   xs: `${controlSquare.xs} text-xs`,
   sm: `${controlSquare.sm} text-sm`,
   md: `${controlSquare.md} text-sm`,
   lg: `${controlSquare.lg} text-base`,
-  xl: 'h-16 w-16 text-lg',
+  xl: 'size-16 text-lg',
 } as const
 
-/**
- * Presence dot: a quarter of the avatar's diameter, sitting in the lower-right
- * quadrant. The offset keeps it *inside* the circle — the surface clips, so a
- * dot pushed into the corner would be cut in half by the round edge.
- */
+/** Presence dot: a quarter of the diameter, kept inside the circle. */
 const DOT_CLASS = {
   xs: 'size-1.5 right-[3px] bottom-[3px]',
   sm: 'size-2 right-1 bottom-1',
@@ -45,7 +37,7 @@ export type AvatarSize = keyof typeof SIZE_CLASS
 
 export interface AvatarStatus {
   tone: keyof typeof DOT_TONE
-  /** The dot's own accessible name (spec: 状态点有独立可访问名称). */
+  /** The dot's own accessible name: state is never colour-only. */
   label: string
 }
 
@@ -55,15 +47,11 @@ interface AvatarSharedProps {
   initial?: string
   /** Last resort when there is neither an image nor an initial. */
   fallbackIcon?: PhosphorIcon
-  /** Presence dot, always with its own label; the colour is never the only clue. */
+  /** Presence dot, always with its own label. */
   status?: AvatarStatus
-  /**
-   * `tonal` (default) paints the circle. `transparent` hands the surface back to a
-   * containing control — an avatar doubling as a menu trigger, where the button
-   * owns the hover / pressed / open paint.
-   */
+  /** `tonal` (default) paints the circle; `transparent` lets a parent control own the paint. */
   surface?: 'tonal' | 'transparent'
-  /** For a row where adjacent text already names the person: hides the glyph. */
+  /** Hides the glyph for a row whose adjacent text already names the person. */
   decorative?: boolean
   className?: string
 }
@@ -73,21 +61,15 @@ export type AvatarProps = AvatarSharedProps &
     | {
         /** Image source. Supplying one makes `alt` required. */
         src: string
-        /** Who this is (`张三的头像`) — never the bare word `头像` (a11y). */
+        /** Who this is (`张三的头像`) — never the bare word `头像`. */
         alt: string
       }
     | { src?: undefined; alt?: string }
   )
 
 /**
- * Avatar (components.md 展示与内容 → Avatar): circular, degrading in the spec's
- * order — image, then first letter, then icon. An image that fails falls back at
- * runtime instead of leaving a broken frame, and the prop type makes "an avatar
- * image without alt" unrepresentable.
- *
- * The letter rides on `bg-tonal` with `text-foreground` (#1a1a18 on #efefe9,
- * ≈13:1): the spec wants the fallback surface derived from tonal *while keeping
- * the 3:1 a graphic needs*, which a muted letter on tonal (≈2.9:1) would miss.
+ * 头像：圆形，按 图片 → 首字母 → 图标 降级；图片加载失败运行时回退，不留破图。
+ * 类型层强制“有图片必须有 alt”。
  */
 export function Avatar({
   src,
@@ -102,14 +84,12 @@ export function Avatar({
 }: AvatarProps) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
   const letter = (initial ?? '').trim().charAt(0).toUpperCase()
-  // A new `src` is a new identity: the failure is remembered per URL, so the
-  // caller can re-sign an expired one and the load cycle starts over.
   const showImage = Boolean(src) && failedSrc !== src
   const shown: 'image' | 'initial' | 'icon' = showImage ? 'image' : letter ? 'initial' : 'icon'
 
   return (
     <span
-      aria-hidden={decorative ? true : undefined}
+      aria-hidden={decorative || undefined}
       className={cn(
         'relative inline-flex shrink-0 select-none items-center justify-center overflow-hidden rounded-pill leading-none',
         surface === 'tonal' && 'bg-tonal text-foreground',
@@ -121,9 +101,8 @@ export function Avatar({
         <img
           src={src}
           alt={alt}
-          // No lazy loading: an avatar is a small above-the-fold face, and a late
-          // paint would flash its own fallback for a frame.
-          className="h-full w-full object-cover"
+          // 不懒加载：首屏小头像懒加载会先闪一帧占位。
+          className="size-full object-cover"
           onError={() => setFailedSrc(src ?? null)}
         />
       ) : shown === 'initial' ? (
@@ -131,15 +110,12 @@ export function Avatar({
           {letter}
         </span>
       ) : (
-        <Icon weight="duotone" aria-hidden="true" className={`${iconSize.sm} text-muted-foreground`} />
+        <Icon weight="duotone" aria-hidden="true" className={cn(iconSize.sm, 'text-muted-foreground')} />
       )}
 
       {status ? (
         <>
-          <span
-            aria-hidden="true"
-            className={cn('absolute rounded-pill', DOT_CLASS[size], DOT_TONE[status.tone])}
-          />
+          <span aria-hidden="true" className={cn('absolute rounded-pill', DOT_CLASS[size], DOT_TONE[status.tone])} />
           <span className="sr-only">{status.label}</span>
         </>
       ) : null}

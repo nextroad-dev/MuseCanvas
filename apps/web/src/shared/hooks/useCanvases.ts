@@ -1,71 +1,95 @@
 'use client'
 
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { CanvasListItemDto, CanvasListPageDto, CreateCanvasRequest } from '@musecanvas/contracts'
-import { canvasApi } from '@/features/generate/lib/canvas-api'
+// 对话（canvas）列表/详情 + 创建/改标题/删除。canvas 即「对话」，
+// 首次发送或「新建对话」时才创建，绝不在 mount/SSR 时隐式创建。
+
 import {
-  CANVASES_QUERY_KEY,
-  canvasDetailQueryKey,
-  canvasListQueryKey,
-} from '@/features/generate/lib/canvas-query-keys'
-import { useAccountQuery } from './useAccount'
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
+  type UseQueryResult,
+} from '@tanstack/react-query'
+import { clientApi } from '@/shared/services/client-api'
+import type {
+  CanvasDto,
+  CanvasListItemDto,
+  CanvasListPageDto,
+  CreateCanvasRequest,
+  UpdateCanvasRequest,
+} from '@/shared/types'
+import { queryKeys } from './query-keys'
+import { useCurrentActorId } from './useSession'
 
-/** Every canvas query is scoped by the authenticated actor, so logging out and
- *  signing in as someone else cannot reuse the previous actor's cached list. */
-export { CANVASES_QUERY_KEY, canvasDetailQueryKey, canvasListQueryKey }
+export { queryKeys }
 
-/**
- * The signed-in actor id for query keys.
- *
- * The session query (`useAccountQuery`) is the single source of truth for the
- * signed-in user, so every actor-scoped query stays disabled until it resolves.
- */
-export function useCurrentActorId(): string {
-  const account = useAccountQuery()
-  return account.data?.id ?? ''
-}
+const CANVAS_PAGE_SIZE = 20
 
-/** Conversation list with cursor "load more". Disabled until an actor is known,
- *  so it never fires during SSR or before the session resolves. */
-export function useCanvasesQuery() {
+/** 对话列表（cursor 分页）；未登录时禁用，避免 RSC/SSR 期间触发。 */
+export function useCanvases(): UseInfiniteQueryResult<
+  InfiniteData<CanvasListPageDto, string | undefined>
+> {
   const actorId = useCurrentActorId()
   return useInfiniteQuery({
-    queryKey: canvasListQueryKey(actorId),
+    queryKey: queryKeys.canvases.list(),
     enabled: actorId !== '',
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
-      canvasApi.list({ limit: 20, ...(pageParam ? { cursor: pageParam } : {}) }),
-    getNextPageParam: (page: CanvasListPageDto) => page.nextCursor ?? undefined,
+      clientApi.canvases.list({
+        limit: CANVAS_PAGE_SIZE,
+        ...(pageParam ? { cursor: pageParam } : {}),
+      }),
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
   })
 }
 
-export function useCanvasDetailQuery(canvasId: string | null) {
+export function canvasPagesToItems(
+  data: InfiniteData<CanvasListPageDto, string | undefined> | undefined,
+): CanvasListItemDto[] {
+  return data?.pages.flatMap((page) => page.items) ?? []
+}
+
+export function useCanvas(canvasId: string | null | undefined): UseQueryResult<CanvasDto> {
   const actorId = useCurrentActorId()
   return useQuery({
-    queryKey: canvasDetailQueryKey(actorId, canvasId ?? ''),
+    queryKey: queryKeys.canvases.detail(canvasId ?? ''),
+    queryFn: () => clientApi.canvases.detail(canvasId as string),
     enabled: Boolean(actorId && canvasId),
-    queryFn: () => canvasApi.detail(canvasId as string),
   })
 }
 
-/**
- * Create a conversation. This is a mutation on purpose: a canvas is created only
- * on an explicit user action (the first message or the "new conversation" button),
- * never on mount/SSR/preload. `baseRevision` for the first request comes from the
- * created document.
- */
-export function useCreateCanvasMutation() {
+export function useCreateCanvas() {
   const queryClient = useQueryClient()
-  const actorId = useCurrentActorId()
   return useMutation({
-    mutationFn: (body: CreateCanvasRequest) => canvasApi.create(body),
+    mutationFn: (body: CreateCanvasRequest = {}) => clientApi.canvases.create(body),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: canvasListQueryKey(actorId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.canvases.root })
     },
   })
 }
 
-/** Flatten the infinite list pages newest-first into one display list. */
-export function flattenCanvasPages(pages: CanvasListPageDto[] | undefined): CanvasListItemDto[] {
-  return (pages ?? []).flatMap((page) => page.items)
+export function useUpdateCanvas() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { id: string; body: UpdateCanvasRequest }) =>
+      clientApi.canvases.update(input.id, input.body),
+    onSuccess: (canvas) => {
+      queryClient.setQueryData(queryKeys.canvases.detail(canvas.id), canvas)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.canvases.list() })
+    },
+  })
+}
+
+export function useDeleteCanvas() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (canvasId: string) => clientApi.canvases.remove(canvasId),
+    onSuccess: (_result, canvasId) => {
+      queryClient.removeQueries({ queryKey: queryKeys.canvases.detail(canvasId) })
+      queryClient.removeQueries({ queryKey: queryKeys.canvasAgent.history(canvasId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.canvases.list() })
+    },
+  })
 }

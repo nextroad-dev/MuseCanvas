@@ -3,7 +3,7 @@ import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { iconSize } from './size'
 
-/** Icon sizes from `--icon-*` (icons.md §3): the spinner never invents a size. */
+/** Icon sizes from `--icon-*`: the spinner never invents a size. */
 const sizeClass = {
   xs: iconSize.xs,
   sm: iconSize.sm,
@@ -15,20 +15,18 @@ export interface SpinnerProps {
   /** `sm` (16px) sits inside a 40px control; `lg` is for page-level loading. */
   size?: keyof typeof sizeClass
   /**
-   * Text for assistive tech (`加载中`). The glyph itself is always decorative
-   * per icons.md §1, so a busy state is announced through this text or through
-   * `aria-busy` on the owning control — never through the icon.
+   * 给读屏的文字（`加载中`）。图形永远是装饰，忙碌状态靠这段文字或所属控件的
+   * `aria-busy` 播报。
    */
   label?: string
-  /** Swap the glyph for another loader without changing the behaviour contract. */
+  /** Swap the glyph without changing the behaviour contract. */
   icon?: PhosphorIcon
   className?: string
 }
 
 /**
- * Busy indicator. Rotation comes from `.motion-spin` (600ms linear, globals.css)
- * rather than Tailwind's `animate-spin`, so the duration stays a token and
- * reduced-motion turns it into a static glyph while the state stays legible.
+ * 忙碌指示器。旋转来自 `.motion-spin`（globals.css 里的 token 时长），不用 Tailwind
+ * 的 `animate-spin`；reduced-motion 下变成静止图形，状态仍然可读。
  */
 export function Spinner({ size = 'sm', label, icon: Icon = Loader2, className }: SpinnerProps) {
   return (

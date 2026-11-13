@@ -1,36 +1,27 @@
 /**
- * Global modal stack manager for apps/web.
+ * 全局模态栈：管注册/注销、背景 inert、滚动锁定与「Esc 只关最上层」。
  *
- * Guarantees:
- * 1. Single active Escape / focus trap owner: only the topmost open modal handles Escape and Tab keys.
- * 2. Nested dialog safety: opening dialog B over dialog A does not close both on Escape or trap focus in A.
- * 3. Reference-counted scroll locking: body overflow and scrollbar compensation are locked on the first modal
- *    and only unlocked when the last modal unmounts.
- * 4. Layered inert management: elements behind the topmost modal are marked inert, and previous inert states
- *    are accurately restored when modals pop.
- * 5. Focus restoration: focus restores to the trigger that opened each specific modal.
+ * 保证：
+ * 1. 嵌套模态中只有最上层响应 Esc（更内层的 dropdown 先 preventDefault 时不再关闭 dialog）。
+ * 2. 背景 inert 按层快照与恢复，嵌套模态弹出/收起不会把下层对话也永久禁用。
+ * 3. 滚动锁定引用计数：第一个模态上锁，最后一个收起时还原 body 的 overflow/padding。
+ * 4. 注销时把焦点还给打开该层模态的元素；焦点陷阱（Tab）由 useDialog 负责。
  */
 
 export type ModalDirection = 'previous' | 'next'
-
-const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(', ')
 
 const MEDIA_OR_EDITABLE = 'input, textarea, select, [contenteditable], video, audio'
 const INERT_EXEMPT_ATTRIBUTE = 'data-inert-exempt'
 
 export interface ModalRegistration {
   id: string
+  /** 模态最外层节点（portal 的根，焦点陷阱与 inert 以它为边界）。 */
   getRoot: () => HTMLElement | null
   getDialog: () => HTMLElement | null
   onClose: () => void
+  /** 可选：← / → 翻页（灯箱）。 */
   onNavigate?: ((direction: ModalDirection) => void) | undefined
+  /** 打开前拥有焦点的元素，注销时恢复。 */
   restoreFocusElement?: HTMLElement | null
 }
 
@@ -40,96 +31,101 @@ interface StackEntry extends ModalRegistration {
 
 class ModalStack {
   private stack: StackEntry[] = []
-  private bodyPreviousOverflow = ''
-  private bodyPreviousPaddingRight = ''
-  private listenerAttached = false
+  private bodyOverflow = ''
+  private bodyPaddingRight = ''
+  private listening = false
 
-  public push(modal: ModalRegistration): () => void {
+  /** 注册一层模态，返回注销函数。 */
+  push(registration: ModalRegistration): () => void {
     if (typeof window === 'undefined') return () => {}
 
-    const { body } = document
-    if (this.stack.length === 0) {
-      this.bodyPreviousOverflow = body.style.overflow
-      this.bodyPreviousPaddingRight = body.style.paddingRight
-      const gutter = window.innerWidth - document.documentElement.clientWidth
-      body.style.overflow = 'hidden'
-      if (gutter > 0) body.style.paddingRight = `${gutter}px`
-      this.attachListener()
-    }
+    if (this.stack.length === 0) this.lockScroll()
+    this.attachListener()
 
-    const inertState = new Map<HTMLElement, boolean>()
-    const root = modal.getRoot()
-    if (root) {
-      for (const child of Array.from(body.children)) {
-        if (typeof HTMLElement !== 'undefined' && !(child instanceof HTMLElement)) continue
-        if (child === root) continue
-        if (child.hasAttribute(INERT_EXEMPT_ATTRIBUTE)) continue
-        inertState.set(child as HTMLElement, (child as HTMLElement).inert)
-        ;(child as HTMLElement).inert = true
-      }
-    }
-
-    const entry: StackEntry = { ...modal, inertState }
+    const entry: StackEntry = { ...registration, inertState: new Map() }
+    this.applyInert(entry)
     this.stack.push(entry)
 
-    return () => this.pop(modal.id)
+    return () => this.pop(entry.id)
   }
 
-  public pop(id: string): void {
+  /** 注销指定模态；不在栈内时为空操作。 */
+  pop(id: string): void {
     if (typeof window === 'undefined') return
-    const index = this.stack.findIndex(entry => entry.id === id)
+    const index = this.stack.findIndex((entry) => entry.id === id)
     if (index === -1) return
 
     const [removed] = this.stack.splice(index, 1)
     if (removed) {
       for (const [element, wasInert] of removed.inertState) {
-        element.inert = wasInert
+        if (document.contains(element)) element.inert = wasInert
       }
-      if (removed.restoreFocusElement && document.contains(removed.restoreFocusElement)) {
-        removed.restoreFocusElement.focus()
-      }
-    }
-
-    // Re-evaluate inert for the new top modal, if any remains
-    const top = this.top()
-    if (top) {
-      const topRoot = top.getRoot()
-      if (topRoot) {
-        topRoot.inert = false
+      const restore = removed.restoreFocusElement
+      if (restore && document.contains(restore) && !restore.inert) {
+        restore.focus({ preventScroll: true })
       }
     }
 
     if (this.stack.length === 0) {
-      const { body } = document
-      body.style.overflow = this.bodyPreviousOverflow
-      body.style.paddingRight = this.bodyPreviousPaddingRight
+      this.unlockScroll()
       this.detachListener()
     }
   }
 
-  public top(): StackEntry | null {
+  top(): StackEntry | null {
     return this.stack.at(-1) ?? null
   }
 
-  public isTop(id: string): boolean {
+  isTop(id: string): boolean {
     return this.stack.at(-1)?.id === id
   }
 
+  /** 把最上层之外的 body 直接子节点设为 inert，并记录旧值。 */
+  private applyInert(entry: StackEntry): void {
+    const root = entry.getRoot()
+    if (!root) return
+    for (const child of Array.from(document.body.children)) {
+      if (!(child instanceof HTMLElement)) continue
+      if (child === root || child.contains(root)) continue
+      if (child.hasAttribute(INERT_EXEMPT_ATTRIBUTE)) continue
+      entry.inertState.set(child, child.inert)
+      child.inert = true
+    }
+  }
+
+  private lockScroll(): void {
+    const { body } = document
+    this.bodyOverflow = body.style.overflow
+    this.bodyPaddingRight = body.style.paddingRight
+    // 滚动条消失会让页面横向跳动，用等宽 padding 补偿。
+    const gutter = window.innerWidth - document.documentElement.clientWidth
+    body.style.overflow = 'hidden'
+    if (gutter > 0) body.style.paddingRight = `${gutter}px`
+  }
+
+  private unlockScroll(): void {
+    const { body } = document
+    body.style.overflow = this.bodyOverflow
+    body.style.paddingRight = this.bodyPaddingRight
+  }
+
   private attachListener(): void {
-    if (this.listenerAttached || typeof window === 'undefined') return
+    if (this.listening || typeof window === 'undefined') return
     window.addEventListener('keydown', this.handleKeyDown)
-    this.listenerAttached = true
+    this.listening = true
   }
 
   private detachListener(): void {
-    if (!this.listenerAttached || typeof window === 'undefined') return
+    if (!this.listening || typeof window === 'undefined') return
     window.removeEventListener('keydown', this.handleKeyDown)
-    this.listenerAttached = false
+    this.listening = false
   }
 
   private handleKeyDown = (event: KeyboardEvent): void => {
-    const top = this.top()
+    const top = this.stack.at(-1)
     if (!top) return
+    // 内层控件（dropdown 等）已消费的按键不再上抛，避免一次 Esc 关两层。
+    if (event.defaultPrevented || event.isComposing) return
 
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -138,51 +134,12 @@ class ModalStack {
       return
     }
 
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-      if (!top.onNavigate) return
+    if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && top.onNavigate) {
       const target = event.target
       if (target instanceof Element && target.matches(MEDIA_OR_EDITABLE)) return
       event.preventDefault()
       event.stopPropagation()
       top.onNavigate(event.key === 'ArrowLeft' ? 'previous' : 'next')
-      return
-    }
-
-    if (event.key === 'Tab') {
-      const scope = top.getRoot() ?? top.getDialog()
-      if (!scope) return
-
-      const focusables = Array.from(scope.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-        el => el.getClientRects().length > 0
-      )
-
-      if (focusables.length === 0) {
-        event.preventDefault()
-        event.stopPropagation()
-        top.getDialog()?.focus()
-        return
-      }
-
-      const first = focusables[0]!
-      const last = focusables[focusables.length - 1]!
-      const active = document.activeElement
-
-      if (!scope.contains(active)) {
-        event.preventDefault()
-        event.stopPropagation()
-        ;(event.shiftKey ? last : first).focus()
-        return
-      }
-
-      if (event.shiftKey && active === first) {
-        event.preventDefault()
-        event.stopPropagation()
-        last.focus()
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault()
-        event.stopPropagation()
-        first.focus()
-      }
     }
   }
 }

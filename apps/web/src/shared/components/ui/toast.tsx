@@ -1,98 +1,88 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { CheckIcon as Check, WarningCircleIcon as CircleAlert, InfoIcon as Info, WarningIcon as TriangleAlert, XIcon as X } from '@phosphor-icons/react'
+import {
+  CheckCircleIcon as CircleCheck,
+  InfoIcon as Info,
+  WarningCircleIcon as CircleAlert,
+  WarningIcon as TriangleAlert,
+  XIcon as X,
+} from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { exitDurationMs } from '@/shared/lib/motion'
-import { useFlipList } from '@/shared/hooks/useFlipList'
-import type { ReactNode } from 'react'
-import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { ghostIconButtonVariants } from './button-variants'
-import { controlMinHeight, iconSize } from './size'
+import { iconSize } from './size'
 
-export type ToastVariant = 'success' | 'warning' | 'error' | 'info'
+export type ToastTone = 'success' | 'error' | 'info' | 'warning'
 
-export interface ToastAction {
-  label: string
-  onClick: () => void
-}
-
-export interface ToastInput {
-  title: string
+export interface ToastOptions {
   description?: string
-  variant?: ToastVariant
-  /** Shown right-aligned. A toast with an action never auto-dismisses. */
-  action?: ToastAction
-  /** Auto-dismiss delay in ms. Defaults: success/info 5s, warning 8s, error and
-   *  actionable toasts sticky. Pass `null` to keep any toast on screen. */
+  /**
+   * 自动关闭延迟（ms）。默认按语气：success/info 5s，error/warning 8s。传 `null`
+   * 则一直保留到手动关闭。
+   */
   duration?: number | null
 }
 
-interface ToastItem extends ToastInput {
-  id: number
-  variant: ToastVariant
-}
-
-interface ToastApi {
-  push: (toast: ToastInput) => void
+/** The imperative handle: `toast.success('已保存')`. */
+export interface ToastApi {
+  success: (title: string, description?: string) => void
+  error: (title: string, description?: string) => void
+  info: (title: string, description?: string) => void
+  warning: (title: string, description?: string) => void
   dismiss: (id: number) => void
 }
 
-const ToastContext = createContext<ToastApi | null>(null)
+interface ToastItem {
+  id: number
+  tone: ToastTone
+  title: string
+  description?: string
+}
 
-/** Visible stack cap (spec: 多条堆叠时最多显示 3 条，超出折叠为计数). Overflow is
- *  kept in state and folded into a counter, never dropped — a dismissed-by-overflow
- *  error would vanish unanswered. */
-const MAX_VISIBLE = 3
-/** Safety valve on the buffer itself, so a burst of sticky toasts cannot grow it. */
-const MAX_KEPT = 20
+interface ToastContextValue {
+  toast: ToastApi
+}
 
-/** Reading times, in ms. Success may close itself; a warning needs longer to
- *  read, and an error or an actionable toast stays until it is answered. */
-const AUTO_DISMISS_MS: Record<ToastVariant, number | null> = {
+const ToastContext = createContext<ToastContextValue | null>(null)
+
+const DEFAULT_DURATION: Record<ToastTone, number | null> = {
   success: 5000,
   info: 5000,
   warning: 8000,
-  error: null,
+  error: 8000,
 }
 
-/** Text-tone icon: every semantic foreground clears 4.5:1 on `bg-surface`. */
-const TONE_ICON: Record<ToastVariant, string> = {
-  success: 'text-success',
-  warning: 'text-warning',
-  error: 'text-danger',
-  info: 'text-info',
-}
-
-const TONE_GLYPH: Record<ToastVariant, PhosphorIcon> = {
-  success: Check,
-  warning: TriangleAlert,
+const TONE_ICON = {
+  success: CircleCheck,
   error: CircleAlert,
   info: Info,
+  warning: TriangleAlert,
+} as const
+
+const TONE_ICON_CLASS: Record<ToastTone, string> = {
+  success: 'text-success',
+  error: 'text-danger',
+  info: 'text-info',
+  warning: 'text-warning',
 }
 
-/** Urgency is announced as `alert`; everything else uses the polite region, and
- *  the shape of the glyph plus the wording carries the tone, never colour alone. */
-const TONE_ROLE: Record<ToastVariant, 'status' | 'alert'> = {
-  success: 'status',
-  info: 'status',
-  warning: 'alert',
-  error: 'alert',
-}
+/** Visible stack cap; older toasts stay in state but leave the viewport. */
+const MAX_VISIBLE = 4
 
 /**
- * Toast region + producer. The viewport is a permanent `aria-live="polite"`
- * landmark (individual errors and warnings upgrade to `role="alert"`), so
- * announcements never depend on visually scanning the corner — an urgent
- * message arriving in a region that mounts with it is not reliably read.
+ * Toast 区域 + 生产者。`<ToastProvider>` 挂在 root layout；视口是常驻的
+ * `aria-live="polite"` 区域（每条 `role="status"`），播报不依赖与消息同时挂载的区域。
  *
- * New toasts push in below the stack, `z-toast` (50) keeps them above a modal,
- * and a toast with an action never auto-dismisses.
+ * 退场双保险：`animationend` 一到就移除节点，另有 `--motion-exit` 计时器兜底动画
+ * 没运行的情况（reduced-motion、后台标签页）。刻意不迁移旧的 FLIP 卸载体系——
+ * toast 只是一个小的有界列表。
  */
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<ToastItem[]>([])
-  const [leavingIds, setLeavingIds] = useState<Set<number>>(new Set())
+  const [items, setItems] = useState<ToastItem[]>([])
+  const [leaving, setLeaving] = useState<Set<number>>(new Set())
   const nextId = useRef(0)
   const timers = useRef<Set<number>>(new Set())
 
@@ -102,10 +92,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       task()
     }, ms)
     timers.current.add(handle)
-    return handle
   }, [])
 
-  // Nothing may fire into an unmounted provider.
   useEffect(
     () => () => {
       for (const handle of timers.current) window.clearTimeout(handle)
@@ -116,137 +104,122 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback(
     (id: number) => {
-      setLeavingIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
-      // The node leaves the DOM once the slide-out (`--motion-exit`) has run.
-      schedule(() => {
-        setToasts((prev) => prev.filter((toast) => toast.id !== id))
-        setLeavingIds((prev) => {
-          const next = new Set(prev)
-          next.delete(id)
-          return next
-        })
-      }, exitDurationMs())
+      setLeaving((prev) => {
+        if (prev.has(id)) return prev
+        const next = new Set(prev)
+        next.add(id)
+        return next
+      })
     },
-    [schedule],
+    [],
   )
 
+  const remove = useCallback((id: number) => {
+    setItems((prev) => prev.filter((item) => item.id !== id))
+    setLeaving((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
+  // 正常情况下由 animationend 先移除；这个计时器只清理退场动画无法触发的 toast。
+  useEffect(() => {
+    if (leaving.size === 0) return
+    const ms = exitDurationMs() + 80
+    const timersToClear = [...leaving].map((id) =>
+      window.setTimeout(() => remove(id), ms),
+    )
+    return () => {
+      for (const handle of timersToClear) window.clearTimeout(handle)
+    }
+  }, [leaving, remove])
+
   const push = useCallback(
-    (input: ToastInput) => {
-      const id = ++nextId.current
-      const variant = input.variant ?? 'info'
-      // Actionable toasts and errors require user interaction and never auto-dismiss;
-      // otherwise explicit duration wins, and default toasts self-dismiss on reading time.
-      let autoClose: number | null
-      if (input.action || input.duration === null) autoClose = null
-      else if (typeof input.duration === 'number') autoClose = input.duration
-      else if (variant === 'error') autoClose = null
-      else autoClose = AUTO_DISMISS_MS[variant]
-      setToasts((prev) => {
-        const next = [...prev, { ...input, id, variant }]
-        return next.length > MAX_KEPT ? next.slice(next.length - MAX_KEPT) : next
-      })
-      if (autoClose != null) schedule(() => dismiss(id), autoClose)
+    (tone: ToastTone, title: string, description?: string, duration?: number | null) => {
+      const id = (nextId.current += 1)
+      setItems((prev) => [...prev, { id, tone, title, description }])
+      const autoClose = duration === null ? null : (duration ?? DEFAULT_DURATION[tone])
+      if (autoClose !== null) schedule(() => dismiss(id), autoClose)
     },
     [dismiss, schedule],
   )
 
-  const api = useMemo<ToastApi>(() => ({ push, dismiss }), [push, dismiss])
+  const api = useMemo<ToastApi>(
+    () => ({
+      success: (title, description) => push('success', title, description),
+      error: (title, description) => push('error', title, description),
+      info: (title, description) => push('info', title, description),
+      warning: (title, description) => push('warning', title, description),
+      dismiss,
+    }),
+    [push, dismiss],
+  )
 
   return (
-    <ToastContext.Provider value={api}>
+    <ToastContext.Provider value={{ toast: api }}>
       {children}
-      <ToastViewport toasts={toasts} leavingIds={leavingIds} onDismiss={dismiss} />
+      <ToastViewport items={items} leaving={leaving} onDismiss={dismiss} onRemoved={remove} />
     </ToastContext.Provider>
   )
 }
 
 function ToastViewport({
-  toasts,
-  leavingIds,
+  items,
+  leaving,
   onDismiss,
+  onRemoved,
 }: {
-  toasts: ToastItem[]
-  leavingIds: Set<number>
+  items: ToastItem[]
+  leaving: Set<number>
   onDismiss: (id: number) => void
+  onRemoved: (id: number) => void
 }) {
-  // The live region must exist in the DOM before the first toast arrives, and it
-  // can only be portalled once there is a document: mount on an effect so the
-  // server HTML and the first client paint stay identical.
+  // 直播区必须先于第一条消息存在；portal 需要 document，故在 effect 里挂载，
+  // 保证服务端 HTML 与首次客户端渲染一致。
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
-  const viewportRef = useRef<HTMLDivElement>(null)
-  const overflow = Math.max(0, toasts.length - MAX_VISIBLE)
-  const visible = overflow > 0 ? toasts.slice(-MAX_VISIBLE) : toasts
-  // Order-only trigger: auto-dismiss timers re-render, but the ids join only
-  // changes on push / dismiss, so ticks never re-measure.
-  useFlipList(viewportRef, visible.map((toast) => toast.id).join(','))
   if (!mounted) return null
+
+  const visible = items.slice(-MAX_VISIBLE)
 
   return createPortal(
     <div
-      ref={viewportRef}
       aria-live="polite"
-      // Toasts float above an open dialog, so `useDialog` must not make them inert.
+      // toast 浮在打开的对话框之上，useDialog 不能把它设为 inert。
       data-inert-exempt
       className="pointer-events-none fixed inset-x-4 top-4 z-toast flex flex-col items-end gap-2 sm:inset-x-auto sm:right-6 sm:top-6"
     >
-      {overflow > 0 ? (
-        <p aria-hidden="true" className="rounded-pill bg-surface px-3 py-1 text-xs font-medium text-muted-foreground shadow-toast">
-          已折叠 {overflow} 条通知
-        </p>
-      ) : null}
-      {visible.map((toast) => {
-        const leaving = leavingIds.has(toast.id)
-        // `?? Info`: a caller that passes a tone from an older string set gets the
-        // neutral glyph instead of a crash on an undefined component.
-        const Glyph = TONE_GLYPH[toast.variant] ?? Info
+      {visible.map((item) => {
+        const Icon = TONE_ICON[item.tone]
+        const isLeaving = leaving.has(item.id)
         return (
-          // FLIP owns the outer wrapper (`data-flip-key`); the slide keyframes
-          // stay on the inner node so WAAPI transforms are never overridden.
-          <div key={toast.id} data-flip-key={toast.id} className="w-full max-w-sm">
-            <div
-              role={TONE_ROLE[toast.variant]}
-              className={cn(
-                'pointer-events-auto relative w-full overflow-hidden rounded-card bg-surface border border-border p-4 shadow-toast motion-toast-in',
-                leaving && 'motion-toast-out',
-              )}
+          <div
+            key={item.id}
+            role="status"
+            className={cn(
+              'pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-card border border-border bg-surface p-4 shadow-toast',
+              isLeaving ? 'motion-toast-out' : 'motion-toast-in',
+            )}
+            onAnimationEnd={(event) => {
+              if (event.target !== event.currentTarget) return
+              if (isLeaving) onRemoved(item.id)
+            }}
+          >
+            <Icon weight="fill" aria-hidden="true" className={cn('mt-0.5 shrink-0', iconSize.sm, TONE_ICON_CLASS[item.tone])} />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-foreground">{item.title}</p>
+              {item.description ? <p className="mt-1 text-sm text-muted-foreground">{item.description}</p> : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => onDismiss(item.id)}
+              aria-label="关闭通知"
+              className={ghostIconButtonVariants({ size: 'sm' })}
             >
-            <div className="flex items-start gap-3">
-              <Glyph weight="fill" className={cn(`mt-0.5 ${iconSize.sm} shrink-0`, TONE_ICON[toast.variant])} aria-hidden="true" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-foreground">{toast.title}</p>
-                {toast.description ? (
-                  <p className="mt-1 text-sm text-muted-foreground">{toast.description}</p>
-                ) : null}
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {toast.action ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      toast.action?.onClick()
-                      onDismiss(toast.id)
-                    }}
-                    className={cn(
-                      'inline-flex items-center rounded-control px-2 text-sm font-medium text-primary',
-                      controlMinHeight.sm,
-                      'not-disabled:hover:bg-tonal-hover not-disabled:active:bg-tonal-active motion-press',
-                    )}
-                  >
-                    {toast.action.label}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => onDismiss(toast.id)}
-                  aria-label="关闭通知"
-                  className={ghostIconButtonVariants({ size: 'sm' })}
-                >
-                  <X weight="bold" className={iconSize.sm} aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-            </div>
+              <X weight="bold" aria-hidden="true" className={iconSize.sm} />
+            </button>
           </div>
         )
       })}
@@ -255,8 +228,11 @@ function ToastViewport({
   )
 }
 
-/** Imperative toast handle for event handlers (copy, save, async completion). */
-export function useToast(): ToastApi {
+/**
+ * 事件处理器里的命令式 toast 句柄：
+ * `const { toast } = useToast(); toast.success('已保存')`。
+ */
+export function useToast(): ToastContextValue {
   const ctx = useContext(ToastContext)
   if (!ctx) throw new Error('useToast must be used inside <ToastProvider>')
   return ctx

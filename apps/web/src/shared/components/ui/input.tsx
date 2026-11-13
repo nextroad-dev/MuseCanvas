@@ -1,32 +1,30 @@
 'use client'
 
 import { useId } from 'react'
-import type { InputHTMLAttributes, Ref, TextareaHTMLAttributes } from 'react'
+import type { InputHTMLAttributes, Ref } from 'react'
 import { cn } from '@/shared/lib/cn'
-import { useFormFieldContext } from './field'
+import { useFieldContext } from './field'
 import { colourTransition, outlineHover } from './interaction'
-import { controlMinHeight } from './size'
+import { controlMinHeight, touchTarget } from './size'
 
 /**
- * Shared control surface for `Input` / `Textarea` / `Select` (states.md §3):
- * white surface + `border-border-control` (3.6:1, the outline a control needs —
- * `border-border` is decoration only), 10px radius, 40px min-height via
- * min-height so zoom and wrapping never clip it, error red on `aria-invalid`.
- * Hover and colour timing match every other control (`interaction.ts`); no focus
- * utility here: globals.css paints the one ring.
+ * `Input` / `Textarea` / `Select` 共用的控件表面：白底 + `border-border-control`
+ * （控件需要 3:1 描边，`border-border` 只作装饰）、10 圆角、控件 token 的
+ * `min-h`（缩放/换行不裁切）、`aria-invalid` 时红边。hover 与颜色时长与其他控件
+ * 一致；焦点环用全局那一套。
  */
 export const controlClasses = [
   'w-full rounded-control border bg-surface px-3 text-sm text-foreground',
   colourTransition,
   'placeholder:text-muted-foreground',
+  touchTarget,
   outlineHover,
   'aria-[invalid=true]:border-danger aria-[invalid=true]:bg-danger-soft',
 ].join(' ')
 
+/** Two surfaces: readable outline for a standalone field, borderless tonal for dense toolbars. */
 export const controlSurface = {
-  /** Readable outline for a standalone field. */
   outline: 'border-border-control',
-  /** Borderless tonal fill: dense toolbars and inline editors (components.md Input row). */
   subtle: 'border-transparent bg-tonal',
 } as const
 
@@ -39,75 +37,36 @@ export const controlHeight = {
 export type ControlVariant = keyof typeof controlSurface
 export type ControlSize = keyof typeof controlHeight
 
-/** Wiring every control shares with its enclosing `FormField`. */
-function useFieldWiring(providedId?: string) {
+/**
+ * 控件与外围 `Field` 共享的接线：label 指向的 id，以及 describedby / invalid /
+ * required 属性。
+ */
+export function useControlWiring(providedId?: string) {
   const fallbackId = useId()
-  const field = useFormFieldContext()
+  const field = useFieldContext()
   return { field, id: field?.id ?? providedId ?? fallbackId }
 }
 
 export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
   variant?: ControlVariant
   size?: ControlSize
-  /** Error state when the input is *not* inside a `FormField`. */
+  /** Error state when the input is *not* inside a `Field`. */
   invalid?: boolean
   ref?: Ref<HTMLInputElement>
 }
 
 export function Input({ variant = 'outline', size = 'md', invalid, className, id, ...rest }: InputProps) {
-  const { field, id: controlId } = useFieldWiring(id)
+  const { field, id: controlId } = useControlWiring(id)
   const isError = invalid ?? field?.invalid ?? false
 
   return (
     <input
       id={controlId}
-      aria-invalid={isError ? true : undefined}
+      aria-invalid={isError || undefined}
       aria-describedby={field?.describedBy || undefined}
-      aria-required={field?.required ? true : undefined}
-      // `disabled` stays native: paste, autofill and copy keep working on the
-      // enabled path, and `not-disabled:` variants switch the hover paint off.
+      aria-required={field?.required || undefined}
+      // `disabled` 保持原生：粘贴/自动填充仍可用，`not-disabled:` 会关掉 hover 颜色。
       className={cn(controlClasses, controlSurface[variant], controlHeight[size], rest.disabled && 'is-disabled', className)}
-      {...rest}
-    />
-  )
-}
-
-export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
-  variant?: ControlVariant
-  invalid?: boolean
-  ref?: Ref<HTMLTextAreaElement>
-}
-
-/**
- * Multiline control. `min-h` plus `resize-y` keeps the 40px floor without
- * trapping content: a failed submit must never lose what the user typed
- * (components.md Input row: 失败保留输入).
- */
-export function Textarea({
-  variant = 'outline',
-  invalid,
-  className,
-  id,
-  rows = 3,
-  ...rest
-}: TextareaProps) {
-  const { field, id: controlId } = useFieldWiring(id)
-  const isError = invalid ?? field?.invalid ?? false
-
-  return (
-    <textarea
-      id={controlId}
-      rows={rows}
-      aria-invalid={isError ? true : undefined}
-      aria-describedby={field?.describedBy || undefined}
-      aria-required={field?.required ? true : undefined}
-      className={cn(
-        controlClasses,
-        controlSurface[variant],
-        'min-h-[88px] resize-y py-2',
-        rest.disabled && 'is-disabled',
-        className,
-      )}
       {...rest}
     />
   )

@@ -6,14 +6,13 @@ export type BadgeTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 
 export type BadgeVariant = 'soft' | 'solid' | 'outline'
 
 /**
- * Badge / Tag (components.md): pill, 12px/500, status colour used locally and
- * always next to text — `soft` is the default because a solid fill is reserved
- * for actions, and a static badge never pretends to be a button.
- * `accent` is the one place the brand green may appear as a graphic fill.
+ * 徽标 / 状态胶囊（画板 02/03/07/08）：胶囊形、12px/500，状态色只在局部且始终
+ * 伴随文字。默认 `soft`；实心仅用于操作按钮与一次性的“默认”标签，静态徽标不伪装
+ * 成按钮。
  */
 const badgeClasses: Record<BadgeVariant, Record<BadgeTone, string>> = {
   soft: {
-    neutral: 'bg-neutral-soft text-foreground',
+    neutral: 'bg-neutral-soft text-neutral-status',
     success: 'bg-success-soft text-success',
     warning: 'bg-warning-soft text-warning',
     danger: 'bg-danger-soft text-danger',
@@ -21,20 +20,21 @@ const badgeClasses: Record<BadgeVariant, Record<BadgeTone, string>> = {
     accent: 'bg-accent-soft text-accent-strong',
   },
   solid: {
-    // `on-*` tokens are the WCAG-checked pairings for a solid semantic fill.
-    neutral: 'bg-neutral-status text-on-primary',
+    // `on-*` 是实心色块经过对比度校验的前景配对。
+    // 中性实心 = “默认”/计数标签：主色底 + 反色文字。
+    neutral: 'bg-primary text-on-primary',
     success: 'bg-success text-on-success',
     warning: 'bg-warning text-on-warning',
     danger: 'bg-danger text-on-danger',
     info: 'bg-info text-on-info',
-    accent: 'bg-accent text-accent-contrast',
+    accent: 'bg-accent text-accent-strong',
   },
   outline: {
     neutral: 'border border-border-strong text-foreground',
-    success: 'border border-success text-success',
-    warning: 'border border-warning text-warning',
-    danger: 'border border-danger text-danger',
-    info: 'border border-info text-info',
+    success: 'border border-success-border text-success',
+    warning: 'border border-warning-border text-warning',
+    danger: 'border border-danger-border text-danger',
+    info: 'border border-info-border text-info',
     accent: 'border border-accent text-accent',
   },
 }
@@ -51,12 +51,14 @@ const dotClasses: Record<BadgeTone, string> = {
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: BadgeTone
   variant?: BadgeVariant
-  /** Optional leading status icon; decorative unless it is the whole message. */
+  /** Optional leading icon; decorative unless it is the whole message. */
   icon?: ReactNode
+  /** 6px status dot before the label, for a state that should be scannable. */
+  dot?: boolean
   ref?: Ref<HTMLSpanElement>
 }
 
-export function Badge({ tone = 'neutral', variant = 'soft', icon, className, ref, children, ...rest }: BadgeProps) {
+export function Badge({ tone = 'neutral', variant = 'soft', icon, dot, className, ref, children, ...rest }: BadgeProps) {
   return (
     <span
       ref={ref}
@@ -67,66 +69,13 @@ export function Badge({ tone = 'neutral', variant = 'soft', icon, className, ref
       )}
       {...rest}
     >
+      {dot ? <span aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-pill', dotClasses[tone])} /> : null}
       {icon ? (
-        <span aria-hidden="true" className={`inline-flex shrink-0 ${iconSlot.xs}`}>
+        <span aria-hidden="true" className={cn('inline-flex shrink-0', iconSlot.xs)}>
           {icon}
         </span>
       ) : null}
       <span className="truncate">{children}</span>
-    </span>
-  )
-}
-
-export interface BadgeDotProps extends HTMLAttributes<HTMLSpanElement> {
-  tone?: BadgeTone
-  /** Accessible name: a dot alone must never carry meaning by colour only. */
-  label: string
-  ref?: Ref<HTMLSpanElement>
-}
-
-/**
- * 8px status dot (components.md → Badge Variants). Position it over a parent with
- * an absolute `className` (spec offset is -4px top-right); the `label` is rendered
- * as `sr-only` text so the state survives without sight or colour.
- */
-export function BadgeDot({ tone = 'danger', label, className, ref, ...rest }: BadgeDotProps) {
-  return (
-    <span ref={ref} className={cn('inline-flex items-center', className)} {...rest}>
-      <span aria-hidden="true" className={cn('h-2 w-2 shrink-0 rounded-pill', dotClasses[tone])} />
-      <span className="sr-only">{label}</span>
-    </span>
-  )
-}
-
-export interface BadgeCountProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
-  count: number
-  /** Caps the display at `${max}+`, per the spec's 99+ rule. */
-  max?: number
-  tone?: BadgeTone
-  /** Noun for the screen-reader text, e.g. `条未读` → `12 条未读`. */
-  label?: string
-  ref?: Ref<HTMLSpanElement>
-}
-
-/** Pill counter: min-width/height 20px, `99+` cap, `sr-only` expansion. */
-export function BadgeCount({ count, max = 99, tone = 'danger', label = '项', className, ref, ...rest }: BadgeCountProps) {
-  const capped = count > max
-  return (
-    <span
-      ref={ref}
-      className={cn(
-        'inline-flex min-h-5 min-w-5 items-center justify-center rounded-pill px-1.5 text-xs font-medium tabular-nums',
-        badgeClasses.solid[tone],
-        className,
-      )}
-      {...rest}
-    >
-      <span aria-hidden="true" className="font-mono">
-        {capped ? `${max}+` : count}
-      </span>
-      <span className="sr-only">
-        {capped ? `超过 ${max} ${label}` : `${count} ${label}`}
-      </span>
     </span>
   )
 }

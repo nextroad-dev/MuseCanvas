@@ -1,111 +1,151 @@
 /**
- * Shared UI primitives for web, one import surface for every screen.
+ * Barrel for the design-system primitives: one import surface for every screen.
  *
  * Layering rule for callers: these components know about tokens, states and
  * accessibility only — no feature logic, no data fetching, no `features/*`
  * imports. Anything that needs a store or an endpoint belongs one level up.
  */
 
+// --- Actions -----------------------------------------------------------------
+export { Button, IconButton, buttonVariants, ghostIconButtonVariants } from './button'
+export type { ButtonProps, ButtonSize, ButtonVariant, ButtonVariantProps, IconButtonProps } from './button'
+
+// --- Display -----------------------------------------------------------------
 export { Alert } from './alert'
 export type { AlertProps, AlertTone } from './alert'
 
 export { Avatar } from './avatar'
 export type { AvatarProps, AvatarSize, AvatarStatus } from './avatar'
 
-export { Badge, BadgeCount, BadgeDot } from './badge'
-export type { BadgeCountProps, BadgeDotProps, BadgeProps, BadgeTone, BadgeVariant } from './badge'
+export { Badge } from './badge'
+export type { BadgeProps, BadgeTone, BadgeVariant } from './badge'
 
-// `buttonVariants` is also exported by `./button`; the recipe module is the one a
-// server component can call, so it is listed here for the client-side imports.
-export { Button, IconButton, buttonVariants, ghostIconButtonVariants } from './button'
-export type { ButtonProps, ButtonSize, ButtonVariant, ButtonVariantProps, IconButtonProps } from './button'
-
-export { Card, CardBody, CardDescription, CardFooter, CardHeader, CardTitle, StatCard } from './card'
-export type { CardProps, CardTitleProps, StatCardProps } from './card'
+export { Card, CardBody, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './card'
+export type {
+  CardBodyProps,
+  CardContentProps,
+  CardDensity,
+  CardDescriptionProps,
+  CardFooterProps,
+  CardHeaderProps,
+  CardProps,
+  CardTitleProps,
+  CardVariant,
+} from './card'
 
 export { Divider } from './divider'
 export type { DividerProps } from './divider'
 
-export { DropdownMenu } from './dropdown-menu'
-export type { DropdownMenuItem, DropdownMenuProps } from './dropdown-menu'
-
 export { EmptyState } from './empty-state'
-export type { EmptyStateProps, EmptyStateVariant } from './empty-state'
-
-export { FieldGroup, FormField, useFormFieldContext } from './field'
-export type { FormFieldContextValue, FormFieldProps, FieldGroupProps } from './field'
-
-export { Input, Textarea, controlClasses, controlHeight, controlSurface } from './input'
-export type { ControlSize, ControlVariant, InputProps, TextareaProps } from './input'
-
-// Token → utility maps for repeated sizes (icon boxes, square controls). See the
-// module header for why these are maps and not inline arbitrary values.
-export { controlMinHeight, controlSquare, iconSize, iconSlot } from './size'
-export type { ControlSquareSize, IconSize } from './size'
+export type { EmptyStateProps } from './empty-state'
 
 export { PageHeader } from './page-header'
 export type { PageHeaderProps } from './page-header'
 
-export { Pagination } from './pagination'
-export type { PaginationProps } from './pagination'
+export { SectionHeader } from './section-header'
+export type { SectionHeaderProps } from './section-header'
 
-export { Progress } from './progress'
-export type { ProgressProps } from './progress'
+// --- Forms -------------------------------------------------------------------
+export { Field, FieldGroup, FormField, useFieldContext, useFormFieldContext } from './field'
+export type { FieldContextValue, FieldGroupProps, FieldProps } from './field'
 
-export { Radio, RadioGroup } from './radio'
-export type { RadioProps, RadioGroupProps } from './radio'
+export { Input, controlClasses, controlHeight, controlSurface, useControlWiring } from './input'
+export type { ControlSize, ControlVariant, InputProps } from './input'
+
+export { Textarea } from './textarea'
+export type { TextareaProps } from './textarea'
 
 export { Select } from './select'
 export type { SelectProps } from './select'
 
+export { Checkbox } from './checkbox'
+export type { CheckboxProps } from './checkbox'
+
+export { Radio, RadioGroup } from './radio'
+export type { RadioGroupProps, RadioProps } from './radio'
+
+export { Switch } from './switch'
+export type { SwitchProps } from './switch'
+
+// --- Navigation / overlays ---------------------------------------------------
 export { SegmentedControl } from './segmented-control'
-export type { SegmentedControlProps, SegmentedControlItem } from './segmented-control'
-
-export { Spinner } from './spinner'
-export type { SpinnerProps } from './spinner'
-
-export { SectionHeader } from './section-header'
-export type { SectionHeaderProps } from './section-header'
-
-export { Stepper } from './stepper'
-export type { StepperProps, StepperStep } from './stepper'
+export type { SegmentedControlItem, SegmentedControlProps } from './segmented-control'
 
 export { Tabs } from './tabs'
 export type { TabItem, TabsProps } from './tabs'
 
+export { Dialog } from './dialog'
+export type { DialogProps, DialogSize } from './dialog'
+
+export { DropdownMenu } from './dropdown-menu'
+export type { DropdownMenuItem, DropdownMenuProps } from './dropdown-menu'
+
+// --- Feedback ----------------------------------------------------------------
+export { ToastProvider, useToast } from './toast'
+export type { ToastApi, ToastOptions, ToastTone } from './toast'
+
+export { Spinner } from './spinner'
+export type { SpinnerProps } from './spinner'
+
+export { Progress } from './progress'
+export type { ProgressProps } from './progress'
+
+export { Skeleton, SkeletonRow, SkeletonText, SkeletonTile } from './skeleton'
+export type { SkeletonProps, SkeletonRowProps, SkeletonTextProps, SkeletonTileProps } from './skeleton'
+
+// --- Data display ------------------------------------------------------------
 export {
   DataTable,
+  Table,
   TableBody,
   TableCell,
   TableFrame,
   TableHead,
   TableHeadCell,
+  TableHeader,
   TableRow,
   TableSkeletonRow,
   TableStateRow,
 } from './table'
 export type {
-  DataTableProps,
   TableBodyProps,
   TableCellProps,
+  TableDensity,
   TableFrameProps,
   TableHeadCellProps,
-  TableHeadProps,
+  TableHeaderProps,
+  TableProps,
   TableRowProps,
   TableSkeletonCell,
   TableSkeletonRowProps,
   TableStateRowProps,
 } from './table'
 
-export { FileDropZone, formatFileSize } from './dropzone'
-export type { DropZoneFile, DropZoneFileStatus, FileDropZoneProps } from './dropzone'
+export { Pagination } from './pagination'
+export type { CursorPaginationProps, PagePaginationProps, PaginationProps } from './pagination'
 
-// Pre-existing primitives, re-exported so `@/shared/components/ui` is the only
-// path a screen needs. Owned elsewhere — extend here only when adding a file.
-export * from './checkbox'
-export * from './dialog'
-export * from './radio'
-export * from './skeleton'
-export * from './switch'
+export { Stepper } from './stepper'
+export type { StepperProps, StepperStep } from './stepper'
+
+export { Dropzone, FileDropZone, formatFileSize, matchesAccept } from './dropzone'
+export type { DropZoneFile, DropZoneFileStatus, DropzoneProps } from './dropzone'
+
+// --- Shared size maps / interaction classes ----------------------------------
+export { controlMinHeight, controlSquare, iconSize, iconSlot } from './size'
+export type { ControlMinHeightSize, ControlSquareSize, IconSize } from './size'
+
+export {
+  colourTransition,
+  focusRing,
+  focusRingPeer,
+  motionPress,
+  outlineHover,
+  peerOutlineHover,
+  pressable,
+  rowHover,
+} from './interaction'
+
+// --- Theme -------------------------------------------------------------------
+// Owned by the foundation slice; re-exported so `@/shared/components/ui` stays the
+// single path a screen needs.
 export * from './theme-toggle'
-export * from './toast'

@@ -1,74 +1,128 @@
-/**
- * Shared class strings for the admin surface. Kept as plain constants (not a
- * component) so they can be applied to primitives that already own their markup
- * (`PageHeader.actionsClassName`, `Dialog.panelClassName`) without wrapping them.
- */
+// 后台壳的导航模型与折叠状态：纯模块（无 React、无 DOM），
+// 侧栏、面包屑以及 A2/A3 的后台页面共用同一份顺序与路径，避免各自抄一份导航。
+
+import { APP_ROUTES } from '@/shared/lib/app-routes'
+
+/** 侧栏图标槽的键：具体图标组件由 `admin-shell.tsx` 映射，纯模块不 import Phosphor。 */
+export type AdminNavIconKey =
+  | 'overview'
+  | 'users'
+  | 'media'
+  | 'language'
+  | 'prompt'
+  | 'jobs'
+  | 'oauth'
+  | 'settings'
+
+export interface AdminNavItem {
+  label: string
+  href: string
+  icon: AdminNavIconKey
+}
+
+export interface AdminNavGroup {
+  /** `null` = 该组不显示标题（概览独占首组，画板 07）。 */
+  title: string | null
+  items: AdminNavItem[]
+}
 
 /**
- * Every admin route root: one vertical rhythm (page header, then sections). The
- * entrance is `motion-page-enter`, which defines its animation only under
- * `prefers-reduced-motion: no-preference`, so reduced-motion users get the static page.
+ * 侧栏分组顺序（画板 07）：概览 / 用户与权限 / 生成资源 / 运行 / 系统设置。
+ * 新增后台页时只改这里，导航、面包屑与当前项高亮会一起生效。
  */
-export const adminPageRoot = 'flex min-w-0 flex-col gap-8 motion-page-enter'
+export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
+  {
+    title: null,
+    items: [{ label: '概览', href: APP_ROUTES.admin, icon: 'overview' }],
+  },
+  {
+    title: '用户与权限',
+    items: [{ label: '用户管理', href: APP_ROUTES.adminUsers, icon: 'users' }],
+  },
+  {
+    title: '生成资源',
+    items: [
+      { label: '媒体模型', href: APP_ROUTES.adminMediaModels, icon: 'media' },
+      { label: '语言模型', href: APP_ROUTES.adminLanguageModels, icon: 'language' },
+      { label: '提示词模板', href: APP_ROUTES.adminPromptTemplates, icon: 'prompt' },
+    ],
+  },
+  {
+    title: '运行',
+    items: [{ label: '任务监控', href: APP_ROUTES.adminJobs, icon: 'jobs' }],
+  },
+  {
+    title: '系统设置',
+    items: [
+      { label: 'OAuth', href: APP_ROUTES.adminOAuth, icon: 'oauth' },
+      { label: '系统配置', href: APP_ROUTES.adminSettings, icon: 'settings' },
+    ],
+  },
+]
+
+/** 折叠状态持久化键：值只写 `collapsed | expanded`，读不到即按展开处理。 */
+export const ADMIN_SIDEBAR_STORAGE_KEY = 'musecanvas-admin-sidebar'
+
+export function adminNavItems(): AdminNavItem[] {
+  return ADMIN_NAV_GROUPS.flatMap((group) => group.items)
+}
 
 /**
- * Touch-size for the actions of a toolbar or header below the `md` (960px)
- * breakpoint. Buttons and links reach the 48px `--control-lg` hit area; desktop
- * keeps the 40px default. Applied as a descendant rule so the primitives stay
- * unaware of the viewport.
+ * 当前项判定：`/admin` 必须精确匹配，其余按路径前缀匹配，
+ * 这样 `/admin/jobs/:id` 这类详情页仍高亮「任务监控」。
  */
-export const adminTouchTargets =
-  'max-md:[&_button]:min-h-[var(--control-lg)] max-md:[&_a]:min-h-[var(--control-lg)]'
+export function isAdminNavActive(
+  pathname: string | null | undefined,
+  href: string,
+): boolean {
+  const path = (pathname ?? '').split('?')[0].replace(/\/+$/, '') || '/'
+  const target = href.replace(/\/+$/, '') || '/'
+  if (target === APP_ROUTES.admin) return path === target
+  return path === target || path.startsWith(`${target}/`)
+}
 
-/**
- * Same as `adminTouchTargets`, plus a square minimum width on buttons. Used for
- * icon-only triggers and dialog panels, where a 40px-wide target is too narrow
- * to hit reliably with a finger.
- */
-export const adminTouchTargetsSquare =
-  'max-md:[&_button]:min-h-[var(--control-lg)] max-md:[&_button]:min-w-[var(--control-lg)]'
+/** 路径 → 命中的导航项（含所属分组）；详情页按前缀归到父级入口。 */
+export function adminNavMatch(
+  pathname: string | null | undefined,
+): { group: AdminNavGroup; item: AdminNavItem } | null {
+  for (const group of ADMIN_NAV_GROUPS) {
+    for (const item of group.items) {
+      if (isAdminNavActive(pathname, item.href)) return { group, item }
+    }
+  }
+  return null
+}
 
-/**
- * Wrapper for a block of admin content that holds its own buttons (a record
- * list, an actions row): wraps long identifiers, and sizes the buttons to touch.
- */
-export const adminTouchWrap = `min-w-0 [overflow-wrap:anywhere] ${adminTouchTargets}`
+export interface AdminBreadcrumb {
+  label: string
+  /** 分组标题，概览为 `null`。 */
+  group: string | null
+  href: string
+}
 
-/**
- * `PageHeader.className`: the header is separated from the content by a hairline
- * rule instead of a boxed band, and long identifiers wrap rather than overflow.
- */
-export const adminPageHeader = 'min-w-0 border-b border-border pb-6 [overflow-wrap:anywhere]'
+/** 顶栏面包屑的「当前页」；未登记的路径返回 `null`，壳只显示「管理后台」。 */
+export function adminBreadcrumb(pathname: string | null | undefined): AdminBreadcrumb | null {
+  const match = adminNavMatch(pathname)
+  if (!match) return null
+  return { label: match.item.label, group: match.group.title, href: match.item.href }
+}
 
-/** `PageHeader.actionsClassName`: header actions take the touch size below `md`. */
-export const adminPageActions = `max-w-full min-w-0 ${adminTouchTargets}`
-
-/**
- * Admin sidebar collapse persistence.
- *
- * The collapsed flag lives in `localStorage` so a refresh keeps the operator's
- * choice. Both helpers are SSR-safe (first paint always renders expanded, the
- * stored value is applied after mount) and swallow storage failures, so private
- * mode or a blocked store simply falls back to expanded.
- */
-export const adminSidebarCollapsedKey = 'musecanvas:admin:sidebar-collapsed'
-
-/** Stored value, or `false` (expanded) when storage is unavailable. */
-export function readAdminSidebarCollapsed(): boolean {
+/** SSR 一律返回 `false`（首屏展开），挂载后由客户端读取真实偏好。 */
+export function readSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
   try {
-    if (typeof window === 'undefined' || !window.localStorage) return false
-    return window.localStorage.getItem(adminSidebarCollapsedKey) === '1'
+    return window.localStorage.getItem(ADMIN_SIDEBAR_STORAGE_KEY) === 'collapsed'
   } catch {
     return false
   }
 }
 
-/** Persist the operator's choice; storage failures keep the in-memory state. */
-export function writeAdminSidebarCollapsed(collapsed: boolean): void {
+/** 存储失败（隐私模式 / 禁用 localStorage）只影响下次进入，当前会话仍然生效。 */
+export function writeSidebarCollapsed(collapsed: boolean): void {
+  if (typeof window === 'undefined') return
   try {
-    if (typeof window === 'undefined' || !window.localStorage) return
-    window.localStorage.setItem(adminSidebarCollapsedKey, collapsed ? '1' : '0')
+    window.localStorage.setItem(ADMIN_SIDEBAR_STORAGE_KEY, collapsed ? 'collapsed' : 'expanded')
   } catch {
-    // Blocked storage: the sidebar still toggles, it just resets next load.
+    /* 忽略：折叠仍在内存状态里生效 */
   }
 }

@@ -2,9 +2,8 @@ import { cn } from '@/shared/lib/cn'
 
 export interface ProgressProps {
   /**
-   * Current value on the `min`…`max` scale. Pass `null` (or omit) for work whose
-   * length is unknown: the bar animates and *no* percentage is claimed —
-   * components.md: 未知进度不伪造百分比.
+   * `min`…`max` 上的当前值。长度未知时传 `null`（或省略）：进度条转为不定态动画，
+   * 不伪造百分比。
    */
   value?: number | null
   min?: number
@@ -13,15 +12,12 @@ export interface ProgressProps {
   label?: string
   /** Right side of the label row. Defaults to the rounded percentage. */
   valueLabel?: string
-  /** Set `false` when the label row above is rendered by the parent. */
+  /** Set `false` when the label row is rendered by the parent. */
   showLabelRow?: boolean
-  /** 4px is the spec track; 8px is for a page-level "generating" bar. */
+  /** `sm` = 4px spec track; `md` = 8px page-level bar (the in-frame bar is 3px). */
   size?: 'sm' | 'md'
   /**
-   * `overlay` inverts the pair for a bar that sits on a media scrim (an upload
-   * progress over a thumbnail): the track becomes a translucent light band and the
-   * fill the inverse foreground, because `bg-tonal` on `bg-overlay` reads as a
-   * printed stripe and `bg-primary` ink disappears into the scrim.
+   * `overlay` 用于深色媒体底上的进度条：浅色半透明轨道 + 反色填充，压在暗图上仍可见。
    */
   variant?: 'default' | 'overlay'
   className?: string
@@ -38,9 +34,8 @@ const FILL_CLASS = {
 } as const
 
 /**
- * Progress bar (components.md → Progress Bar): tonal track, `bg-primary` fill,
- * radius = half the track height, label + percentage in a space-between row above
- * the track, and a `success` fill once the work is done.
+ * 进度条：弱色轨道 + `bg-primary` 填充，可选标签与百分比行。已知值用
+ * `.motion-position` 平滑滑动；未知值跑 `.motion-progress-indeterminate`，不编造百分比。
  */
 export function Progress({
   value,
@@ -53,7 +48,7 @@ export function Progress({
   variant = 'default',
   className,
 }: ProgressProps) {
-  const known = typeof value === 'number'
+  const known = typeof value === 'number' && Number.isFinite(value)
   const ratio = known ? Math.min(1, Math.max(0, ((value as number) - min) / (max - min || 1))) : 0
   const percent = Math.round(ratio * 100)
   const done = known && percent >= 100
@@ -62,13 +57,11 @@ export function Progress({
 
   return (
     <div className={cn('flex flex-col gap-1', className)}>
-      {showLabelRow ? (
+      {showLabelRow && (label || known) ? (
         <div className="flex items-baseline justify-between gap-2 text-sm">
           <span className={cn('min-w-0 truncate', labelClass)}>{label}</span>
           {known ? (
-            <span className={cn('shrink-0 font-mono text-xs tabular-nums', labelClass)}>
-              {valueLabel ?? `${percent}%`}
-            </span>
+            <span className={cn('shrink-0 font-mono text-xs tabular-nums', labelClass)}>{valueLabel ?? `${percent}%`}</span>
           ) : null}
         </div>
       ) : null}
@@ -84,19 +77,11 @@ export function Progress({
       >
         {known ? (
           <div
-            className={cn(
-              // `.motion-position` is the width glide at --motion-base / --ease-standard.
-              'motion-position h-full rounded-pill',
-              FILL_CLASS[variant],
-              done && 'bg-success',
-            )}
+            className={cn('motion-position h-full rounded-pill', FILL_CLASS[variant], done && 'bg-success')}
             style={{ width: `${percent}%` }}
           />
         ) : (
-          // Indeterminate: a travelling segment, never a fake value.
-          <div
-            className={cn('motion-progress-indeterminate h-full w-1/3 rounded-pill', FILL_CLASS[variant])}
-          />
+          <div className={cn('motion-progress-indeterminate h-full w-1/3 rounded-pill', FILL_CLASS[variant])} />
         )}
       </div>
     </div>

@@ -1,460 +1,320 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { API_ENDPOINTS } from '@musecanvas/contracts'
 import Link from 'next/link'
-import { api } from '@/shared/services/api'
-import type { AdminJob } from '@/shared/types'
-import { requireAdminData } from '../lib/admin-query'
-import { AdminQueryFeedback } from './admin-query-feedback'
-import { AdminDefaultModelsCard } from './admin-default-models-card'
-import { AdminJobDetail } from './admin-job-detail'
-import { AdminMobileRecords, AdminRecordDetailDialog } from './admin-record-detail-dialog'
-import { formatLocalizedDateTime } from '@/shared/lib/format'
-import { JobStatusBadge } from '@/shared/components/job-status-badge'
-import { adminPageActions, adminPageHeader, adminPageRoot } from '../lib/admin-layout'
-import { ArrowClockwiseIcon as RefreshCw } from '@phosphor-icons/react'
+import { ArrowUpRightIcon as ArrowUpRight } from '@phosphor-icons/react'
+
 import {
   Alert,
+  Badge,
   Button,
   Card,
-  DataTable,
   EmptyState,
   PageHeader,
+  SectionHeader,
   Skeleton,
-  SkeletonText,
+  Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeadCell,
+  TableHeader,
   TableRow,
   TableSkeletonRow,
   TableStateRow,
-  buttonVariants,
 } from '@/shared/components/ui'
+import { useModels } from '@/shared/hooks/useModels'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { formatCount, formatDateTime } from '@/shared/lib/format'
+import { jobStatusLabel, jobStatusTone } from '@/shared/lib/job-status'
+import type { AdminJobDto } from '@/shared/types'
+import {
+  buildChartDays,
+  buildChartLabel,
+  formatUpdatedTime,
+  jobMediaKindLabel,
+  normalizeDashboardDays,
+  summarizeDashboard,
+  summarizeDefaultModels,
+  truncateJobId,
+  useAdminDashboard,
+  useAdminMediaModelDefaults,
+  useAdminRecentJobs,
+} from '../lib/admin-query'
+import type { AdminDefaultModelEntry } from '../lib/admin-query'
 
-interface DashboardMetrics {
-  totalUsers: number
-  totalJobs: number
-  successRate7d: number
-  failedJobs7d: number
-}
+const RECENT_JOBS_COLUMNS = 5
+const RECENT_JOBS_CAPTION = '最近 10 条生成任务'
+const FAILED_JOBS_HREF = `${APP_ROUTES.adminJobs}?status=failed`
 
-interface AdminDashboardViewProps {
-  initialMetrics?: DashboardMetrics | null
-  initialJobs?: AdminJob[]
-}
-
-const RECENT_JOB_LIMIT = 10
-
-const MEDIA_KIND_LABEL: Record<string, string> = {
-  image: '图像',
-  video: '视频',
-}
-
-/** Backend guarantees `media_kind`; unknown values read as image, never blank. */
-function adminJobMediaKind(job: AdminJob): 'image' | 'video' {
-  return job.mediaKind === 'video' ? 'video' : 'image'
-}
-
-/** Title-area freshness stamp, `更新于 HH:mm` in mono. */
-function formatUpdatedAt(value: number): string {
-  if (!value) return ''
-  const date = new Date(value)
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `更新于 ${hours}:${minutes}`
-}
-
-/** Table time column: local `HH:mm` only; the full timestamp stays in the job detail. */
-function formatTimeOfDay(value: string | number | Date | null | undefined): string {
-  if (value === null || value === undefined || value === '') return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '—'
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-/** Format a number with locale separators, e.g. 3416 -> "3,416". */
-function formatCount(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—'
-  return value.toLocaleString('zh-CN')
-}
-
-interface MetricTileProps {
-  label: string
-  /** `null` while the first load is in flight: a skeleton stands in for the figure. */
-  value: string | null
-}
-
-/** Overview KPI tile: caption over a mono figure. */
-function MetricTile({ label, value }: MetricTileProps) {
+/** 指标卡：15px 标签 + 44px mono 数值（画板 07 的两个统计卡）。 */
+function MetricCard({ label, value, loading }: { label: string; value: number | null; loading: boolean }) {
   return (
-    <Card className="gap-1.5 p-5">
-      <p className="text-sm text-muted-foreground">{label}</p>
-      {value === null ? (
-        <Skeleton className="my-1 h-8 w-24" />
+    <Card density="none" className="justify-between gap-3 px-6 py-5">
+      <p className="text-compact font-medium">{label}</p>
+      {loading ? (
+        <Skeleton className="h-[55px] w-24" />
       ) : (
-        <p className="font-mono text-title tabular-nums text-foreground">{value}</p>
+        <p className="font-mono text-cta font-normal tabular-nums">{formatCount(value)}</p>
       )}
     </Card>
   )
 }
 
-interface DailyPoint {
-  label: string
-  total: number
-  success: number
-  failed: number
+/** 默认模型摘要条里的一项：模型名 / 未设置（warning）/ 已不可用。 */
+function DefaultModelItem({ label, entry }: { label: string; entry: AdminDefaultModelEntry }) {
+  return (
+    <div className="flex items-baseline gap-2.5">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd>
+        {entry.state === 'ready' ? (
+          <span className="text-sm font-medium text-foreground">{entry.name}</span>
+        ) : entry.state === 'unset' ? (
+          <Badge tone="warning">未设置</Badge>
+        ) : (
+          <span className="text-sm text-muted-foreground">模型已不可用</span>
+        )}
+      </dd>
+    </div>
+  )
+}
+
+/** 最近任务一行：ID 缩写 / 类型 / 模型 / 状态 / 创建时间。 */
+function RecentJobRow({ job }: { job: AdminJobDto }) {
+  return (
+    <TableRow>
+      <TableCell mono title={job.id}>
+        {truncateJobId(job.id)}
+      </TableCell>
+      <TableCell>{jobMediaKindLabel(job.mediaKind)}</TableCell>
+      <TableCell>{job.modelName || '—'}</TableCell>
+      <TableCell>
+        <Badge tone={jobStatusTone(job.status)}>{jobStatusLabel(job.status)}</Badge>
+      </TableCell>
+      <TableCell align="right" mono tone="muted">
+        <time dateTime={job.createdAt}>{formatDateTime(job.createdAt)}</time>
+      </TableCell>
+    </TableRow>
+  )
 }
 
 /**
- * Build a deterministic 7-day breakdown from the real 7-day totals.
- * `failedJobs7d` is the real failure count; `successRate7d` lets us derive the
- * real 7-day total. The daily bars are a plausible distribution whose sums match
- * those real totals.
+ * 后台概览（画板 07）。
+ *
+ * 三块数据各自独立查询：仪表盘聚合 + 默认模型 + 最近任务；任一块失败只降级该块，
+ * 不拖垮整页。图表柱高在 `admin-query.ts` 里算成像素，这里只负责呈现，
+ * 因此 `role="img"` 的 aria-label 与视觉结论来自同一份汇总。
  */
-function buildSevenDayPoints(metrics: DashboardMetrics | null | undefined): DailyPoint[] {
-  const failed = metrics?.failedJobs7d ?? 0
-  const successRate = metrics?.successRate7d ?? 0
-  const rate = typeof successRate === 'number' && Number.isFinite(successRate)
-    ? Math.min(100, Math.max(0, successRate)) / 100
-    : 0
-  const total = rate > 0 && rate < 1 ? Math.round(failed / (1 - rate)) : failed
-  const success = Math.max(0, total - failed)
+export function AdminDashboardView() {
+  const dashboardQuery = useAdminDashboard()
+  const defaultsQuery = useAdminMediaModelDefaults()
+  const modelsQuery = useModels()
+  const jobsQuery = useAdminRecentJobs()
 
-  // Shape the 7 days with mild variation so the chart is not a flat line.
-  const totalShape = [0.85, 1.05, 0.75, 1.1, 1.25, 0.95, 1.05]
-  const failedShape = [1.0, 0.7, 0.4, 1.3, 0.6, 0.8, 1.2]
-  const shapeSum = totalShape.reduce((a, b) => a + b, 0)
-  const failedShapeSum = failedShape.reduce((a, b) => a + b, 0)
+  const dashboard = dashboardQuery.data
+  const days = normalizeDashboardDays(dashboard)
+  const chartDays = buildChartDays(days)
+  const summary = summarizeDashboard(dashboard, days)
+  const chartLabel = buildChartLabel(days, summary)
+  const updatedAt = formatUpdatedTime(dashboardQuery.dataUpdatedAt)
 
-  const today = new Date()
-  const points: DailyPoint[] = []
-  for (let i = 6; i >= 0; i--) {
-    const date = new Date(today)
-    date.setDate(date.getDate() - i)
-    const label = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-    points.push({ label, total: 0, success: 0, failed: 0 })
-  }
-
-  if (total === 0) return points
-
-  // Distribute successes and failures independently so they both sum exactly.
-  let remainingSuccess = success
-  let remainingFailed = failed
-  for (let i = 0; i < 7; i++) {
-    const isLast = i === 6
-    const daySuccess = isLast
-      ? remainingSuccess
-      : Math.min(remainingSuccess, Math.max(0, Math.round(success * (totalShape[i] / shapeSum))))
-    const dayFailed = isLast
-      ? remainingFailed
-      : Math.min(remainingFailed, Math.max(0, Math.round(failed * (failedShape[i] / failedShapeSum))))
-    points[i].success = daySuccess
-    points[i].failed = dayFailed
-    points[i].total = daySuccess + dayFailed
-    remainingSuccess -= daySuccess
-    remainingFailed -= dayFailed
-  }
-
-  return points
-}
-
-export function AdminDashboardView({ initialMetrics, initialJobs = [] }: AdminDashboardViewProps) {
-  const recordListRef = useRef<HTMLElement | null>(null)
-  const [detailJob, setDetailJob] = useState<AdminJob | null>(null)
-  const {
-    data: metrics,
-    refetch: refetchMetrics,
-    isFetching: isFetchingMetrics,
-    isError: isMetricsError,
-    error: metricsError,
-    dataUpdatedAt: metricsUpdatedAt,
-  } = useQuery({
-    queryKey: ['admin', 'dashboard'],
-    queryFn: async () => {
-      const res = await api<DashboardMetrics>(API_ENDPOINTS.admin.dashboard)
-      return requireAdminData(res, '加载汇总指标失败')
-    },
-    initialData: initialMetrics ?? undefined,
-  })
-
-  const {
-    data: jobs,
-    refetch: refetchJobs,
-    isFetching: isFetchingJobs,
-    isLoading: jobsLoading,
-    isError: isJobsError,
-    error: jobsError,
-    dataUpdatedAt: jobsUpdatedAt,
-  } = useQuery({
-    queryKey: ['admin', 'jobs', { limit: RECENT_JOB_LIMIT }],
-    queryFn: async () => {
-      const res = await api<{ items: AdminJob[] }>(API_ENDPOINTS.admin.jobs, {
-        params: { limit: RECENT_JOB_LIMIT },
-      })
-      return requireAdminData(res, '加载最近任务失败').items
-    },
-    initialData: initialJobs.length ? initialJobs : undefined,
-  })
-
-  const refreshing = isFetchingMetrics || isFetchingJobs
-  const metricsPending = metrics == null && isFetchingMetrics
-  const jobsPending = jobsLoading
-  const updatedLabel = formatUpdatedAt(Math.max(metricsUpdatedAt ?? 0, jobsUpdatedAt ?? 0))
-
-  const points = useMemo(() => buildSevenDayPoints(metrics), [metrics])
-  const maxTotal = useMemo(() => Math.max(1, ...points.map((p) => p.total)), [points])
-  const successRate = metrics?.successRate7d
-  const failedCount = metrics?.failedJobs7d ?? 0
-  const successRateText = typeof successRate === 'number' ? `${successRate}%` : '—'
-  const chartLabel = `近 7 天成功率 ${successRateText}，失败 ${failedCount} 个`
-
-  function handleRefresh() {
-    refetchMetrics()
-    refetchJobs()
-  }
+  const defaults = summarizeDefaultModels(
+    defaultsQuery.data,
+    Array.isArray(modelsQuery.data) ? modelsQuery.data : [],
+  )
+  const defaultsLoading = defaultsQuery.isPending || modelsQuery.isPending
+  const jobs = jobsQuery.data?.items ?? []
+  const statsLoading = dashboardQuery.isPending
 
   return (
-    <div className={adminPageRoot}>
+    <div className="flex flex-col gap-7">
       <PageHeader
-        className={adminPageHeader}
-        actionsClassName={adminPageActions}
         title="系统概览"
-        description="累计规模与近 7 天的生成结果，刷新失败时保留最近一次成功的数据。"
-        actions={
-          <>
-            {updatedLabel ? (
-              <span className="font-mono text-xs text-muted-foreground">{updatedLabel}</span>
-            ) : null}
-            <Button
-              variant="secondary"
-              loading={refreshing}
-              onClick={handleRefresh}
-              icon={<RefreshCw weight="bold" aria-hidden="true" />}
-            >
-              刷新数据
-            </Button>
-          </>
-        }
+        actions={<span className="font-mono text-xs text-muted-foreground">更新于 {updatedAt}</span>}
       />
 
-      {isMetricsError ? (
+      {dashboardQuery.isError ? (
         <Alert
           tone="danger"
-          title={metrics ? '汇总指标刷新失败' : '无法加载汇总指标'}
+          title="概览数据加载失败"
           action={
-            <Button variant="secondary" size="sm" onClick={() => refetchMetrics()}>
-              刷新重试
+            <Button variant="secondary" size="sm" onClick={() => void dashboardQuery.refetch()}>
+              重试
             </Button>
           }
         >
-          {metricsError?.message ? `${metricsError.message}。` : '服务未返回统计数据。'}
-          {metrics ? '仍显示上次成功的数据，可能已过时。' : '请检查网络连接，或稍后重试。'}
+          {dashboardQuery.error instanceof Error ? dashboardQuery.error.message : '网络或服务端错误。'}
         </Alert>
       ) : null}
 
-      {/* Overview row as in the design mock: two KPI tiles and the 近 7 天 chart at 1fr / 1fr / 2fr. Stacks in a narrow track. */}
-      <section aria-labelledby="dashboard-metrics-heading" className="flex min-w-0 flex-col gap-4">
-        <h2 id="dashboard-metrics-heading" className="sr-only">
-          汇总指标
-        </h2>
+      <section
+        aria-label="实例运行状况"
+        className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)]"
+      >
+        <MetricCard label="用户总数" value={dashboard?.totalUsers ?? null} loading={statsLoading} />
+        <MetricCard label="累计生成任务" value={dashboard?.totalJobs ?? null} loading={statsLoading} />
 
-        <div
-          className="grid grid-cols-1 gap-4 @min-[800px]/admin:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)]"
-          aria-busy={metricsPending || undefined}
-        >
-          <MetricTile label="用户总数" value={metricsPending ? null : formatCount(metrics?.totalUsers)} />
-          <MetricTile label="累计生成任务" value={metricsPending ? null : formatCount(metrics?.totalJobs)} />
+        <figure className="flex flex-col gap-4 rounded-card bg-surface px-6 py-5 text-foreground shadow-soft sm:col-span-2 lg:col-span-1">
+          <figcaption className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+            <span className="flex flex-wrap items-baseline gap-4">
+              <span className="text-compact font-medium">近 7 天生成</span>
+              <span className="text-ui">
+                <span className="text-muted-foreground">
+                  成功率 <span className="font-mono text-foreground">{summary.successRateLabel}</span>
+                </span>
+              </span>
+              <Link href={FAILED_JOBS_HREF} className="text-ui hover:underline">
+                <span className="text-danger">
+                  失败 <span className="font-mono">{summary.failed}</span> 个，查看
+                </span>
+              </Link>
+            </span>
+            <span className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span aria-hidden="true" className="size-2.5 rounded-sm bg-chart-positive" />
+                成功
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span aria-hidden="true" className="size-2.5 rounded-sm bg-chart-negative" />
+                失败
+              </span>
+            </span>
+          </figcaption>
 
-          {/* 近 7 天生成 — stacked bar chart, the third cell of the overview row */}
-          <Card className="gap-4 p-5" aria-busy={metricsPending || undefined}>
-            <div className="flex flex-col gap-1">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-3 text-sm">
-                  <span className="font-semibold text-foreground">近 7 天生成</span>
-                  <span className="text-muted-foreground">成功率 {successRateText}</span>
-                  {failedCount > 0 ? (
-                    <Link
-                      href="/admin/jobs?status=failed"
-                      className="text-danger hover:underline"
-                    >
-                      失败 {failedCount} 个，查看
-                    </Link>
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-3 text-caption text-muted-foreground">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-sm bg-chart-positive" aria-hidden="true" />
-                    成功
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-sm bg-chart-negative" aria-hidden="true" />
-                    失败
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {metricsPending ? (
-              <div className="flex items-end justify-between gap-3 px-1" aria-hidden="true">
-                {Array.from({ length: 7 }, (_, i) => (
-                  <div key={i} className="flex flex-1 flex-col items-center">
-                    <Skeleton className="mb-1.5 h-3 w-5" />
-                    <div className="mb-2 w-full max-w-[34px]" style={{ height: `${40 + (i % 3) * 20}px` }}>
-                      <Skeleton className="h-full w-full" />
-                    </div>
-                    <Skeleton className="h-3 w-8" />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {/* The summary stands in for the bars, which are hidden from assistive tech. */}
-                <div role="img" aria-label={chartLabel} className="flex items-end justify-between gap-3 px-1">
-                  {points.map((point) => (
-                    <div key={point.label} className="flex flex-1 flex-col items-center">
-                      <span aria-hidden="true" className="mb-1.5 text-xs text-muted-foreground">{point.total}</span>
-                      <div
-                        className="flex w-full max-w-[34px] flex-col items-center justify-end rounded-t-sm"
-                        style={{ height: '84px' }}
-                      >
-                        {point.failed > 0 ? (
-                          <div
-                            className="w-full rounded-t-sm bg-chart-negative"
-                            style={{ height: `${Math.max(3, (point.failed / maxTotal) * 84)}px` }}
+          {statsLoading ? (
+            <Skeleton className="h-[150px] w-full" />
+          ) : dashboardQuery.isError && !dashboard ? (
+            <p className="text-sm text-muted-foreground">近 7 天数据暂不可用，可在上方重试。</p>
+          ) : days.length === 0 ? (
+            <p className="text-sm text-muted-foreground">近 7 天暂无生成任务数据。</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="flex min-w-[280px] flex-col gap-2">
+                <div
+                  role="img"
+                  aria-label={chartLabel}
+                  className="grid grid-cols-7 items-end gap-1 border-b border-border sm:gap-4"
+                >
+                  {chartDays.map((day) => (
+                    <div key={day.date} className="flex h-[150px] flex-col items-center justify-end gap-1">
+                      <span className="text-caption">
+                        <span className="font-mono text-muted-foreground">{day.total}</span>
+                      </span>
+                      <span className="flex w-full max-w-10 flex-col overflow-hidden rounded-t-[var(--space-1)]">
+                        {day.failHeight > 0 ? (
+                          <span
                             aria-hidden="true"
+                            className="block w-full bg-chart-negative"
+                            style={{ height: day.failHeight }}
                           />
                         ) : null}
-                        <div
-                          className="w-full bg-chart-positive"
-                          style={{ height: `${(point.success / maxTotal) * 84}px` }}
-                          aria-hidden="true"
-                        />
-                      </div>
+                        {day.successHeight > 0 ? (
+                          <span
+                            aria-hidden="true"
+                            className="block w-full bg-chart-positive"
+                            style={{ height: day.successHeight }}
+                          />
+                        ) : null}
+                      </span>
                     </div>
                   ))}
                 </div>
-                <div className="flex justify-between gap-3 px-1">
-                  {points.map((point) => (
-                    <span key={point.label} className="flex-1 text-center text-caption text-muted-foreground">
-                      {point.label}
+                <div className="grid grid-cols-7 gap-1 sm:gap-4" aria-hidden="true">
+                  {chartDays.map((day) => (
+                    <span
+                      key={day.date}
+                      className="text-center font-mono text-xs text-muted-foreground"
+                    >
+                      <span className="sm:hidden">{day.shortLabel}</span>
+                      <span className="hidden sm:inline">{day.label}</span>
                     </span>
                   ))}
                 </div>
               </div>
-            )}
-          </Card>
-        </div>
+            </div>
+          )}
+        </figure>
       </section>
 
-      <AdminDefaultModelsCard />
-
-      {/* Recent jobs */}
-      <section ref={recordListRef} tabIndex={-1} aria-label="最近任务列表" className="flex flex-col gap-4">
-        <div className="flex items-center justify-between px-1">
-          <h2 className="text-module text-foreground">最近任务</h2>
-          <Link href="/admin/jobs" className="text-sm font-medium text-foreground underline-offset-4 hover:underline">
-            进入任务监控
-          </Link>
-        </div>
-
-        {jobs !== undefined && (
-          <AdminQueryFeedback error={jobsError} hasData label="最近任务" onRetry={() => refetchJobs()} />
+      <section
+        aria-labelledby="admin-default-models"
+        className="flex flex-wrap items-center gap-x-8 gap-y-4 rounded-card bg-surface px-6 py-5 text-foreground shadow-soft"
+      >
+        <h2 id="admin-default-models" className="text-module">
+          默认模型
+        </h2>
+        {defaultsLoading ? (
+          <Skeleton className="h-5 w-56" />
+        ) : defaultsQuery.isError || modelsQuery.isError ? (
+          <p className="text-sm text-muted-foreground">暂时无法读取默认模型配置。</p>
+        ) : (
+          <dl className="flex flex-1 flex-wrap items-baseline gap-x-8 gap-y-3">
+            <DefaultModelItem label="图像" entry={defaults.image} />
+            <DefaultModelItem label="视频" entry={defaults.video} />
+          </dl>
         )}
+        <Button variant="secondary" size="sm" className="min-h-[var(--control-compact)] px-3.5" asChild>
+          <Link href={APP_ROUTES.adminMediaModels}>去设置</Link>
+        </Button>
+      </section>
 
-        <AdminMobileRecords
-          records={jobs ?? []}
-          loading={jobsPending}
-          error={isJobsError && jobs === undefined ? jobsError?.message || '加载最近任务失败' : null}
-          onRetry={() => { void refetchJobs() }}
-          emptyTitle="还没有生成任务"
-          empty="用户开始创作后，最近的任务会出现在这里。"
-          emptyAction={<Link href="/admin/jobs" className={buttonVariants({ variant: 'secondary' })}>查看全部任务</Link>}
-          title={(job) => job.modelName || '未知模型'}
-          status={(job) => <JobStatusBadge status={job.status} />}
-          summary={(job) => <><span className="font-mono">{job.id}</span> · {MEDIA_KIND_LABEL[adminJobMediaKind(job)]} · {formatLocalizedDateTime(job.createdAt)}</>}
-          onDetails={setDetailJob}
+      <section aria-labelledby="admin-recent-jobs" className="flex flex-col gap-3">
+        <SectionHeader
+          id="admin-recent-jobs"
+          title="最近任务"
+          actions={
+            <Link
+              href={APP_ROUTES.adminJobs}
+              className="inline-flex items-center gap-1 text-ui font-medium hover:underline"
+            >
+              进入任务监控
+              <ArrowUpRight size={14} aria-hidden="true" />
+            </Link>
+          }
         />
 
-        <DataTable cardClassName="hidden @min-[800px]/admin:block" caption={`最近 ${RECENT_JOB_LIMIT} 条生成任务`} columns={5}>
-          <TableHead>
+        <Table caption={RECENT_JOBS_CAPTION} columns={RECENT_JOBS_COLUMNS} className="[&>table]:min-w-[720px]">
+          <TableHeader>
             <TableHeadCell>任务 ID</TableHeadCell>
             <TableHeadCell>类型</TableHeadCell>
             <TableHeadCell>模型</TableHeadCell>
             <TableHeadCell>状态</TableHeadCell>
             <TableHeadCell align="right">创建时间</TableHeadCell>
-          </TableHead>
-          <TableBody busy={jobsPending}>
-            {jobsPending ? (
+          </TableHeader>
+          <TableBody busy={jobsQuery.isFetching}>
+            {jobsQuery.isPending ? (
               Array.from({ length: 5 }, (_, index) => (
                 <TableSkeletonRow
                   key={index}
                   cells={[
-                    <SkeletonText key="id" width="7rem" />,
-                    <SkeletonText key="kind" width="4rem" />,
-                    <SkeletonText key="model" width="9rem" />,
-                    <SkeletonText key="status" width="5rem" />,
-                    { align: 'right', content: <SkeletonText width="8rem" className="ml-auto" /> },
+                    <Skeleton key="id" className="h-4 w-20" />,
+                    <Skeleton key="kind" className="h-4 w-10" />,
+                    <Skeleton key="model" className="h-4 w-32" />,
+                    <Skeleton key="status" className="h-5 w-16" />,
+                    <Skeleton key="time" className="ml-auto h-4 w-28" />,
                   ]}
                 />
               ))
-            ) : isJobsError && jobs === undefined ? (
+            ) : jobsQuery.isError ? (
               <TableStateRow>
-                <EmptyState
-                  variant="error"
-                  objectName="最近任务"
-                  density="compact"
-                  actionLabel="刷新重试"
-                  onAction={() => refetchJobs()}
-                />
+                <div className="flex flex-col items-center gap-2 py-8">
+                  <p className="text-sm text-muted-foreground">最近任务读取失败。</p>
+                  <Button variant="secondary" size="sm" onClick={() => void jobsQuery.refetch()}>
+                    重试
+                  </Button>
+                </div>
               </TableStateRow>
-            ) : jobs && jobs.length > 0 ? (
-              jobs.map((job) => (
-                <TableRow key={job.id} hover>
-                  <TableCell mono textSize="xs" tone="muted">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="font-mono text-xs font-normal"
-                      onClick={() => setDetailJob(job)}
-                      aria-label={`查看任务 ${job.id} 详情`}
-                    >
-                      {job.id}
-                    </Button>
-                  </TableCell>
-                  <TableCell tone="foreground">{MEDIA_KIND_LABEL[adminJobMediaKind(job)]}</TableCell>
-                  <TableCell tone="strong">{job.modelName || '未知模型'}</TableCell>
-                  <TableCell>
-                    <JobStatusBadge status={job.status} />
-                  </TableCell>
-                  <TableCell align="right" mono tabular tone="muted">
-                    {formatTimeOfDay(job.createdAt)}
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : (
+            ) : jobs.length === 0 ? (
               <TableStateRow>
                 <EmptyState
-                  variant="first-use"
-                  objectName="生成任务"
                   density="compact"
                   title="还没有生成任务"
-                  description="用户开始创作后，最近的任务会出现在这里。"
-                  action={
-                    <Link href="/admin/jobs" className={buttonVariants({ variant: 'secondary' })}>
-                      查看全部任务
-                    </Link>
-                  }
+                  description="用户开始创作后，最近 10 条任务会出现在这里。"
                 />
               </TableStateRow>
+            ) : (
+              jobs.map((job) => <RecentJobRow key={job.id} job={job} />)
             )}
           </TableBody>
-        </DataTable>
-        <AdminRecordDetailDialog open={detailJob !== null} onClose={() => setDetailJob(null)} title="最近任务详情" listFocusRef={recordListRef}>
-          {detailJob && <AdminJobDetail job={detailJob} />}
-        </AdminRecordDetailDialog>
+        </Table>
       </section>
     </div>
   )

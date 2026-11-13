@@ -1,7 +1,7 @@
 import type { HTMLAttributes, ReactNode, Ref } from 'react'
 import { cn } from '@/shared/lib/cn'
 
-export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, 'children' | 'title'> {
+export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
   title: ReactNode
   description?: ReactNode
   /** Right-aligned actions: primary first from the right, then secondary/ghost. */
@@ -9,9 +9,8 @@ export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, 'chil
   /** Content above the title — breadcrumbs, tabs, a status row. */
   meta?: ReactNode
   /**
-   * Jude-Frontweb v22: primary page title H1 defaults to 32px (`page`, `text-title`),
-   * significantly larger than module/view subtitle H2 (20px, `text-subtitle`).
-   * `section` = 24px (`text-section`) for sub-sections.
+   * `page` = 32px 主标题（`text-title`），`section` = 24px（`text-section`）用于子页面。
+   * 颜色从外层继承：标题上不要同时写 `text-*` 颜色，否则字号类会被合并掉。
    */
   size?: 'page' | 'section'
   actionsClassName?: string
@@ -19,9 +18,7 @@ export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, 'chil
 }
 
 /**
- * Page header (components.md 场景模式 → 数据表格页): page title + description with
- * the main action right-aligned, wrapping to two rows on narrow viewports instead
- * of squeezing the title.
+ * 页头：标题 + 说明 + 右侧主操作；窄屏自动换行而不是挤压标题。
  */
 export function PageHeader({
   title,
@@ -35,27 +32,13 @@ export function PageHeader({
   ...rest
 }: PageHeaderProps) {
   return (
-    <header
-      ref={ref}
-      className={cn('flex flex-wrap items-start justify-between gap-x-6 gap-y-3', className)}
-      {...rest}
-    >
-      <div className="flex min-w-0 flex-col gap-1 text-foreground">
+    <header ref={ref} className={cn('flex flex-wrap items-end justify-between gap-x-6 gap-y-3 text-foreground', className)} {...rest}>
+      <div className="flex min-w-0 flex-col gap-1">
         {meta}
-        <h1
-          className={cn(
-            size === 'page'
-              ? 'text-title font-normal text-foreground leading-[1.25]'
-              : 'text-section font-normal text-foreground leading-[1.35]',
-          )}
-        >
-          {title}
-        </h1>
+        <h1 className={size === 'page' ? 'text-title font-normal' : 'text-section font-normal'}>{title}</h1>
         {description ? <p className="max-w-reading text-sm text-muted-foreground">{description}</p> : null}
       </div>
-      {actions ? (
-        <div className={cn('flex shrink-0 flex-wrap items-center gap-2', actionsClassName)}>{actions}</div>
-      ) : null}
+      {actions ? <div className={cn('flex shrink-0 flex-wrap items-center gap-2', actionsClassName)}>{actions}</div> : null}
     </header>
   )
 }

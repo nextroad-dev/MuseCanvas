@@ -1,43 +1,45 @@
-import type { Metadata } from 'next'
-import '@fontsource/ibm-plex-mono/400.css'
+import type { Metadata, Viewport } from 'next'
+
 import '@fontsource/ibm-plex-sans/400.css'
 import '@fontsource/ibm-plex-sans/500.css'
 import '@fontsource/ibm-plex-sans/600.css'
+import '@fontsource/ibm-plex-mono/400.css'
+import '@fontsource/ibm-plex-mono/500.css'
 import '@fontsource/noto-sans-sc/400.css'
 import '@fontsource/noto-sans-sc/500.css'
+import '@fontsource/noto-serif-sc/500.css'
+import '@fontsource/noto-serif-sc/600.css'
+
 import './globals.css'
-import { QueryProvider } from '@/shared/providers/query-provider'
-import { ToastProvider } from '@/shared/components/ui/toast'
+
+import { ThemeBootScript } from '@/shared/components/theme-boot-script'
+import { AppProviders } from '@/shared/providers/app-providers'
 
 export const metadata: Metadata = {
-  title: 'MuseCanvas',
-  description: '面向创作者的 AI 图像生成工作台：提示词、画幅与参考图、任务队列和作品图库保持在同一条创作路径上。',
-  icons: { icon: '/favicon.png' },
+  title: {
+    default: 'MuseCanvas',
+    template: '%s · MuseCanvas',
+  },
+  description: '可以装在自己服务器上的 AI 画图工具：把构想写成一段文字，AI 即刻生成画面，作品自动保存至图库。',
+  applicationName: 'MuseCanvas',
+  icons: { icon: '/favicon.png', apple: '/favicon.png' },
+  formatDetection: { telephone: false },
 }
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode
-}>) {
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  colorScheme: 'light dark',
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" className="font-sans" suppressHydrationWarning>
+    <html lang="zh-CN" suppressHydrationWarning>
       <head>
-        {/* Theme bootstrap: manual choice (localStorage) beats the OS
-            preference. Runs before first paint to avoid a light/dark flash. */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('muse-theme');if(t!=='light'&&t!=='dark'){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.dataset.theme=t}catch(e){document.documentElement.dataset.theme='light'}})()`,
-          }}
-        />
+        <ThemeBootScript />
       </head>
-      {/* The canvas + foreground pair lives on `body`, not on each page: an
-          overscroll or a route without its own wrapper would otherwise flash the
-          browser default (white) under the dark theme. */}
-      <body className="bg-canvas text-foreground antialiased">
-        <ToastProvider>
-          <QueryProvider>{children}</QueryProvider>
-        </ToastProvider>
+      <body className="bg-canvas text-foreground font-sans antialiased">
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   )

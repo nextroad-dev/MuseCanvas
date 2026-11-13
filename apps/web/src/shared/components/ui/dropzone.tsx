@@ -17,14 +17,15 @@ export interface DropZoneFile {
   /** Bytes. */
   size: number
   status?: DropZoneFileStatus
-  /** 0–100 of the *real* transfer, fed from the caller's XHR/fetch progress event. */
+  /** 0–100 of the real transfer, fed from the caller's upload progress event. */
   progress?: number
-  /** Per-file failure. Rendered inline and unlocks 重试. */
+  /** Per-file failure; rendered inline and unlocks 重试. */
   error?: string | null
 }
 
-export interface FileDropZoneProps {
-  files: DropZoneFile[]
+export interface DropzoneProps {
+  /** Optional file list under the target; omit when the parent renders its own. */
+  files?: DropZoneFile[]
   /** Called with the files that survived the local size/type checks. */
   onFilesSelected?: (files: File[]) => void
   onRemove?: (fileId: string) => void
@@ -44,14 +45,15 @@ export interface FileDropZoneProps {
   className?: string
 }
 
-/** Decimal units with the half-width space copy.md §9 requires (`10 MB`). */
+/** Decimal units with the half-width space the copy guide requires (`10 MB`). */
 export function formatFileSize(bytes: number): string {
   if (bytes < 1000) return `${bytes} B`
   if (bytes < 1_000_000) return `${Math.round(bytes / 1000)} KB`
   return `${Number((bytes / 1_000_000).toFixed(1))} MB`
 }
 
-function matchesAccept(file: File, accept?: string): boolean {
+/** Local accept check, so a rejected file is explained instead of silently ignored. */
+export function matchesAccept(file: File, accept?: string): boolean {
   if (!accept) return true
   const name = file.name.toLowerCase()
   const type = file.type.toLowerCase()
@@ -67,17 +69,12 @@ function matchesAccept(file: File, accept?: string): boolean {
 }
 
 /**
- * File upload / dropzone (components.md → File Upload row): the dashed container
- * is the only place dashed borders belong, drag-over raises a primary outline on a
- * tonal base, and every row carries icon + name + size + progress + a named 删除
- * button that is reachable by Tab.
- *
- * Keyboard path is a real `input[type=file]` kept `sr-only` (Tab reaches it,
- * Enter/Space open the native picker) with the visible surface as its `<label>`,
- * so no clickable `<div>` stands in for a control.
+ * 文件上传拖拽区：虚线容器是唯一允许虚线边框的地方。可见表面是一个真实 `sr-only`
+ * file input 的 `<label>`，Tab 能到、Enter/Space 打开原生选择器——没有可点击 `<div>`
+ * 冒充控件。拖入时提升为主色描边并跑 `.motion-dropzone`（reduced-motion 下脉冲静止）。
  */
-export function FileDropZone({
-  files,
+export function Dropzone({
+  files = [],
   onFilesSelected,
   onRemove,
   onRetry,
@@ -90,7 +87,7 @@ export function FileDropZone({
   hint,
   error,
   className,
-}: FileDropZoneProps) {
+}: DropzoneProps) {
   const inputId = useId()
   const hintId = `${inputId}-hint`
   const dragDepth = useRef(0)
@@ -154,9 +151,8 @@ export function FileDropZone({
         onDrop={onDrop}
         aria-disabled={disabled || undefined}
         className={cn(
-          'flex flex-col items-center gap-2 rounded-control border-2 border-dashed px-4 py-6 text-center',
-          'transition-colors',
-          dragging ? 'border-primary bg-tonal-hover' : 'border-border-control bg-tonal',
+          'flex flex-col items-center gap-2 rounded-control border-2 border-dashed px-4 py-6 text-center transition-colors',
+          dragging ? 'motion-dropzone border-primary bg-tonal-hover' : 'border-border-control bg-tonal',
           disabled && 'is-disabled',
         )}
       >
@@ -169,21 +165,16 @@ export function FileDropZone({
           aria-describedby={shownHint ? hintId : undefined}
           onChange={(event) => {
             ingest(Array.from(event.target.files ?? []))
-            // Clear it, so picking the same file again still fires a change.
+            // 清空 value，重复选择同一个文件也能再次触发 change。
             event.target.value = ''
           }}
           className="peer sr-only"
         />
-        {/* The ring lives on the label because the focused input is off-screen;
-            same tokens as the global ring, transferred via `peer-focus-visible`. */}
         <label
           htmlFor={inputId}
-          className={cn(
-            'flex cursor-pointer flex-col items-center gap-2 rounded-control peer-disabled:cursor-not-allowed',
-            focusRingPeer,
-          )}
+          className={cn('flex cursor-pointer flex-col items-center gap-2 rounded-control peer-disabled:cursor-not-allowed', focusRingPeer)}
         >
-          <Upload weight="duotone" aria-hidden="true" className={`${iconSize.xl} text-muted-foreground`} />
+          <Upload weight="duotone" aria-hidden="true" className={cn(iconSize.xl, 'text-muted-foreground')} />
           <span className="text-sm font-medium text-foreground">{label}</span>
         </label>
         {shownHint ? (
@@ -193,7 +184,7 @@ export function FileDropZone({
         ) : null}
         {rejection ? (
           <p role="alert" className="flex items-start gap-1 text-xs text-danger">
-            <CircleAlert weight="fill" aria-hidden="true" className={`mt-0.5 ${iconSize.xs} shrink-0`} />
+            <CircleAlert weight="fill" aria-hidden="true" className={cn('mt-0.5 shrink-0', iconSize.xs)} />
             <span>{rejection}</span>
           </p>
         ) : null}
@@ -201,7 +192,7 @@ export function FileDropZone({
 
       {error ? (
         <p role="alert" className="flex items-start gap-1 text-xs text-danger">
-          <CircleAlert weight="fill" aria-hidden="true" className={`mt-0.5 ${iconSize.xs} shrink-0`} />
+          <CircleAlert weight="fill" aria-hidden="true" className={cn('mt-0.5 shrink-0', iconSize.xs)} />
           <span>{error}</span>
         </p>
       ) : null}
@@ -219,7 +210,7 @@ export function FileDropZone({
                   failed ? 'border-danger' : 'border-border',
                 )}
               >
-                <FileText weight="bold" aria-hidden="true" className={`${iconSize.md} shrink-0 text-muted-foreground`} />
+                <FileText weight="bold" aria-hidden="true" className={cn(iconSize.md, 'shrink-0 text-muted-foreground')} />
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <span className="truncate text-sm text-foreground">{file.name}</span>
                   <span className="text-xs tabular-nums text-muted-foreground">{formatFileSize(file.size)}</span>
@@ -229,7 +220,6 @@ export function FileDropZone({
                   {file.error ? <span className="text-xs text-danger">{file.error}</span> : null}
                   {file.status === 'done' ? <span className="text-xs text-success">上传完成</span> : null}
                 </div>
-
                 <div className="flex shrink-0 items-center gap-1">
                   {failed && onRetry ? (
                     <Button variant="secondary" size="sm" onClick={() => onRetry(file.id)} icon={<RefreshCw weight="bold" />}>
@@ -239,7 +229,7 @@ export function FileDropZone({
                   {onRemove ? (
                     <IconButton
                       variant="danger-ghost"
-                      size="sm"
+                      size="icon"
                       aria-label={`删除 ${file.name}`}
                       onClick={() => onRemove(file.id)}
                       icon={<Trash2 weight="bold" />}
@@ -254,3 +244,6 @@ export function FileDropZone({
     </div>
   )
 }
+
+/** Alias kept for the previous component name. */
+export const FileDropZone = Dropzone

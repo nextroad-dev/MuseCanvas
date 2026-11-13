@@ -3,50 +3,47 @@ import { cn } from '@/shared/lib/cn'
 
 export interface SectionHeaderProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'id'> {
   /**
-   * Id of the `<h2>` this renders. The enclosing `<section>` points its
-   * `aria-labelledby` at it, which is what gives the section its accessible name —
-   * so it is required rather than generated: `useId` would force this module to be
-   * a client component for no benefit.
+   * 渲染的 `<h2>` id。外层 `<section>` 用 `aria-labelledby` 指向它来获得可访问名；
+   * 必须由调用方提供，这样本模块不依赖 `useId`，RSC 可直接渲染。
    */
   id: string
   title: ReactNode
-  /** One or two sentences of context. Wraps at `max-w-reading`, never full-bleed. */
+  /** One or two sentences of context; wraps at `max-w-reading`. */
   description?: ReactNode
   /** Right-aligned actions; wraps under the title on narrow viewports. */
   actions?: ReactNode
+  /** Heading level for the outline (styling is the same). */
+  level?: 2 | 3
   ref?: Ref<HTMLDivElement>
 }
 
 /**
- * In-page section heading for a stacked admin page (components.md 数据表格页).
- *
- * Deliberately not `PageHeader`: that renders the single `<h1>` at the 32px page
- * size, while a section inside a page is an `<h2>` at the 18px module size. The
- * two share a shape (title + description + trailing actions) but not a level, and
- * reusing one for the other would either emit two `<h1>`s or flatten the outline.
- *
- * The caller keeps the `<section aria-labelledby={id}>` wrapper, because only the
- * caller knows whether the section also needs `id`/`scroll-mt-*` for in-page links.
+ * 页内区块标题：18px `text-module` 的 `<h2>`，右侧可带操作。刻意不复用 `PageHeader`
+ * （它持有唯一的 `<h1>`），避免页面出现两个一级标题。
  */
 export function SectionHeader({
   id,
   title,
   description,
   actions,
+  level = 2,
   className,
   ref,
   ...rest
 }: SectionHeaderProps) {
+  const titleClass = 'text-module'
   return (
-    <div
-      ref={ref}
-      className={cn('flex flex-wrap items-start justify-between gap-3', className)}
-      {...rest}
-    >
-      <div className="flex min-w-0 flex-col gap-1 text-foreground">
-        <h2 id={id} className="text-module">
-          {title}
-        </h2>
+    <div ref={ref} className={cn('flex flex-wrap items-start justify-between gap-3 text-foreground', className)} {...rest}>
+      <div className="flex min-w-0 flex-col gap-1">
+        {level === 3 ? (
+          <h3 id={id} className={titleClass}>
+            {title}
+          </h3>
+        ) : (
+          <h2 id={id} className={titleClass}>
+            {title}
+          </h2>
+        )}
         {description ? <p className="max-w-reading text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}

@@ -1,78 +1,519 @@
-import type { ApiResponse } from '@/shared/types'
+'use client'
 
-const BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
+// 浏览器端 typed API。只在 Client Component / 'use client' hook 中引用；
+// 路径全部来自 `@musecanvas/contracts` 的 `API_ENDPOINTS`，错误统一抛 `ApiError`。
 
-export class ApiError extends Error {
+import { API_ENDPOINTS } from '@musecanvas/contracts'
+import type {
+  AdminPluginDocsDto,
+  CanvasAgentApplyResultDto,
+  CanvasAgentConfirmResultDto,
+  CanvasAgentHistoryDto,
+  CanvasAgentSettingsDto,
+  CanvasAgentStatusDto,
+  CanvasAgentTurnRecoveryDto,
+  CanvasDto,
+  CanvasListPageDto,
+  CreateCanvasRequest,
+  CreateGenerationRequest,
+  CreatePromptTemplateEntryInput,
+  EditSelection,
+  ImportPromptTemplateSetInput,
+  ImportPromptTemplateSetResult,
+  MediaModelDefaultsDto,
+  PromptTemplateSetDetailDto,
+  PromptTemplateSetSummaryDto,
+  PublicModelDto,
+  RenderPromptTemplateInput,
+  RenderPromptTemplateResult,
+  SetupClaimInput,
+  SetupClaimResult,
+  SetupCompletionPayload,
+  SetupConfigDto,
+  SetupDatabaseStatus,
+  SetupStatusResponse,
+  SiteSettingsDto,
+  SiteSettingsInput,
+  SmtpSettingsDto,
+  SmtpSettingsInput,
+  StorageSettingsDto,
+  StorageSettingsInput,
+  RuntimeSettingsDto,
+  RuntimeSettingsInput,
+  UpdateCanvasAgentSettingsRequest,
+  UpdateCanvasRequest,
+  UpdateMediaModelDefaultsRequest,
+  UpdatePromptTemplateEntryInput,
+  BuiltinProviderTemplate,
+} from '@musecanvas/contracts'
+import { ApiError, apiFetch, resolveApiUrl } from './api'
+import { WORKSPACE_MODE } from '../lib/workspace-mode'
+import { mockWorkspaceApi } from './mock-workspace-api'
+import type {
+  AccountDto,
+  AdminDashboardDto,
+  AdminJobDto,
+  AdminModelDto,
+  AdminModelInput,
+  AdminOAuthProviderDto,
+  AdminPluginDeleteResult,
+  AdminPluginDto,
+  AdminPluginUploadResult,
+  AdminPluginValidateResult,
+  AdminUserDto,
+  AssetDownloadDto,
+  AssetListDto,
+  GenerationJobDto,
+  GenerationJobListDto,
+  InvitationDto,
+  ModelPresetDto,
+  OAuthIdentityDto,
+  OAuthProvider,
+  OAuthProviderInfo,
+  OAuthProviderInput,
+  OtpRequestResult,
+  PresignedUploadDto,
+  PromptOptimizationSettingsDto,
+  PromptOptimizationSettingsInput,
+  ProviderCredentialDto,
+  ProviderCredentialInput,
+  RegistrationModeDto,
+  SessionDto,
+  SetupAdminRequestResult,
+  SetupDatabaseTestResult,
+  SetupSmtpTestResult,
+  SetupStorageTestResult,
+  SetupTemplateImportResult,
+  UploadCompleteDto,
+} from '@/shared/types'
+
+export { ApiError, isApiError } from './api'
+export { resolveApiUrl }
+
+async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined | null>): Promise<T> {
+  return apiFetch<T>(path, { params })
+}
+
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  return apiFetch<T>(path, { method: 'POST', body })
+}
+
+async function patch<T>(path: string, body?: unknown): Promise<T> {
+  return apiFetch<T>(path, { method: 'PATCH', body })
+}
+
+async function del<T>(path: string): Promise<T> {
+  return apiFetch<T>(path, { method: 'DELETE' })
+}
+
+// ---------------------------------------------------------------------------
+// session / auth / account
+// ---------------------------------------------------------------------------
+
+export const sessionApi = {
+  get: () => get<SessionDto>(API_ENDPOINTS.session),
+}
+
+export const authApi = {
+  requestOtp: (email: string, invitationCode?: string) =>
+    post<OtpRequestResult>(API_ENDPOINTS.auth.otpRequest, {
+      email,
+      ...(invitationCode ? { invitationCode } : {}),
+    }),
+  verifyOtp: (email: string, code: string) =>
+    post<SessionDto>(API_ENDPOINTS.auth.otpVerify, { email, code }),
+  logout: () => post<{ loggedOut: boolean }>(API_ENDPOINTS.auth.logout),
+  /** OAuth 登录/绑定的浏览器跳转地址（后端 302 到供应商）。 */
+  oauthStartUrl: (provider: OAuthProvider) => resolveApiUrl(API_ENDPOINTS.auth.oauthStart(provider)),
+  getOAuthProviders: async (): Promise<OAuthProviderInfo[]> => {
+    const result = await get<{ providers: OAuthProviderInfo[] }>(API_ENDPOINTS.auth.oauthProviders)
+    return result.providers
+  },
+  /** 邀请制下 OAuth 新用户补邀请码（challengeId 来自 /login 回调 query）。 */
+  completeOAuthInvitation: (challengeId: string, invitationCode: string) =>
+    post<SessionDto>(API_ENDPOINTS.auth.oauthInvitation, { challengeId, invitationCode }),
+}
+
+export const accountApi = {
+  get: async (): Promise<AccountDto> => {
+    const [session, oauthIdentities] = await Promise.all([
+      sessionApi.get(),
+      get<OAuthIdentityDto[]>(API_ENDPOINTS.account.oauth),
+    ])
+    return { user: session.user, oauthIdentities }
+  },
+  getOAuthIdentities: () => get<OAuthIdentityDto[]>(API_ENDPOINTS.account.oauth),
+  oauthLinkUrl: (provider: OAuthProvider) => resolveApiUrl(API_ENDPOINTS.account.oauthLinkStart(provider)),
+  unlinkOAuth: (provider: OAuthProvider) =>
+    del<{ unlinked: boolean }>(API_ENDPOINTS.account.oauthUnlink(provider)),
+}
+
+// ---------------------------------------------------------------------------
+// models / generations
+// ---------------------------------------------------------------------------
+
+export const modelsApi = {
+  list: () => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.models.list() : get<PublicModelDto[]>(API_ENDPOINTS.models),
+}
+
+export const generationsApi = {
+  create: (body: CreateGenerationRequest) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.generations.create(body) : post<GenerationJobDto>(API_ENDPOINTS.generations, body),
+}
+
+// ---------------------------------------------------------------------------
+// canvases + canvas agent
+// ---------------------------------------------------------------------------
+
+export const canvasesApi = {
+  list: (params?: { limit?: number; cursor?: string }) =>
+    get<CanvasListPageDto>(API_ENDPOINTS.canvases.list, params),
+  create: (body: CreateCanvasRequest = {}) => post<CanvasDto>(API_ENDPOINTS.canvases.create, body),
+  detail: (id: string) => get<CanvasDto>(API_ENDPOINTS.canvases.detail(id)),
+  update: (id: string, body: UpdateCanvasRequest) =>
+    patch<CanvasDto>(API_ENDPOINTS.canvases.update(id), body),
+  remove: (id: string) => del<{ id: string }>(API_ENDPOINTS.canvases.remove(id)),
+}
+
+/** 历史倒序分页：首页用 `beforeSeq = LATEST_HISTORY_SEQ`。 */
+export const LATEST_HISTORY_SEQ = 2_147_483_647
+
+export const canvasAgentApi = {
+  getStatus: () => get<CanvasAgentStatusDto>(API_ENDPOINTS.canvasAgent.status),
+  getHistory: (
+    canvasId: string,
+    params?: { afterSeq?: number; beforeSeq?: number; limit?: number },
+  ) => get<CanvasAgentHistoryDto>(API_ENDPOINTS.canvases.agent.history(canvasId), params),
+  getTurn: (canvasId: string, turnId: string) =>
+    get<CanvasAgentTurnRecoveryDto>(API_ENDPOINTS.canvases.agent.turn(canvasId, turnId)),
+  confirm: (canvasId: string, pendingId: string, approve: boolean) =>
+    post<CanvasAgentConfirmResultDto>(API_ENDPOINTS.canvases.agent.confirm(canvasId), { pendingId, approve }),
+  apply: (canvasId: string, turnId: string) =>
+    post<CanvasAgentApplyResultDto>(API_ENDPOINTS.canvases.agent.apply(canvasId), { turnId }),
+}
+
+// ---------------------------------------------------------------------------
+// jobs
+// ---------------------------------------------------------------------------
+
+export const jobsApi = {
+  list: (params?: { status?: string }) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.jobs.list(params) : get<GenerationJobListDto>(API_ENDPOINTS.jobs.list, params),
+  detail: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.jobs.detail(id) : get<GenerationJobDto>(API_ENDPOINTS.jobs.detail(id)),
+  cancel: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.jobs.cancel(id) : post<GenerationJobDto>(API_ENDPOINTS.jobs.cancel(id)),
+  retry: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.jobs.retry(id) : post<GenerationJobDto>(API_ENDPOINTS.jobs.retry(id)),
+  remove: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.jobs.remove(id) : del<{ deleted: boolean }>(API_ENDPOINTS.jobs.detail(id)),
+}
+
+// ---------------------------------------------------------------------------
+// library
+// ---------------------------------------------------------------------------
+
+export const libraryApi = {
+  list: (params?: { limit?: number; cursor?: string; q?: string; kind?: 'image' | 'video'; eligible?: boolean }) =>
+    WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.library.list(params) : get<AssetListDto>(API_ENDPOINTS.library.list, params),
+  download: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.library.download(id) : get<AssetDownloadDto>(API_ENDPOINTS.library.download(id)),
+  remove: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.library.remove(id) : del<{ deleted: boolean }>(API_ENDPOINTS.library.detail(id)),
+}
+
+// ---------------------------------------------------------------------------
+// 参考图直传（generation-uploads）+ 媒体直传（media）
+// ---------------------------------------------------------------------------
+
+export type UploadProgressHandler = (percent: number) => void
+
+/**
+ * 按预签名描述把文件 POST 到对象存储。
+ *
+ * S3 POST 策略与本地存储签名上传口（`/api/media/upload?...`）都是 multipart：
+ * `fields` 必须先写、`file` 必须最后写。响应体为 204，故不走 JSON 信封。
+ */
+function uploadToPresigned(
+  target: { uploadUrl: string; fields: Record<string, string> },
+  file: File | Blob,
+  options: { onProgress?: UploadProgressHandler; signal?: AbortSignal } = {},
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    for (const [key, value] of Object.entries(target.fields)) form.append(key, value)
+    form.append('file', file, 'file')
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', target.uploadUrl.startsWith('http') ? target.uploadUrl : resolveApiUrl(target.uploadUrl))
+    xhr.withCredentials = true
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !options.onProgress) return
+      options.onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)))
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve()
+      else reject(new ApiError(xhr.status, `HTTP_${xhr.status}`, `上传至存储服务失败（HTTP ${xhr.status}）`))
+    }
+    xhr.onerror = () =>
+      reject(
+        new ApiError(
+          0,
+          'UPLOAD_NETWORK_ERROR',
+          '无法读取存储服务响应，请检查跨域允许来源（MINIO_API_CORS_ALLOW_ORIGIN）或网络连接',
+        ),
+      )
+    xhr.onabort = () => reject(new ApiError(0, 'ABORTED', '上传已取消'))
+    options.signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+    xhr.send(form)
+  })
+}
+
+export const generationUploadsApi = {
+  create: (body: { mimeType: string; sizeBytes: number }) =>
+    post<PresignedUploadDto>(API_ENDPOINTS.generationUploads.create, body),
+  complete: (uploadId: string) =>
+    post<UploadCompleteDto>(API_ENDPOINTS.generationUploads.complete(uploadId)),
+  remove: (uploadId: string) => del<{ deleted: boolean }>(API_ENDPOINTS.generationUploads.remove(uploadId)),
+}
+
+export const mediaApi = {
+  /** 受签名保护的媒体对象读取端点（URL 由服务端签发，客户端不自行拼参数）。 */
+  objectPath: API_ENDPOINTS.media.object,
+  uploadPath: API_ENDPOINTS.media.upload,
+  upload: uploadToPresigned,
+}
+
+// ---------------------------------------------------------------------------
+// 局部修改（multipart）
+// ---------------------------------------------------------------------------
+
+export interface ImageEditRequest {
+  modelId: string
+  /** 用户原话，服务端负责包裹「尊重遮罩」指令。 */
+  prompt: string
+  /** 图库资产来源；与 `image` 文件二选一。 */
+  assetId?: string
+  /** 源图字节（无 assetId 时）。 */
+  image?: File
+  /** 源图像素坐标选区。 */
+  selection?: EditSelection
+  /** 外部生成的遮罩 PNG（有 alpha）。 */
+  mask?: File
+  quality?: string
+  parameters?: Record<string, unknown>
+  idempotencyKey?: string
+}
+
+export const imagesApi = {
+  edit: (request: ImageEditRequest, signal?: AbortSignal) => {
+    const form = new FormData()
+    form.append('modelId', request.modelId)
+    form.append('prompt', request.prompt)
+    if (request.assetId) form.append('assetId', request.assetId)
+    if (request.image) form.append('image', request.image, request.image.name)
+    if (request.mask) form.append('mask', request.mask, request.mask.name)
+    if (request.quality) form.append('quality', request.quality)
+    if (request.parameters && Object.keys(request.parameters).length > 0) {
+      form.append('parameters', JSON.stringify(request.parameters))
+    }
+    if (request.idempotencyKey) form.append('idempotencyKey', request.idempotencyKey)
+    if (request.selection) {
+      form.append(
+        'region',
+        JSON.stringify({
+          x: request.selection.x,
+          y: request.selection.y,
+          width: request.selection.width,
+          height: request.selection.height,
+        }),
+      )
+    }
+    return apiFetch<GenerationJobDto>(API_ENDPOINTS.images.edit, { method: 'POST', body: form, signal })
+  },
+}
+
+// ---------------------------------------------------------------------------
+// setup 向导（含管理员/数据库/模板导入）
+// ---------------------------------------------------------------------------
+
+export interface SetupAdminVerifyInput {
+  email: string
   code: string
-  constructor(code: string, message: string) {
-    super(message)
-    this.name = 'ApiError'
-    this.code = code
-  }
 }
 
-export interface RequestOptions {
-  method?: string
-  body?: unknown
-  params?: Record<string, string | number | boolean | undefined | null>
-  headers?: Record<string, string>
-  signal?: AbortSignal
+export const setupApi = {
+  getStatus: () => get<SetupStatusResponse>(API_ENDPOINTS.setup.status),
+  getConfig: () => get<SetupConfigDto>(API_ENDPOINTS.setup.config),
+  complete: () => post<SetupCompletionPayload>(API_ENDPOINTS.setup.complete),
+  claim: (input: SetupClaimInput) => post<SetupClaimResult>(API_ENDPOINTS.setup.claim, input),
+  updateSite: (input: SiteSettingsInput) => post<SiteSettingsDto>(API_ENDPOINTS.setup.site, input),
+  updateSmtp: (input: SmtpSettingsInput) => post<SmtpSettingsDto>(API_ENDPOINTS.setup.smtp, input),
+  testSmtp: (input: SmtpSettingsInput) =>
+    post<SetupSmtpTestResult>(API_ENDPOINTS.setup.smtpTest, input),
+  updateStorage: (input: StorageSettingsInput) =>
+    post<StorageSettingsDto>(API_ENDPOINTS.setup.storage, input),
+  testStorage: (input: StorageSettingsInput) =>
+    post<SetupStorageTestResult>(API_ENDPOINTS.setup.storageTest, input),
+  getDatabase: () => get<SetupDatabaseStatus>(API_ENDPOINTS.setup.database),
+  testDatabase: () => post<SetupDatabaseTestResult>(API_ENDPOINTS.setup.databaseTest),
+  updateRuntime: (input: RuntimeSettingsInput) =>
+    post<RuntimeSettingsDto>(API_ENDPOINTS.setup.runtime, input),
+  importPromptTemplates: (entries: Array<{ name: string; description?: string; instruction: string }>) =>
+    post<SetupTemplateImportResult>(API_ENDPOINTS.setup.promptTemplatesImport, { templates: entries }),
+  requestAdmin: (email: string) =>
+    post<SetupAdminRequestResult>(API_ENDPOINTS.setup.adminRequest, { email }),
+  verifyAdmin: (input: SetupAdminVerifyInput) =>
+    post<SessionDto>(API_ENDPOINTS.setup.adminVerify, input),
 }
 
-function buildUrl(
-  path: string,
-  params?: Record<string, string | number | boolean | undefined | null>,
-): string {
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'
-  const url = new URL(path, origin)
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== '') {
-        url.searchParams.set(k, String(v))
-      }
-    }
-  }
-  return url.pathname + url.search
+// ---------------------------------------------------------------------------
+// 管理后台
+// ---------------------------------------------------------------------------
+
+export interface AdminListParams {
+  limit?: number
+  cursor?: string
+  [key: string]: string | number | boolean | undefined
 }
 
-export async function clientApi<T>(
-  path: string,
-  options: RequestOptions = {},
-): Promise<ApiResponse<T>> {
-  const { method = 'GET', body, params, headers = {}, signal } = options
-  const relativeUrl = buildUrl(path, params)
-
-  try {
-    const requestUrl = BASE_URL.endsWith('/api') && relativeUrl.startsWith('/api/')
-      ? BASE_URL + relativeUrl.slice(4)
-      : BASE_URL + relativeUrl
-
-    const res = await fetch(requestUrl, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      credentials: 'include',
-      signal,
-    })
-
-    // 后端契约以 body 的 success 字段为唯一判据（POST /api/generations 返回 202），
-    // 这里只兜底非 JSON 响应（nginx 502 HTML、代理错误页等），避免误判为 NETWORK_ERROR。
-    const text = await res.text()
-    if (!text) {
-      return { success: false, error: { code: `HTTP_${res.status}`, message: '上游服务响应异常' } }
-    }
-    try {
-      return JSON.parse(text) as ApiResponse<T>
-    } catch {
-      return { success: false, error: { code: `HTTP_${res.status}`, message: '上游服务响应异常' } }
-    }
-  } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      return { success: false, error: { code: 'ABORTED', message: '请求已取消' } }
-    }
-    return { success: false, error: { code: 'NETWORK_ERROR', message: '网络连接失败' } }
-  }
+export interface AdminUsersFilters extends AdminListParams {
+  status?: 'active' | 'disabled'
+  email?: string
 }
+
+export interface AdminJobsFilters extends AdminListParams {
+  userId?: string
+  status?: string
+  modelId?: string
+  from?: string
+  to?: string
+}
+
+/** 插件图标 / 原始包 / 文档下载是同源 GET，URL 可直接用于 `<img src>` / `<a href>`。 */
+function pluginMultipart(path: string, field: 'package' | 'file', file: File, signal?: AbortSignal) {
+  const form = new FormData()
+  form.append(field, file, file.name)
+  return apiFetch<unknown>(path, { method: 'POST', body: form, signal })
+}
+
+export const adminApi = {
+  getDashboard: () => get<AdminDashboardDto>(API_ENDPOINTS.admin.dashboard),
+
+  getRegistration: () => get<RegistrationModeDto>(API_ENDPOINTS.admin.registration),
+  setRegistration: (requiresInvitation: boolean) =>
+    patch<RegistrationModeDto>(API_ENDPOINTS.admin.registration, { requiresInvitation }),
+
+  // --- 用户 -------------------------------------------------------------
+  listUsers: (params?: AdminUsersFilters) =>
+    get<{ items: AdminUserDto[]; total: number; hasMore: boolean; nextCursor?: string }>(
+      API_ENDPOINTS.admin.users,
+      params,
+    ),
+  setUserStatus: (id: string, status: 'active' | 'disabled') =>
+    patch<AdminUserDto>(API_ENDPOINTS.admin.userStatus(id), { status }),
+  deleteUser: (id: string) => del<{ deleted: boolean }>(API_ENDPOINTS.admin.user(id)),
+
+  // --- 任务 -------------------------------------------------------------
+  listJobs: (params?: AdminJobsFilters) =>
+    get<{ items: AdminJobDto[]; total: number; hasMore: boolean; nextCursor?: string }>(
+      API_ENDPOINTS.admin.jobs,
+      params,
+    ),
+
+  // --- 邀请码 -----------------------------------------------------------
+  listInvitations: () =>
+    get<{ items: InvitationDto[]; total: number; hasMore: boolean }>(API_ENDPOINTS.admin.invitations),
+  createInvitation: () => post<InvitationDto>(API_ENDPOINTS.admin.invitations),
+  revokeInvitation: (id: string) => del<{ revoked: boolean }>(API_ENDPOINTS.admin.invitation(id)),
+
+  // --- 模型 -------------------------------------------------------------
+  listModels: () => get<AdminModelDto[]>(API_ENDPOINTS.admin.models),
+  createModel: (input: AdminModelInput) => post<AdminModelDto>(API_ENDPOINTS.admin.models, input),
+  updateModel: (id: string, input: AdminModelInput) =>
+    patch<AdminModelDto>(API_ENDPOINTS.admin.model(id), input),
+  deleteModel: (id: string) => del<{ deleted: boolean }>(API_ENDPOINTS.admin.model(id)),
+  listModelPresets: () => get<ModelPresetDto[]>(API_ENDPOINTS.admin.modelPresets),
+
+  // --- 供应商凭据 / 模板 / 插件 -----------------------------------------
+  listProviderCredentials: () => get<ProviderCredentialDto[]>(API_ENDPOINTS.admin.providerCredentials),
+  createProviderCredential: (input: ProviderCredentialInput) =>
+    post<ProviderCredentialDto>(API_ENDPOINTS.admin.providerCredentials, input),
+  updateProviderCredential: (id: string, input: ProviderCredentialInput) =>
+    patch<ProviderCredentialDto>(API_ENDPOINTS.admin.providerCredential(id), input),
+  deleteProviderCredential: (id: string) =>
+    del<{ deleted: boolean }>(API_ENDPOINTS.admin.providerCredential(id)),
+  testProviderCredential: (id: string) =>
+    post<{ tested: boolean; status: 'success' | 'pending' }>(
+      API_ENDPOINTS.admin.providerCredentialTest(id),
+    ),
+  listProviderTemplates: async (): Promise<BuiltinProviderTemplate[]> => {
+    const result = await get<{ templates: BuiltinProviderTemplate[] }>(API_ENDPOINTS.admin.providerTemplates)
+    return result.templates
+  },
+
+  listPlugins: () => get<AdminPluginDto[]>(API_ENDPOINTS.admin.plugins),
+  validatePluginPackage: (file: File, signal?: AbortSignal) =>
+    pluginMultipart(API_ENDPOINTS.admin.pluginValidate, 'package', file, signal) as Promise<AdminPluginValidateResult>,
+  uploadPluginPackage: (file: File, signal?: AbortSignal) =>
+    pluginMultipart(API_ENDPOINTS.admin.pluginUpload, 'package', file, signal) as Promise<AdminPluginUploadResult>,
+  setPluginStatus: (id: string, status: 'active' | 'disabled') =>
+    patch<AdminPluginDto>(API_ENDPOINTS.admin.plugin(id), { status }),
+  deletePlugin: (id: string) =>
+    del<AdminPluginDeleteResult>(API_ENDPOINTS.admin.plugin(id)),
+  getPluginDocs: (id: string) => get<AdminPluginDocsDto>(API_ENDPOINTS.admin.pluginDocs(id)),
+  pluginIconUrl: (id: string) => resolveApiUrl(API_ENDPOINTS.admin.pluginIcon(id)),
+  pluginPackageUrl: (id: string) => resolveApiUrl(API_ENDPOINTS.admin.pluginPackage(id)),
+
+  // --- OAuth ------------------------------------------------------------
+  listOAuthProviders: () => get<AdminOAuthProviderDto[]>(API_ENDPOINTS.admin.oauthProviders),
+  updateOAuthProvider: (provider: OAuthProvider, input: OAuthProviderInput) =>
+    patch<AdminOAuthProviderDto>(API_ENDPOINTS.admin.oauthProvider(provider), input),
+
+  // --- 提示词模板 -------------------------------------------------------
+  getActivePromptTemplates: () =>
+    get<PromptTemplateSetDetailDto | null>(API_ENDPOINTS.admin.promptTemplates),
+  listPromptTemplateSets: () =>
+    get<PromptTemplateSetSummaryDto[]>(API_ENDPOINTS.admin.promptTemplateSets),
+  getPromptTemplateSet: (id: string) =>
+    get<PromptTemplateSetDetailDto>(API_ENDPOINTS.admin.promptTemplateSet(id)),
+  activatePromptTemplateSet: (id: string) =>
+    post<PromptTemplateSetSummaryDto>(API_ENDPOINTS.admin.promptTemplateSetActivate(id)),
+  createPromptTemplateEntry: (setId: string, input: CreatePromptTemplateEntryInput) =>
+    post<PromptTemplateSetDetailDto>(API_ENDPOINTS.admin.promptTemplateSetEntries(setId), input),
+  updatePromptTemplateEntry: (entryId: string, input: UpdatePromptTemplateEntryInput) =>
+    patch<PromptTemplateSetDetailDto>(API_ENDPOINTS.admin.promptTemplateEntry(entryId), input),
+  deletePromptTemplateEntry: (entryId: string) =>
+    del<{ deleted: true; setId: string }>(API_ENDPOINTS.admin.promptTemplateEntry(entryId)),
+  deletePromptTemplateSet: (id: string) =>
+    del<{ deleted: true }>(API_ENDPOINTS.admin.promptTemplateSet(id)),
+  importPromptTemplates: (input: ImportPromptTemplateSetInput) =>
+    post<ImportPromptTemplateSetResult>(API_ENDPOINTS.admin.promptTemplatesImport, input),
+  previewPromptTemplate: (input: RenderPromptTemplateInput) =>
+    post<RenderPromptTemplateResult>(API_ENDPOINTS.admin.promptTemplatesPreview, input),
+  /** 导出为原始 JSON 文本（服务端返回 attachment；导出按钮应直接下载）。 */
+  promptTemplatesExportUrl: (setId?: string) =>
+    resolveApiUrl(API_ENDPOINTS.admin.promptTemplatesExport, setId ? { setId } : undefined),
+
+  // --- 设置 -------------------------------------------------------------
+  getPromptOptimizationSettings: () =>
+    get<PromptOptimizationSettingsDto>(API_ENDPOINTS.admin.promptOptimizationSettings),
+  updatePromptOptimizationSettings: (input: PromptOptimizationSettingsInput) =>
+    patch<PromptOptimizationSettingsDto>(API_ENDPOINTS.admin.promptOptimizationSettings, input),
+  getCanvasAgentSettings: () => get<CanvasAgentSettingsDto>(API_ENDPOINTS.admin.canvasAgentSettings),
+  updateCanvasAgentSettings: (input: UpdateCanvasAgentSettingsRequest) =>
+    patch<CanvasAgentSettingsDto>(API_ENDPOINTS.admin.canvasAgentSettings, input),
+  getMediaModelDefaults: () => get<MediaModelDefaultsDto>(API_ENDPOINTS.admin.mediaModelDefaults),
+  updateMediaModelDefaults: (input: UpdateMediaModelDefaultsRequest) =>
+    patch<MediaModelDefaultsDto>(API_ENDPOINTS.admin.mediaModelDefaults, input),
+}
+
+/** 领域聚合，便于 `import { clientApi } from '@/shared/services/client-api'`。 */
+export const clientApi = {
+  session: sessionApi,
+  auth: authApi,
+  account: accountApi,
+  models: modelsApi,
+  generations: generationsApi,
+  canvases: canvasesApi,
+  canvasAgent: canvasAgentApi,
+  jobs: jobsApi,
+  library: libraryApi,
+  generationUploads: generationUploadsApi,
+  media: mediaApi,
+  images: imagesApi,
+  setup: setupApi,
+  admin: adminApi,
+} as const

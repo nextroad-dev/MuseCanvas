@@ -1,100 +1,163 @@
 'use client'
 
+// Canvas Agent 对话控制器：状态 + history 读取、POST-SSE 发送、提案确认、
+// agent-managed 画布 apply 与断线恢复。UI 只消费本 hook，不自行拼协议。
+//
+// 关键事实（读 apps/api/src/modules/canvases/agent/**）：
+// - `POST canvases/:id/agent/messages` 返回 `text/event-stream`，终态为 done/error；
+// - 提案必须经 `POST .../confirm` 才会创建 generation job；
+// - 画布改动在确认落定后由 `POST .../apply` 提交（revision CAS）；
+// - `GET .../turns/:turnId` 是恢复/轮询用的 durable 状态，不替代 SSE。
+
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseInfiniteQueryResult,
+  type UseQueryResult,
+} from '@tanstack/react-query'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import type {
-  AgentMessageDto,
-  AgentStreamEvent,
   CanvasAgentHistoryDto,
+  CanvasAgentStatusDto,
+  CanvasAgentTurnRecoveryDto,
 } from '@musecanvas/contracts'
-import { canvasApi, LATEST_HISTORY_SEQ } from '@/features/generate/lib/canvas-api'
-import {
-  actorScopedCanvasQueryKeys,
-  CANVAS_AGENT_STATUS_KEY,
-  canvasAgentHistoryQueryKey,
-} from '@/features/generate/lib/canvas-query-keys'
+import { clientApi, LATEST_HISTORY_SEQ } from '@/shared/services/client-api'
 import {
   AgentStreamDisconnectedError,
   AgentStreamHttpError,
   createAgentSubmitLock,
   streamAgentEvents,
-} from '@/features/generate/lib/agent-stream'
-import { createComposerSender } from '@/features/generate/lib/agent-composer'
-import type { ComposerDraft, ComposerSender } from '@/features/generate/lib/agent-composer'
+} from '@/shared/lib/agent-stream'
 import {
-  beginConfirmation,
-  confirmationFailed,
-  confirmationFor,
-  confirmationSucceeded,
-  createConfirmationState,
-} from '@/features/generate/lib/agent-confirmation'
-import type { ConfirmationMap } from '@/features/generate/lib/agent-confirmation'
+  createComposerSender,
+  type ComposerDraft,
+  type ComposerSender,
+} from '@/shared/lib/agent-composer'
 import {
   agentScopeChanged,
   appendUserMessage,
   applyAgentTimelineEvent,
   applyFailureMessage,
   applyPendingSnapshot,
+  beginConfirmation,
+  confirmationFailed,
+  confirmationFor,
+  confirmationSucceeded,
   createAgentTimeline,
+  createConfirmationState,
   describeApplyResult,
   mergeHistoryPage,
   planApplyRecovery,
   resolveAgentAvailability,
   shouldApplyTurn,
   unappliedOpsTurnIds,
-} from '@/features/generate/lib/agent-turn-state'
-import type { AgentTimelineState, ApplyFeedback } from '@/features/generate/lib/agent-turn-state'
-import { useCurrentActorId } from './useCanvases'
-import { JOBS_QUERY_KEY } from './useJobs'
-import { LIBRARY_QUERY_KEY } from './useLibrary'
+  type AgentTimelineState,
+  type ApplyFeedback,
+  type ConfirmationMap,
+} from '@/shared/lib/agent-timeline'
+import { CANVAS_AGENT_POLL_MS, queryKeys } from './query-keys'
+import { useSession } from './useSession'
 
-export { CANVAS_AGENT_STATUS_KEY, canvasAgentHistoryQueryKey, actorScopedCanvasQueryKeys } from '@/features/generate/lib/canvas-query-keys'
+export type { AgentStreamEvent } from '@musecanvas/contracts'
 
-/** Whether the Agent can start a turn at all. Read-only; never calls a provider. */
-export function useCanvasAgentStatusQuery() {
-  const actorId = useCurrentActorId()
+interface AgentRequestScope {
+  actorId: string
+  canvasId: string | null
+  generation: number
+}
+
+/** Agent 是否可发起新 turn（只读状态，不调用供应商）。 */
+export function useCanvasAgentStatus(): UseQueryResult<CanvasAgentStatusDto> {
+  const session = useSession()
   return useQuery({
-    queryKey: [...CANVAS_AGENT_STATUS_KEY, actorId],
-    enabled: actorId !== '',
-    queryFn: () => canvasApi.status(),
-    refetchInterval: false,
+    queryKey: queryKeys.canvasAgent.status,
+    queryFn: () => clientApi.canvasAgent.getStatus(),
+    enabled: Boolean(session.data),
+    staleTime: 60_000,
   })
 }
 
-/**
- * Backward-paginated history. The first page is the newest 50 messages (fetched
- * with `beforeSeq = LATEST_HISTORY_SEQ`); `nextBeforeSeq` walks toward older pages.
- * Pages are kept newest-first by the query, and `historyMessages` re-orders them
- * oldest→newest for display.
- */
-export function useCanvasAgentHistoryQuery(canvasId: string | null) {
-  const actorId = useCurrentActorId()
-  return useInfiniteQuery({
-    queryKey: canvasAgentHistoryQueryKey(actorId, canvasId ?? ''),
-    enabled: Boolean(actorId && canvasId),
-    initialPageParam: LATEST_HISTORY_SEQ,
-    queryFn: ({ pageParam }) => canvasApi.history(canvasId as string, { beforeSeq: pageParam, limit: 50 }),
-    getNextPageParam: (page: CanvasAgentHistoryDto) => page.nextBeforeSeq ?? undefined,
-  })
-}
-
-/**
- * Owns the Canvas Agent conversation: status + history queries, the streaming send
- * path, confirmation lifecycle and the managed-apply call.
- *
- * Nothing here auto-submits or auto-continues on its own: a turn starts only from an
- * explicit composer send or an explicitly authorised job_event continuation. The
- * stream is aborted — and the timeline, confirmations and apply feedback cleared —
- * on actor switch, logout (actor becomes empty) and unmount.
- */
-export function useCanvasAgent(canvasId: string | null) {
-  const actorId = useCurrentActorId()
+/** durable turn 状态轮询：仅在 SSE 断线/刷新恢复时使用，终态自动停止。 */
+export function useCanvasAgentTurn(
+  canvasId: string | null | undefined,
+  turnId: string | null | undefined,
+): UseQueryResult<CanvasAgentTurnRecoveryDto> {
   const queryClient = useQueryClient()
-  const statusQuery = useCanvasAgentStatusQuery()
-  const historyQuery = useCanvasAgentHistoryQuery(canvasId)
+  const query = useQuery({
+    queryKey: queryKeys.canvasAgent.turn(canvasId ?? '', turnId ?? ''),
+    queryFn: () => clientApi.canvasAgent.getTurn(canvasId as string, turnId as string),
+    enabled: Boolean(canvasId && turnId),
+    refetchInterval: (q) => {
+      const status = q.state.data?.status
+      return status === 'running' ? CANVAS_AGENT_POLL_MS : false
+    },
+  })
+  const status = query.data?.status
+  useEffect(() => {
+    if (!canvasId || !status || status === 'running') return
+    // turn 已终态：把持久 history 重新读回来（断线期间的消息/提案由此补齐）。
+    void queryClient.invalidateQueries({ queryKey: queryKeys.canvasAgent.history(canvasId) })
+  }, [canvasId, status, queryClient])
+  return query
+}
 
-  const [timeline, setTimelineState] = useState<AgentTimelineState>(createAgentTimeline)
+/** 会话历史（倒序分页，首屏取最新一页）。 */
+export function useCanvasAgentHistory(
+  canvasId: string | null,
+): UseInfiniteQueryResult<{ pages: CanvasAgentHistoryDto[]; pageParams: number[] }, Error> {
+  const session = useSession()
+  return useInfiniteQuery({
+    queryKey: queryKeys.canvasAgent.history(canvasId ?? ''),
+    enabled: Boolean(session.data && canvasId),
+    initialPageParam: LATEST_HISTORY_SEQ,
+    queryFn: ({ pageParam }) =>
+      clientApi.canvasAgent.getHistory(canvasId as string, { beforeSeq: pageParam, limit: 50 }),
+    getNextPageParam: (page: CanvasAgentHistoryDto) => page.nextBeforeSeq ?? undefined,
+  }) as UseInfiniteQueryResult<{ pages: CanvasAgentHistoryDto[]; pageParams: number[] }, Error>
+}
+
+export interface CanvasAgentController {
+  canvasId: string | null
+  items: AgentTimelineState['items']
+  streaming: boolean
+  streamError: string | null
+  disconnected: boolean
+  availability: ReturnType<typeof resolveAgentAvailability>
+  status: UseQueryResult<CanvasAgentStatusDto>
+  confirmations: ConfirmationMap
+  applyFeedback: ApplyFeedback | null
+  /** 发送一次结构化 user turn；锁被占用/文本为空返回 false。 */
+  send: (draft: ComposerDraft, baseRevision: number, targetCanvasId?: string) => boolean
+  /** 显式「继续规划」：任务终态后的 job_event turn。 */
+  continuePlanning: (jobId: string, baseRevision: number) => boolean
+  stop: () => void
+  confirmPending: (pendingId: string, approve: boolean) => void
+  confirmationFor: (pendingId: string) => ReturnType<typeof confirmationFor>
+  /** 直接 apply 某 turn 的 ops（恢复路径/手动重试）。 */
+  applyTurn: (turnId: string) => void
+  history: {
+    query: ReturnType<typeof useCanvasAgentHistory>
+    loading: boolean
+    hasOlder: boolean
+    loadOlder: () => void
+  }
+}
+
+/**
+ * 拥有当前对话的 Agent 控制器。切换对话或登录用户变化时中止流，
+ * 并清空时间线/确认状态，绝不把上一段对话的帧写进新的对话。
+ */
+export function useCanvasAgent(canvasId: string | null): CanvasAgentController {
+  const queryClient = useQueryClient()
+  const session = useSession()
+  const actorId = session.data?.user.id ?? ''
+  const statusQuery = useCanvasAgentStatus()
+  const historyQuery = useCanvasAgentHistory(canvasId)
+
+  const [timeline, setTimeline] = useState<AgentTimelineState>(createAgentTimeline)
   const timelineRef = useRef(timeline)
   const [streaming, setStreaming] = useState(false)
   const [streamError, setStreamError] = useState<string | null>(null)
@@ -104,147 +167,163 @@ export function useCanvasAgent(canvasId: string | null) {
   confirmationsRef.current = confirmations
   const [applyFeedback, setApplyFeedback] = useState<ApplyFeedback | null>(null)
 
-  const actorRef = useRef(actorId)
-  const latestRef = useRef({ actorId, canvasId })
-  useEffect(() => {
-    latestRef.current = { actorId, canvasId }
-  }, [actorId, canvasId])
+  const latestRef = useRef<AgentRequestScope>({ actorId, canvasId, generation: 0 })
+  const renderedScopeRef = useRef({ actorId, canvasId })
+  // 同步失效旧请求；代次也隔离 A → B → A，不能只比较最终的用户/画布 id。
+  if (renderedScopeRef.current.actorId !== actorId || renderedScopeRef.current.canvasId !== canvasId) {
+    renderedScopeRef.current = { actorId, canvasId }
+    latestRef.current = { actorId, canvasId, generation: latestRef.current.generation + 1 }
+  }
+  const isCurrentScope = useCallback((scope: AgentRequestScope) => {
+    const current = latestRef.current
+    return scope.actorId === current.actorId && scope.canvasId === current.canvasId &&
+      scope.generation === current.generation
+  }, [])
 
-  /** Single synchronous writer for the timeline so async callbacks read the same
-   *  state the setter just produced (used by the done→apply ordering check). */
+  /** 同步写时间线，保证异步回调读到的就是 setter 刚产出的状态。 */
   const updateTimeline = useCallback(
     (reducer: (previous: AgentTimelineState) => AgentTimelineState) => {
       const next = reducer(timelineRef.current)
       timelineRef.current = next
-      setTimelineState(next)
+      setTimeline(next)
     },
     [],
   )
 
-  const invalidateConversation = useCallback(() => {
-    const { actorId: actor, canvasId: canvas } = latestRef.current
-    if (actor && canvas) void queryClient.invalidateQueries({ queryKey: canvasAgentHistoryQueryKey(actor, canvas) })
+  const invalidateConversation = useCallback((scope = latestRef.current) => {
+    const { actorId: actor, canvasId: canvas } = scope
+    if (!actor || !canvas) return
+    void queryClient.invalidateQueries({ queryKey: queryKeys.canvasAgent.history(canvas) })
   }, [queryClient])
 
+  const applyInFlightRef = useRef(new Set<string>())
   const applyMutation = useMutation({
-    mutationFn: (turnId: string) => {
-      const canvas = latestRef.current.canvasId
+    mutationFn: (input: { turnId: string; scope: AgentRequestScope; key: string }) => {
+      const canvas = input.scope.canvasId
       if (!canvas) throw new Error('缺少对话')
-      return canvasApi.apply(canvas, turnId)
+      return clientApi.canvasAgent.apply(canvas, input.turnId)
     },
-    onSuccess: (result) => {
-      setApplyFeedback(describeApplyResult(result))
-      const { actorId: actor, canvasId: canvas } = latestRef.current
+    onSuccess: (result, input) => {
+      if (isCurrentScope(input.scope)) setApplyFeedback(describeApplyResult(result))
+      const { actorId: actor, canvasId: canvas } = input.scope
       if (actor && canvas) {
-        void queryClient.invalidateQueries({ queryKey: canvasAgentHistoryQueryKey(actor, canvas) })
-        void queryClient.invalidateQueries({ queryKey: ['canvases', actor, 'detail', canvas] })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.canvasAgent.history(canvas) })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.canvases.detail(canvas) })
       }
-      // Applying a scene commits asset/node relations, so the shared job and library
-      // reads are refreshed from the server instead of being trusted to have gone
-      // stale. Scoped to the two roots the commit can move — nothing else.
-      void queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-      void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+      // apply 会提交 scene，可能写实 asset 关联：刷新任务/图库缓存。
+      void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.root })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.library.root })
     },
-    onError: (error) => {
+    onError: (error, input) => {
+      if (!isCurrentScope(input.scope)) return
       setApplyFeedback({ applied: false, revision: 0, opCount: 0, message: applyFailureMessage(error) })
+    },
+    onSettled: (_result, _error, input) => {
+      applyInFlightRef.current.delete(input.key)
     },
   })
   const applyRef = useRef(applyMutation)
   applyRef.current = applyMutation
 
-  // Managed-apply bookkeeping. A turn id is recorded the moment apply is attempted
-  // (live `done`, a resolved confirmation, or post-history recovery), so no path can
-  // commit the same turn twice in one session — including a page that refetches and
-  // re-merges the same turn after the first attempt.
-  const applyAttemptedTurnIdsRef = useRef<Set<string>>(new Set())
-  /** The newest ops turn already seen by recovery; only a strictly newer one re-arms. */
+  // 自动恢复逐 turn 仅尝试一次；手动重试绕过去重，但仍受跨会话的在途锁保护。
+  const applyAttemptedRef = useRef<Set<string>>(new Set())
   const applyRecoveryNewestRef = useRef<string | null>(null)
-  /** Actor the active dispatch belongs to, so an in-place actor change cannot let a
-   *  stale frame through even when the canvas id happens to be reused. */
   const dispatchActorRef = useRef('')
-  const requestApply = useCallback((turnId: string | null | undefined) => {
+
+  const requestApply = useCallback((turnId: string | null | undefined, manual = false) => {
     if (!turnId) return
-    if (applyAttemptedTurnIdsRef.current.has(turnId)) return
-    applyAttemptedTurnIdsRef.current.add(turnId)
-    applyRef.current.mutate(turnId)
+    const scope = { ...latestRef.current }
+    if (!scope.actorId || !scope.canvasId) return
+    const key = JSON.stringify([scope.actorId, scope.canvasId, turnId])
+    if (applyInFlightRef.current.has(key)) return
+    if (!manual && applyAttemptedRef.current.has(turnId)) return
+    applyAttemptedRef.current.add(turnId)
+    applyInFlightRef.current.add(key)
+    applyRef.current.mutate({ turnId, scope, key })
   }, [])
 
   const confirmMutation = useMutation({
-    mutationFn: (input: { pendingId: string; approve: boolean }) => {
-      const canvas = latestRef.current.canvasId
+    mutationFn: (input: { pendingId: string; approve: boolean; scope: AgentRequestScope }) => {
+      const canvas = input.scope.canvasId
       if (!canvas) throw new Error('缺少对话')
-      return canvasApi.confirm(canvas, input.pendingId, input.approve)
+      return clientApi.canvasAgent.confirm(canvas, input.pendingId, input.approve)
+    },
+    onSuccess: (result, input) => {
+      invalidateConversation(input.scope)
+      // 已提交的提案会生成 job 行：刷新任务列表，让结果卡从同一数据源解析。
+      void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.root })
+      if (!isCurrentScope(input.scope)) return
+      updateTimeline((previous) => applyPendingSnapshot(previous, result.pending))
+      setConfirmations((map) => confirmationSucceeded(map, result))
+      const turnId = result.pending.turnId
+      if (turnId && shouldApplyTurn(timelineRef.current, turnId)) requestApply(turnId)
+    },
+    onError: (error, input) => {
+      invalidateConversation(input.scope)
+      if (!isCurrentScope(input.scope)) return
+      setConfirmations((map) => confirmationFailed(map, input.pendingId, error))
     },
   })
 
-  // The one send path for this conversation. Created once; its handlers read live
-  // actor/canvas facts from refs so a stale closure can never target the old actor.
+  // 唯一的发送路径；创建一次，回调从 ref 读实时 canvas/actor，避免陈旧闭包。
   const senderRef = useRef<ComposerSender | null>(null)
   if (!senderRef.current) {
-    senderRef.current = createComposerSender({
-      stream: (targetCanvasId, request, signal) =>
-        streamAgentEvents(API_ENDPOINTS.canvases.agent.messages(targetCanvasId), request, { signal }),
-      onRequest: (request, canvas) => {
-        if (canvas !== latestRef.current.canvasId || dispatchActorRef.current !== latestRef.current.actorId) return
-        setStreaming(true)
-        setStreamError(null)
-        setDisconnected(false)
-        if (request.kind === 'user') {
-          updateTimeline((previous) => appendUserMessage(previous, {
-            id: request.messageId,
-            text: request.text,
-            contextSummary: request.context,
-            createdAt: new Date().toISOString(),
-          }))
-        }
+    senderRef.current = createComposerSender(
+      {
+        stream: (targetCanvasId, request, signal) =>
+          streamAgentEvents(API_ENDPOINTS.canvases.agent.messages(targetCanvasId), request, { signal }),
+        onRequest: (request, canvas) => {
+          if (canvas !== latestRef.current.canvasId) return
+          if (dispatchActorRef.current !== latestRef.current.actorId) return
+          setStreaming(true)
+          setStreamError(null)
+          setDisconnected(false)
+          if (request.kind === 'user') {
+            updateTimeline((previous) =>
+              appendUserMessage(previous, {
+                id: request.messageId,
+                text: request.text,
+                contextSummary: request.context,
+                createdAt: new Date().toISOString(),
+              }),
+            )
+          }
+        },
+        onEvent: (event, canvas) => {
+          // 切换对话后仍在途的帧必须丢弃，尤其不能对新 canvas 触发 apply。
+          if (canvas !== latestRef.current.canvasId) return
+          if (dispatchActorRef.current !== latestRef.current.actorId) return
+          updateTimeline((previous) => applyAgentTimelineEvent(previous, event))
+          if (event.type === 'done' && shouldApplyTurn(timelineRef.current, event.turnId, event.message.ops?.length ?? 0)) {
+            requestApply(event.turnId)
+          }
+        },
+        onSettled: (outcome, canvas) => {
+          if (canvas !== latestRef.current.canvasId) return
+          if (dispatchActorRef.current !== latestRef.current.actorId) return
+          setStreaming(false)
+          if (outcome.status === 'error') {
+            if (outcome.error instanceof AgentStreamHttpError) setStreamError(outcome.error.message)
+            else if (outcome.error instanceof AgentStreamDisconnectedError) setDisconnected(true)
+            else setStreamError(outcome.error instanceof Error ? outcome.error.message : 'Agent 请求失败')
+          }
+          // 任何终局都重新读持久事实：断线时服务端可能知道得更多。
+          invalidateConversation()
+        },
       },
-      onEvent: (event, canvas) => {
-        // A switch aborts the stream, but an event already read could still be in
-        // flight; it must not leak into the new conversation or trigger an apply
-        // against the new canvas. The actor check covers an in-place actor change
-        // that reuses the same canvas id.
-        if (canvas !== latestRef.current.canvasId || dispatchActorRef.current !== latestRef.current.actorId) return
-        updateTimeline((previous) => applyAgentTimelineEvent(previous, event))
-        // Apply ordering: a completed agent-managed turn with ops and no pending is
-        // committed now; a pending keeps the revision frozen until it is decided.
-        if (event.type === 'done' && shouldApplyTurn(timelineRef.current, event.turnId, event.message.ops?.length ?? 0)) {
-          requestApply(event.turnId)
-        }
-      },
-      onSettled: (outcome, canvas) => {
-        // A stale stream settling must not clear the new conversation's streaming
-        // state or reload its history.
-        if (canvas !== latestRef.current.canvasId || dispatchActorRef.current !== latestRef.current.actorId) return
-        setStreaming(false)
-        if (outcome.status === 'error') {
-          if (outcome.error instanceof AgentStreamHttpError) setStreamError(outcome.error.message)
-          else if (outcome.error instanceof AgentStreamDisconnectedError) setDisconnected(true)
-          else setStreamError(outcome.error instanceof Error ? outcome.error.message : 'Agent 请求失败')
-        }
-        // Re-read persisted facts after any terminal outcome; a disconnect is exactly
-        // the case where the server may know more than the client received.
-        invalidateConversation()
-      },
-    }, createAgentSubmitLock())
+      createAgentSubmitLock(),
+    )
   }
 
-  // A different conversation is a different timeline. Without this reset, switching
-  // canvas would merge the new history into the previous conversation's items — and
-  // the recovery below would offer to apply a turn against the wrong canvas.
+  // 切换对话：中止在途流并清空上一段对话状态（null → id 的首建保留乐观消息）。
   const previousCanvasIdRef = useRef(canvasId)
   useEffect(() => {
     const previous = previousCanvasIdRef.current
     previousCanvasIdRef.current = canvasId
-    // Creating the first conversation (null -> id) keeps the optimistic turn the
-    // send that created it just appended; only a switch between conversations (or
-    // back to none) starts clean.
     if (previous === null || previous === canvasId) return
-    // Leaving a conversation abandons its in-flight turn: abort it so it cannot
-    // write into the new timeline or apply its turn against the new canvas, then
-    // clear every piece of the old conversation's state.
     senderRef.current?.stop()
     updateTimeline(() => createAgentTimeline())
-    applyAttemptedTurnIdsRef.current = new Set()
+    applyAttemptedRef.current = new Set()
     applyRecoveryNewestRef.current = null
     setApplyFeedback(null)
     setStreaming(false)
@@ -253,30 +332,21 @@ export function useCanvasAgent(canvasId: string | null) {
     setConfirmations(createConfirmationState())
   }, [canvasId, updateTimeline])
 
-  // Fold persisted history into the timeline. Idempotent, so a refetch after a turn
-  // (or a replayed page) updates items in place instead of duplicating them.
+  // 合并持久 history（幂等：重复拉取只更新不重复）。
   useEffect(() => {
     const pages = historyQuery.data?.pages
     if (!pages || pages.length === 0) return
     updateTimeline((previous) => {
       let next = previous
+      // pages 最新在前：反向合并，让旧页按 seq 前插。
       for (const page of [...pages].reverse()) {
-        next = mergeHistoryPage(next, page.messages as AgentMessageDto[], page.pendingJobs)
+        next = mergeHistoryPage(next, page.messages, page.pendingJobs)
       }
       return next
     })
   }, [historyQuery.data, updateTimeline])
 
-  // Bounded apply recovery after the first history load of a conversation. A
-  // completed agent-managed turn whose live `done` never arrived (disconnect,
-  // reload) still carries its ops in the persisted history, and no other path
-  // would ever commit them. Recovery is keyed on the newest ops turn: a refetch or
-  // a backward page that only adds older pre-existing turns changes nothing, while
-  // a genuinely newer turn (a mid-session disconnect) re-arms exactly one pass.
-  // A re-armed pass may only apply that newer turn — falling through to an older
-  // pre-existing turn would only conflict against an advanced revision. The
-  // per-turn attempt set still guarantees no turn is applied twice; the
-  // switch/actor effects reset the marker.
+  // 断线/刷新后的一次有界 apply 恢复：只补最新 ops turn，且逐 turn 仅一次。
   useEffect(() => {
     if (streaming) return
     if (!historyQuery.data) return
@@ -285,14 +355,12 @@ export function useCanvasAgent(canvasId: string | null) {
     const newest = opsTurns[opsTurns.length - 1]!
     if (applyRecoveryNewestRef.current === newest) return
     applyRecoveryNewestRef.current = newest
-    const turnId = planApplyRecovery(timelineRef.current, applyAttemptedTurnIdsRef.current)
-    if (turnId !== newest) return
-    requestApply(turnId)
+    const turnId = planApplyRecovery(timelineRef.current, applyAttemptedRef.current)
+    if (turnId) requestApply(turnId)
   }, [timeline, streaming, historyQuery.data, requestApply])
 
-  // Actor switch: abort the in-flight stream, clear the previous actor's timeline,
-  // confirmations and cached conversation state. Runs again when logout clears the
-  // actor to ''.
+  // 登录用户变化：中止流、清空上一用户时间线与缓存。
+  const actorRef = useRef(actorId)
   useEffect(() => {
     if (!agentScopeChanged(actorRef.current, actorId)) return
     const previous = actorRef.current
@@ -304,59 +372,45 @@ export function useCanvasAgent(canvasId: string | null) {
     setDisconnected(false)
     setConfirmations(createConfirmationState())
     setApplyFeedback(null)
-    applyAttemptedTurnIdsRef.current = new Set()
+    applyAttemptedRef.current = new Set()
     applyRecoveryNewestRef.current = null
     if (previous) {
-      for (const prefix of actorScopedCanvasQueryKeys(previous)) {
-        queryClient.removeQueries({ queryKey: prefix })
-      }
+      queryClient.removeQueries({ queryKey: queryKeys.canvasAgent.history('') })
+      queryClient.removeQueries({ queryKey: queryKeys.canvasAgent.status })
+      queryClient.removeQueries({ queryKey: queryKeys.canvases.root })
     }
   }, [actorId, queryClient, updateTimeline])
 
-  useEffect(() => () => {
-    senderRef.current?.stop()
-  }, [])
+  useEffect(
+    () => () => {
+      senderRef.current?.stop()
+      latestRef.current = { ...latestRef.current, generation: latestRef.current.generation + 1 }
+    },
+    [],
+  )
 
-  /** Confirm or reject one immutable proposal; reconcile from the response, and on a
-   *  conflict/expiry surface a new-proposal state instead of retrying. */
-  const confirmPending = useCallback((pendingId: string, approve: boolean) => {
-    if (confirmationFor(confirmationsRef.current, pendingId).phase === 'submitting') return
-    setConfirmations((map) => beginConfirmation(map, pendingId, approve ? 'confirm' : 'reject'))
-    confirmMutation.mutate({ pendingId, approve }, {
-      onSuccess: (result) => {
-        updateTimeline((previous) => applyPendingSnapshot(previous, result.pending))
-        setConfirmations((map) => confirmationSucceeded(map, result))
-        invalidateConversation()
-        // Once the proposal is decided the turn has no actionable pending left, so a
-        // turn that staged ops can be committed now (the revision was frozen until
-        // this point). `turnId` may be absent on legacy rows: then it is not applied.
-        // A submitted proposal has also produced a job row, so the shared job list is
-        // refreshed so the result card can resolve it from one source.
-        void queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY })
-        const turnId = result.pending.turnId
-        if (turnId && shouldApplyTurn(timelineRef.current, turnId)) requestApply(turnId)
-      },
-      onError: (error) => {
-        setConfirmations((map) => confirmationFailed(map, pendingId, error))
-        invalidateConversation()
-      },
-    })
-  }, [confirmMutation, invalidateConversation, updateTimeline, requestApply, queryClient])
+  const confirmPending = useCallback(
+    (pendingId: string, approve: boolean) => {
+      const scope = { ...latestRef.current }
+      if (!scope.actorId || !scope.canvasId) return
+      if (confirmationFor(confirmationsRef.current, pendingId).phase === 'submitting') return
+      const next = beginConfirmation(confirmationsRef.current, pendingId, approve ? 'confirm' : 'reject')
+      confirmationsRef.current = next
+      setConfirmations(next)
+      confirmMutation.mutate({ pendingId, approve, scope })
+    },
+    [confirmMutation],
+  )
 
-  /** Send a structured composer draft as one Agent turn. Returns `false`
-   *  synchronously when the lock is held or the draft is empty. */
+  /** 发送结构化草稿。返回 false 表示：空文本/锁被占用/缺对话。 */
   const send = useCallback((draft: ComposerDraft, baseRevision: number, targetCanvasId?: string) => {
     const canvas = targetCanvasId ?? latestRef.current.canvasId
     if (!canvas || !senderRef.current) return false
-    // Keep the live canvas/actor facts in step with the dispatch so the stream
-    // guards compare against the conversation this turn actually targets, even when
-    // the state effect for a just-created conversation has not run yet.
     latestRef.current = { ...latestRef.current, canvasId: canvas }
     dispatchActorRef.current = latestRef.current.actorId
     return senderRef.current.sendUserMessage({ canvasId: canvas, baseRevision, draft })
   }, [])
 
-  /** Explicit job_event continuation (user click or enabled opt-in only). */
   const continuePlanning = useCallback((jobId: string, baseRevision: number) => {
     const canvas = latestRef.current.canvasId
     if (!canvas || !senderRef.current) return false
@@ -364,7 +418,6 @@ export function useCanvasAgent(canvasId: string | null) {
     return senderRef.current.sendJobEvent({ canvasId: canvas, baseRevision, jobId })
   }, [])
 
-  /** Aborts only the current Agent turn; a media job is cancelled separately. */
   const stop = useCallback(() => {
     senderRef.current?.stop()
   }, [])
@@ -372,31 +425,26 @@ export function useCanvasAgent(canvasId: string | null) {
   const availability = resolveAgentAvailability(statusQuery.data)
 
   return {
-    actorId,
-    timeline,
+    canvasId,
+    items: timeline.items,
     streaming,
     streamError,
     disconnected,
-    send,
-    stop,
-    continuePlanning,
-    confirmPending,
+    availability,
+    status: statusQuery,
     confirmations,
     applyFeedback,
-    apply: applyMutation,
-    status: statusQuery,
-    availability,
+    send,
+    continuePlanning,
+    stop,
+    confirmPending,
+    confirmationFor: (pendingId: string) => confirmationFor(confirmationsRef.current, pendingId),
+    applyTurn: (turnId: string) => requestApply(turnId, true),
     history: {
       query: historyQuery,
-      messages: historyQuery.data?.pages ?? [],
       loading: historyQuery.isLoading,
-      error: historyQuery.error,
-      hasOlder: historyQuery.hasNextPage,
-      loadOlder: historyQuery.fetchNextPage,
-      reload: historyQuery.refetch,
+      hasOlder: Boolean(historyQuery.hasNextPage),
+      loadOlder: () => void historyQuery.fetchNextPage(),
     },
   }
 }
-
-export type CanvasAgentController = ReturnType<typeof useCanvasAgent>
-export type { AgentStreamEvent }

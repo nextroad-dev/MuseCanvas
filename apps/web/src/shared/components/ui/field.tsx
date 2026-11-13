@@ -6,7 +6,7 @@ import { WarningCircleIcon as CircleAlert } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { iconSize } from './size'
 
-export interface FormFieldContextValue {
+export interface FieldContextValue {
   /** Control id the `<label htmlFor>` points at — also the base for hint/error ids. */
   id: string
   /** Space-separated ids of the help/error nodes, for `aria-describedby`. */
@@ -17,34 +17,35 @@ export interface FormFieldContextValue {
   disabled?: boolean
 }
 
-const FormFieldContext = createContext<FormFieldContextValue | null>(null)
+const FieldContext = createContext<FieldContextValue | null>(null)
 
-/** Read by `Input` / `Textarea` / `Select` so they self-wire inside a `FormField`. */
-export function useFormFieldContext(): FormFieldContextValue | null {
-  return useContext(FormFieldContext)
+/** Read by `Input` / `Textarea` / `Select` so they self-wire inside a `Field`. */
+export function useFieldContext(): FieldContextValue | null {
+  return useContext(FieldContext)
 }
 
-export interface FormFieldProps extends HTMLAttributes<HTMLDivElement> {
-  /** Omit to let `FormField` generate one and hand it to the control via context. */
+/** Back-compat alias for the old name. */
+export const useFormFieldContext = useFieldContext
+
+export interface FieldProps extends HTMLAttributes<HTMLDivElement> {
+  /** Omit to let `Field` generate one and hand it to the control via context. */
   id?: string
   label: ReactNode
   required?: boolean
   /** 12px secondary text under the control. Replaced by `error` when set. */
   hint?: ReactNode
   error?: ReactNode
-  /** Hide the hint once an error shows (default) or keep both. */
+  /** Keep the hint visible even while an error shows. */
   keepHintOnError?: boolean
   ref?: Ref<HTMLDivElement>
   children: ReactNode
 }
 
 /**
- * Label + control + help/error wrapper (components.md 补充组件规范 → Form Field).
- * Spacing is fixed by the spec and therefore not configurable: label→control 8px,
- * control→hint 4px, field→field 24px (see `FieldGroup`). The error node replaces
- * the help slot, carries a 12px leading icon and is linked by `aria-describedby`.
+ * label + 控件 + 提示/错误包装器。错误节点替换提示槽位，并通过 `aria-describedby`
+ * 关联；`aria-invalid` 由 `error` 推导，保证红边永远伴随读屏播报。
  */
-export function FormField({
+export function Field({
   id,
   label,
   required,
@@ -55,7 +56,7 @@ export function FormField({
   ref,
   children,
   ...rest
-}: FormFieldProps) {
+}: FieldProps) {
   const auto = useId()
   const controlId = id ?? `field${auto}`
   const hintId = `${controlId}-hint`
@@ -65,7 +66,7 @@ export function FormField({
   const describedBy = [showError ? errorId : null, showHint ? hintId : null].filter(Boolean).join(' ')
 
   return (
-    <FormFieldContext.Provider value={{ id: controlId, describedBy, invalid: showError, required }}>
+    <FieldContext.Provider value={{ id: controlId, describedBy, invalid: showError, required }}>
       <div ref={ref} className={cn('flex flex-col', className)} {...rest}>
         <label htmlFor={controlId} className="mb-2 text-sm font-medium text-foreground">
           {label}
@@ -84,7 +85,7 @@ export function FormField({
 
         {showError ? (
           <p id={errorId} className="mt-1 flex items-start gap-1 text-xs text-danger">
-            <CircleAlert weight="fill" aria-hidden="true" className={`mt-0.5 ${iconSize.xs} shrink-0`} />
+            <CircleAlert weight="fill" aria-hidden="true" className={cn('mt-0.5 shrink-0', iconSize.xs)} />
             <span>{error}</span>
           </p>
         ) : null}
@@ -95,15 +96,16 @@ export function FormField({
           </p>
         ) : null}
       </div>
-    </FormFieldContext.Provider>
+    </FieldContext.Provider>
   )
 }
 
-export interface FieldGroupProps extends HTMLAttributes<HTMLDivElement> {
-  ref?: Ref<HTMLDivElement>
-}
+/** Alias kept so older call sites/imports keep working. */
+export const FormField = Field
 
-/** Stack of `FormField`s. The 24px between fields is the spec's field gap. */
+export type FieldGroupProps = HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> }
+
+/** Stack of fields; the 24px gap is the spec's field rhythm. */
 export function FieldGroup({ className, ref, ...rest }: FieldGroupProps) {
   return <div ref={ref} className={cn('flex flex-col gap-6', className)} {...rest} />
 }

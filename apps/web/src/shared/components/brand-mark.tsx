@@ -1,69 +1,58 @@
 import { cn } from '@/shared/lib/cn'
 
+/** 品牌飘带标志的原始比例（设计稿 40 × 19）。 */
+const MARK_RATIO = 40 / 19
+
 export interface BrandMarkProps {
-  /**
-   * `wordmark`: horizontal text mark (default for headers and auth).
-   * `monochrome`: black mark for footer / compact placement.
-   * `primary`: color ribbon logo.
-   * `mark`: square-ish standalone brand mark (public/brand/brand-mark.png).
-   */
-  variant?: 'wordmark' | 'monochrome' | 'primary' | 'mark'
+  /** `mark` 只有图形；`lockup` 图形 + "MuseCanvas" 文字（站点导航 / 页脚使用）。 */
+  variant?: 'mark' | 'lockup'
+  /** 图形宽度（px，默认 40）；高度按 40 × 19 比例推导。 */
+  size?: number
+  /** 兼容写法：直接给图形高度（px），宽度按比例推导。 */
+  height?: number
+  /** 文字部分是否使用衬线字体（落地页深色收尾区）。 */
+  displayFont?: boolean
   className?: string
-  priority?: boolean
 }
 
-const BRAND_PATHS = {
-  primary: '/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/01_primary_logo_transparent_trimmed.png',
-  wordmark: '/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/03_wordmark_transparent_trimmed.png',
-  monochrome: '/brand/musecanvas_flow_ribbon_final_pack/03_transparent_trimmed_png/04_monochrome_logo_transparent_trimmed.png',
-  mark: '/brand/brand-mark.png',
-} as const
-
-/** Intrinsic sizes pin the layout box before the bytes arrive (no CLS). */
-const BRAND_DIMENSIONS = {
-  primary: { width: 1105, height: 665 },
-  wordmark: { width: 1277, height: 327 },
-  monochrome: { width: 932, height: 586 },
-  mark: { width: 780, height: 370 },
-} as const
-
 /**
- * Theme-aware brand mark component for MuseCanvas.
+ * 品牌标志。
  *
- * Light wordmark keeps the original brand colors. Dark headers use the existing
- * monochrome asset; only that monochrome image is filtered, never the green logo.
- * Images inherit the frame height supplied by the consumer.
+ * 用普通 `<img>` 而不是 `next/image`：本站图片全部是本地固定素材，且生产镜像没有
+ * 安装 `sharp`，`next/image` 的默认优化器会在 `next start` 下 500。仍显式给
+ * `width`/`height`（首屏前就占好位），因此不会产生 CLS。
  */
 export function BrandMark({
-  variant = 'wordmark',
+  variant = 'lockup',
+  size = 40,
+  height,
+  displayFont = false,
   className,
-  priority = false,
 }: BrandMarkProps) {
-  const dimensions = BRAND_DIMENSIONS[variant]
+  const width = height ? Math.round(height * MARK_RATIO) : size
+  const pixelHeight = height ?? Math.round(width / MARK_RATIO)
+
   return (
-    <span className={cn('inline-flex h-7 shrink-0 items-center select-none', className)}>
+    <span className={cn('inline-flex items-center gap-2.5', className)}>
       <img
-        src={BRAND_PATHS[variant]}
-        alt="MuseCanvas"
-        width={dimensions.width}
-        height={dimensions.height}
-        className={cn(
-          'h-full w-auto max-w-full object-contain',
-          variant === 'wordmark' && 'dark:hidden',
-          variant === 'monochrome' && 'dark:brightness-0 dark:invert',
-        )}
-        loading={priority ? 'eager' : 'lazy'}
+        src="/brand/brand-mark.png"
+        alt={variant === 'lockup' ? '' : 'MuseCanvas'}
+        width={width}
+        height={pixelHeight}
+        decoding="async"
+        className="block shrink-0 object-contain"
+        style={{ width, height: pixelHeight }}
       />
-      {variant === 'wordmark' && (
-        <img
-          src={BRAND_PATHS.monochrome}
-          alt="MuseCanvas"
-          width={BRAND_DIMENSIONS.monochrome.width}
-          height={BRAND_DIMENSIONS.monochrome.height}
-          className="hidden h-full w-auto max-w-full object-contain brightness-0 invert dark:block"
-          loading={priority ? 'eager' : 'lazy'}
-        />
-      )}
+      {variant === 'lockup' ? (
+        <span
+          className={cn(
+            'text-base font-semibold text-foreground',
+            displayFont && 'font-display',
+          )}
+        >
+          MuseCanvas
+        </span>
+      ) : null}
     </span>
   )
 }

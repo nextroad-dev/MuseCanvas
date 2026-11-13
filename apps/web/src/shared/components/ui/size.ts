@@ -1,22 +1,12 @@
 /**
- * Token → utility maps for the two sizes a screen sets over and over: icon boxes
- * and square controls.
+ * 图标尺寸与方形控件的 token → 工具类映射。
  *
- * Why a map and not a raw arbitrary value: `h-[var(--icon-sm)] w-[var(--icon-sm)]`
- * was written 65 times across the app, and each copy is an independent chance to
- * typo a token name or drift back to a hardcoded pixel size. The token link is the
- * whole point of the scale, so the reference should exist once.
- *
- * Why `size-*` and not `h-* w-*`: `size-[var(--icon-sm)]` emits `width` and
- * `height` from one class, so an icon box is one literal instead of two that can
- * disagree. tailwind-merge already treats `size-*` (arbitrary values included) as
- * its own group, so `cn()` resolves a caller override the same way for both forms.
- *
- * A component that needs the height only (a row that may grow with its content)
- * uses `controlMinHeight`; a fixed square hit area uses `controlSquare`.
+ * 用 `size-[var(--icon-*)]` 而不是手写 `h-[…] w-[…]`：一个类同时输出宽高，避免两个
+ * 类写歪；token 检查规则 D 也会拦下手写尺寸对。只需要高度下限的行用
+ * `controlMinHeight`，固定方形热区用 `controlSquare`。
  */
 
-/** Icon box, matched to the `--icon-*` scale (12 / 16 / 20 / 24 / 32 / 48). */
+/** 图标容器，对应 `--icon-*`（12 / 16 / 20 / 24 / 32 / 48）。 */
 export const iconSize = {
   xs: 'size-[var(--icon-xs)]',
   sm: 'size-[var(--icon-sm)]',
@@ -26,7 +16,7 @@ export const iconSize = {
   '2xl': 'size-[var(--icon-2xl)]',
 } as const
 
-/** Descendant icons: size every `<svg>` a slot renders. */
+/** 作用于插槽内所有 `<svg>` 的图标尺寸。 */
 export const iconSlot = {
   xs: '[&>svg]:size-[var(--icon-xs)]',
   sm: '[&>svg]:size-[var(--icon-sm)]',
@@ -36,28 +26,28 @@ export const iconSlot = {
   '2xl': '[&>svg]:size-[var(--icon-2xl)]',
 } as const
 
-/**
- * Square control (checkbox, radio, icon-only button, avatar slot): one side equals
- * the control height, so the box and the row it sits in share a rhythm. `xs` is the
- * 24px dense toolbar size, which is square more often than it is a standalone field.
- */
-export const controlSquare: Record<ControlSquareSize, string> = {
+/** 方形控件（checkbox / radio / 图标按钮 / 头像槽）：边长等于控件高度。 */
+export const controlSquare = {
   xs: 'size-[var(--control-xs)]',
   sm: 'size-[var(--control-sm)]',
   md: 'size-[var(--control-md)]',
   lg: 'size-[var(--control-lg)]',
-}
+} as const
 
-/**
- * Minimum height of a control row (button, tab, segment, checkbox label). `min-h`
- * and not `h`: wrapping text or browser zoom may grow a control, never clip it.
- */
-export const controlMinHeight: Record<ControlSquareSize, string> = {
+/** 控件行最小高度（按钮、标签页、分段项、复选框标签）。用 min-h 而非 h，避免裁切。 */
+export const controlMinHeight = {
   xs: 'min-h-[var(--control-xs)]',
   sm: 'min-h-[var(--control-sm)]',
   md: 'min-h-[var(--control-md)]',
   lg: 'min-h-[var(--control-lg)]',
-}
+} as const
 
 export type IconSize = keyof typeof iconSize
-export type ControlSquareSize = 'xs' | 'sm' | 'md' | 'lg'
+export type ControlSquareSize = keyof typeof controlSquare
+export type ControlMinHeightSize = keyof typeof controlMinHeight
+
+/** 移动端触控目标下限（44px）：桌面尺寸偏小的控件在 <640px 时补足。 */
+export const touchTarget = 'max-sm:min-h-11'
+
+/** 图标按钮的移动端方形触控下限（44×44px）。 */
+export const touchTargetSquare = 'max-sm:size-11'

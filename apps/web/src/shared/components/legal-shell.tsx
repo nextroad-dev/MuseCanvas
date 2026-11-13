@@ -1,131 +1,81 @@
 import type { ReactNode } from 'react'
-import { CaretDownIcon as CaretDown } from '@phosphor-icons/react/ssr'
-import { PublicHeader } from '@/shared/components/public-header'
+import { ArrowUpIcon } from '@phosphor-icons/react/ssr'
+import { PUBLIC_FRAME, PublicHeader } from '@/shared/components/public-header'
 import { SiteFooter } from '@/shared/components/site-footer'
-import { ContentFrame } from '@/shared/components/content-frame'
 import { iconSize } from '@/shared/components/ui/size'
 import { cn } from '@/shared/lib/cn'
 
-export interface LegalSection {
-  id: string
-  title: string
-}
-
-interface LegalShellProps {
+export interface LegalShellProps {
   title: string
   updatedAt: string
-  current?: 'terms' | 'privacy'
-  sections?: LegalSection[]
+  current: 'terms' | 'privacy'
   children: ReactNode
 }
 
 /**
- * Frame for the terms / privacy pages. Those routes are `force-static`, so this
- * file stays a plain server component: no `cookies()`, no `headers()`, nothing
- * browser-only at module scope or during render.
+ * 条款 / 隐私页的统一版式（无画板，沿用 01 的字体与留白语言）。
  *
- * Reading layout:
- * - One reading column capped at `max-w-reading` (72ch), so a clause never runs
- *   past a comfortable line length.
- * - Sections are separated by a hairline rule and a 40px rhythm instead of boxes.
- * - Below 1280px the contents collapse into a native `<details>` band above the
- *   article (works without JavaScript). From 1280px the contents become a sticky
- *   rail beside the article.
- * - Gutters follow `ContentFrame`: 16px, then 24px from 640px, then 32px from 960px.
+ * - 顶部 2px 阅读进度条来自 `globals.css` 的 `.motion-reading-progress`：
+ *   只有支持 `animation-timeline: scroll()` 且允许动效时才 display，其余情况不渲染。
+ * - 正文单栏 `--container-reading`（72ch），sticky 顶栏提供返回首页与登录入口。
+ * - 正文层级由外层选择器统一给：节标题衬线 24px、段落 16px、列表 disc；
+ *   每节之间用 hairline 分隔，而不是卡片。
+ * - 文末「回到顶部」回到 `#main`，44px 触控目标。
  */
-export function LegalShell({ title, updatedAt, current = 'terms', sections = [], children }: LegalShellProps) {
+export function LegalShell({ title, updatedAt, current, children }: LegalShellProps) {
   return (
-    <div className="flex min-h-screen flex-col bg-canvas text-foreground antialiased">
-      <a
-        href="#main"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-tooltip focus:rounded-control focus:bg-primary focus:px-4 focus:py-2 focus:text-on-primary"
-      >
-        跳到主要内容
-      </a>
-      {/* 阅读进度条：2px bg-primary，`@supports (animation-timeline: scroll())` 才显示（见 globals.css）。 */}
+    <div className="flex min-h-screen flex-col bg-canvas text-foreground">
+      <PublicHeader />
+      {/* 放在顶栏之后：同为 z-sticky，后出现的进度条才压在 header 上沿。 */}
       <div aria-hidden="true" className="motion-reading-progress" />
-      <PublicHeader current={current} />
 
-      <main id="main" className="motion-page-enter flex-1 py-12 md:py-16 lg:py-20">
-        <ContentFrame>
-          <div
-            className={cn(
-              'grid grid-cols-[minmax(0,1fr)] gap-10',
-              sections.length > 0 && 'lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-16 xl:grid-cols-[16rem_minmax(0,1fr)]',
-            )}
-          >
-            {/* Contents for narrower screens: a tinted band that opens in place. */}
-            {sections.length > 0 && (
-              <details className="group rounded-card bg-tonal lg:hidden">
-                <summary className="flex min-h-[var(--control-md)] cursor-pointer list-none items-center justify-between gap-3 rounded-card px-4 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
-                  <span>
-                    {title}目录（{sections.length} 条）
-                  </span>
-                  <CaretDown
-                    weight="bold"
-                    aria-hidden="true"
-                    className={cn(iconSize.sm, 'shrink-0 text-muted-foreground transition-transform group-open:rotate-180')}
-                  />
-                </summary>
-                <nav aria-label="条款目录导航" className="flex flex-col gap-1 px-2 pb-3">
-                  {sections.map((section) => (
-                    <a
-                      key={section.id}
-                      href={`#${section.id}`}
-                      className="rounded-control px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-tonal-hover hover:text-foreground"
-                    >
-                      {section.title}
-                    </a>
-                  ))}
-                </nav>
-              </details>
-            )}
+      <main id="main" className="flex-1 py-12 sm:py-16 md:py-20">
+        <div className={PUBLIC_FRAME}>
+          <article className="mx-auto w-full max-w-reading">
+            <header className="flex flex-col gap-3 border-b border-border pb-8">
+              <p className="font-mono text-caption uppercase tracking-[0.05em] text-muted-foreground">
+                MuseCanvas · 法律文件
+              </p>
+              <h1 className="font-display text-headline text-foreground">{title}</h1>
+              <p className="text-sm text-muted-foreground">
+                最后更新：
+                <time dateTime={updatedAt} className="font-mono tabular-nums text-foreground">
+                  {updatedAt}
+                </time>
+              </p>
+            </header>
 
-            {/* Sticky contents rail on desktop: a thin rule, no box. */}
-            {sections.length > 0 && (
-              <aside
-                aria-label="条款目录导航"
-                className="hidden lg:sticky lg:top-[calc(var(--layout-header)+2rem)] lg:block lg:self-start"
+            <div
+              className={cn(
+                'mt-10 flex flex-col',
+                // 每节：衬线标题 + 段间距；节与节之间一条 hairline。
+                '[&>section]:flex [&>section]:flex-col [&>section]:gap-4',
+                '[&>section+section]:mt-10 [&>section+section]:border-t [&>section+section]:border-border [&>section+section]:pt-10',
+                '[&>section]:scroll-mt-20',
+                '[&>section>h2]:font-display [&>section>h2]:text-section [&>section>h2]:font-semibold [&>section>h2]:text-foreground',
+                '[&>section>p]:text-base [&>section>p]:text-foreground [&>section>p]:[overflow-wrap:break-word]',
+                '[&>section>p>strong]:font-medium [&>section>p>strong]:text-foreground',
+                '[&>section>ul]:list-disc [&>section>ul]:space-y-1.5 [&>section>ul]:pl-5 [&>section>ul]:text-base [&>section>ul]:text-foreground',
+                '[&>section>ul>li]:[overflow-wrap:break-word]',
+              )}
+            >
+              {children}
+            </div>
+
+            <div className="mt-12 flex justify-end border-t border-border pt-6">
+              <a
+                href="#main"
+                className="motion-press inline-flex min-h-[var(--control-touch)] items-center gap-2 rounded-control text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
-                <nav className="flex flex-col gap-3">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <h2 className="text-sm font-medium text-foreground">{title}目录</h2>
-                    <span className="font-mono text-xs tabular-nums text-muted-foreground">{sections.length} 条</span>
-                  </div>
-                  <div className="flex max-h-[calc(100vh-12rem)] flex-col overflow-y-auto border-l border-border">
-                    {sections.map((section) => (
-                      <a
-                        key={section.id}
-                        href={`#${section.id}`}
-                        title={section.title}
-                        className="-ml-px truncate border-l border-transparent py-1.5 pl-4 text-sm text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
-                      >
-                        {section.title}
-                      </a>
-                    ))}
-                  </div>
-                </nav>
-              </aside>
-            )}
-
-            {/* Document: header, then sections separated by rules. */}
-            <article className="min-w-0 max-w-reading">
-              <header className="flex flex-col gap-3 border-b border-border pb-8">
-                <h1 className="text-title text-foreground [text-wrap:balance]">{title}</h1>
-                <p className="text-sm text-muted-foreground">
-                  最后更新：<time className="font-mono tabular-nums whitespace-nowrap text-foreground">{updatedAt}</time>
-                </p>
-              </header>
-
-              <div className="mt-10 flex flex-col gap-10 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-10 [&_h2]:text-subtitle [&_h2]:font-normal [&_h2]:text-foreground [&_h2]:[text-wrap:balance] [&_p]:mt-3 [&_p]:text-base [&_p]:leading-[1.59] [&_p]:text-foreground [&_p]:[text-wrap:pretty] [&_p]:[overflow-wrap:break-word] [&_ul]:mt-3 [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul]:pl-5 [&_ul]:text-base [&_ul]:leading-[1.59] [&_ul]:text-foreground [&_li]:[text-wrap:pretty] [&_li]:[overflow-wrap:break-word] [&_strong]:font-medium [&_strong]:text-foreground">
-                {children}
-              </div>
-            </article>
-          </div>
-        </ContentFrame>
+                回到顶部
+                <ArrowUpIcon weight="bold" aria-hidden="true" className={iconSize.sm} />
+              </a>
+            </div>
+          </article>
+        </div>
       </main>
 
-      <SiteFooter current={current} className="mt-16" />
+      <SiteFooter current={current} />
     </div>
   )
 }

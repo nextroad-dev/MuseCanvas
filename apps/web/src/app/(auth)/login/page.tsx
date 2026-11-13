@@ -1,66 +1,70 @@
+import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
-import { serverApi } from '@/shared/services/server-api'
+
 import { LoginForm } from '@/features/auth/components/login-form'
-import { ServiceUnavailable } from '@/shared/components/service-unavailable'
-import { safeRedirectPath } from '@/shared/lib/app-routes'
-import { Skeleton, SkeletonText } from '@/shared/components/ui/skeleton'
-import { Suspense } from 'react'
+import { APP_ROUTES, safeRedirectPath } from '@/shared/lib/app-routes'
+import { getRegistrationMode, getSession } from '@/shared/services/server-api'
+
+/**
+ * 登录页：RSC 会话预检 + Client Island 表单。
+ *
+ * 读 `muse_session` Cookie 决定了本页必须动态渲染，不能 `force-static`；
+ * 已登录用户在服务端直接 307 到目标页（`?next=` 先经白名单归一化），
+ * 避免客户端先闪一次表单。后端不可用时仍渲染表单，并把提示交给表单展示。
+ */
 
 export const dynamic = 'force-dynamic'
 
-export const metadata = {
-  title: '登录 - MuseCanvas',
+export const metadata: Metadata = {
+  title: '登录',
   description: '登录 MuseCanvas AI 创作工作台',
 }
 
-/** Shape-matched placeholder for the client form and its OAuth alternatives. */
-function LoginFormFallback() {
-  return (
-    <div aria-busy="true" className="flex flex-col gap-8">
-      <span className="sr-only">正在加载登录表单</span>
-      <header className="flex flex-col items-start gap-3" aria-hidden="true">
-        <Skeleton className="h-8 w-48" />
-        <SkeletonText lines={1} width="16rem" />
-      </header>
-      <div className="flex flex-col gap-6" aria-hidden="true">
-        <div className="flex flex-col gap-2">
-          <Skeleton className="h-5 w-24" />
-          <Skeleton className="h-[var(--control-lg)] w-full rounded-control" />
-          <Skeleton className="h-4 w-48" />
-        </div>
-        <Skeleton className="h-[var(--control-lg)] w-full rounded-control" />
-      </div>
-      <div className="flex flex-col gap-4" aria-hidden="true">
-        <Skeleton className="h-px w-full rounded-none" />
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <Skeleton className="h-[var(--control-lg)] flex-1 rounded-control" />
-          <Skeleton className="h-[var(--control-lg)] flex-1 rounded-control" />
-        </div>
-      </div>
-    </div>
-  )
+type LoginSearchParams = Promise<Record<string, string | string[] | undefined>>
+
+function firstValue(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
 }
 
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ from?: string }>
-}) {
-  const { from } = await searchParams
+/** 目标页白名单之外再排除 `/login` 自身，避免 `?next=/login` 造成登录后回环。 */
+function loginDestination(value: string | null): string {
+  const path = safeRedirectPath(value)
+  if (path === APP_ROUTES.login || path.startsWith(`${APP_ROUTES.login}/`) || path.startsWith(`${APP_ROUTES.login}?`)) {
+    return APP_ROUTES.generate
+  }
+  return path
+}
 
-  // Server-side session pre-check: authenticated users redirect; a downed
-  // backend must not render a form whose submit is guaranteed to fail.
-  const sessionRes = await serverApi.getMe()
-  if (sessionRes.success && sessionRes.data?.user) {
-    redirect(safeRedirectPath(from))
+export default async function LoginPage({ searchParams }: { searchParams: LoginSearchParams }) {
+  const params = await searchParams
+  // 兼容 `?next=` 与旧链路的 `?from=`；两者都收敛为站内白名单路径。
+  const nextPath = loginDestination(firstValue(params.next) ?? firstValue(params.from))
+
+  let session = null
+  let backendUnavailable = false
+  try {
+    session = await getSession()
+  } catch {
+    backendUnavailable = true
   }
-  if (sessionRes.error?.code === 'UPSTREAM_UNAVAILABLE') {
-    return <ServiceUnavailable mode="inline" />
-  }
+
+  if (session) redirect(nextPath)
+
+  // 公开端点；后端不可用时按「非邀请制」降级，真正的邀请判断会由 otp/request 的 nextStep 兜住。
+  const registration = backendUnavailable
+    ? null
+    : await getRegistrationMode().catch(() => null)
 
   return (
-    <Suspense fallback={<LoginFormFallback />}>
-      <LoginForm />
-    </Suspense>
+    <LoginForm
+      nextPath={nextPath}
+      backendUnavailable={backendUnavailable}
+      oauthError={firstValue(params.error)}
+      oauthChallenge={firstValue(params.oauth_challenge)}
+      oauthEmail={firstValue(params.email)}
+      oauthProvider={firstValue(params.provider)}
+      requiresInvitation={registration?.requiresInvitation ?? false}
+    />
   )
 }

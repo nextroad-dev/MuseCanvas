@@ -3,7 +3,7 @@ name: Backend reliability fixtures
 on:
   pull_request:
     branches: [main]
-    paths: ['apps/api/**', 'apps/worker/**', 'packages/database/**', 'tests/integration/backend-reliability*', 'deploy/**', '.github/workflows/backend-reliability.yml']
+    paths: ['apps/api/**', 'apps/worker/**', 'packages/database/**', 'scripts/**', 'tests/integration/backend-reliability*', 'deploy/**', '.github/workflows/backend-reliability.yml']
   workflow_dispatch:
 
 permissions:

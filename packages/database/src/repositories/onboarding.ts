@@ -1,11 +1,11 @@
-import type pg from 'pg'
+import pg from 'pg'
 
 // Typed repository for the resumable, secure onboarding foundation.
 //
 // This module only moves opaque strings and numbers between callers and SQL.
 // It performs no encryption, decryption, or fingerprinting: ciphertext and
 // fingerprints are caller-supplied and stored opaquely. Plaintext secrets are
-// never modeled here and never returned. Depends on `pg` types only — no
+// never modeled here and never returned. Depends on `pg` only — no
 // providers/config imports.
 
 export type OnboardingSectionKey =
@@ -45,6 +45,28 @@ function toIso(value: Date | string | null): string | null {
 
 function requireIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : String(value)
+}
+
+/** Pool writes own a short transaction so row locks and section updates are
+ * atomic. PoolClient writes MUST run in the caller's existing transaction;
+ * never begin, commit, roll back, or release a caller-owned connection. */
+async function writeTransaction<T>(
+  client: pg.Pool | pg.PoolClient,
+  fn: (client: pg.PoolClient) => Promise<T>,
+): Promise<T> {
+  if (!(client instanceof pg.Pool)) return fn(client)
+  const connection = await client.connect()
+  try {
+    await connection.query('BEGIN')
+    const value = await fn(connection)
+    await connection.query('COMMIT')
+    return value
+  } catch (error) {
+    await connection.query('ROLLBACK')
+    throw error
+  } finally {
+    connection.release()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,21 +192,23 @@ export async function updateSiteSettings(
   input: UpdateSiteSettingsInput,
   updatedBy?: string | null,
 ): Promise<SiteSettingsEntity> {
-  const current = await client.query('SELECT * FROM app_settings WHERE singleton = true FOR UPDATE')
-  const row = current.rows[0] as SiteSettingsRow | undefined
-  const res = await client.query(
-    `UPDATE app_settings
+  return writeTransaction(client, async (client) => {
+    const current = await client.query('SELECT * FROM app_settings WHERE singleton = true FOR UPDATE')
+    const row = current.rows[0] as SiteSettingsRow | undefined
+    const res = await client.query(
+      `UPDATE app_settings
      SET site_name = $1, site_url = $2, revision = revision + 1,
          updated_at = now(), updated_by = COALESCE($3, updated_by)
      WHERE singleton = true RETURNING *`,
-    [
-      input.siteName !== undefined ? input.siteName : (row?.site_name ?? null),
-      input.siteUrl !== undefined ? input.siteUrl : (row?.site_url ?? null),
-      updatedBy ?? null,
-    ],
-  )
-  await markOnboardingSection(client, 'site', 'complete', updatedBy)
-  return toSiteSettingsEntity(res.rows[0] as SiteSettingsRow)
+      [
+        input.siteName !== undefined ? input.siteName : (row?.site_name ?? null),
+        input.siteUrl !== undefined ? input.siteUrl : (row?.site_url ?? null),
+        updatedBy ?? null,
+      ],
+    )
+    await markOnboardingSection(client, 'site', 'complete', updatedBy)
+    return toSiteSettingsEntity(res.rows[0] as SiteSettingsRow)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -273,34 +297,36 @@ export async function updateSmtpSettings(
   input: UpdateSmtpSettingsInput,
   updatedBy?: string | null,
 ): Promise<SmtpSettingsEntity> {
-  const current = await client.query('SELECT * FROM smtp_settings WHERE singleton = true FOR UPDATE')
-  const row = current.rows[0] as SmtpSettingsRow | undefined
-  const clearSecret = input.clearSecret === true
-  const res = await client.query(
-    `UPDATE smtp_settings
+  return writeTransaction(client, async (client) => {
+    const current = await client.query('SELECT * FROM smtp_settings WHERE singleton = true FOR UPDATE')
+    const row = current.rows[0] as SmtpSettingsRow | undefined
+    const clearSecret = input.clearSecret === true
+    const res = await client.query(
+      `UPDATE smtp_settings
      SET host = $1, port = $2, tls_mode = $3, username = $4,
          from_address = $5, from_name = $6, status = $7,
          password_encrypted = $8, password_fingerprint = $9, encryption_key_id = $10,
          revision = revision + 1, updated_at = now(),
          updated_by = COALESCE($11, updated_by)
      WHERE singleton = true RETURNING *`,
-    [
-      input.host !== undefined ? input.host : (row?.host ?? null),
-      input.port !== undefined ? input.port : (row?.port ?? null),
-      input.tlsMode !== undefined ? input.tlsMode : (row?.tls_mode ?? 'none'),
-      input.username !== undefined ? input.username : (row?.username ?? null),
-      input.fromAddress !== undefined ? input.fromAddress : (row?.from_address ?? null),
-      input.fromName !== undefined ? input.fromName : (row?.from_name ?? null),
-      input.status !== undefined ? input.status : (row?.status ?? 'not_configured'),
-      clearSecret ? null : (input.passwordCiphertext !== undefined ? input.passwordCiphertext : (row?.password_encrypted ?? null)),
-      clearSecret ? null : (input.passwordFingerprint !== undefined ? input.passwordFingerprint : (row?.password_fingerprint ?? null)),
-      input.encryptionKeyId !== undefined ? input.encryptionKeyId : (row?.encryption_key_id ?? null),
-      updatedBy ?? null,
-    ],
-  )
-  const saved = toSmtpSettingsEntity(res.rows[0] as SmtpSettingsRow)
-  await markOnboardingSection(client, 'smtp', saved.status === 'verified' ? 'complete' : 'pending', updatedBy)
-  return saved
+      [
+        input.host !== undefined ? input.host : (row?.host ?? null),
+        input.port !== undefined ? input.port : (row?.port ?? null),
+        input.tlsMode !== undefined ? input.tlsMode : (row?.tls_mode ?? 'none'),
+        input.username !== undefined ? input.username : (row?.username ?? null),
+        input.fromAddress !== undefined ? input.fromAddress : (row?.from_address ?? null),
+        input.fromName !== undefined ? input.fromName : (row?.from_name ?? null),
+        input.status !== undefined ? input.status : (row?.status ?? 'not_configured'),
+        clearSecret ? null : (input.passwordCiphertext !== undefined ? input.passwordCiphertext : (row?.password_encrypted ?? null)),
+        clearSecret ? null : (input.passwordFingerprint !== undefined ? input.passwordFingerprint : (row?.password_fingerprint ?? null)),
+        input.encryptionKeyId !== undefined ? input.encryptionKeyId : (row?.encryption_key_id ?? null),
+        updatedBy ?? null,
+      ],
+    )
+    const saved = toSmtpSettingsEntity(res.rows[0] as SmtpSettingsRow)
+    await markOnboardingSection(client, 'smtp', saved.status === 'verified' ? 'complete' : 'pending', updatedBy)
+    return saved
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -410,11 +436,12 @@ export async function updateStorageSettings(
   input: UpdateStorageSettingsInput,
   updatedBy?: string | null,
 ): Promise<StorageSettingsEntity> {
-  const current = await client.query('SELECT * FROM object_storage_settings WHERE singleton = true FOR UPDATE')
-  const row = current.rows[0] as StorageSettingsRow | undefined
-  const clearSecret = input.clearSecret === true
-  const res = await client.query(
-    `UPDATE object_storage_settings
+  return writeTransaction(client, async (client) => {
+    const current = await client.query('SELECT * FROM object_storage_settings WHERE singleton = true FOR UPDATE')
+    const row = current.rows[0] as StorageSettingsRow | undefined
+    const clearSecret = input.clearSecret === true
+    const res = await client.query(
+      `UPDATE object_storage_settings
      SET endpoint = $1, public_endpoint = $2, region = $3, bucket = $4,
          access_key_id = $5, signed_url_ttl_seconds = $6, status = $7,
          secret_encrypted = $8, secret_fingerprint = $9, encryption_key_id = $10,
@@ -422,25 +449,26 @@ export async function updateStorageSettings(
          updated_by = COALESCE($11, updated_by),
          storage_driver = $12, local_root = $13
      WHERE singleton = true RETURNING *`,
-    [
-      input.endpoint !== undefined ? input.endpoint : (row?.endpoint ?? null),
-      input.publicEndpoint !== undefined ? input.publicEndpoint : (row?.public_endpoint ?? null),
-      input.region !== undefined ? input.region : (row?.region ?? 'us-east-1'),
-      input.bucket !== undefined ? input.bucket : (row?.bucket ?? null),
-      input.accessKeyId !== undefined ? input.accessKeyId : (row?.access_key_id ?? null),
-      input.signedUrlTtlSeconds !== undefined ? input.signedUrlTtlSeconds : (row?.signed_url_ttl_seconds ?? 900),
-      input.status !== undefined ? input.status : (row?.status ?? 'not_configured'),
-      clearSecret ? null : (input.secretCiphertext !== undefined ? input.secretCiphertext : (row?.secret_encrypted ?? null)),
-      clearSecret ? null : (input.secretFingerprint !== undefined ? input.secretFingerprint : (row?.secret_fingerprint ?? null)),
-      input.encryptionKeyId !== undefined ? input.encryptionKeyId : (row?.encryption_key_id ?? null),
-      updatedBy ?? null,
-      input.driver !== undefined ? input.driver : (row?.storage_driver ?? 's3'),
-      input.localRoot !== undefined ? input.localRoot : (row?.local_root ?? null),
-    ],
-  )
-  const saved = toStorageSettingsEntity(res.rows[0] as StorageSettingsRow)
-  await markOnboardingSection(client, 'storage', saved.status === 'verified' ? 'complete' : 'pending', updatedBy)
-  return saved
+      [
+        input.endpoint !== undefined ? input.endpoint : (row?.endpoint ?? null),
+        input.publicEndpoint !== undefined ? input.publicEndpoint : (row?.public_endpoint ?? null),
+        input.region !== undefined ? input.region : (row?.region ?? 'us-east-1'),
+        input.bucket !== undefined ? input.bucket : (row?.bucket ?? null),
+        input.accessKeyId !== undefined ? input.accessKeyId : (row?.access_key_id ?? null),
+        input.signedUrlTtlSeconds !== undefined ? input.signedUrlTtlSeconds : (row?.signed_url_ttl_seconds ?? 900),
+        input.status !== undefined ? input.status : (row?.status ?? 'not_configured'),
+        clearSecret ? null : (input.secretCiphertext !== undefined ? input.secretCiphertext : (row?.secret_encrypted ?? null)),
+        clearSecret ? null : (input.secretFingerprint !== undefined ? input.secretFingerprint : (row?.secret_fingerprint ?? null)),
+        input.encryptionKeyId !== undefined ? input.encryptionKeyId : (row?.encryption_key_id ?? null),
+        updatedBy ?? null,
+        input.driver !== undefined ? input.driver : (row?.storage_driver ?? 's3'),
+        input.localRoot !== undefined ? input.localRoot : (row?.local_root ?? null),
+      ],
+    )
+    const saved = toStorageSettingsEntity(res.rows[0] as StorageSettingsRow)
+    await markOnboardingSection(client, 'storage', saved.status === 'verified' ? 'complete' : 'pending', updatedBy)
+    return saved
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -512,30 +540,32 @@ export async function updateRuntimeSettings(
   input: UpdateRuntimeSettingsInput,
   updatedBy?: string | null,
 ): Promise<RuntimeSettingsEntity> {
-  const current = await client.query('SELECT * FROM runtime_settings WHERE singleton = true FOR UPDATE')
-  const row = current.rows[0] as RuntimeSettingsRow | undefined
-  const res = await client.query(
-    `UPDATE runtime_settings
+  return writeTransaction(client, async (client) => {
+    const current = await client.query('SELECT * FROM runtime_settings WHERE singleton = true FOR UPDATE')
+    const row = current.rows[0] as RuntimeSettingsRow | undefined
+    const res = await client.query(
+      `UPDATE runtime_settings
      SET upload_ttl_seconds = $1, signed_url_ttl_seconds = $2,
          max_image_bytes = $3, max_total_bytes = $4, max_inputs = $5,
          provider_timeout_ms = $6, max_output_bytes = $7, job_lease_ms = $8,
          revision = revision + 1, updated_at = now(),
          updated_by = COALESCE($9, updated_by)
      WHERE singleton = true RETURNING *`,
-    [
-      input.uploadTtlSeconds ?? row?.upload_ttl_seconds ?? 86400,
-      input.signedUrlTtlSeconds ?? row?.signed_url_ttl_seconds ?? 900,
-      input.maxImageBytes ?? row?.max_image_bytes ?? 10000000,
-      input.maxTotalBytes ?? row?.max_total_bytes ?? 20000000,
-      input.maxInputs ?? row?.max_inputs ?? 4,
-      input.providerTimeoutMs ?? row?.provider_timeout_ms ?? 300000,
-      input.maxOutputBytes ?? row?.max_output_bytes ?? 100000000,
-      input.jobLeaseMs ?? row?.job_lease_ms ?? 600000,
-      updatedBy ?? null,
-    ],
-  )
-  await markOnboardingSection(client, 'runtime', 'complete', updatedBy)
-  return toRuntimeSettingsEntity(res.rows[0] as RuntimeSettingsRow)
+      [
+        input.uploadTtlSeconds ?? row?.upload_ttl_seconds ?? 86400,
+        input.signedUrlTtlSeconds ?? row?.signed_url_ttl_seconds ?? 900,
+        input.maxImageBytes ?? row?.max_image_bytes ?? 10000000,
+        input.maxTotalBytes ?? row?.max_total_bytes ?? 20000000,
+        input.maxInputs ?? row?.max_inputs ?? 4,
+        input.providerTimeoutMs ?? row?.provider_timeout_ms ?? 300000,
+        input.maxOutputBytes ?? row?.max_output_bytes ?? 100000000,
+        input.jobLeaseMs ?? row?.job_lease_ms ?? 600000,
+        updatedBy ?? null,
+      ],
+    )
+    await markOnboardingSection(client, 'runtime', 'complete', updatedBy)
+    return toRuntimeSettingsEntity(res.rows[0] as RuntimeSettingsRow)
+  })
 }
 
 // ---------------------------------------------------------------------------

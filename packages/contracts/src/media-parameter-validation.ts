@@ -663,21 +663,33 @@ function validateParameters(
 
     if (type === 'image-size') {
       validateImageSizeDeclaration(name, entry, reject)
+      // Do not pass malformed presets to the value validator below (or defaults).
+      if (!Array.isArray(entry.presets) || !entry.presets.every((preset) =>
+        isRecord(preset) && typeof preset.value === 'string' && typeof preset.label === 'string')) {
+        continue
+      }
     }
     if (type === 'enum') {
       const options = entry.options
       if (!Array.isArray(options) || options.length === 0) {
         reject('INVALID_MODEL_CAPABILITIES', `enum parameter '${name}' must declare a non-empty options array`)
+        continue
       } else {
         if (options.length > MEDIA_PARAMETER_LIMITS.options) {
           reject('PARAMETER_LIMIT', `enum parameter '${name}' exceeds the option limit of ${MEDIA_PARAMETER_LIMITS.options}`)
         }
+        const validOptions = options.every((option) => typeof option === 'string'
+          || (isRecord(option) && typeof option.value === 'string'
+            && (option.label === undefined || typeof option.label === 'string')
+            && (option.description === undefined || typeof option.description === 'string')
+            && (option.experimental === undefined || typeof option.experimental === 'boolean')))
+        if (!validOptions) {
+          reject('INVALID_MODEL_CAPABILITIES', `enum parameter '${name}' has malformed options`)
+          continue
+        }
         const values = enumOptionValues(options as Array<string | ParameterOption>)
         if (new Set(values).size !== values.length) {
           reject('INVALID_MODEL_CAPABILITIES', `enum parameter '${name}' declares duplicate options`)
-        }
-        if (typeof entry.defaultValue === 'string' && !values.includes(entry.defaultValue)) {
-          reject('DEFAULT_NOT_ALLOWED', `enum parameter '${name}' defaults to unoffered value '${entry.defaultValue}'`)
         }
       }
     }
@@ -687,12 +699,11 @@ function validateParameters(
       if (typeof min === 'number' && typeof max === 'number' && min > max) {
         reject('INVALID_MODEL_CAPABILITIES', `parameter '${name}' declares min > max`)
       }
-      const defaultValue = entry.defaultValue
-      if (typeof defaultValue === 'number') {
-        const issues = validateParameterValue(entry as unknown as ParameterDescriptor, defaultValue)
-        if (issues.length > 0) {
-          reject('DEFAULT_NOT_ALLOWED', `parameter '${name}' defaults to an illegal value: ${issues[0].message}`)
-        }
+    }
+    if (entry.defaultValue !== undefined) {
+      const issues = validateParameterValue(entry as unknown as ParameterDescriptor, entry.defaultValue as JsonValue)
+      if (issues.length > 0) {
+        reject('DEFAULT_NOT_ALLOWED', `parameter '${name}' defaults to an illegal value: ${issues[0].message}`)
       }
     }
 
@@ -924,11 +935,9 @@ function validateDefaults(
       reject('DEFAULT_NOT_ALLOWED', `default refers to undeclared parameter '${name}'`)
       continue
     }
-    if (!isRecord(value) && !Array.isArray(value)) {
-      const issues = validateParameterValue(descriptor, value as JsonValue)
-      if (issues.length > 0) {
-        reject('DEFAULT_NOT_ALLOWED', `default for '${name}' is illegal: ${issues[0].message}`)
-      }
+    const issues = validateParameterValue(descriptor, value as JsonValue)
+    if (issues.length > 0) {
+      reject('DEFAULT_NOT_ALLOWED', `default for '${name}' is illegal: ${issues[0].message}`)
     }
   }
 }

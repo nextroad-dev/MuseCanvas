@@ -209,10 +209,9 @@ export function validateGenerationRequest(
     // can see or unset has no business reaching a vendor.
     if (descriptor.dependsOn && !isParameterVisible(descriptor, rawParameters)) continue
 
-    if (rawVal === undefined || rawVal === null) {
-      if (defaultVal !== undefined) {
-        normalizedParameters[descriptor.name] = defaultVal
-      } else if (descriptor.required) {
+    const value = rawVal === undefined || rawVal === null ? defaultVal : rawVal
+    if (value === undefined) {
+      if (descriptor.required) {
         errors.push({
           code: 'MISSING_REQUIRED_PARAMETER',
           message: `Missing required parameter '${descriptor.name}'`,
@@ -222,9 +221,9 @@ export function validateGenerationRequest(
       continue
     }
 
-    const issues = validateParameterValue(descriptor, rawVal)
+    const issues = validateParameterValue(descriptor, value)
     if (issues.length === 0) {
-      normalizedParameters[descriptor.name] = rawVal
+      normalizedParameters[descriptor.name] = value
       continue
     }
     for (const issue of issues) {
@@ -260,8 +259,8 @@ export function validateGenerationRequest(
   }
 
   // 4. Ordered Input Slots validation
-  const rawInputs = request.inputs || []
-  if (!Array.isArray(rawInputs)) {
+  const rawInputs = Array.isArray(request.inputs) ? request.inputs : []
+  if (request.inputs !== undefined && !Array.isArray(request.inputs)) {
     errors.push({
       code: 'INVALID_INPUTS',
       message: 'Inputs must be an array of items',
@@ -283,7 +282,7 @@ export function validateGenerationRequest(
 
   for (let i = 0; i < rawInputs.length; i++) {
     const item = rawInputs[i]
-    if (!item || typeof item !== 'object') {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
       errors.push({
         code: 'INVALID_INPUT_ITEM',
         message: `Input at index ${i} is not an object`,
@@ -388,11 +387,8 @@ export function validateGenerationRequest(
     }
   }
 
-  // Sort inputs by position ascending
-  const sortedInputs = [...rawInputs].sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-
   // 5. Generation Mode Resolution & Verification
-  const hasInputs = sortedInputs.length > 0
+  const hasInputs = rawInputs.length > 0
   const isVideoCapabilities =
     capabilities.supportedMediaKinds?.includes('video') ||
     capabilities.modes.some((m) => m === 'text_to_video' || m === 'image_to_video')
@@ -456,6 +452,10 @@ export function validateGenerationRequest(
       errorMessage: first.message,
     }
   }
+
+  // Only sort after validation: malformed items must return errors, not throw
+  // while dereferencing their positions in the comparator.
+  const sortedInputs = [...rawInputs].sort((a, b) => a.position - b.position)
 
   return {
     valid: true,

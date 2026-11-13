@@ -12,6 +12,7 @@ import {
   type CreateGenerationRequest,
   type GenerationOutput,
   type ImageGenerationOutput,
+  type JsonValue,
   type ModelCapabilities,
   type VideoGenerationOutput,
 } from '@musecanvas/contracts'
@@ -333,6 +334,108 @@ test('descriptor-driven validation rejects unknown parameters and type/bounds vi
   assert.equal(missingReqResult.valid, false)
   if (!missingReqResult.valid) {
     assert.equal(missingReqResult.errorCode, 'MISSING_REQUIRED_PARAMETER')
+  }
+})
+
+test('effective parameter defaults are validated for absent and null request values', () => {
+  const invalidDefaults: { value: JsonValue; code: string }[] = [
+    { value: 'oops', code: 'INVALID_PARAMETER_TYPE' },
+    { value: false, code: 'INVALID_PARAMETER_TYPE' },
+    { value: {}, code: 'INVALID_PARAMETER_TYPE' },
+    { value: [], code: 'INVALID_PARAMETER_TYPE' },
+    { value: null, code: 'INVALID_PARAMETER_TYPE' },
+    { value: -1, code: 'PARAMETER_OUT_OF_RANGE' },
+    { value: 5, code: 'PARAMETER_OUT_OF_RANGE' },
+    { value: 1.5, code: 'INVALID_PARAMETER_TYPE' },
+  ]
+
+  for (const source of ['descriptor', 'override'] as const) {
+    for (const { value, code } of invalidDefaults) {
+      // Null overrides intentionally fall back to the descriptor default.
+      if (source === 'override' && value === null) continue
+      const requestParameters: Record<string, JsonValue>[] = [{}, { count: null }]
+      for (const parameters of requestParameters) {
+        const capabilities: ModelCapabilities = {
+          modes: ['text_to_image'],
+          parameters: [{
+            type: 'integer', name: 'count', min: 1, max: 4,
+            defaultValue: (source === 'descriptor' ? value : 2) as number,
+          }],
+          inputSlots: [],
+        }
+        const result = validateGenerationRequest(
+          capabilities,
+          { modelId: 'model-1', prompt: 'test', parameters },
+          source === 'override' ? { defaults: { count: value } } : undefined,
+        )
+        assert.equal(result.valid, false, `${source} default ${JSON.stringify(value)}`)
+        if (!result.valid) {
+          assert.equal(result.errorCode, code)
+          assert.equal(result.errors[0].field, 'parameters.count')
+          assert.equal(result.errors[0].details?.value, value)
+        }
+      }
+    }
+  }
+})
+
+test('legal defaults preserve precedence and absent/null request fallback semantics', () => {
+  const capabilities: ModelCapabilities = {
+    modes: ['text_to_image'],
+    parameters: [
+      { type: 'integer', name: 'count', min: 1, max: 4, defaultValue: 2 },
+      { type: 'boolean', name: 'watermark', defaultValue: false },
+    ],
+    inputSlots: [],
+  }
+  const cases: { parameters?: Record<string, JsonValue>; defaults?: Record<string, JsonValue>; count: number }[] = [
+    { count: 2 },
+    { parameters: {}, count: 2 },
+    { parameters: { count: null }, count: 2 },
+    { defaults: { count: 4 }, count: 4 },
+    { parameters: { count: null }, defaults: { count: 1 }, count: 1 },
+    { defaults: { count: null }, count: 2 },
+    { parameters: { count: 3 }, defaults: { count: -1 }, count: 3 },
+  ]
+  for (const { parameters, defaults, count } of cases) {
+    const result = validateGenerationRequest(
+      capabilities,
+      { modelId: 'model-1', prompt: 'test', parameters: parameters ?? {} },
+      { defaults },
+    )
+    assert.equal(result.valid, true)
+    if (result.valid) assert.deepEqual(result.value.parameters, { count, watermark: false })
+  }
+})
+
+test('malformed inputs return validation failures instead of throwing or being accepted', () => {
+  const capabilities: ModelCapabilities = {
+    modes: ['text_to_image', 'image_to_image'],
+    parameters: [],
+    inputSlots: [
+      { role: 'reference_image', required: false, minCount: 0, maxCount: 4, allowedMediaKinds: ['image'] },
+    ],
+  }
+  const cases: { inputs: unknown; code: string }[] = [
+    ...[{}, { length: 1 }, 'bad', 1, 0, false, true, '', null].map((inputs) => ({
+      inputs, code: 'INVALID_INPUTS',
+    })),
+    ...[[null], [null, { position: 1 }], [{ position: 1 }, null], [undefined], [false], [1], ['bad'], [[]]].map((inputs) => ({
+      inputs, code: 'INVALID_INPUT_ITEM',
+    })),
+  ]
+  for (const { inputs, code } of cases) {
+    const result = validateGenerationRequest(capabilities, {
+      modelId: 'model-1', prompt: 'test', parameters: {},
+      inputs: inputs as CreateGenerationRequest['inputs'],
+    })
+    assert.equal(result.valid, false, JSON.stringify(inputs))
+    if (!result.valid) assert.ok(result.errors.some((error) => error.code === code))
+  }
+  for (const inputs of [undefined, []]) {
+    const result = validateGenerationRequest(capabilities, { modelId: 'model-1', prompt: 'test', parameters: {}, inputs })
+    assert.equal(result.valid, true)
+    if (result.valid) assert.deepEqual(result.value.inputs, [])
   }
 })
 

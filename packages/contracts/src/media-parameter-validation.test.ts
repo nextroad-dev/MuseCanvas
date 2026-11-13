@@ -260,6 +260,84 @@ test('an unknown descriptor type is refused rather than guessed', () => {
   }).includes('UNKNOWN_PARAMETER_TYPE'))
 })
 
+test('malformed enum options return findings rather than throwing, even with defaults', () => {
+  const malformed: unknown[] = [
+    null, 42, true, [], {}, { value: null }, { value: 42 },
+    { value: 'auto', label: null }, { value: 'auto', label: 1 },
+    { value: 'auto', description: false }, { value: 'auto', description: {} },
+    { value: 'auto', experimental: 'yes' }, { value: 'auto', experimental: null },
+  ]
+  for (const option of malformed) {
+    const result = validateModelCapabilities({
+      ...MINIMAL,
+      parameters: [{ type: 'enum', name: 'quality', options: ['high', option], defaultValue: 'high' }],
+      defaults: { quality: 'high' },
+    })
+    assert.equal(result.ok, false, JSON.stringify(option))
+    assert.equal(result.capabilities, null)
+    assert.ok(result.findings.some(f => f.rule === 'INVALID_MODEL_CAPABILITIES'), JSON.stringify(option))
+  }
+})
+
+test('legacy, rich and mixed enum options retain their supported formats', () => {
+  for (const options of [
+    ['auto', 'high'],
+    [{ value: 'auto' }, { value: 'high', label: 'High', description: 'Detail', experimental: true }],
+    ['auto', { value: 'high', label: '', description: '', experimental: false }],
+    [{ value: 'auto', label: undefined, description: undefined, experimental: undefined }],
+  ]) {
+    const result = validateModelCapabilities({
+      ...MINIMAL,
+      parameters: [{ type: 'enum', name: 'quality', options, defaultValue: 'auto' }],
+      defaults: { quality: 'auto' },
+    })
+    assert.equal(result.ok, true, JSON.stringify(result.findings))
+    assert.deepEqual(result.capabilities?.parameters[0].type === 'enum'
+      ? result.capabilities.parameters[0].options : undefined, options)
+  }
+})
+
+test('every defined descriptor or model default obeys the shared value validator', () => {
+  const cases: Array<{ descriptor: ParameterDescriptor; valid: unknown; invalid: unknown[] }> = [
+    { descriptor: { type: 'integer', name: 'count', min: 1, max: 5, step: 2 }, valid: 3,
+      invalid: ['oops', null, {}, [], true, 0, 6, 2, 1.5, NaN, Infinity] },
+    { descriptor: { type: 'number', name: 'strength', min: 0, max: 1, step: 0.1, precision: 1 }, valid: 0.3,
+      invalid: ['oops', null, {}, [], false, -0.1, 1.1, 0.15, NaN, Infinity] },
+    { descriptor: { type: 'boolean', name: 'audio' }, valid: false, invalid: ['false', 0, null, {}, []] },
+    { descriptor: { type: 'text', name: 'tag', minLength: 2, maxLength: 4, pattern: '^[a-z]+$' }, valid: 'ok',
+      invalid: [false, 3, null, {}, [], 'a', 'abcde', 'AB'] },
+    { descriptor: { type: 'enum', name: 'quality', options: ['auto'] }, valid: 'auto',
+      invalid: [false, 1, null, {}, [], 'max'] },
+    { descriptor: sizeDescriptor(), valid: 'auto', invalid: [false, 1024, null, {}, [], 'wide'] },
+  ]
+  for (const { descriptor, valid, invalid } of cases) {
+    for (const location of ['descriptor', 'model']) {
+      for (const value of [valid, ...invalid]) {
+        const result = validateModelCapabilities({
+          ...MINIMAL,
+          parameters: [{ ...descriptor, ...(location === 'descriptor' ? { defaultValue: value } : {}) }],
+          ...(location === 'model' ? { defaults: { [descriptor.name]: value } } : {}),
+        })
+        const context = `${descriptor.type} ${location} default ${String(value)}`
+        assert.equal(result.ok, value === valid, context)
+        if (value !== valid) assert.ok(result.findings.some(f => f.rule === 'DEFAULT_NOT_ALLOWED'), context)
+      }
+    }
+  }
+})
+
+test('malformed image presets with defaults return findings rather than throwing', () => {
+  for (const presets of [undefined, null, [null], [42], [{}]]) {
+    const result = validateModelCapabilities({
+      ...MINIMAL,
+      parameters: [{ type: 'image-size', name: 'size', presets, defaultValue: 'auto' }],
+      defaults: { size: 'auto' },
+    })
+    assert.equal(result.ok, false)
+    assert.ok(result.findings.some(f => f.rule === 'INVALID_IMAGE_SIZE_RULES'))
+  }
+})
+
 test('allowCustom without constraints is refused', () => {
   assert.ok(capabilityFindings({
     modes: ['text_to_image'],

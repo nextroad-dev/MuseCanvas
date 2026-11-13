@@ -35,6 +35,7 @@ import {
 } from '@musecanvas/providers'
 import { createMediaExecutionContext, resolveMediaPlugin } from '../plugins/availability'
 import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
+import { LifecyclePersistenceError, MAX_PRE_RUN_ATTEMPTS, reconcileCancellation, reconcileUnknownSubmission, unknownSubmissionExpired } from './lifecycle'
 import {
   inspectInputImage,
   MAX_INPUT_IMAGES,
@@ -66,16 +67,33 @@ import {
 } from '../provider-state'
 
 /** Keep the GET deadline alive while consuming the S3 body after headers. */
-export async function readInputBody(body: { transformToByteArray(): Promise<Uint8Array>; destroy?: () => void }, signal: AbortSignal): Promise<Uint8Array> {
+export async function readInputBody(body: AsyncIterable<Uint8Array> & { destroy?: (error?: Error) => void }, signal: AbortSignal, maxBytes: number): Promise<Buffer> {
   let abort: () => void = () => {}
   const canceled = new Promise<never>((_, reject) => {
     abort = () => {
-      try { body.destroy?.() } finally { reject(signal.reason || new Error('STORAGE_OPERATION_TIMEOUT')) }
+      try { body.destroy?.(signal.reason instanceof Error ? signal.reason : undefined) } finally { reject(signal.reason || new Error('STORAGE_OPERATION_TIMEOUT')) }
     }
     if (signal.aborted) abort()
     else signal.addEventListener('abort', abort, { once: true })
   })
-  try { return await Promise.race([body.transformToByteArray(), canceled]) }
+  try {
+    const reading = (async () => {
+      const chunks: Buffer[] = []
+      let total = 0
+      for await (const chunk of body) {
+        signal.throwIfAborted()
+        total += chunk.byteLength
+        if (total > maxBytes) {
+          const error = new Error('INVALID_INPUT_IMAGE_SIZE')
+          body.destroy?.(error)
+          throw error
+        }
+        chunks.push(Buffer.from(chunk))
+      }
+      return Buffer.concat(chunks)
+    })()
+    return await Promise.race([reading, canceled])
+  }
   finally { signal.removeEventListener('abort', abort) }
 }
 
@@ -158,10 +176,10 @@ export async function loadAndValidateInputImages(
 
     let data: Buffer
     try {
-      const bytes = await readInputBody(s3Res.body, inputDeadline)
-      data = Buffer.from(bytes)
-    } catch {
-      throw new Error('INPUT_IMAGE_UNAVAILABLE')
+      data = await readInputBody(s3Res.body, inputDeadline, Math.min(maxSingle, maxTotal - totalBytes))
+    } catch (error) {
+      if (error instanceof Error && error.message === 'INVALID_INPUT_IMAGE_SIZE') throw error
+      throw new Error('INPUT_IMAGE_UNAVAILABLE', { cause: error })
     }
 
     if (data.length === 0 || data.length > maxSingle) {
@@ -267,11 +285,17 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
         throw new Error('INPUT_IMAGE_UNAVAILABLE')
       }
       if (!s3Res.body) throw new Error('INPUT_IMAGE_UNAVAILABLE')
+      if (s3Res.contentLength !== undefined && (
+        s3Res.contentLength <= 0 ||
+        s3Res.contentLength > maxSingle ||
+        totalBytes + s3Res.contentLength > maxTotal
+      )) throw new Error('INVALID_INPUT_IMAGE_SIZE')
       let data: Buffer
       try {
-        data = Buffer.from(await readInputBody(s3Res.body, inputDeadline))
-      } catch {
-        throw new Error('INPUT_IMAGE_UNAVAILABLE')
+        data = await readInputBody(s3Res.body, inputDeadline, Math.min(maxSingle, maxTotal - totalBytes))
+      } catch (error) {
+        if (error instanceof Error && error.message === 'INVALID_INPUT_IMAGE_SIZE') throw error
+        throw new Error('INPUT_IMAGE_UNAVAILABLE', { cause: error })
       }
       if (data.length === 0 || data.length > maxSingle) throw new Error('INVALID_INPUT_IMAGE_SIZE')
       totalBytes += data.length
@@ -310,12 +334,13 @@ export async function persistJobSuccess(
   input: PersistJobSuccessInput,
 ): Promise<boolean> {
   const current = await client.query(
-    'SELECT status,deleted_at FROM generation_jobs WHERE id=$1 FOR UPDATE',
+    'SELECT status,deleted_at,cancel_requested_at FROM generation_jobs WHERE id=$1 FOR UPDATE',
     [input.jobId],
   )
   if (
     !current.rows[0] ||
     current.rows[0].deleted_at ||
+    current.rows[0].cancel_requested_at ||
     current.rows[0].status === 'canceled' ||
     current.rows[0].status !== 'running'
   ) {
@@ -389,6 +414,39 @@ export async function persistJobFailure(
     ],
   )
   return Boolean(updated.rowCount && updated.rowCount > 0)
+}
+
+/** The job transition and its next delivery must commit together. */
+export async function persistPreRunFailure(input: PersistJobFailureInput, attempt: number, retryCycle: string): Promise<void> {
+  if (!retryCycle) throw new Error('MISSING_RETRY_CYCLE')
+  const retryable = input.retryable && Number.isSafeInteger(attempt) && attempt >= 1 && attempt < MAX_PRE_RUN_ATTEMPTS
+  await transaction(async client => {
+    const owner = await client.query(
+      "SELECT id FROM generation_jobs WHERE id=$1 AND status='running' AND attempt=$2 AND started_at=$3::timestamptz FOR UPDATE",
+      [input.jobId, attempt, retryCycle],
+    )
+    if (!owner.rows.length) throw new Error('JOB_STATE_CONFLICT')
+    const changed = await persistJobFailure(client, { ...input, retryable })
+    if (!changed) throw new Error('JOB_STATE_CONFLICT')
+    if (retryable) {
+      await client.query(
+        'INSERT INTO outbox_events(event_type,aggregate_id,payload,dedupe_key) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+        ['generation.retry', input.jobId, { jobId: input.jobId }, `generation.retry:${input.jobId}:${retryCycle}:${attempt}`],
+      )
+    }
+  })
+}
+
+/** Only the failed claim's owner may restore a pre-run claim for redelivery. */
+async function restorePreRunClaim(job: Record<string, unknown>): Promise<void> {
+  await db().query(
+    `UPDATE generation_jobs SET status='queued',attempt=attempt-1,updated_at=now()
+     WHERE id=$1 AND status='running' AND attempt=$2 AND started_at=$3::timestamptz
+       AND deleted_at IS NULL AND cancel_requested_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM provider_runs WHERE job_id=$1
+         AND (submitted_at >= $3::timestamptz OR operation_state IN ('submitting','submission_unknown','waiting','importing','canceling')))`,
+    [job.id, job.attempt, job.retry_cycle],
+  )
 }
 
 async function deleteUploadedObjects(uploaded: Array<{ key: string }>): Promise<void> {
@@ -591,7 +649,7 @@ async function retrySyncSubmit(
 ): Promise<boolean> {
   const plan = planSyncSubmitRetry(attempt, code, diagnostic)
   if (!plan.retry || !plan.outboxEventType) return false
-  const dedupeKey = `${plan.outboxEventType}:${String(job.id)}:${attempt}`
+  const dedupeKey = `${plan.outboxEventType}:${run.id}`
   try {
     await transaction(async client => {
       const updatedRun = await updateProviderRunState(client, {
@@ -632,6 +690,7 @@ async function failRunTerminal(run: ProviderRunEntity, job: Record<string, unkno
       error: { code, message: code, retryable: false, details: diagnostic || undefined },
       releaseCapacity: true,
       completed: true,
+      nextActionAt: null,
     })
     await persistJobFailure(client, {
       jobId: String(job.id),
@@ -644,17 +703,20 @@ async function failRunTerminal(run: ProviderRunEntity, job: Record<string, unkno
   })
 }
 
-async function cancelJobWithRun(run: ProviderRunEntity, job: Record<string, unknown>): Promise<void> {
-  await transaction(async client => {
-    await updateProviderRunState(client, {
-      runId: run.id,
-      expectedStateRevision: run.stateRevision,
-      operationState: 'canceled',
-      releaseCapacity: true,
-      completed: true,
-    })
-    await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running','retry_wait')", [job.id])
+async function persistCanceledRun(client: pg.PoolClient, run: ProviderRunEntity, job: Record<string, unknown>, terminalState: 'canceled' | 'succeeded'): Promise<void> {
+  await updateProviderRunState(client, {
+    runId: run.id,
+    expectedStateRevision: run.stateRevision,
+    operationState: terminalState,
+    releaseCapacity: true,
+    completed: true,
+    nextActionAt: null,
   })
+  await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running','retry_wait')", [job.id])
+}
+
+async function cancelJobWithRun(run: ProviderRunEntity, job: Record<string, unknown>, terminalState: 'canceled' | 'succeeded' = 'canceled'): Promise<void> {
+  await transaction(client => persistCanceledRun(client, run, job, terminalState))
 }
 
 async function storeRunWaiting(run: ProviderRunEntity, result: OperationResult): Promise<ProviderRunEntity | null> {
@@ -796,6 +858,12 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
       assertProviderLease()
       const ok = await persistJobSuccess(client, { jobId: String(job.id), createdBy, prompt, uploaded })
       if (!ok) {
+        const current = await client.query('SELECT status,deleted_at,cancel_requested_at FROM generation_jobs WHERE id=$1 FOR UPDATE', [job.id])
+        if (current.rows[0]?.status === 'canceled' || current.rows[0]?.deleted_at || isCancelRequested(current.rows[0] || {})) {
+          await persistCanceledRun(client, { ...run, stateRevision: revisionNow }, job, 'succeeded')
+        } else {
+          throw new LifecyclePersistenceError(new Error('JOB_STATE_CONFLICT'))
+        }
         return false
       }
       for (const item of uploaded) {
@@ -820,6 +888,8 @@ async function importRunOutputs(run: ProviderRunEntity, job: Record<string, unkn
     })
     if (persisted) {
       await attachDerivedPreviews(String(job.id), mediaKind, uploaded.map(item => item.key), derivedPreviews)
+    } else {
+      await deleteUploadedObjects(persistedKeys.map(key => ({ key })))
     }
   } catch (error) {
     // Deterministic run/index keys can be reused by a replacement owner. A
@@ -886,6 +956,13 @@ async function attachDerivedPreviews(
 }
 
 async function handleTerminalResult(run: ProviderRunEntity, job: Record<string, unknown>, revision: ModelConfigRevisionEntity, config: ProviderConfig, result: OperationResult, prompt: string): Promise<void> {
+  if (result.status === 'succeeded') {
+    const freshJob = await db().query('SELECT status,deleted_at,cancel_requested_at FROM generation_jobs WHERE id=$1', [job.id])
+    if (!freshJob.rows[0] || freshJob.rows[0].status === 'canceled' || freshJob.rows[0].deleted_at || isCancelRequested(freshJob.rows[0])) {
+      await cancelJobWithRun(run, job, 'succeeded')
+      return
+    }
+  }
   if (result.status === 'succeeded' && result.outputs && result.outputs.length > 0) {
     await importRunOutputs(run, job, revision, config, result.outputs, prompt)
     return
@@ -904,7 +981,7 @@ async function handleTerminalResult(run: ProviderRunEntity, job: Record<string, 
 
 /** Poll a single provider run under a Postgres lease. Exported for maintenance/dispatch. */
 export async function pollProviderRun(runId: string): Promise<boolean> {
-  return await withProviderLease(runId, async leased => {
+  const handled = await withProviderLease(runId, async leased => {
     let run: ProviderRunEntity = leased
     const jobRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [run.jobId])
     const job = jobRes.rows[0] as Record<string, unknown> | undefined
@@ -912,11 +989,11 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
       await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'failed', error: { code: 'JOB_NOT_FOUND', message: 'JOB_NOT_FOUND' }, releaseCapacity: true, completed: true })
       return true
     }
+    if (!isNonTerminalRunState(run.operationState)) return true
     if (job.status === 'canceled' || isCancelRequested(job)) {
       await requestRemoteCancel(run, job)
       return true
     }
-    if (!isNonTerminalRunState(run.operationState)) return true
     const { revision, config } = await resolveSnapshot(job)
     const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
     const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
@@ -935,7 +1012,10 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
         )
         return true
       }
-      await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt() })
+      await reconcileUnknownSubmission(run, config.timeoutMs || 300_000, {
+        expire: () => failRunTerminal(run, job, 'PROVIDER_TIMEOUT', { detail: 'SUBMISSION_UNKNOWN_DEADLINE_EXCEEDED' }, 'generation_failed'),
+        wait: async () => { await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'submission_unknown', nextActionAt: submissionUnknownNextActionAt() }) },
+      })
       return true
     }
     let result: OperationResult
@@ -981,31 +1061,60 @@ export async function pollProviderRun(runId: string): Promise<boolean> {
     const promptRow = await db().query('SELECT prompt FROM generation_jobs WHERE id=$1', [job.id])
     await handleTerminalResult(run, job, revision, config, result, String(promptRow.rows[0]?.prompt || job.prompt || ''))
     return true
-  }) ?? true
+  })
+  if (handled === undefined) throw new ProviderLeaseLostError()
+  return handled
 }
 
 async function requestRemoteCancel(run: ProviderRunEntity, job: Record<string, unknown>): Promise<void> {
   try {
-    const { revision, config } = await resolveSnapshot(job)
-    const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
-    const context = fenceProviderContext(createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config }))
-    const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
-    await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'canceling', nextActionAt: null })
-    await db().query("UPDATE generation_jobs SET phase='provider_canceling',updated_at=now() WHERE id=$1", [job.id]).catch(() => {})
-    if (run.remoteId && plugin.cancel) {
-      assertProviderLease()
-      const result = await plugin.cancel(run.remoteId, opaque, config, context).catch(() => ({ status: 'canceled' as const }))
-      assertProviderLease()
-      if (result.status === 'succeeded' && result.outputs && result.outputs.length > 0) {
+    await reconcileRemoteCancel(run, job)
+  } catch (error) {
+    if (error instanceof ProviderLeaseLostError) throw error
+    throw new LifecyclePersistenceError(error)
+  }
+}
+
+async function reconcileRemoteCancel(run: ProviderRunEntity, job: Record<string, unknown>): Promise<void> {
+  if (!isNonTerminalRunState(run.operationState)) return
+  // Schedule before resolving credentials or doing network I/O, so a crash or
+  // unavailable provider cannot strand a canceling run with no next action.
+  run = await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'canceling', nextActionAt: nextActionAtForRetryAfter(undefined) })
+  await db().query("UPDATE generation_jobs SET phase='provider_canceling',updated_at=now() WHERE id=$1", [job.id])
+  let snapshot: ResolvedSnapshot | undefined
+  await reconcileCancellation({
+    assertLease: assertProviderLease,
+    isLeaseLost: error => error instanceof ProviderLeaseLostError,
+    invoke: async () => {
+      snapshot = await resolveSnapshot(job)
+      const { revision, config } = snapshot
+      const plugin = resolveMediaPlugin(revision.pluginId, revision.pluginVersion)
+      const context = fenceProviderContext(createMediaExecutionContext(revision.pluginId, revision.pluginVersion, { config }))
+      const opaque = decryptOpaqueState(run.encryptedStatePayload, run.encryptedStateKeyId)
+      if (!run.remoteId) return undefined
+      // Providers without cancellation can still confirm completion via poll.
+      return plugin.cancel ? plugin.cancel(run.remoteId, opaque, config, context)
+        : plugin.poll?.(run.remoteId, opaque, config, context)
+    },
+    pending: async result => {
+      if (!run.remoteId && unknownSubmissionExpired(run, snapshot?.config.timeoutMs || 300_000)) {
+        await failRunTerminal(run, job, 'PROVIDER_TIMEOUT', { detail: 'SUBMISSION_UNKNOWN_DEADLINE_EXCEEDED' }, 'generation_failed')
         return
       }
-    }
-  } catch (error) {
-    console.error('provider cancel failed', redactForLog({ code: error instanceof Error ? error.name : 'CANCEL_FAILED' }) as Record<string, unknown>)
-  } finally {
-    const latest = await getProviderRunById(db(), run.id).catch(() => null)
-    await cancelJobWithRun(latest || run, job)
-  }
+      await updateProviderRunState(db(), {
+        runId: run.id, expectedStateRevision: run.stateRevision,
+        operationState: 'canceling', nextActionAt: nextActionAtForRetryAfter(result?.retryAfterMs),
+        remoteId: result?.remoteId ?? run.remoteId,
+        encryptedStatePayload: result?.opaqueState ? encryptOpaqueState(result.opaqueState) : undefined,
+        encryptedStateKeyId: result?.opaqueState ? PROVIDER_RUN_STATE_KEY_ID : undefined,
+      })
+    },
+    // A completion racing cancellation is terminal remotely, but the user has
+    // canceled locally: discard outputs rather than importing into a canceled job.
+    terminal: result => result.status === 'succeeded'
+      ? cancelJobWithRun(run, job, 'succeeded')
+      : handleTerminalResult(run, job, snapshot!.revision, snapshot!.config, result, String(job.prompt || '')),
+  })
 }
 
 export async function processJob(jobId: string, runId?: string): Promise<boolean> {
@@ -1024,17 +1133,25 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       return { ...(job as object), status: 'canceled', canceledAtClaim: true } as unknown as Record<string, unknown>
     }
     await client.query("UPDATE generation_jobs SET status='running',started_at=COALESCE(started_at,now()),updated_at=now(),attempt=attempt+1,phase=COALESCE(phase,'preprocessing') WHERE id=$1", [job.id])
-    const updated = await client.query('SELECT * FROM generation_jobs WHERE id=$1', [job.id])
+    // Keep PostgreSQL precision; JS Date truncates the cycle/ownership timestamp.
+    const updated = await client.query('SELECT *,started_at::text AS retry_cycle FROM generation_jobs WHERE id=$1', [job.id])
     return updated.rows[0] as Record<string, unknown>
   })
   if (!claimed) {
-    const latest = await getLatestProviderRunForJob(db(), jobId).catch(() => null)
+    const latest = await getLatestProviderRunForJob(db(), jobId)
     if (latest && isNonTerminalRunState(latest.operationState)) {
       await pollProviderRun(latest.id)
+    } else {
+      const current = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [jobId])
+      // This may be a reclaimed copy of the active owner's stream message.
+      // Do not ACK its only delivery, and never infer ownership from running.
+      if (current.rows[0]?.status === 'running') throw new LifecyclePersistenceError(new Error('PRE_RUN_OWNERSHIP_UNAVAILABLE'))
     }
     return true
   }
   if ((claimed as Record<string, unknown>).canceledAtClaim) return true
+  let providerRequestStarted = false
+  let providerRunStarted = false
   try {
     const prompt = await preprocessPrompt(claimed as PreprocessPromptJob)
     const currentRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [claimed.id])
@@ -1042,21 +1159,25 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
     if (decideClaimedJob(current) === 'cancel') {
       const latest = await getLatestProviderRunForJob(db(), String(claimed.id)).catch(() => null)
       if (latest && isNonTerminalRunState(latest.operationState)) {
-        await withProviderLease(latest.id, leased => requestRemoteCancel(leased, current || claimed))
+        const canceled = await withProviderLease(latest.id, async leased => {
+          await requestRemoteCancel(leased, current || claimed)
+          return true
+        })
+        if (canceled === undefined) throw new ProviderLeaseLostError()
       } else if (current) {
         await db().query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [claimed.id]).catch(() => {})
       }
       return true
     }
-    const existingRun = await getLatestProviderRunForJob(db(), String(claimed.id)).catch(() => null)
+    const existingRun = await getLatestProviderRunForJob(db(), String(claimed.id))
     if (existingRun && isNonTerminalRunState(existingRun.operationState)) {
-      await pollProviderRun(existingRun.id)
+      try { await pollProviderRun(existingRun.id) } catch (error) { throw new LifecyclePersistenceError(error) }
       return true
     }
     const attempt = Number((current || claimed).attempt || 1)
     const { revision, config } = await resolveSnapshot((current || claimed) as Record<string, unknown>)
     const jobRow = (current || claimed) as Record<string, unknown>
-    const clientToken = `${String(jobRow.id)}:a${attempt}:${String(revision.id).slice(0, 8)}`
+    const clientToken = `${String(jobRow.id)}:${String(claimed.retry_cycle)}:a${attempt}:${String(revision.id).slice(0, 8)}`
     const idempotent = await transaction(async client => {
       return acquireModelCapacity(client, {
         modelId: String(jobRow.model_id),
@@ -1079,7 +1200,12 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       await db().query("INSERT INTO outbox_events(event_type,aggregate_id,payload) VALUES('generation.retry',$1,$2)", [jobRow.id, { jobId: jobRow.id }]).catch(() => {})
       return true
     }
-    return await withProviderLease((idempotent.run as ProviderRunEntity).id, async run => {
+    providerRunStarted = true
+    const submitted = await withProviderLease((idempotent.run as ProviderRunEntity).id, async run => {
+      // Capacity acquisition can return an existing run. A replacement poller
+      // may also have advanced it before this lease was acquired: never submit
+      // a waiting, uncertain, or already terminal run again.
+      if (run.operationState !== 'submitting' || run.remoteId) return true
       await db().query("UPDATE generation_jobs SET phase='provider_submitting',provider_id=$2,plugin_id=$3,plugin_version=$4,updated_at=now() WHERE id=$1", [jobRow.id, revision.providerId, revision.pluginId, revision.pluginVersion]).catch(() => {})
       const inputImages = await resolveMediaInputImages(String(jobRow.id)).catch(error => {
         const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'INVALID_INPUT_IMAGE'
@@ -1095,6 +1221,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
           throw new Error(code)
         }
         assertProviderLease()
+        providerRequestStarted = true
         result = await plugin.submit(request, config, context)
       } catch (error) {
         if (error instanceof ProviderLeaseLostError) throw error
@@ -1150,17 +1277,51 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       }
       await handleTerminalResult(run, jobRow, revision, config, result, prompt)
       return true
-    }) ?? true
+    })
+    if (submitted === undefined) throw new ProviderLeaseLostError()
+    return submitted
   } catch (error) {
-    if (isSyncRetryPersistenceError(error) || error instanceof ProviderLeaseLostError) throw error
+    if (isSyncRetryPersistenceError(error) || error instanceof LifecyclePersistenceError || error instanceof ProviderLeaseLostError) throw error
+    // Once submit was invoked, an unhandled error is a local persistence/import
+    // failure, not evidence of provider rejection. Leave uncertainty reserved.
+    if (providerRequestStarted) throw new LifecyclePersistenceError(error)
     const code = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : 'GENERATION_FAILED'
     const temporary = ['PROVIDER_TEMPORARY_ERROR', 'PROVIDER_TIMEOUT', 'PROVIDER_DOWNLOAD_FAILED', 'PROVIDER_BUSY', 'INPUT_IMAGE_UNAVAILABLE', 'STORAGE_TEMPORARY_ERROR', 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR', 'LANGUAGE_MODEL_RESPONSE_INVALID', 'PROMPT_TEMPLATE_SELECTION_INVALID', 'PROMPT_OUTPUT_INVALID'].includes(code)
     const phase = code.startsWith('PROMPT_TEMPLATE') ? 'template_failed' : code.startsWith('PROMPT_') || code.startsWith('LANGUAGE_') ? 'optimization_failed' : 'generation_failed'
     const providerError = error instanceof LanguageModelHttpError ? error.diagnostic as unknown as Record<string, unknown> : null
-    const latest = await getLatestProviderRunForJob(db(), String((claimed as Record<string, unknown>).id)).catch(() => null)
+    let latest: ProviderRunEntity | null
+    try {
+      latest = await getLatestProviderRunForJob(db(), String(claimed.id))
+    } catch (persistenceError) {
+      if (!providerRunStarted) {
+        try { await restorePreRunClaim(claimed) } catch (restoreError) {
+          throw new LifecyclePersistenceError(new AggregateError([persistenceError, restoreError]))
+        }
+      }
+      throw new LifecyclePersistenceError(persistenceError)
+    }
+    if (!providerRunStarted && (!latest || shouldCreateNewRun(latest.operationState))) {
+      try {
+        await persistPreRunFailure({
+          jobId: String(claimed.id), promptOptimizationId: (claimed.prompt_optimization_id as string) || null,
+          phase, code, retryable: temporary, providerError,
+        }, Number(claimed.attempt), String(claimed.retry_cycle || ''))
+      } catch (persistenceError) {
+        try { await restorePreRunClaim(claimed) } catch (restoreError) {
+          throw new LifecyclePersistenceError(new AggregateError([persistenceError, restoreError]))
+        }
+        throw new LifecyclePersistenceError(persistenceError)
+      }
+      return true
+    }
     const persistFailure = async (leased?: ProviderRunEntity) => transaction(async client => {
       if (leased) {
-        await updateProviderRunState(client, { runId: leased.id, expectedStateRevision: leased.stateRevision, nextActionAt: nextActionAtForRetryAfter(undefined) })
+        await updateProviderRunState(client, { runId: leased.id, expectedStateRevision: leased.stateRevision,
+          nextActionAt: temporary ? nextActionAtForRetryAfter(undefined) : null,
+          ...(temporary ? {} : { operationState: 'failed', releaseCapacity: true, completed: true }),
+        })
+        // Recovery polls an existing run; no new submission is safe here.
+        if (temporary) return true
       }
       await persistJobFailure(client, {
         jobId: String((claimed as Record<string, unknown>).id),

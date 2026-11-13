@@ -1,12 +1,378 @@
 import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import { inspectInputImage, validateInputImages } from '@musecanvas/providers/core/image-input'
-import { NormalizedProviderError } from '@musecanvas/providers'
+import { encryptApiKey, NormalizedProviderError, type OperationResult } from '@musecanvas/providers'
 import { resolveMediaPlugin } from '../plugins/availability'
 import { classifySubmitError, isSynchronousPlugin, readInputBody, validateStoredInputImage } from './index'
 import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
 import { isNonTerminalRunState, shouldCreateNewRun } from '../provider-state'
+import { db } from '@musecanvas/database'
+import type pg from 'pg'
+import { persistJobSuccess, persistPreRunFailure, pollProviderRun, processJob } from './index'
+import { LifecyclePersistenceError, MAX_PRE_RUN_ATTEMPTS, reconcileCancellation, reconcileUnknownSubmission, unknownSubmissionExpired } from './lifecycle'
+import { ProviderLeaseLostError } from './lease'
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+/** Exercises real processJob/poll/lease code without provider HTTP or live SQL. */
+function workerFixture(t: TestContext) {
+  process.env.APP_MASTER_KEY ||= '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+  process.env.PROVIDER_CREDENTIALS_ENCRYPTION_KEY ||= 'test-worker-encryption-key'
+  const credential = encryptApiKey('worker-lifecycle-test-placeholder')
+  const cycle = '2026-10-25 00:00:00.123456+00'
+  const job: Record<string, unknown> = { id: 'job', status: 'queued', attempt: 0, prompt: 'draw', count: 1,
+    optimization_mode: 'disabled', model_id: 'model', model_revision_id: 'revision', retry_cycle: cycle, created_by: 'actor' }
+  let run: Record<string, unknown> | undefined
+  const controls = {
+    failWaitingWrite: false,
+    preprocess: async (): Promise<void> => { /* Most tests use disabled preprocessing. */ },
+    submit: async (): Promise<OperationResult> => ({ status: 'waiting', remoteId: 'remote' }),
+    poll: async (): Promise<OperationResult> => ({ status: 'waiting', remoteId: 'remote' }),
+  }
+  const statements: string[] = []
+  const query = async (sql: string, values: unknown[] = []) => {
+    statements.push(sql)
+    const rows = (result: Record<string, unknown>[] = []) => ({ rows: structuredClone(result), rowCount: result.length })
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)) return rows()
+    if (sql.startsWith('SELECT *') && sql.includes('FROM generation_jobs')) return rows([job])
+    if (sql.startsWith('SELECT prompt FROM generation_jobs')) return rows([job])
+    if (sql.startsWith('SELECT status,deleted_at,cancel_requested_at')) return rows([job])
+    if (sql.startsWith('SELECT id FROM generation_jobs')) return rows(job.status === 'running' && values[1] === job.attempt && values[2] === cycle ? [{ id: 'job' }] : [])
+    if (sql.startsWith('SELECT po.*')) { await controls.preprocess(); throw new Error('PROMPT_OPTIMIZATION_TEMPORARY_ERROR') }
+    if (sql.includes('FROM model_config_revisions')) return rows([{ id: 'revision', model_id: 'model', provider_id: 'provider', plugin_id: 'seedance-video', plugin_version: '1.0.0', credential_id: 'credential', normalized_config: { timeoutMs: 300_000, maxBytes: 100_000 }, created_at: new Date() }])
+    if (sql.includes('FROM provider_credentials')) return rows([{ id: 'credential', enabled: true, api_key_encrypted: credential }])
+    if (sql.startsWith('SELECT id, concurrency_limit')) return rows([{ id: 'model', concurrency_limit: 1 }])
+    if (sql.includes('SELECT count(*)::int AS count')) return rows([{ count: 0 }])
+    if (sql.startsWith('SELECT * FROM provider_runs')) return rows(run ? [run] : [])
+    if (sql.includes('INSERT INTO provider_runs')) {
+      assert.equal(run, undefined, 'a claim must create at most one provider run')
+      run = { id: 'run', job_id: job.id, attempt: values[1], provider_id: values[2], plugin_id: values[3], plugin_version: values[4],
+        client_token: values[5], remote_id: null, operation_state: 'submitting', state_revision: 1, capacity_state: 'reserved',
+        submitted_at: new Date(), created_at: new Date(), updated_at: new Date() }
+      return rows([run])
+    }
+    if (sql.includes('SET worker_lease_token = $2')) {
+      if (!run || run.worker_lease_token) return rows()
+      run.worker_lease_token = values[1]; run.worker_lease_expires_at = new Date(Date.now() + 60_000)
+      return rows([run])
+    }
+    if (sql.includes('SET worker_lease_token = NULL')) {
+      if (run && run.worker_lease_token === values[1]) { run.worker_lease_token = null; run.worker_lease_expires_at = null }
+      return rows([{ id: 'run' }])
+    }
+    if (sql.includes('state_revision = state_revision + 1')) {
+      assert.ok(run)
+      assert.equal(values[1], run.state_revision, 'every write must use the current revision')
+      assert.equal(values.at(-1), run.worker_lease_token, 'every write must retain lease fencing')
+      const assignments = sql.split('WHERE')[0]
+      if (controls.failWaitingWrite && /operation_state = \$(\d+)/.test(assignments) && values[Number(/operation_state = \$(\d+)/.exec(assignments)![1]) - 1] === 'waiting') throw new Error('WAITING_DB_WRITE_FAILED')
+      for (const match of assignments.matchAll(/(\w+) = \$(\d+)/g)) run[match[1]] = values[Number(match[2]) - 1]
+      run.state_revision = Number(run.state_revision) + 1
+      if (assignments.includes("capacity_state = 'released'")) run.capacity_state = 'released'
+      if (assignments.includes('completed_at = now()')) run.completed_at = new Date()
+      return rows([run])
+    }
+    if (sql.startsWith('UPDATE generation_jobs')) {
+      if (sql.includes('attempt=attempt+1')) { job.status = 'running'; job.attempt = Number(job.attempt) + 1 }
+      else if (sql.includes("status='canceled'")) job.status = 'canceled'
+      else if (sql.includes('status=$2')) job.status = values[1]
+      else if (sql.includes("status='succeeded'")) job.status = 'succeeded'
+      return rows([{ id: 'job' }])
+    }
+    if (sql.startsWith('UPDATE prompt_optimizations') || sql.startsWith('INSERT INTO outbox_events')) return rows()
+    if (sql.includes('FROM generation_job_inputs') || sql.includes('FROM (')) return rows()
+    assert.fail(`Unexpected lifecycle SQL: ${sql}`)
+  }
+  t.mock.method(db(), 'query', query)
+  t.mock.method(db(), 'connect', async () => ({ query, release() { /* Mock connection owns no external resources. */ } }))
+  const plugin = resolveMediaPlugin('seedance-video', '1.0.0')
+  const submit = t.mock.method(plugin, 'submit', () => controls.submit())
+  assert.ok(plugin.poll, 'the fixture requires an asynchronous plugin')
+  const poll = t.mock.method(plugin as typeof plugin & { poll: NonNullable<typeof plugin.poll> }, 'poll', () => controls.poll())
+  t.mock.method(plugin, 'validateRequest', async () => { /* Request validity is unrelated to lifecycle races. */ })
+  return { job, controls, statements, submit, poll, run: () => run }
+}
+
+test('a duplicate delivery cannot preprocess an actively owned running job without a provider run', async t => {
+  const fixture = workerFixture(t)
+  fixture.job.optimization_mode = 'enabled'
+  const entered = deferred<void>()
+  const release = deferred<void>()
+  let preprocessCalls = 0
+  fixture.controls.preprocess = async () => {
+    preprocessCalls++
+    if (preprocessCalls === 1) { entered.resolve(); await release.promise }
+  }
+  const first = processJob('job')
+  await entered.promise
+  try {
+    await assert.rejects(processJob('job'), LifecyclePersistenceError)
+    assert.equal(preprocessCalls, 1)
+    assert.equal(fixture.job.attempt, 1)
+    assert.equal(fixture.submit.mock.callCount(), 0)
+  } finally {
+    release.resolve()
+    await first
+  }
+})
+
+test('accepted async submit followed by persistence failure keeps capacity and never resubmits on redelivery', async t => {
+  const fixture = workerFixture(t)
+  const entered = deferred<void>()
+  const complete = deferred<OperationResult>()
+  fixture.controls.submit = async () => { entered.resolve(); return complete.promise }
+  fixture.controls.failWaitingWrite = true
+  const delivery = processJob('job')
+  await entered.promise
+  await assert.rejects(processJob('job'), ProviderLeaseLostError, 'contending delivery must remain unacknowledged')
+  assert.equal(fixture.submit.mock.callCount(), 1)
+  complete.resolve({ status: 'waiting', remoteId: 'billable-remote' })
+  await assert.rejects(delivery, LifecyclePersistenceError)
+  assert.equal(fixture.run()?.capacity_state, 'reserved')
+  assert.equal(fixture.run()?.operation_state, 'submitting')
+  assert.equal(fixture.job.status, 'running')
+  fixture.controls.failWaitingWrite = false
+  assert.equal(await processJob('job'), true)
+  assert.equal(fixture.submit.mock.callCount(), 1)
+  assert.equal(fixture.run()?.operation_state, 'submission_unknown')
+  assert.equal(fixture.run()?.capacity_state, 'reserved')
+})
+
+for (const path of ['submit', 'poll'] as const) {
+  test(`cancellation arriving during ${path} success discards outputs before ingestion`, async t => {
+    const fixture = workerFixture(t)
+    if (path === 'poll') {
+      assert.equal(await processJob('job'), true)
+      assert.equal(fixture.run()?.operation_state, 'waiting')
+    }
+    const entered = deferred<void>()
+    const complete = deferred<OperationResult>()
+    fixture.controls[path] = async () => { entered.resolve(); return complete.promise }
+    const delivery = path === 'submit' ? processJob('job') : pollProviderRun('run')
+    await entered.promise
+    fixture.job.cancel_requested_at = new Date()
+    complete.resolve({ status: 'succeeded', outputs: [{ index: 0, mimeType: 'image/png', url: 'https://example.invalid/output' }] })
+    assert.equal(await delivery, true)
+    assert.equal(fixture.job.status, 'canceled')
+    assert.equal(fixture.run()?.operation_state, 'succeeded')
+    assert.equal(fixture.run()?.capacity_state, 'released')
+    assert.equal(fixture.statements.some(sql => sql.includes('INSERT INTO output_ingestions') || sql.includes('INSERT INTO assets')), false)
+    await processJob('job')
+    assert.equal(fixture.submit.mock.callCount(), 1, 'terminal cancellation must not resubmit')
+  })
+}
+
+test('success transaction sees cancellation committed after ingestion started and inserts no assets', async () => {
+  const locked = deferred<void>()
+  const cancellationCommitted = deferred<void>()
+  const statements: string[] = []
+  const client = {
+    async query(sql: string) {
+      statements.push(sql)
+      assert.match(sql, /SELECT status,deleted_at,cancel_requested_at.*FOR UPDATE/)
+      locked.resolve()
+      await cancellationCommitted.promise
+      return { rows: [{ status: 'running', deleted_at: null, cancel_requested_at: new Date() }] }
+    },
+  } as unknown as pg.PoolClient
+  const persistence = persistJobSuccess(client, { jobId: 'job', createdBy: 'actor', prompt: 'draw', uploaded: [{ key: 'output', checksum: 'digest', image: { mimeType: 'image/png' } }] })
+  await locked.promise
+  cancellationCommitted.resolve()
+  assert.equal(await persistence, false)
+  assert.equal(statements.length, 1, 'the locked cancellation guard must precede any asset write')
+})
+
+test('pre-run retry atomically commits failure and deduplicated delivery, rolls back outbox failure, and exhausts', async t => {
+  let committed = { status: 'running', outbox: [] as string[], optimization: 'running' }
+  let staged = structuredClone(committed)
+  let failOutbox = false
+  let cycle = '2026-10-25 00:00:00.123456+00'
+  const statements: string[] = []
+  const client = {
+    release() {},
+    async query(sql: string, values: unknown[] = []) {
+      statements.push(sql)
+      if (sql === 'BEGIN') staged = structuredClone(committed)
+      else if (sql === 'COMMIT') committed = structuredClone(staged)
+      else if (sql.startsWith('SELECT id FROM generation_jobs')) return { rows: staged.status === 'running' && values[2] === cycle ? [{ id: 'job' }] : [] }
+      else if (sql.startsWith('UPDATE prompt_optimizations')) staged.optimization = 'failed'
+      else if (sql.startsWith('UPDATE generation_jobs')) {
+        assert.match(sql, /status='running' RETURNING id/)
+        staged.status = String(values[1])
+        return { rows: [{ id: 'job' }], rowCount: 1 }
+      } else if (sql.startsWith('INSERT INTO outbox_events')) {
+        assert.match(sql, /dedupe_key.*ON CONFLICT DO NOTHING/)
+        if (failOutbox) throw new Error('OUTBOX_UNAVAILABLE')
+        if (!staged.outbox.includes(String(values[3]))) staged.outbox.push(String(values[3]))
+      }
+      return { rows: [], rowCount: 0 }
+    },
+  }
+  t.mock.method(db(), 'connect', async () => client)
+  const failure = { jobId: 'job', promptOptimizationId: 'optimization', phase: 'optimization_failed', code: 'PROMPT_OPTIMIZATION_TEMPORARY_ERROR', retryable: true }
+  failOutbox = true
+  await assert.rejects(persistPreRunFailure(failure, 1, cycle), /OUTBOX_UNAVAILABLE/)
+  assert.deepEqual(committed, { status: 'running', outbox: [], optimization: 'running' })
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  failOutbox = false
+  await persistPreRunFailure(failure, 1, cycle)
+  assert.equal(committed.status, 'retry_wait')
+  assert.deepEqual(committed.outbox, [`generation.retry:job:${cycle}:1`])
+  await assert.rejects(persistPreRunFailure(failure, 1, cycle), /JOB_STATE_CONFLICT/)
+  assert.equal(committed.outbox.length, 1)
+  committed.status = 'running'
+  await persistPreRunFailure(failure, MAX_PRE_RUN_ATTEMPTS, cycle)
+  assert.equal(committed.status, 'failed')
+  assert.equal(committed.outbox.length, 1, 'exhaustion must not enqueue another submission')
+  assert.match(statements.findLast(sql => sql.startsWith('UPDATE generation_jobs'))!, /completed_at=now\(\)/)
+  // Manual retry resets attempt but starts a new persisted cycle. Retain the
+  // already-dispatched old outbox row to reproduce the unique-key collision.
+  cycle = '2026-10-25 00:01:00.654321+00'
+  committed.status = 'running'
+  await persistPreRunFailure(failure, 1, cycle)
+  assert.equal(committed.status, 'retry_wait')
+  assert.equal(committed.outbox.length, 2)
+  assert.equal(committed.outbox.at(-1), `generation.retry:job:${cycle}:1`)
+})
+
+test('processJob preprocessing recovery retries even after a previous terminal run; outbox failure rejects queue delivery', async t => {
+  let attempt = 0
+  let status = 'queued'
+  let outbox = 0
+  let failOutbox = false
+  let snapshot = { attempt, status, outbox }
+  const cycle = '2026-10-25 00:00:00.123456+00'
+  let activeCycle = cycle
+  let supersedeAfterRollback = false
+  let historicalRun = false
+  const keys = new Set<string>()
+  const job = () => ({ id: 'job', status, attempt, retry_cycle: activeCycle, prompt: 'draw', optimization_mode: 'enabled', prompt_optimization_id: 'optimization' })
+  const query = async (sql: string, values: unknown[] = []) => {
+    if (sql === 'BEGIN') snapshot = { attempt, status, outbox }
+    else if (sql === 'ROLLBACK') {
+      ({ attempt, status, outbox } = snapshot)
+      if (supersedeAfterRollback) { activeCycle = '2026-10-25 01:00:00.999999+00'; attempt = 1; status = 'running' }
+    }
+    else if (sql === 'COMMIT') { /* Mock mutations are already applied; only rollback restores the snapshot. */ }
+    else if (sql.startsWith('SELECT * FROM provider_runs')) return { rows: historicalRun || attempt > 1 ? [{ id: 'old-run', job_id: 'job', attempt: 3, operation_state: 'failed', state_revision: 1, created_at: new Date(), updated_at: new Date() }] : [] }
+    else if (sql.startsWith('SELECT *')) return { rows: [job()] }
+    else if (sql.startsWith('SELECT id FROM generation_jobs')) return { rows: [{ id: 'job' }] }
+    else if (sql.includes('attempt=attempt+1')) { attempt++; status = 'running' }
+    else if (sql.startsWith('SELECT po.*')) throw new Error('PROMPT_OPTIMIZATION_TEMPORARY_ERROR')
+    else if (sql.startsWith('UPDATE prompt_optimizations')) { /* This mock tracks job and outbox recovery, not optimization metadata. */ }
+    else if (sql.startsWith('UPDATE generation_jobs SET status=$2')) { status = String(values[1]); return { rows: [{ id: 'job' }], rowCount: 1 } }
+    else if (sql.startsWith("UPDATE generation_jobs SET status='queued',attempt=attempt-1")) {
+      assert.match(sql, /status='running' AND attempt=\$2 AND started_at=\$3::timestamptz/)
+      assert.match(sql, /NOT EXISTS.*SELECT 1 FROM provider_runs/s)
+      assert.match(sql, /submitted_at >= \$3::timestamptz OR operation_state IN/)
+      if (values[1] === attempt && values[2] === activeCycle) { status = 'queued'; attempt-- }
+    }
+    else if (sql.startsWith('INSERT INTO outbox_events')) {
+      if (failOutbox) throw new Error('OUTBOX_FAILED')
+      const key = String(values[3])
+      if (!keys.has(key)) { keys.add(key); outbox++ }
+    }
+    else assert.fail(`Unexpected SQL (provider submission must not run): ${sql}`)
+    return { rows: [], rowCount: 0 }
+  }
+  t.mock.method(db(), 'query', query)
+  t.mock.method(db(), 'connect', async () => ({ query, release() {} }))
+  assert.equal(await processJob('job'), true)
+  assert.equal(status, 'retry_wait')
+  assert.equal(outbox, 1)
+  failOutbox = true
+  await assert.rejects(processJob('job'), LifecyclePersistenceError)
+  assert.equal(status, 'queued', 'the owner restores only its pre-run claim before rejecting delivery')
+  assert.equal(attempt, 1)
+  assert.equal(outbox, 1)
+  // Replay the restored delivery after interrupted persistence without
+  // spending another attempt or creating a provider submission.
+  failOutbox = false
+  assert.equal(await processJob('job'), true)
+  assert.equal(attempt, 2)
+  assert.equal(status, 'retry_wait')
+  assert.equal(outbox, 2)
+  assert.equal(await processJob('job'), true)
+  assert.equal(status, 'failed')
+  assert.equal(outbox, 2)
+  // An old terminal provider run may have a higher attempt than the reset job.
+  // It must not swallow preprocessing failure in the new manual retry cycle.
+  historicalRun = true
+  activeCycle = '2026-10-25 00:30:00.654321+00'
+  status = 'queued'; attempt = 0
+  assert.equal(await processJob('job'), true)
+  assert.equal(status, 'retry_wait')
+  assert.equal(outbox, 3)
+  // If another cycle became active after rollback, restoration must not queue
+  // that new owner or decrement its attempt with the old claim's timestamp.
+  failOutbox = true
+  supersedeAfterRollback = true
+  await assert.rejects(processJob('job'), LifecyclePersistenceError)
+  assert.equal(status, 'running')
+  assert.equal(attempt, 1)
+  assert.equal(activeCycle, '2026-10-25 01:00:00.999999+00')
+})
+
+test('unknown reconciliation uses original timestamps, expires capacity, and never resubmits', async t => {
+  let now = Date.parse('2026-10-25T00:00:00Z')
+  t.mock.method(Date, 'now', () => now)
+  const run = { submittedAt: new Date(now).toISOString(), createdAt: new Date(now - 1000).toISOString() }
+  let capacity = 'reserved'
+  let waits = 0
+  const actions = { expire: async () => { capacity = 'released' }, wait: async () => { waits++ } }
+  await reconcileUnknownSubmission(run, 300_000, actions)
+  assert.equal(capacity, 'reserved')
+  assert.equal(waits, 1)
+  now += 300_000
+  await reconcileUnknownSubmission(run, 300_000, actions)
+  assert.equal(capacity, 'released')
+  assert.equal(waits, 1)
+  assert.equal(unknownSubmissionExpired({ ...run, submittedAt: null }, 300_000), true)
+  assert.equal(unknownSubmissionExpired({ submittedAt: null, createdAt: 'invalid' }, 300_000), true)
+  await assert.rejects(reconcileUnknownSubmission(run, 300_000, { ...actions, expire: async () => { throw new Error('DB_FAILED') } }), /DB_FAILED/)
+})
+
+test('cancellation pending/errors retain capacity; only confirmed terminal outcomes release', async () => {
+  for (const outcome of ['waiting', 'submission_unknown', 'submitting', 'error', 'unsupported', 'canceled', 'succeeded', 'failed'] as const) {
+    let capacity = 'reserved'
+    let state = 'canceling'
+    let scheduled = false
+    await reconcileCancellation({
+      invoke: async () => {
+        if (outcome === 'error') throw new Error('PROVIDER_TIMEOUT')
+        if (outcome === 'unsupported') return undefined
+        return { status: outcome }
+      },
+      assertLease() {}, isLeaseLost: error => error instanceof ProviderLeaseLostError,
+      pending: async () => { scheduled = true },
+      terminal: async result => { capacity = 'released'; state = result.status },
+    })
+    const terminal = ['canceled', 'succeeded', 'failed'].includes(outcome)
+    assert.equal(capacity, terminal ? 'released' : 'reserved', outcome)
+    assert.equal(scheduled, !terminal, outcome)
+    assert.equal(state, terminal ? outcome : 'canceling')
+  }
+})
+
+test('cancellation fencing and persistence failures propagate, never become confirmed cancellation', async () => {
+  let releases = 0
+  const callbacks = {
+    invoke: async () => ({ status: 'waiting' as const }),
+    assertLease() {}, isLeaseLost: (error: unknown) => error instanceof ProviderLeaseLostError,
+    pending: async () => { throw new Error('DB_FAILED') },
+    terminal: async () => { releases++ },
+  }
+  await assert.rejects(reconcileCancellation(callbacks), /DB_FAILED/)
+  await assert.rejects(reconcileCancellation({ ...callbacks, invoke: async () => { throw new ProviderLeaseLostError() } }), ProviderLeaseLostError)
+  await assert.rejects(reconcileCancellation({ ...callbacks, assertLease() { throw new ProviderLeaseLostError() } }), ProviderLeaseLostError)
+  await assert.rejects(reconcileCancellation({ ...callbacks, invoke: async () => ({ status: 'canceled' }), terminal: async () => { throw new Error('TERMINAL_DB_FAILED') } }), /TERMINAL_DB_FAILED/)
+  assert.equal(releases, 0)
+})
 
 // Create helper PNG buffer with valid IHDR
 function createValidPng(width = 100, height = 100): Buffer {
@@ -244,8 +610,11 @@ function normalizeDiagnostic(error: unknown): Record<string, unknown> {
 test('input body deadline destroys a stalled S3 stream and releases its waiter', async () => {
   const controller = new AbortController()
   let destroyed = 0
-  const body = { transformToByteArray: () => new Promise<Uint8Array>(() => {}), destroy: () => { destroyed++ } }
-  const pending = readInputBody(body, controller.signal)
+  const body: AsyncIterable<Uint8Array> & { destroy: () => void } = {
+    [Symbol.asyncIterator]: () => ({ next: () => new Promise<IteratorResult<Uint8Array>>(() => {}) }),
+    destroy: () => { destroyed++ },
+  }
+  const pending = readInputBody(body, controller.signal, 10)
   const error = new Error('STORAGE_OPERATION_TIMEOUT')
   controller.abort(error)
   await assert.rejects(pending, value => value === error)
@@ -256,8 +625,34 @@ test('completed input body removes its abort listener', async () => {
   const controller = new AbortController()
   let destroyed = 0
   const bytes = new Uint8Array([1, 2, 3])
-  const body = { transformToByteArray: async () => bytes, destroy: () => { destroyed++ } }
-  assert.equal(await readInputBody(body, controller.signal), bytes)
+  const body: AsyncIterable<Uint8Array> & { destroy: () => void } = {
+    async *[Symbol.asyncIterator]() { yield bytes },
+    destroy: () => { destroyed++ },
+  }
+  assert.deepEqual(await readInputBody(body, controller.signal, 3), Buffer.from(bytes))
   controller.abort()
   assert.equal(destroyed, 0)
+})
+
+test('input body enforces per-object and remaining-total caps while streaming', async () => {
+  for (const { chunks, cap, accepted } of [
+    { chunks: [new Uint8Array(4), new Uint8Array(2)], cap: 5, accepted: false },
+    { chunks: [new Uint8Array(3), new Uint8Array(3)], cap: 5, accepted: false },
+    { chunks: [new Uint8Array(2), new Uint8Array(3)], cap: 5, accepted: true },
+  ]) {
+    let destroyed = 0
+    let yielded = 0
+    const body: AsyncIterable<Uint8Array> & { destroy: () => void } = {
+      async *[Symbol.asyncIterator]() { for (const chunk of chunks) { yielded++; yield chunk } },
+      destroy: () => { destroyed++ },
+    }
+    if (accepted) {
+      assert.equal((await readInputBody(body, new AbortController().signal, cap)).byteLength, cap)
+      assert.equal(destroyed, 0)
+    } else {
+      await assert.rejects(readInputBody(body, new AbortController().signal, cap), /INVALID_INPUT_IMAGE_SIZE/)
+      assert.equal(destroyed, 1)
+      assert.equal(yielded, 2, 'stream stops as soon as the first over-limit chunk arrives')
+    }
+  }
 })

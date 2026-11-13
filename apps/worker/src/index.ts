@@ -1,4 +1,5 @@
 import { assertBootstrapConfig } from '@musecanvas/config'
+import { initializeObservability, shutdownObservability } from '@musecanvas/observability'
 import { redis, redisCommand } from './shared/infra'
 import { consume, trimGenerationStream } from './queue'
 import { processJob } from './jobs'
@@ -15,6 +16,7 @@ async function main() {
   // before any queue or maintenance work starts. S3 is still not required
   // here; storage resolves lazily on first use.
   assertBootstrapConfig()
+  await initializeObservability('musecanvas-worker', process.env.OTEL_EXPORTER_OTLP_ENDPOINT)
   await redisCommand(redis.connect())
   const health = createWorkerHealth()
   const server = startHealthServer(health)
@@ -101,6 +103,13 @@ async function main() {
     process.removeListener('SIGINT', stop)
     server.close()
     if (redis.isOpen) redis.destroy()
+    try { await shutdownObservability() }
+    catch (error) { console.error('observability shutdown failed', { code: error instanceof Error ? error.name : 'ERROR' }) }
   }
 }
-main().catch(error => { console.error('worker fatal', { code: error instanceof Error ? error.name : 'ERROR' }); process.exit(1) })
+main().catch(async error => {
+  console.error('worker fatal', { code: error instanceof Error ? error.name : 'ERROR' })
+  try { await shutdownObservability() }
+  catch (shutdownError) { console.error('observability shutdown failed', { code: shutdownError instanceof Error ? shutdownError.name : 'ERROR' }) }
+  process.exit(1)
+})

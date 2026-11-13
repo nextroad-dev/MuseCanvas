@@ -1,4 +1,5 @@
 import { db } from '@musecanvas/database'
+import { withSpan } from '@musecanvas/observability'
 import { randomUUID } from 'node:crypto'
 import { CONSUMER_BLOCK_MS, GENERATION_GROUP, GENERATION_STREAM, HEARTBEAT_RENEW_MS, HEARTBEAT_TTL_MS, STALE_PENDING_IDLE_MS, blockingRedis, boundedInteger, consumer, redis, redisCommand } from '../shared/infra'
 import { resolveJobLeaseMs } from '../shared/runtime'
@@ -113,7 +114,7 @@ export async function consume(processJob: (jobId: string, runId?: string) => Pro
     }, HEARTBEAT_RENEW_MS)
     try {
       await writeHeartbeat(message.id)
-      await processJob(jobId, runId)
+      await withSpan('worker.job.process', { event_kind: 'generation' }, () => processJob(jobId, runId))
       await redisCommand(redis.xAck(GENERATION_STREAM, GENERATION_GROUP, message.id))
       options.onActivity?.()
     } catch (error) {

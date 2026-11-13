@@ -9,6 +9,8 @@
 - `docker/`：`api`、`worker`、`web`、`nginx` 四个镜像定义（Compose 构建上下文均为仓库根目录 `.`，Nginx 配置从 `deploy/nginx` 复制；`api` 镜像包含 `scripts/`，供 `db-migrate` 调用迁移与种子脚本）。
 - `nginx/`：Web 静态资源及 `/api` 反向代理配置。
 
+可选服务端遥测：设置 `OTEL_EXPORTER_OTLP_ENDPOINT` 为 OTLP/HTTP Collector 地址（如 `http://otel-collector:4318`），API 与 Worker 会分别以 `musecanvas-api` / `musecanvas-worker` 导出 traces；留空时不启动遥测 SDK，不影响服务启动。遥测不记录请求/响应正文、提示词、凭据或原始异常消息。请限制 Collector 网络访问并按组织的数据保留策略处理 traces。
+
 图库缩略图（派生预览对象）：`apps/worker` 在产物上传成功后生成一张 512px 长边的预览图（图像用 sharp 转 WebP，视频用 ffmpeg 抽一帧转 JPEG），对象键由源键纯函数派生（`<source>.thumb-512.webp|.jpg`，同目录同前缀），视频那一帧同时写入 `assets.poster_object_key` 与 `thumbnail_object_key`。ffmpeg 由 `deploy/docker/worker.Dockerfile` 的 `apk add --no-cache ffmpeg` 提供（Alpine musl 原生包；`ffmpeg-static` 的 glibc 二进制在本镜像内无法执行）。任何预览生成失败都只把 `thumbnail_state` 记为 `failed`，绝不影响任务结果，图库格子自动回退到原图。
 
 升级到带此功能的版本后请跑一次回填，否则新资产有预览、历史资产仍下载原图，网格表现不一致（`api` 镜像不含 ffmpeg，视频行会记为 `failed`，因此完整回填在 `worker` 容器内执行）：

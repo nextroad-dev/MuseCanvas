@@ -16,6 +16,7 @@
     "@musecanvas/config": "workspace:*",
     "@musecanvas/contracts": "workspace:*",
     "@musecanvas/database": "workspace:*",
+    "@musecanvas/observability": "workspace:*",
     "@musecanvas/providers": "workspace:*",
     "pg": "^8.22.0",
     "redis": "^5.12.1"

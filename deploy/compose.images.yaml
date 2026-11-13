@@ -50,6 +50,7 @@ services:
       - media_data:/data/media
     environment: &backend-env
       NODE_ENV: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SETUP_CLAIM_DELIVERY: ${SETUP_CLAIM_DELIVERY:-}
       SETUP_CLAIM_REQUIRED: ${SETUP_CLAIM_REQUIRED:-}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-12}

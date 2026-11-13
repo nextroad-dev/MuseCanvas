@@ -20,9 +20,11 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/providers/package.json packages/providers/package.json
+COPY packages/observability/package.json packages/observability/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/worker apps/worker
 COPY packages packages
+COPY scripts scripts
 
 # Drop to an unprivileged user. The worker writes only outside /app: poster
 # extraction mkdtemps under os.tmpdir() and the plugin loader materializes

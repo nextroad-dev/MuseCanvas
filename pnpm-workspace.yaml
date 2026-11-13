@@ -4,6 +4,23 @@ packages:
 allowBuilds:
   esbuild: true
   sharp: true
+minimumReleaseAgeExclude:
+  - "@opentelemetry/configuration@0.301.2"
+  - "@opentelemetry/exporter-logs-otlp-grpc@0.301.2"
+  - "@opentelemetry/exporter-logs-otlp-http@0.301.2"
+  - "@opentelemetry/exporter-logs-otlp-proto@0.301.2"
+  - "@opentelemetry/exporter-metrics-otlp-grpc@0.301.2"
+  - "@opentelemetry/exporter-metrics-otlp-http@0.301.2"
+  - "@opentelemetry/exporter-metrics-otlp-proto@0.301.2"
+  - "@opentelemetry/exporter-prometheus@0.301.2"
+  - "@opentelemetry/exporter-trace-otlp-grpc@0.301.2"
+  - "@opentelemetry/exporter-trace-otlp-http@0.301.2"
+  - "@opentelemetry/exporter-trace-otlp-proto@0.301.2"
+  - "@opentelemetry/instrumentation@0.301.2"
+  - "@opentelemetry/otlp-exporter-base@0.301.2"
+  - "@opentelemetry/otlp-grpc-exporter-base@0.301.2"
+  - "@opentelemetry/otlp-transformer@0.301.2"
+  - "@opentelemetry/sdk-node@0.301.2"
 overrides:
   sharp: ^0.35.5
   postcss: ^8.5.30

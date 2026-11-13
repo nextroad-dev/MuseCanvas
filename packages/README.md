@@ -5,6 +5,7 @@
 - `database`: migration、事务及数据访问；用户资源查询必须限定所有者。
 - `providers`: 图像、对象存储和邮件服务适配器。
 - `config`: 服务端环境变量读取与校验。
+- `observability`: API 与 Worker 共用的可选 OpenTelemetry trace 初始化；未配置 OTLP endpoint 时禁用。
 
 数据库实体和供应商原始响应不得放入 `contracts`。
 

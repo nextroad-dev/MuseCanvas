@@ -18,6 +18,7 @@
     "@musecanvas/contracts": "workspace:*",
     "@musecanvas/database": "workspace:*",
     "@musecanvas/domain": "workspace:*",
+    "@musecanvas/observability": "workspace:*",
     "@musecanvas/providers": "workspace:*",
     "jose": "^6.2.3",
     "next": "^15.5.27",

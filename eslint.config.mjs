@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -31,6 +32,16 @@ export default tseslint.config(
       'no-empty': 'warn',
       'no-control-regex': 'warn',
       'prefer-const': 'warn',
+    },
+  },
+  {
+    // React hooks 规则只在 web 客户端组件上生效：api/worker 是纯服务端代码，
+    // 没有 React 运行时，装上插件也只是噪音。
+    files: ['apps/web/src/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
     },
   },
 );

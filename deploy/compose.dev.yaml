@@ -52,6 +52,7 @@ services:
       db-migrate: { condition: service_completed_successfully }
     environment: &backend-env
       NODE_ENV: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-12}
       DATABASE_CONNECTION_TIMEOUT_MS: ${DATABASE_CONNECTION_TIMEOUT_MS:-5000}
       DATABASE_IDLE_TIMEOUT_MS: ${DATABASE_IDLE_TIMEOUT_MS:-30000}

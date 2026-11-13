@@ -18,7 +18,16 @@ export const fail = (
   { success: false, error: details ? { code, message, details } : { code, message } },
   { status },
 )
-export async function body(request: NextRequest): Promise<Record<string, unknown>> { try { return await request.json() } catch { return {} } }
+export async function body(request: NextRequest): Promise<Record<string, unknown>> {
+  try {
+    const input: unknown = await request.json()
+    // Preserve the malformed-JSON fallback so each endpoint keeps its existing
+    // validation response, but never expose null, arrays or primitives as objects.
+    return input !== null && typeof input === 'object' && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : {}
+  } catch { return {} }
+}
 export const emailValid = (value: unknown): value is string => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 export function clientIpFromRequest(request: NextRequest): string {
   const forwarded = request.headers.get('x-forwarded-for')

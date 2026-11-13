@@ -1,6 +1,7 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { NextResponse, type NextRequest } from 'next/server'
 import { db, transaction } from '@musecanvas/database'
-import { hashToken, hashTokenCandidates, randomToken, shouldUseSecureCookie } from '../../auth/security'
+import { actorFrom, hashToken, hashTokenCandidates, randomToken, shouldUseSecureCookie } from '../../auth/security'
 import { clientIpFromRequest, fail, ok } from '../../shared/http'
 import { writeAudit } from '../../shared/audit'
 import { userDto } from '../../shared/dto'
@@ -18,6 +19,19 @@ import {
 } from '../../auth/oauth'
 
 const OAUTH_STATE_TTL = 600
+
+// A separate cookie per flow keeps concurrent tabs independent. The public state
+// commits to the secret cookie and initiating actor, so we can validate both
+// BEFORE GETDEL, without letting a copied callback burn the real browser's flow.
+const bindingCookieName = (id: string) => `muse_oauth_${id}`
+const bindingProof = (id: string, binding: string, provider: OAuthProvider, mode: string, userId = '') =>
+  createHash('sha256').update(JSON.stringify([id, binding, provider, mode, userId])).digest()
+
+const oauthDependencies = {
+  oauthSetting, resolvePublicOrigin, redisSet, redisGetDel, actorFrom, loginRedirect,
+  exchangeCodeWithConfig, fetchProfileWithConfig, loginWithIdentity, linkIdentity,
+}
+type OAuthDependencies = typeof oauthDependencies
 
 type OAuthStateRecord = {
   mode: 'login' | 'link'
@@ -63,56 +77,86 @@ export async function startOAuth(
   provider: OAuthProvider,
   mode: 'login' | 'link',
   userId?: string,
+  dependencies: OAuthDependencies = oauthDependencies,
 ): Promise<NextResponse> {
-  const setting = await oauthSetting(provider)
-  if (!setting.enabled) return loginRedirect('OAUTH_PROVIDER_DISABLED')
-  const state = randomToken(24)
+  const setting = await dependencies.oauthSetting(provider)
+  if (!setting.enabled) return dependencies.loginRedirect('OAUTH_PROVIDER_DISABLED')
+  if (mode === 'link' && !userId) return dependencies.loginRedirect('OAUTH_INVALID_CALLBACK')
+  const id = randomToken(24)
+  const binding = randomToken()
+  const state = `${id}.${mode}.${bindingProof(id, binding, provider, mode, userId).toString('hex')}`
   const pkceVerifier = createPkceVerifier()
   const nonce = randomToken(16)
   const record: OAuthStateRecord = { mode, provider, pkceVerifier, nonce, userId }
   try {
-    await redisSet(`oauth:state:${state}`, record, OAUTH_STATE_TTL)
+    await dependencies.redisSet(`oauth:state:${state}`, record, OAUTH_STATE_TTL)
   } catch {
-    return loginRedirect('OAUTH_STATE_FAILED')
+    return dependencies.loginRedirect('OAUTH_STATE_FAILED')
   }
-  return NextResponse.redirect(
+  const response = NextResponse.redirect(
     authorizeUrlWithConfig(provider, setting.config, {
       state,
       pkceChallenge: pkceChallenge(pkceVerifier),
       nonce,
     }),
   )
+  response.cookies.set(bindingCookieName(id), binding, {
+    httpOnly: true, secure: shouldUseSecureCookie(await dependencies.resolvePublicOrigin()),
+    sameSite: 'lax', path: '/', maxAge: OAUTH_STATE_TTL,
+  })
+  return response
 }
 
 export async function handleOAuthCallback(
   request: NextRequest,
   provider: OAuthProvider,
+  dependencies: OAuthDependencies = oauthDependencies,
 ): Promise<NextResponse> {
-  const setting = await oauthSetting(provider)
-  if (!setting.enabled) return loginRedirect('OAUTH_PROVIDER_DISABLED')
   const params = request.nextUrl.searchParams
-  if (params.get('error')) return loginRedirect('OAUTH_DENIED')
   const code = params.get('code')
   const state = params.get('state')
-  if (!code || !state) return loginRedirect('OAUTH_INVALID_CALLBACK')
+  const parts = state?.match(/^([A-Za-z0-9_-]{32})\.(login|link)\.([a-f0-9]{64})$/)
+  if (!parts) return dependencies.loginRedirect('OAUTH_INVALID_CALLBACK')
+  const [, id, mode, proof] = parts
+  const binding = request.cookies.get(bindingCookieName(id))?.value
+  if (!binding || !/^[A-Za-z0-9_-]{43}$/.test(binding)) return dependencies.loginRedirect('OAUTH_STATE_EXPIRED')
+  const actor = mode === 'link' ? await dependencies.actorFrom(request) : null
+  if (mode === 'link' && !actor) return dependencies.loginRedirect('OAUTH_STATE_EXPIRED')
+  if (!timingSafeEqual(Buffer.from(proof, 'hex'), bindingProof(id, binding, provider, mode, actor?.id))) {
+    return dependencies.loginRedirect('OAUTH_STATE_EXPIRED')
+  }
 
-  const record = await redisGetDel<OAuthStateRecord>(`oauth:state:${state}`)
-  if (!record || record.provider !== provider) return loginRedirect('OAUTH_STATE_EXPIRED')
+  // Only a verified browser/actor may consume this state or clear its cookie.
+  const finish = async (response: Promise<NextResponse>): Promise<NextResponse> => {
+    const result = await response
+    result.cookies.set(bindingCookieName(id), '', {
+      httpOnly: true, secure: shouldUseSecureCookie(await dependencies.resolvePublicOrigin()),
+      sameSite: 'lax', path: '/', maxAge: 0,
+    })
+    return result
+  }
+  const record = await dependencies.redisGetDel<OAuthStateRecord>(`oauth:state:${state}`)
+  if (!record || record.provider !== provider || record.mode !== mode ||
+      (mode === 'link' && record.userId !== actor?.id)) return finish(dependencies.loginRedirect('OAUTH_STATE_EXPIRED'))
+  if (params.get('error')) return finish(dependencies.loginRedirect('OAUTH_DENIED'))
+  if (!code) return finish(dependencies.loginRedirect('OAUTH_INVALID_CALLBACK'))
+  const setting = await dependencies.oauthSetting(provider)
+  if (!setting.enabled) return finish(dependencies.loginRedirect('OAUTH_PROVIDER_DISABLED'))
 
   let profile: OAuthProfile
   try {
-    const tokens = await exchangeCodeWithConfig(provider, setting.config, code, record.pkceVerifier)
-    profile = await fetchProfileWithConfig(provider, setting.config, tokens, record.nonce)
+    const tokens = await dependencies.exchangeCodeWithConfig(provider, setting.config, code, record.pkceVerifier)
+    profile = await dependencies.fetchProfileWithConfig(provider, setting.config, tokens, record.nonce)
   } catch (error) {
     const known =
       error instanceof Error && /^OAUTH_/.test(error.message) ? error.message : 'OAUTH_PROFILE_FAILED'
-    return loginRedirect(known)
+    return finish(dependencies.loginRedirect(known))
   }
-  if (!profile.emailVerified) return loginRedirect('OAUTH_EMAIL_UNVERIFIED')
+  if (!profile.emailVerified) return finish(dependencies.loginRedirect('OAUTH_EMAIL_UNVERIFIED'))
 
-  return record.mode === 'link' && record.userId
-    ? linkIdentity(record.userId, provider, profile)
-    : loginWithIdentity(provider, profile)
+  return finish(record.mode === 'link' && record.userId
+    ? dependencies.linkIdentity(record.userId, provider, profile)
+    : dependencies.loginWithIdentity(provider, profile))
 }
 
 async function loginWithIdentity(

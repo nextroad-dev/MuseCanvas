@@ -22,7 +22,7 @@ export const encodeCursor = (row: { cursor_created_at: string; id: string }) =>
   Buffer.from(JSON.stringify({ createdAt: row.cursor_created_at, id: row.id })).toString('base64url')
 
 export const boundedLimit = (request: NextRequest) =>
-  Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get('limit') || 50) || 50))
+  Math.min(100, Math.max(1, Math.trunc(Number(request.nextUrl.searchParams.get('limit') || 50) || 50)))
 
 export const userJobSelect = `SELECT j.*,po.input_prompt,po.final_prompt,po.template_name_snapshot,po.status optimization_status,s.allow_user_read_final_prompt
   FROM generation_jobs j LEFT JOIN prompt_optimizations po ON po.id=j.prompt_optimization_id AND po.deleted_at IS NULL

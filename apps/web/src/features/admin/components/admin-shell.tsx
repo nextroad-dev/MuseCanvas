@@ -6,17 +6,14 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   ArrowLeftIcon as ArrowLeft,
-  CpuIcon as Cpu,
+  CaretRightIcon as CaretRight,
   FileTextIcon as FileText,
   GearSixIcon as GearSix,
   HouseIcon as House,
-  ImagesIcon as Images,
-  ListBulletsIcon as ListBullets,
   ShieldCheckIcon as ShieldCheck,
   SidebarSimpleIcon as SidebarSimple,
   SignOutIcon as SignOut,
   UserCircleIcon as UserCircle,
-  UsersIcon as Users,
 } from '@phosphor-icons/react'
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 
@@ -24,6 +21,7 @@ import { BrandMark } from '@/shared/components/brand-mark'
 import {
   Avatar,
   DropdownMenu,
+  ThemeToggle,
   ghostIconButtonVariants,
   useToast,
 } from '@/shared/components/ui'
@@ -43,11 +41,7 @@ import type { AdminNavIconKey } from '../lib/admin-layout'
 /** 侧栏图标槽：lib 只给键，React 组件在这里映射，纯模块不依赖 Phosphor。 */
 const NAV_ICONS: Record<AdminNavIconKey, PhosphorIcon> = {
   overview: House,
-  users: Users,
-  media: Images,
-  language: Cpu,
   prompt: FileText,
-  jobs: ListBullets,
   oauth: ShieldCheck,
   settings: GearSix,
 }
@@ -55,7 +49,7 @@ const NAV_ICONS: Record<AdminNavIconKey, PhosphorIcon> = {
 const SIDEBAR_NAV_ID = 'admin-sidebar-nav'
 
 const NAV_ITEM_BASE =
-  'relative flex min-h-[var(--control-md)] items-center gap-2.5 rounded-control px-2.5 text-sm transition-colors'
+  'relative flex min-h-[var(--control-md)] items-center gap-3 rounded-pill px-3 text-ui transition-colors'
 
 export interface AdminShellProps {
   /** RSC 守卫已确认的管理员身份；只用于账户菜单展示。 */
@@ -110,6 +104,12 @@ export function AdminShell({ user, children }: AdminShellProps) {
 
   return (
     <div className="flex min-h-dvh flex-col bg-canvas text-foreground md:flex-row">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-toast focus:rounded-control focus:bg-surface focus:px-4 focus:py-3 focus:shadow-floating"
+      >
+        跳到管理后台内容
+      </a>
       <aside
         aria-label="管理后台"
         className={cn(
@@ -125,17 +125,22 @@ export function AdminShell({ user, children }: AdminShellProps) {
         >
           <div
             className={cn(
-              'mb-2 flex h-11 shrink-0 items-center gap-2 px-1 text-foreground',
+              'mb-3 flex h-11 shrink-0 items-center gap-2 px-1 text-foreground',
               collapsed ? 'justify-between md:justify-center' : 'justify-between',
             )}
           >
             <Link
               href={APP_ROUTES.admin}
-              className={cn('flex min-w-0 items-center gap-2 rounded-control', collapsed && 'md:hidden')}
+              className={cn('flex min-w-0 items-center gap-2.5 rounded-control', collapsed && 'md:hidden')}
               aria-label="管理后台首页"
             >
-              <BrandMark variant="mark" size={36} />
-              <span className="truncate text-compact font-medium">管理后台</span>
+              <BrandMark variant="mark" size={32} />
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-compact font-semibold leading-tight tracking-tight">
+                  MuseCanvas
+                </span>
+                <span className="truncate text-caption text-muted-foreground">管理控制台</span>
+              </div>
             </Link>
             <button
               type="button"
@@ -148,19 +153,19 @@ export function AdminShell({ user, children }: AdminShellProps) {
                 'size-[var(--control-compact)] max-sm:size-11 max-md:hidden',
               )}
             >
-              <SidebarSimple size={18} aria-hidden="true" />
+              <SidebarSimple size={18} weight="duotone" aria-hidden="true" />
             </button>
           </div>
 
           {ADMIN_NAV_GROUPS.map((group, groupIndex) => (
             <div
               key={group.title ?? `group-${groupIndex}`}
-              className="mb-2.5 flex flex-col gap-0.5 text-foreground"
+              className="mb-2 flex flex-col gap-0.5 text-foreground"
             >
               {group.title ? (
                 <span
                   className={cn(
-                    'px-2.5 pb-1.5 pt-3 text-compact font-semibold',
+                    'px-3 pb-1.5 pt-3 text-caption font-medium tracking-wide text-muted-foreground',
                     collapsed && 'md:hidden',
                   )}
                 >
@@ -179,19 +184,18 @@ export function AdminShell({ user, children }: AdminShellProps) {
                     title={item.label}
                     className={cn(
                       NAV_ITEM_BASE,
-                      collapsed ? 'justify-start md:justify-center' : 'justify-start',
+                      collapsed ? 'justify-start md:justify-center md:px-0' : 'justify-start',
                       active
-                        ? 'bg-tonal-selected font-medium text-foreground'
+                        ? 'bg-accent-soft font-medium text-accent'
                         : 'text-muted-foreground hover:bg-tonal hover:text-foreground',
                     )}
                   >
-                    {active ? (
-                      <span
-                        aria-hidden="true"
-                        className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 bg-primary"
-                      />
-                    ) : null}
-                    <Icon size={18} aria-hidden="true" className="shrink-0" />
+                    <Icon
+                      size={18}
+                      weight={active ? 'duotone' : 'regular'}
+                      aria-hidden="true"
+                      className="shrink-0"
+                    />
                     <span className={cn('truncate', collapsed && 'md:hidden')}>{item.label}</span>
                   </Link>
                 )
@@ -202,77 +206,103 @@ export function AdminShell({ user, children }: AdminShellProps) {
           <div className="mt-auto border-t border-border pt-3">
             <Link
               href={APP_ROUTES.generate}
-              aria-label={collapsed ? '返回创作台' : undefined}
-              title="返回创作台"
+              aria-label={collapsed ? '返回工作台' : undefined}
+              title="返回工作台"
               className={cn(
                 NAV_ITEM_BASE,
                 'text-muted-foreground hover:bg-tonal hover:text-foreground',
-                collapsed ? 'justify-start md:justify-center' : 'justify-start',
+                collapsed ? 'justify-start md:justify-center md:px-0' : 'justify-start',
               )}
             >
               <ArrowLeft size={18} aria-hidden="true" className="shrink-0" />
-              <span className={cn('truncate', collapsed && 'md:hidden')}>返回创作台</span>
+              <span className={cn('truncate', collapsed && 'md:hidden')}>返回工作台</span>
             </Link>
           </div>
         </nav>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-[var(--layout-header)] shrink-0 items-center justify-between gap-4 border-b border-border px-4 sm:px-6 md:px-10">
-          <nav aria-label="面包屑" className="flex min-w-0 items-center gap-2 text-ui">
-            <span className="shrink-0 text-muted-foreground">管理后台</span>
+        <header className="sticky top-0 z-[var(--z-index-sticky)] flex h-[var(--layout-header)] shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-4 sm:px-6 md:px-10">
+          <nav aria-label="面包屑" className="flex min-w-0 items-center gap-1.5 text-ui">
+            <Link
+              href={APP_ROUTES.admin}
+              className="shrink-0 font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              管理后台
+            </Link>
             {breadcrumb ? (
               <>
-                <span aria-hidden="true" className="text-muted-foreground">
-                  /
-                </span>
-                <span className="truncate text-foreground">{breadcrumb.label}</span>
+                <CaretRight size={14} aria-hidden="true" className="shrink-0 text-muted-foreground" />
+                {breadcrumb.group ? (
+                  <>
+                    <span className="hidden shrink-0 text-muted-foreground sm:inline">
+                      {breadcrumb.group}
+                    </span>
+                    <CaretRight
+                      size={14}
+                      aria-hidden="true"
+                      className="hidden shrink-0 text-muted-foreground sm:inline"
+                    />
+                  </>
+                ) : null}
+                <span className="truncate font-medium text-foreground">{breadcrumb.label}</span>
               </>
             ) : null}
           </nav>
 
-          <DropdownMenu
-            menuLabel="账户菜单"
-            trigger={
-              <button
-                type="button"
-                aria-label="账户菜单"
-                className="inline-flex size-[var(--control-sm)] shrink-0 items-center justify-center rounded-pill max-sm:size-11"
-              >
-                <Avatar size="sm" initial={user.email} decorative className="bg-tonal-selected" />
-              </button>
-            }
-            header={
-              <div className="mb-1 border-b border-border px-3 pb-2 pt-1.5">
-                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">管理员</p>
-              </div>
-            }
-            items={[
-              {
-                id: 'account',
-                label: '账户',
-                icon: <UserCircle size={16} aria-hidden="true" />,
-                onSelect: () => router.push(APP_ROUTES.account),
-              },
-              {
-                id: 'logout',
-                label: loggingOut ? '正在退出…' : '退出登录',
-                icon: <SignOut size={16} aria-hidden="true" />,
-                danger: true,
-                separator: true,
-                disabled: loggingOut,
-                onSelect: () => {
-                  void handleLogout()
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href={APP_ROUTES.generate}
+              className="hidden items-center gap-1.5 rounded-pill border border-border bg-canvas px-3 py-1.5 text-ui font-medium text-foreground transition-colors hover:bg-tonal sm:inline-flex"
+            >
+              <ArrowLeft size={14} aria-hidden="true" />
+              <span>返回工作台</span>
+            </Link>
+            <ThemeToggle />
+            <DropdownMenu
+              menuLabel="账户菜单"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="账户菜单"
+                  className="inline-flex size-[var(--control-sm)] shrink-0 items-center justify-center rounded-pill max-sm:size-11"
+                >
+                  <Avatar size="sm" initial={user.email} decorative className="bg-tonal-selected" />
+                </button>
+              }
+              header={
+                <div className="mb-1 border-b border-border px-3 pb-2 pt-1.5">
+                  <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">管理员</p>
+                </div>
+              }
+              items={[
+                {
+                  id: 'account',
+                  label: '账户',
+                  icon: <UserCircle size={16} aria-hidden="true" />,
+                  onSelect: () => router.push(APP_ROUTES.account),
                 },
-              },
-            ]}
-          />
+                {
+                  id: 'logout',
+                  label: loggingOut ? '正在退出…' : '退出登录',
+                  icon: <SignOut size={16} aria-hidden="true" />,
+                  danger: true,
+                  separator: true,
+                  disabled: loggingOut,
+                  onSelect: () => {
+                    void handleLogout()
+                  },
+                },
+              ]}
+            />
+          </div>
         </header>
 
         <main
           id="main"
-          className="flex min-w-0 flex-1 flex-col gap-7 px-4 pb-12 pt-7 sm:px-6 md:px-10"
+          tabIndex={-1}
+          className="flex min-w-0 flex-1 flex-col gap-7 px-4 pb-12 pt-7 outline-none sm:px-6 md:px-10"
         >
           {children}
         </main>

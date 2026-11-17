@@ -59,7 +59,9 @@ Desktop.ini
 *.crt
 
 # Local AI agent instructions and development notes
-docs/
+docs/*
+!docs/agent-core-v1-design.md
+!docs/agent-core-openapi.json
 agents.md
 **/agents.md
 AGENTS.md

@@ -8,6 +8,7 @@ const config: NextConfig = {
     '@musecanvas/contracts',
     '@musecanvas/database',
     '@musecanvas/domain',
+    '@musecanvas/media-service',
     '@musecanvas/providers',
   ],
   serverExternalPackages: ['pg', 'nodemailer', 'sharp'],

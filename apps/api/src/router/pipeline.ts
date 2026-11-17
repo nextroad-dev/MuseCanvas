@@ -4,6 +4,7 @@ import { isResponse, requireActor } from './guard'
 import { matchRoute } from './match'
 import { DELETE_ROUTES, GET_ROUTES, PATCH_ROUTES, POST_ROUTES } from './routes'
 import type { Route } from './types'
+import { agentCorePathDisabled } from '../modules/agent/feature'
 
 /**
  * The dispatcher: one ordered route table and one pipeline per method.
@@ -51,12 +52,14 @@ async function unmatchedGate(request: NextRequest, path: string, alwaysAdmin: bo
 }
 
 export async function dispatchGet(request: NextRequest, path: string) {
+  if (agentCorePathDisabled(path)) return notFound()
   const matched = matchRoute(GET_ROUTES, path)
   if (matched) return answer(matched.route, makeContext(request, path, matched.params))
   return (await unmatchedGate(request, path, false)) ?? notFound()
 }
 
 export async function dispatchPost(request: NextRequest, path: string) {
+  if (agentCorePathDisabled(path)) return notFound()
   if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403)
   const matched = matchRoute(POST_ROUTES, path)
   if (matched) return answer(matched.route, makeContext(request, path, matched.params))
@@ -64,6 +67,7 @@ export async function dispatchPost(request: NextRequest, path: string) {
 }
 
 export async function dispatchPatch(request: NextRequest, path: string) {
+  if (agentCorePathDisabled(path)) return notFound()
   if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403)
   const matched = matchRoute(PATCH_ROUTES, path)
   if (matched) return answer(matched.route, makeContext(request, path, matched.params))
@@ -76,11 +80,13 @@ export async function dispatchPatch(request: NextRequest, path: string) {
  * gate before 404ing. The 401 and 403 for an unauthorized PUT are observable.
  */
 export async function dispatchPut(request: NextRequest, path: string) {
+  if (agentCorePathDisabled(path)) return notFound()
   if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403)
   return (await unmatchedGate(request, path, true)) ?? notFound()
 }
 
 export async function dispatchDelete(request: NextRequest, path: string) {
+  if (agentCorePathDisabled(path)) return notFound()
   if (!mutationOriginValid(request)) return fail('CSRF_REJECTED', '请求来源无效', 403)
   const matched = matchRoute(DELETE_ROUTES, path)
   if (matched) return answer(matched.route, makeContext(request, path, matched.params))

@@ -7,15 +7,18 @@ import { cleanupMaintenance, scheduleMaintenance } from './maintenance'
 import { PLUGIN_BOOT_REFRESH_BUDGET_MS, refreshPlugins } from './plugins/loader'
 import { assertBuiltinPluginsAvailable } from './plugins/availability'
 import { runCredentialTests } from './credentials/probe'
+import { assertWorkerSchema, WorkerSchemaRequiredError } from './shared/schema-preflight'
 import { createWorkerHealth, startHealthServer } from './shared/health'
 
 async function main() {
   // Imports above stay side-effect free (no S3/DB connects at module load),
-  // so this assertion is the single fail-fast gate: missing DATABASE_URL,
+  // so bootstrap validation runs before schema preflight: missing DATABASE_URL,
   // REDIS_URL, APP_MASTER_KEY, or NODE_ENV exits BOOTSTRAP_CONFIG_INVALID
   // before any queue or maintenance work starts. S3 is still not required
   // here; storage resolves lazily on first use.
   assertBootstrapConfig()
+  // Fail before Redis, health, plugin refresh or either generation scheduling path.
+  await assertWorkerSchema()
   await initializeObservability('musecanvas-worker', process.env.OTEL_EXPORTER_OTLP_ENDPOINT)
   await redisCommand(redis.connect())
   const health = createWorkerHealth()
@@ -108,7 +111,9 @@ async function main() {
   }
 }
 main().catch(async error => {
-  console.error('worker fatal', { code: error instanceof Error ? error.name : 'ERROR' })
+  console.error('worker fatal', error instanceof WorkerSchemaRequiredError
+    ? { code: error.name, requiredMigration: '0042', missingColumns: error.missingColumns }
+    : { code: error instanceof Error ? error.name : 'ERROR' })
   try { await shutdownObservability() }
   catch (shutdownError) { console.error('observability shutdown failed', { code: shutdownError instanceof Error ? shutdownError.name : 'ERROR' }) }
   process.exit(1)

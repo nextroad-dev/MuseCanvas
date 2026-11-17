@@ -886,7 +886,7 @@ test('a storage failure on the mask leaves a compensating delete and no job', as
   assert.match(lostWrite.deletes[0], /^inputs\/33333333/)
 })
 
-test('storeReadyInputImage writes both rows in one shape and survives a missing mirror table', async () => {
+test('storeReadyInputImage writes both rows in lock order and propagates a missing mirror table', async () => {
   const queries: Array<{ sql: string; params: unknown[] }> = []
   let mirrorThrows = false
   const client: SqlClient = {
@@ -909,7 +909,7 @@ test('storeReadyInputImage writes both rows in one shape and survives a missing 
     ttlSeconds: 86400,
   }
   await storeReadyInputImage(client, row)
-  assert.deepEqual(queries.map(entry => entry.sql.match(/INSERT INTO (\w+)/)?.[1]).filter(Boolean), ['generation_input_images', 'media_uploads'])
+  assert.deepEqual(queries.map(entry => entry.sql.match(/INSERT INTO (\w+)/)?.[1]).filter(Boolean), ['media_uploads', 'generation_input_images'])
   assert.equal(queries[0].params[3], 'image/png')
   // Both rows carry the same nine values in the same order: id, owner, key, mime,
   // geometry, byte count, digest, TTL.
@@ -921,11 +921,11 @@ test('storeReadyInputImage writes both rows in one shape and survives a missing 
   const verify = queries[2]
   assert.match(verify.sql, /SELECT .+ FROM generation_input_images WHERE id=\$1/)
   assert.deepEqual(verify.params, [row.uploadId])
-  // An older database without the generic table keeps working on the legacy row.
+  // SQL errors abort a real PG transaction; never continue against the legacy table.
   queries.length = 0
   mirrorThrows = true
-  await storeReadyInputImage(client, row)
-  assert.equal(queries.length, 3)
+  await assert.rejects(storeReadyInputImage(client, row), /42P01/)
+  assert.equal(queries.length, 1)
 })
 
 test('storeReadyInputImage refuses an existing id whose stored bytes differ', async () => {

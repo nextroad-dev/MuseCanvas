@@ -79,6 +79,16 @@ test('every endpoint declared in contracts has a handler', () => {
   assert.deepEqual(unrouted, [], 'API_ENDPOINTS declares paths with no backend handler')
 })
 
+test('Agent Core route IDs match valid uppercase UUIDs without changing params.id or legacy matching', () => {
+  const upper = SAMPLE_UUID.toUpperCase()
+  const core = matchRoute(GET_ROUTES, `agent/sessions/${upper}`)
+  assert.ok(core)
+  assert.equal(core.route.path, 'agent/sessions/:id')
+  assert.deepEqual(core.params, { id: upper })
+  assert.equal(matchPath('jobs/:id', `jobs/${upper}`), null)
+  assert.equal(matchPath('canvases/:id/agent/history', `canvases/${upper}/agent/history`), null)
+})
+
 test('the declared-but-unrouted list never goes stale', () => {
   for (const endpoint of DECLARED_WITHOUT_HANDLER) {
     const path = endpoint.replace(/^\/api\//, '')

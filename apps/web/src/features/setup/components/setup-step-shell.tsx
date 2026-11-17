@@ -17,11 +17,11 @@ export function SetupStepShell({ headingId, title, description, status, children
   return (
     <section
       aria-labelledby={headingId}
-      className="flex min-w-0 flex-col gap-6 rounded-panel bg-surface p-6 text-foreground shadow-soft md:p-8"
+      className="flex min-w-0 flex-col gap-6 rounded-panel border border-border bg-surface p-6 text-foreground shadow-soft md:p-8"
     >
-      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h2 id={headingId} className="text-module">
+      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-b border-border/70 pb-5">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <h2 id={headingId} className="text-module font-medium tracking-tight text-foreground">
             {title}
           </h2>
           {description ? (

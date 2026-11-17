@@ -16,7 +16,10 @@ export const REDIS_COMMAND_TIMEOUT_MS = boundedInteger(process.env.WORKER_REDIS_
 const options = { url: process.env.REDIS_URL, disableOfflineQueue: true, commandsQueueMaxLength: 1024, commandOptions: { timeout: REDIS_COMMAND_TIMEOUT_MS }, socket: { connectTimeout: boundedInteger(process.env.REDIS_CONNECT_TIMEOUT_MS, 1000, 100, 60_000) } }
 export const redis = createClient(options)
 // BLOCK must never queue heartbeats or outbox writes behind the read command.
-export const blockingRedis = createClient({ ...options, commandOptions: { timeout: 15_000 } })
+export function createBlockingRedis() {
+  return createClient({ ...options, commandOptions: { timeout: 15_000 } })
+}
+export const blockingRedis = createBlockingRedis()
 for (const client of [redis, blockingRedis]) client.on('error', error => console.error('redis error', { code: error.name }))
 
 export async function redisCommand<T>(operation: Promise<T>, timeoutMs = REDIS_COMMAND_TIMEOUT_MS): Promise<T> {
@@ -29,7 +32,7 @@ export async function redisCommand<T>(operation: Promise<T>, timeoutMs = REDIS_C
 }
 export const consumer = `worker-${process.pid}-${randomUUID().slice(0, 8)}`
 
-export const GENERATION_STREAM = 'muse:generation'
+export { GENERATION_STREAM, AGENT_STREAM, AGENT_MEDIA_EVENT_STREAM } from '../queue/outbox-routing'
 export const GENERATION_GROUP = 'workers'
 // Stale-idle threshold must stay below HEARTBEAT_TTL_MS: a crashed worker's
 // in-flight messages are only retried once its heartbeat key lapses, never

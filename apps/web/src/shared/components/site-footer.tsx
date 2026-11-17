@@ -1,6 +1,8 @@
 import Link from 'next/link'
+import { ArrowUpRightIcon } from '@phosphor-icons/react/ssr'
 import { BrandMark } from '@/shared/components/brand-mark'
 import { PUBLIC_FRAME } from '@/shared/components/public-header'
+import { iconSize } from '@/shared/components/ui/size'
 import { APP_ROUTES } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 
@@ -16,9 +18,9 @@ export interface SiteFooterProps {
   className?: string
 }
 
-const columnHeading = 'font-mono text-xs text-muted-foreground'
+const columnHeading = 'font-mono text-overline uppercase tracking-[0.06em] text-muted-foreground'
 const columnLink =
-  'flex items-center rounded-control text-sm text-foreground/85 transition-colors hover:text-foreground max-sm:min-h-[var(--control-touch)]'
+  'inline-flex items-center gap-1 rounded-control text-sm text-foreground/85 transition-colors hover:text-foreground max-sm:min-h-[var(--control-touch)]'
 
 /** 三列导航共用的结构：mono 小标题 + 竖排链接。 */
 function FooterColumn({ title, children }: { title: string; children: React.ReactNode }) {
@@ -31,17 +33,19 @@ function FooterColumn({ title, children }: { title: string; children: React.Reac
 }
 
 /**
- * 公共页页脚（画板 01 底部）：品牌 + 一句话介绍、产品 / 部署 / 法律三列、
- * 底行版权与版本号。整块保持 canvas 底、只有一条 hairline，不堆叠卡片。
+ * 公共页页脚：品牌 + 一句话介绍、产品 / 部署 / 法律三列、
+ * 底行版权与版本号。保持简洁 Studio 表面与细腻分割线。
  */
 export function SiteFooter({ current, className }: SiteFooterProps) {
   return (
-    <footer className={cn('bg-canvas', className)}>
-      <div className={cn(PUBLIC_FRAME, 'flex flex-col gap-14 pb-10 pt-18')}>
+    <footer className={cn('border-t border-border bg-surface', className)}>
+      <div className={cn(PUBLIC_FRAME, 'flex flex-col gap-12 pb-10 pt-16')}>
         <div className="flex flex-wrap justify-between gap-10">
           <div className="flex max-w-xs flex-col gap-3.5">
             <BrandMark variant="lockup" height={19} />
-            <p className="text-base text-muted-foreground">可以装在自己服务器上的 AI 画图工具。</p>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              可以装在自己服务器上的 AI 画图与视频创作工作室。
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-x-16 gap-y-10">
@@ -63,9 +67,11 @@ export function SiteFooter({ current, className }: SiteFooterProps) {
             <FooterColumn title="部署">
               <a href={DEPLOY_DOC_URL} target="_blank" rel="noopener noreferrer" className={columnLink}>
                 部署说明
+                <ArrowUpRightIcon weight="bold" aria-hidden="true" className={cn(iconSize.xs, 'text-muted-foreground')} />
               </a>
               <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className={columnLink}>
                 源码仓库
+                <ArrowUpRightIcon weight="bold" aria-hidden="true" className={cn(iconSize.xs, 'text-muted-foreground')} />
               </a>
             </FooterColumn>
 
@@ -73,14 +79,14 @@ export function SiteFooter({ current, className }: SiteFooterProps) {
               <Link
                 href={APP_ROUTES.terms}
                 aria-current={current === 'terms' ? 'page' : undefined}
-                className={columnLink}
+                className={cn(columnLink, current === 'terms' && 'font-medium text-accent')}
               >
                 用户协议
               </Link>
               <Link
                 href={APP_ROUTES.privacy}
                 aria-current={current === 'privacy' ? 'page' : undefined}
-                className={columnLink}
+                className={cn(columnLink, current === 'privacy' && 'font-medium text-accent')}
               >
                 隐私政策
               </Link>
@@ -90,7 +96,9 @@ export function SiteFooter({ current, className }: SiteFooterProps) {
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-6 font-mono text-xs text-muted-foreground">
           <span>© 2026 MuseCanvas</span>
-          <span className="tabular-nums">v{APP_VERSION}</span>
+          <span className="rounded-pill border border-border bg-tonal px-2.5 py-0.5 text-caption tabular-nums">
+            v{APP_VERSION}
+          </span>
         </div>
       </div>
     </footer>

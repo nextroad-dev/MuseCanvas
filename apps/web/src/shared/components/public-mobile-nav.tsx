@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
+import { ListIcon, XIcon } from '@phosphor-icons/react'
 import { useDialog } from '@/shared/hooks/useDialog'
 import { buttonVariants } from '@/shared/components/ui/button-variants'
+import { iconSize } from '@/shared/components/ui/size'
 import { APP_ROUTES } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 
@@ -19,35 +21,7 @@ const NAV_ITEMS: { href: string; label: string }[] = [
   { href: APP_ROUTES.privacy, label: '隐私政策' },
 ]
 
-const iconBox = 'inline-flex size-11 shrink-0 items-center justify-center rounded-control'
-
-function MenuGlyph({ open }: { open: boolean }) {
-  return open ? (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      className="size-[var(--icon-md)]"
-    >
-      <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
-  ) : (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      className="size-[var(--icon-md)]"
-    >
-      <path d="M4 7h16M4 12h16M4 17h16" />
-    </svg>
-  )
-}
+const iconBox = 'inline-flex size-11 shrink-0 items-center justify-center rounded-pill'
 
 /**
  * <640px 公共页导航面板（画板 04）。
@@ -86,7 +60,11 @@ export function PublicMobileNav() {
         onClick={() => setOpen((value) => !value)}
         className={cn(iconBox, 'text-foreground hover:bg-tonal-hover active:bg-tonal-active motion-press sm:hidden')}
       >
-        <MenuGlyph open={open} />
+        {open ? (
+          <XIcon weight="bold" aria-hidden="true" className={iconSize.md} />
+        ) : (
+          <ListIcon weight="bold" aria-hidden="true" className={iconSize.md} />
+        )}
       </button>
 
       {mounted && portalTarget
@@ -95,17 +73,17 @@ export function PublicMobileNav() {
               {...overlayProps}
               className={cn('fixed inset-0 z-modal sm:hidden', phase === 'exit' ? 'motion-fade-out' : 'motion-fade-in')}
             >
-              <div aria-hidden="true" onClick={close} className="absolute inset-0 bg-overlay/40 dark:bg-overlay/55" />
+              <div aria-hidden="true" onClick={close} className="absolute inset-0 bg-overlay/40 backdrop-blur-xs dark:bg-overlay/55" />
               <div
                 {...dialogProps}
                 id={PANEL_ID}
                 className={cn(
-                  'absolute inset-x-0 top-0 rounded-b-panel bg-canvas px-4 pb-5 shadow-modal',
+                  'absolute inset-x-0 top-0 rounded-b-panel border-b border-border bg-surface px-4 pb-6 shadow-modal',
                   phase === 'exit' ? 'motion-toast-out' : 'motion-toast-in',
                 )}
               >
                 <div className="flex h-[var(--layout-public-header)] items-center justify-between">
-                  <h2 id={labelId} className="text-compact font-medium text-foreground">
+                  <h2 id={labelId} className="text-compact font-medium text-muted-foreground">
                     菜单
                   </h2>
                   <button
@@ -115,7 +93,7 @@ export function PublicMobileNav() {
                     onClick={close}
                     className={cn(iconBox, 'text-foreground hover:bg-tonal-hover active:bg-tonal-active motion-press')}
                   >
-                    <MenuGlyph open />
+                    <XIcon weight="bold" aria-hidden="true" className={iconSize.md} />
                   </button>
                 </div>
 
@@ -126,7 +104,7 @@ export function PublicMobileNav() {
                         <Link
                           href={item.href}
                           onClick={close}
-                          className="flex min-h-[var(--control-lg)] items-center text-copy text-foreground"
+                          className="flex min-h-[var(--control-lg)] items-center text-copy font-medium text-foreground transition-colors hover:text-accent"
                         >
                           {item.label}
                         </Link>
@@ -135,18 +113,24 @@ export function PublicMobileNav() {
                   </ul>
                 </nav>
 
-                <div className="mt-4 flex gap-2.5">
+                <div className="mt-5 flex gap-3">
                   <Link
                     href={APP_ROUTES.login}
                     onClick={close}
-                    className={cn(buttonVariants({ variant: 'secondary', size: 'lg' }), 'flex-1 max-sm:min-h-[var(--control-lg)]')}
+                    className={cn(
+                      buttonVariants({ variant: 'secondary', size: 'lg' }),
+                      'flex-1 rounded-pill max-sm:min-h-[var(--control-lg)]',
+                    )}
                   >
                     登录
                   </Link>
                   <Link
                     href={APP_ROUTES.generate}
                     onClick={close}
-                    className={cn(buttonVariants({ variant: 'primary', size: 'lg' }), 'flex-1 max-sm:min-h-[var(--control-lg)]')}
+                    className={cn(
+                      buttonVariants({ variant: 'primary', size: 'lg' }),
+                      'flex-1 rounded-pill max-sm:min-h-[var(--control-lg)]',
+                    )}
                   >
                     开始创作
                   </Link>

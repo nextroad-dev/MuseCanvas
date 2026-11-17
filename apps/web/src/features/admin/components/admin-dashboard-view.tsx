@@ -1,7 +1,15 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowUpRightIcon as ArrowUpRight } from '@phosphor-icons/react'
+import type { ReactNode } from 'react'
+import {
+  ArrowClockwiseIcon as RefreshCw,
+  ChartBarIcon as ChartBar,
+  CpuIcon as Cpu,
+  ImagesIcon as Images,
+  PulseIcon as Pulse,
+  UsersIcon as Users,
+} from '@phosphor-icons/react'
 
 import {
   Alert,
@@ -20,9 +28,11 @@ import {
   TableRow,
   TableSkeletonRow,
   TableStateRow,
+  iconSize,
 } from '@/shared/components/ui'
 import { useModels } from '@/shared/hooks/useModels'
 import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { cn } from '@/shared/lib/cn'
 import { formatCount, formatDateTime } from '@/shared/lib/format'
 import { jobStatusLabel, jobStatusTone } from '@/shared/lib/job-status'
 import type { AdminJobDto } from '@/shared/types'
@@ -43,17 +53,51 @@ import type { AdminDefaultModelEntry } from '../lib/admin-query'
 
 const RECENT_JOBS_COLUMNS = 5
 const RECENT_JOBS_CAPTION = '最近 10 条生成任务'
-const FAILED_JOBS_HREF = `${APP_ROUTES.adminJobs}?status=failed`
+const RECENT_JOBS_ANCHOR = '#admin-recent-jobs'
 
-/** 指标卡：15px 标签 + 44px mono 数值（画板 07 的两个统计卡）。 */
-function MetricCard({ label, value, loading }: { label: string; value: number | null; loading: boolean }) {
+type MetricTone = 'accent' | 'info' | 'neutral' | 'success'
+
+const METRIC_TONE_CLASS: Record<MetricTone, string> = {
+  accent: 'bg-accent-soft text-accent',
+  info: 'bg-info-soft text-info',
+  neutral: 'bg-tonal text-foreground',
+  success: 'bg-success-soft text-success',
+}
+
+/** 指标卡：Phosphor duotone 图标徽章 + 标签 + 等宽数值。 */
+function MetricCard({
+  label,
+  value,
+  icon,
+  tone = 'accent',
+  hint,
+  loading,
+}: {
+  label: string
+  value: string
+  icon: ReactNode
+  tone?: MetricTone
+  hint?: ReactNode
+  loading: boolean
+}) {
   return (
-    <Card density="none" className="justify-between gap-3 px-6 py-5">
-      <p className="text-compact font-medium">{label}</p>
+    <Card density="none" className="justify-between gap-4 border border-border px-5 py-5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-ui font-medium text-muted-foreground">{label}</p>
+        <span
+          aria-hidden="true"
+          className={cn('inline-flex size-9 shrink-0 items-center justify-center rounded-control', METRIC_TONE_CLASS[tone])}
+        >
+          {icon}
+        </span>
+      </div>
       {loading ? (
-        <Skeleton className="h-[55px] w-24" />
+        <Skeleton className="h-9 w-24" />
       ) : (
-        <p className="font-mono text-cta font-normal tabular-nums">{formatCount(value)}</p>
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="font-mono text-title font-normal tabular-nums text-foreground">{value}</p>
+          {hint ? <div className="text-xs text-muted-foreground">{hint}</div> : null}
+        </div>
       )}
     </Card>
   )
@@ -128,7 +172,12 @@ export function AdminDashboardView() {
     <div className="flex flex-col gap-7">
       <PageHeader
         title="系统概览"
-        actions={<span className="font-mono text-xs text-muted-foreground">更新于 {updatedAt}</span>}
+        description="监控实例用户规模、任务执行状态与默认模型配置。"
+        actions={
+          <Badge tone="neutral" className="font-mono">
+            更新于 {updatedAt}
+          </Badge>
+        }
       />
 
       {dashboardQuery.isError ? (
@@ -145,27 +194,66 @@ export function AdminDashboardView() {
         </Alert>
       ) : null}
 
+      <section aria-label="核心指标" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          label="用户总数"
+          value={formatCount(dashboard?.totalUsers ?? null)}
+          icon={<Users size={20} weight="duotone" />}
+          tone="accent"
+          loading={statsLoading}
+        />
+        <MetricCard
+          label="累计生成任务"
+          value={formatCount(dashboard?.totalJobs ?? null)}
+          icon={<Images size={20} weight="duotone" />}
+          tone="info"
+          loading={statsLoading}
+        />
+        <MetricCard
+          label="近 7 天任务"
+          value={formatCount(summary.total)}
+          icon={<ChartBar size={20} weight="duotone" />}
+          tone="neutral"
+          hint={
+            summary.failed > 0 ? (
+              <a href={RECENT_JOBS_ANCHOR} className="text-danger hover:underline">
+                失败 <span className="font-mono">{summary.failed}</span>
+              </a>
+            ) : (
+              <span>无失败</span>
+            )
+          }
+          loading={statsLoading}
+        />
+        <MetricCard
+          label="近 7 天成功率"
+          value={summary.successRateLabel}
+          icon={<Pulse size={20} weight="duotone" />}
+          tone="success"
+          loading={statsLoading}
+        />
+      </section>
+
       <section
         aria-label="实例运行状况"
-        className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)]"
+        className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]"
       >
-        <MetricCard label="用户总数" value={dashboard?.totalUsers ?? null} loading={statsLoading} />
-        <MetricCard label="累计生成任务" value={dashboard?.totalJobs ?? null} loading={statsLoading} />
-
-        <figure className="flex flex-col gap-4 rounded-card bg-surface px-6 py-5 text-foreground shadow-soft sm:col-span-2 lg:col-span-1">
+        <figure className="flex flex-col gap-4 rounded-card border border-border bg-surface px-6 py-5 text-foreground shadow-soft">
           <figcaption className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
             <span className="flex flex-wrap items-baseline gap-4">
-              <span className="text-compact font-medium">近 7 天生成</span>
-              <span className="text-ui">
-                <span className="text-muted-foreground">
-                  成功率 <span className="font-mono text-foreground">{summary.successRateLabel}</span>
-                </span>
+              <span className="text-compact font-medium">近 7 天生成趋势</span>
+              <span className="text-ui text-muted-foreground">
+                成功率 <span className="font-mono text-foreground">{summary.successRateLabel}</span>
               </span>
-              <Link href={FAILED_JOBS_HREF} className="text-ui hover:underline">
-                <span className="text-danger">
-                  失败 <span className="font-mono">{summary.failed}</span> 个，查看
+              {summary.failed > 0 ? (
+                <a href={RECENT_JOBS_ANCHOR} className="text-ui text-danger hover:underline">
+                  失败 <span className="font-mono">{summary.failed}</span> 个，查看最近任务
+                </a>
+              ) : (
+                <span className="text-ui text-muted-foreground">
+                  失败 <span className="font-mono">{summary.failed}</span> 个
                 </span>
-              </Link>
+              )}
             </span>
             <span className="flex items-center gap-4 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
@@ -232,42 +320,73 @@ export function AdminDashboardView() {
             </div>
           )}
         </figure>
-      </section>
 
-      <section
-        aria-labelledby="admin-default-models"
-        className="flex flex-wrap items-center gap-x-8 gap-y-4 rounded-card bg-surface px-6 py-5 text-foreground shadow-soft"
-      >
-        <h2 id="admin-default-models" className="text-module">
-          默认模型
-        </h2>
-        {defaultsLoading ? (
-          <Skeleton className="h-5 w-56" />
-        ) : defaultsQuery.isError || modelsQuery.isError ? (
-          <p className="text-sm text-muted-foreground">暂时无法读取默认模型配置。</p>
-        ) : (
-          <dl className="flex flex-1 flex-wrap items-baseline gap-x-8 gap-y-3">
-            <DefaultModelItem label="图像" entry={defaults.image} />
-            <DefaultModelItem label="视频" entry={defaults.video} />
-          </dl>
-        )}
-        <Button variant="secondary" size="sm" className="min-h-[var(--control-compact)] px-3.5" asChild>
-          <Link href={APP_ROUTES.adminMediaModels}>去设置</Link>
-        </Button>
+        <section
+          aria-labelledby="admin-default-models"
+          className="flex flex-col justify-between gap-5 rounded-card border border-border bg-surface px-6 py-5 text-foreground shadow-soft"
+        >
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span
+                  aria-hidden="true"
+                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent"
+                >
+                  <Cpu size={18} weight="duotone" />
+                </span>
+                <h2 id="admin-default-models" className="text-compact font-medium">
+                  默认模型与队列
+                </h2>
+              </div>
+              <Badge tone={defaults.complete ? 'success' : 'warning'} dot>
+                {defaults.complete ? '就绪' : '待配置'}
+              </Badge>
+            </div>
+
+            {defaultsLoading ? (
+              <div className="flex flex-col gap-3">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-5 w-40" />
+              </div>
+            ) : defaultsQuery.isError || modelsQuery.isError ? (
+              <p className="text-sm text-muted-foreground">暂时无法读取默认模型配置。</p>
+            ) : (
+              <dl className="flex flex-col gap-3 rounded-control bg-canvas p-3.5">
+                <DefaultModelItem label="图像模型" entry={defaults.image} />
+                <DefaultModelItem label="视频模型" entry={defaults.video} />
+              </dl>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+            <Button variant="secondary" size="sm" asChild>
+              <Link href={APP_ROUTES.adminPromptTemplates}>提示词与助手配置</Link>
+            </Button>
+            <Button variant="ghost" size="sm" asChild>
+              <a href={RECENT_JOBS_ANCHOR}>查看最近任务</a>
+            </Button>
+          </div>
+        </section>
       </section>
 
       <section aria-labelledby="admin-recent-jobs" className="flex flex-col gap-3">
         <SectionHeader
           id="admin-recent-jobs"
+          className="scroll-mt-20"
           title="最近任务"
           actions={
-            <Link
-              href={APP_ROUTES.adminJobs}
-              className="inline-flex items-center gap-1 text-ui font-medium hover:underline"
-            >
-              进入任务监控
-              <ArrowUpRight size={14} aria-hidden="true" />
-            </Link>
+            <>
+              <Badge tone="neutral">最近 10 条</Badge>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void jobsQuery.refetch()}
+                loading={jobsQuery.isFetching}
+                icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
+              >
+                刷新
+              </Button>
+            </>
           }
         />
 

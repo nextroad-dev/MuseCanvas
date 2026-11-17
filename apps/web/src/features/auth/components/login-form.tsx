@@ -9,7 +9,12 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftIcon as ArrowLeft } from '@phosphor-icons/react'
+import {
+  ArrowLeftIcon as ArrowLeft,
+  EnvelopeSimpleIcon,
+  KeyIcon,
+  SparkleIcon,
+} from '@phosphor-icons/react'
 import { clientApi } from '@/shared/services/client-api'
 import { useAuth, useOAuthProviders, oauthLoginUrl } from '@/shared/hooks/useAuth'
 import { queryKeys } from '@/shared/hooks/query-keys'
@@ -305,11 +310,14 @@ export function LoginForm({
     : '第三方'
 
   return (
-    <div className="flex flex-col gap-7">
+    <div className="flex flex-col gap-6">
       {oauthChallengeActive ? (
-        <section aria-label="完成邀请码注册" className="flex flex-col gap-7">
-          <header className="flex flex-col gap-2">
-            <h1 className="text-title text-foreground">完成邀请码注册</h1>
+        <section aria-label="完成邀请码注册" className="flex flex-col gap-6">
+          <header className="flex flex-col gap-2.5">
+            <div className="inline-flex h-10 w-10 items-center justify-center rounded-card bg-accent-soft text-accent">
+              <KeyIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+            </div>
+            <h1 className="text-title font-medium tracking-tight text-foreground">完成邀请码注册</h1>
             <p className="text-compact text-muted-foreground [text-wrap:pretty]">
               {oauthProviderLabel} 账号
               {oauthEmail ? (
@@ -358,7 +366,7 @@ export function LoginForm({
           <Button
             variant="ghost"
             size="sm"
-            className="-ml-1 self-center px-2 text-compact"
+            className="self-center px-3 text-compact"
             onClick={() => {
               resetAuthUi()
               router.replace(APP_ROUTES.login)
@@ -368,21 +376,27 @@ export function LoginForm({
           </Button>
         </section>
       ) : step === 'code' ? (
-        <section aria-label="输入验证码" className="flex flex-col gap-7">
-          <header className="flex flex-col gap-2">
+        <section aria-label="输入验证码" className="flex flex-col gap-6">
+          <header className="flex flex-col gap-2.5">
             <Button
               variant="ghost"
               size="sm"
               icon={<ArrowLeft weight="bold" aria-hidden="true" />}
               onClick={backToEmail}
               disabled={submitting}
-              className="-ml-1 self-start px-2 text-compact text-muted-foreground"
+              className="-ml-2 self-start px-2.5 text-compact text-muted-foreground"
             >
               修改邮箱
             </Button>
-            <h1 className="text-title text-foreground">输入验证码</h1>
+            <div className="inline-flex h-10 w-10 items-center justify-center rounded-card bg-accent-soft text-accent">
+              <EnvelopeSimpleIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+            </div>
+            <h1 className="text-title font-medium tracking-tight text-foreground">输入验证码</h1>
             <p className="text-compact text-muted-foreground [overflow-wrap:anywhere]">
-              6 位验证码已发送到 <span className="font-medium text-foreground">{email}</span>
+              6 位验证码已发送到{' '}
+              <span className="inline-flex items-center rounded-pill bg-tonal px-2 py-0.5 font-medium text-foreground">
+                {email}
+              </span>
             </p>
           </header>
 
@@ -396,7 +410,7 @@ export function LoginForm({
             noValidate
             onSubmit={handleVerifyOtp}
             onKeyDown={handleFormKeyDown}
-            className="flex flex-col gap-4"
+            className="flex flex-col gap-5"
           >
             <OtpInput
               id="login-otp"
@@ -426,13 +440,13 @@ export function LoginForm({
               验证并登录
             </Button>
 
-            <div className="flex items-center justify-between gap-3 text-ui">
+            <div className="flex items-center justify-between gap-3 border-t border-border pt-4 text-ui">
               <span className="text-muted-foreground">没收到？检查垃圾邮件</span>
               <button
                 type="button"
                 onClick={() => void handleResend()}
                 disabled={submitting || resendIn > 0}
-                className="inline-flex min-h-[var(--control-sm)] items-center rounded-control px-2 font-mono tabular-nums text-foreground transition-colors disabled:text-muted-foreground not-disabled:hover:bg-tonal"
+                className="inline-flex min-h-[var(--control-sm)] items-center rounded-pill px-3 font-mono tabular-nums text-foreground transition-colors disabled:text-muted-foreground not-disabled:bg-tonal not-disabled:hover:bg-tonal-hover"
               >
                 {resendIn > 0 ? `重新发送 · ${formatCountdown(resendIn)}` : '重新发送'}
               </button>
@@ -440,10 +454,14 @@ export function LoginForm({
           </form>
         </section>
       ) : (
-        <section aria-label="邮箱登录" className="flex flex-col gap-7">
-          <header className="flex flex-col gap-2">
-            <h1 className="text-title text-foreground">登录 MuseCanvas</h1>
-            <p className="text-compact text-muted-foreground">开始你的创意</p>
+        <section aria-label="邮箱登录" className="flex flex-col gap-6">
+          <header className="flex flex-col gap-2.5">
+            <div className="inline-flex items-center gap-1.5 self-start rounded-pill bg-accent-soft px-2.5 py-1 text-caption font-medium text-accent">
+              <SparkleIcon weight="fill" aria-hidden="true" className="h-3 w-3" />
+              <span>AI Studio 创作入口</span>
+            </div>
+            <h1 className="text-title font-medium tracking-tight text-foreground">登录 MuseCanvas</h1>
+            <p className="text-compact text-muted-foreground">输入邮箱验证码或使用第三方账号开始创作</p>
           </header>
 
           {backendUnavailable ? (
@@ -526,7 +544,7 @@ export function LoginForm({
 
           {enabledProviders.length > 0 ? (
             <section aria-label="第三方账号登录" className="flex flex-col gap-4">
-              <Divider label="或使用第三方账号" labelClassName="bg-canvas" />
+              <Divider label="或使用第三方账号" labelClassName="bg-surface" />
               <div className="grid grid-cols-2 gap-2.5">
                 {enabledProviders.map((provider) => {
                   const meta = OAUTH_PROVIDERS[provider.provider]
@@ -538,7 +556,7 @@ export function LoginForm({
                       href={oauthLoginUrl(provider.provider)}
                       className={cn(
                         buttonVariants({ variant: 'secondary' }),
-                        'min-h-[var(--control-touch)] gap-2.5 text-compact',
+                        'min-h-[var(--control-touch)] gap-2.5 rounded-control border border-border bg-canvas/60 text-compact font-medium hover:bg-surface-hover',
                       )}
                     >
                       <Icon className={cn('shrink-0', iconSize.md)} />
@@ -561,13 +579,19 @@ export function LoginForm({
         </section>
       )}
 
-      <p className="text-center text-xs text-muted-foreground [text-wrap:pretty]">
+      <p className="border-t border-border pt-4 text-center text-xs text-muted-foreground [text-wrap:pretty]">
         登录即代表你已阅读并同意{' '}
-        <Link href={APP_ROUTES.terms} className="rounded-control text-foreground">
+        <Link
+          href={APP_ROUTES.terms}
+          className="rounded-control text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground"
+        >
           用户协议
         </Link>{' '}
         与{' '}
-        <Link href={APP_ROUTES.privacy} className="rounded-control text-foreground">
+        <Link
+          href={APP_ROUTES.privacy}
+          className="rounded-control text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground"
+        >
           隐私政策
         </Link>
         。

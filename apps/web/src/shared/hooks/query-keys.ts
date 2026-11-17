@@ -35,6 +35,14 @@ export const queryKeys = {
     turn: (canvasId: string, turnId: string) => ['canvas-agent', 'turn', canvasId, turnId] as const,
   },
 
+  agent: {
+    root: ['agent'] as const,
+    sessions: (actorId = '') => ['agent', 'sessions', actorId] as const,
+    snapshot: (actorId: string, sessionId: string) => ['agent', 'snapshot', actorId, sessionId] as const,
+    items: (actorId: string, sessionId: string) => ['agent', 'items', actorId, sessionId] as const,
+    turn: (actorId: string, turnId: string) => ['agent', 'turn', actorId, turnId] as const,
+  },
+
   setup: {
     root: ['setup'] as const,
     status: ['setup', 'status'] as const,

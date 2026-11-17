@@ -221,7 +221,7 @@ export function SetupWizard({ initialStatus, initialConfig, initialStep }: Setup
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className="bg-tonal py-6 md:py-8">
+      <div className="border-b border-border bg-surface py-5 md:py-6">
         <div className="mx-auto w-full max-w-[var(--container-content)] px-4 md:px-8">
           <Stepper
             steps={steps.map((step, index) => ({
@@ -287,7 +287,10 @@ export function SetupWizard({ initialStatus, initialConfig, initialStep }: Setup
             {renderStep()}
           </div>
 
-          <nav aria-label="步骤导航" className="flex flex-wrap items-center justify-between gap-3">
+          <nav
+            aria-label="步骤导航"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3 shadow-soft"
+          >
             <Button
               variant="secondary"
               onClick={() => goTo(activeIndex - 1)}
@@ -296,7 +299,9 @@ export function SetupWizard({ initialStatus, initialConfig, initialStep }: Setup
             >
               上一步
             </Button>
-            <span className="text-sm text-muted-foreground">{setupStepPosition(steps, activeIndex)}</span>
+            <span className="font-mono text-ui tabular-nums text-muted-foreground">
+              {setupStepPosition(steps, activeIndex)}
+            </span>
             {active.id === 'complete' ? null : (
               <Button
                 onClick={() => {

@@ -1,0 +1,15 @@
+ALTER TABLE outbox_events DROP COLUMN IF EXISTS quarantine_code;
+ALTER TABLE outbox_events DROP COLUMN IF EXISTS quarantined_at;
+DROP INDEX IF EXISTS outbox_event_type_dispatch_idx;
+DROP INDEX IF EXISTS outbox_pending_dispatch_v2_idx;
+DROP TABLE IF EXISTS agent_legacy_links;
+DROP TABLE IF EXISTS agent_usage_entries;
+ALTER TABLE IF EXISTS agent_approvals DROP CONSTRAINT IF EXISTS agent_approvals_reservation_fk;
+DROP TABLE IF EXISTS agent_budget_reservations;
+DROP TABLE IF EXISTS agent_consumed_events;
+DROP TABLE IF EXISTS agent_tool_job_links;
+ALTER TABLE IF EXISTS agent_sessions DROP CONSTRAINT IF EXISTS agent_sessions_canvas_owner_fk;
+DROP INDEX IF EXISTS generation_jobs_id_owner_uq;
+DROP INDEX IF EXISTS canvas_documents_id_owner_uq;
+DROP INDEX IF EXISTS canvas_agent_sessions_id_owner_uq;
+DROP FUNCTION IF EXISTS agent_guard_legacy_link_update();

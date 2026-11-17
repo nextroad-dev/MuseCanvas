@@ -1,9 +1,18 @@
+import { Suspense } from 'react'
 import type { Metadata } from 'next'
-import { GenerateView } from '@/features/generate/components/generate-view'
+import { AgentConsoleView } from '@/features/agent-console/components/agent-console-view'
 import { WORKSPACE_MODE } from '@/shared/lib/workspace-mode'
+import StudioLoading from '../loading'
 
-export const metadata: Metadata = { title: '创作台', description: '描述灵感，选择模型，管理生成任务与作品。' }
+export const metadata: Metadata = {
+  title: 'Agent 操作台',
+  description: '多轮 Agent 会话、工具审批流、画布与产物工作台。',
+}
 
 export default function GeneratePage() {
-  return <GenerateView mode={WORKSPACE_MODE} />
+  return (
+    <Suspense fallback={<StudioLoading />}>
+      <AgentConsoleView mode={WORKSPACE_MODE} />
+    </Suspense>
+  )
 }

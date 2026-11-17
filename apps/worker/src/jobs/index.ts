@@ -201,63 +201,47 @@ export async function loadAndValidateInputImages(
   return inputImages
 }
 
-/**
- * Fail when a job linked an input the resolver could not load. The usual cause is a
- * gallery image the user deleted between submitting and execution: the linkage row
- * stays, the `assets` row goes soft-deleted, and the JOIN drops it. Continuing would
- * generate against fewer references than the user chose, so this raises the retryable
- * `INPUT_IMAGE_UNAVAILABLE` instead. It stays quiet when the count cannot be read (a
- * database without the `asset_id` column), leaving the legacy resolver in charge.
- */
-async function assertAllLinkedInputsPresent(jobId: string, loadedCount: number): Promise<void> {
-  let linkedCount = 0
-  try {
-    const res = await db().query(
-      `SELECT count(*)::int AS count FROM generation_job_inputs
-       WHERE job_id = $1 AND (upload_id IS NOT NULL OR asset_id IS NOT NULL)`,
-      [jobId],
-    )
-    linkedCount = Number(res.rows[0]?.count || 0)
-  } catch {
-    return
-  }
-  if (linkedCount > loadedCount) throw new Error('INPUT_IMAGE_UNAVAILABLE')
+/** Load all input kinds exactly once, preserving their role and position. */
+export async function loadMediaInputRows(jobId: string, database: Pick<pg.Pool, 'query'> = db()): Promise<Array<Record<string, unknown>>> {
+  const res = await database.query(
+    `SELECT * FROM (
+       SELECT gji.position, gji.role, mu.id, mu.object_key, mu.mime_type, mu.size_bytes, mu.checksum, mu.media_kind
+       FROM generation_job_inputs gji
+       JOIN media_uploads mu ON mu.id = gji.upload_id
+       WHERE gji.job_id = $1 AND mu.deleted_at IS NULL
+       UNION ALL
+       SELECT gji.position, gji.role, a.id, a.object_key, a.mime_type, a.size_bytes, a.checksum, a.media_kind
+       FROM generation_job_inputs gji
+       JOIN assets a ON a.id = gji.asset_id
+       WHERE gji.job_id = $1 AND a.deleted_at IS NULL AND a.media_kind = 'image' AND a.mime_type IN ('image/png','image/jpeg')
+       UNION ALL
+       SELECT gji.position, gji.role, gii.id, gii.object_key, gii.mime_type, gii.size_bytes, gii.checksum, gii.media_kind
+       FROM generation_job_inputs gji
+       JOIN generation_input_images gii ON gii.id = gji.input_image_id
+       WHERE gji.job_id = $1 AND gji.upload_id IS NULL AND gji.asset_id IS NULL AND gii.deleted_at IS NULL
+     ) inputs ORDER BY inputs.position ASC`,
+    [jobId],
+  )
+  const count = await database.query(
+    `SELECT count(*)::int AS count FROM generation_job_inputs
+     WHERE job_id = $1 AND (upload_id IS NOT NULL OR asset_id IS NOT NULL OR input_image_id IS NOT NULL)`,
+    [jobId],
+  )
+  // Deleted/missing references must fail instead of silently dropping chosen inputs.
+  if (Number(count.rows[0]?.count || 0) > res.rows.length) throw new Error('INPUT_IMAGE_UNAVAILABLE')
+  return res.rows
 }
 
-/** Unified input resolver: reads media_uploads via upload_id and gallery images via
- *  asset_id, falling back to generation_input_images. Every byte path revalidates
- *  checksum and size against stored metadata after the S3 fetch. */
-
+/** Unified reader, with the legacy reader retained only for older schemas. */
 async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[] | undefined> {
-  let rows: Array<Record<string, unknown>> = []
-  let unifiedRead = false
+  let rows: Array<Record<string, unknown>>
   try {
-    const res = await db().query(
-      `SELECT * FROM (
-         SELECT gji.position, gji.role, mu.id, mu.object_key, mu.mime_type, mu.size_bytes, mu.checksum, mu.media_kind
-         FROM generation_job_inputs gji
-         JOIN media_uploads mu ON mu.id = gji.upload_id
-         WHERE gji.job_id = $1 AND mu.deleted_at IS NULL
-         UNION ALL
-         SELECT gji.position, gji.role, a.id, a.object_key, a.mime_type, a.size_bytes, a.checksum, a.media_kind
-         FROM generation_job_inputs gji
-         JOIN assets a ON a.id = gji.asset_id
-         WHERE gji.job_id = $1 AND a.deleted_at IS NULL AND a.media_kind = 'image' AND a.mime_type IN ('image/png','image/jpeg')
-       ) inputs ORDER BY inputs.position ASC`,
-      [jobId],
-    )
-    rows = res.rows as Array<Record<string, unknown>>
-    unifiedRead = true
-  } catch {
-    // No asset_id column (or no media_uploads) on an older database: the UNION All
-    // fails as a whole, so the legacy reader below stays responsible.
-    rows = []
-  }
-  if (unifiedRead) {
-    // A gallery pick is only a reference, so the user can delete that image after
-    // submitting. Loading fewer images than the job linked means one reference is
-    // gone — fail retryably instead of quietly generating against fewer inputs.
-    await assertAllLinkedInputsPresent(jobId, rows.length)
+    rows = await loadMediaInputRows(jobId)
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code
+    if (code !== '42P01' && code !== '42703') throw error
+    const legacy = await loadAndValidateInputImages(jobId)
+    return legacy?.map(item => ({ data: item.data, mimeType: item.mimeType }))
   }
   if (rows.length > 0) {
     const limits = await resolveInputLimits()
@@ -311,9 +295,7 @@ async function resolveMediaInputImages(jobId: string): Promise<MediaInputImage[]
     }
     return images.length > 0 ? images : undefined
   }
-  const legacy = await loadAndValidateInputImages(jobId)
-  if (!legacy) return undefined
-  return legacy.map(item => ({ data: item.data, mimeType: item.mimeType }))
+  return undefined
 }
 
 export interface PersistJobSuccessInput {

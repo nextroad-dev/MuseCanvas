@@ -2,17 +2,24 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowClockwiseIcon as RefreshCw, UploadSimpleIcon as Upload } from '@phosphor-icons/react'
+import {
+  ArrowClockwiseIcon as RefreshCw,
+  FileTextIcon as FileText,
+  UploadSimpleIcon as Upload,
+} from '@phosphor-icons/react'
 import type {
   ImportPromptTemplateSetInput,
   PromptTemplateEntryDto,
   PromptTemplateSetSummaryDto,
 } from '@musecanvas/contracts'
 import { Alert } from '@/shared/components/ui/alert'
+import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Card } from '@/shared/components/ui/card'
 import { Dialog } from '@/shared/components/ui/dialog'
 import { PageHeader } from '@/shared/components/ui/page-header'
+import { SectionHeader } from '@/shared/components/ui/section-header'
+import { Skeleton } from '@/shared/components/ui/skeleton'
 import { useToast } from '@/shared/components/ui/toast'
 import { iconSize } from '@/shared/components/ui/size'
 import { queryKeys } from '@/shared/hooks/query-keys'
@@ -238,10 +245,27 @@ export function AdminPromptTemplatesView() {
       <PageHeader
         title="提示词模板"
         description="管理生成用的提示词模板集与语言模型相关设置。模板按版本 copy-on-write：编辑条目会自动生成新的启用版本，历史版本仍可查看与回滚。"
+        meta={
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="inline-flex size-6 items-center justify-center rounded-control bg-accent-soft text-accent"
+            >
+              <FileText size={14} weight="duotone" />
+            </span>
+            <span className="text-caption font-medium text-muted-foreground">生成资源</span>
+            {active ? (
+              <Badge tone="success" dot>
+                当前启用：{active.name} v{active.version}
+              </Badge>
+            ) : null}
+          </div>
+        }
         actions={
           <>
             <Button
               variant="secondary"
+              size="sm"
               onClick={() => void Promise.all([activeQuery.refetch(), setsQuery.refetch()])}
               loading={activeQuery.isFetching || setsQuery.isFetching}
               icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
@@ -249,6 +273,7 @@ export function AdminPromptTemplatesView() {
               刷新
             </Button>
             <Button
+              size="sm"
               onClick={() => setImportOpen(true)}
               icon={<Upload weight="bold" aria-hidden="true" className={iconSize.sm} />}
             >
@@ -273,10 +298,9 @@ export function AdminPromptTemplatesView() {
       ) : null}
 
       {activeQuery.isLoading && setsQuery.isLoading ? (
-        <Card>
-          <p role="status" className="text-sm text-muted-foreground">
-            正在加载提示词模板…
-          </p>
+        <Card className="gap-3 border border-border" role="status" aria-label="正在加载提示词模板">
+          <Skeleton className="h-5 w-48" />
+          <Skeleton className="h-24 w-full" />
         </Card>
       ) : null}
 
@@ -305,21 +329,22 @@ export function AdminPromptTemplatesView() {
         }}
       />
 
-      <div className="flex min-w-0 flex-col gap-2">
-        <h2 className="text-section text-foreground">语言模型相关设置</h2>
-        <p className="text-sm text-muted-foreground">
-          两张表单共用 /admin/language-models 中已启用的语言模型；启用任一功能前必须先选择模型。
-        </p>
+      <section aria-labelledby="admin-prompt-lm-settings" className="flex min-w-0 flex-col gap-4">
+        <SectionHeader
+          id="admin-prompt-lm-settings"
+          title="语言模型相关设置"
+          description="两张表单共用当前实例中已配置并启用的语言模型；启用任一功能前必须先选择可用模型。"
+        />
         {modelsQuery.isError ? (
           <Alert tone="warning" title="语言模型列表加载失败">
             {adminErrorMessage(modelsQuery.error, '请刷新页面后重试；保存时仍会做服务端校验。')}
           </Alert>
         ) : null}
-      </div>
-      <div className="grid min-w-0 gap-4 xl:grid-cols-2">
-        <AdminPromptOptimizationCard models={languageModels} />
-        <AdminPromptAgentCard models={languageModels} />
-      </div>
+        <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+          <AdminPromptOptimizationCard models={languageModels} />
+          <AdminPromptAgentCard models={languageModels} />
+        </div>
+      </section>
 
       <AdminPromptEntryDialog
         open={entryDialog !== null}

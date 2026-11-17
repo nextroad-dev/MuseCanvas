@@ -57,7 +57,7 @@ function RegistrationCard() {
           </Badge>
         </div>
         <CardDescription>
-          邀请注册下，新用户除邮箱/OAuth 验证外还需提供有效邀请码；邀请码在「用户管理」中生成。
+          邀请注册下，新用户除邮箱/OAuth 验证外还需提供有效邀请码。
         </CardDescription>
       </CardHeader>
       <CardBody>

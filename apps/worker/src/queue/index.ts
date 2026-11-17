@@ -2,6 +2,7 @@ import { db } from '@musecanvas/database'
 import { withSpan } from '@musecanvas/observability'
 import { randomUUID } from 'node:crypto'
 import { CONSUMER_BLOCK_MS, GENERATION_GROUP, GENERATION_STREAM, HEARTBEAT_RENEW_MS, HEARTBEAT_TTL_MS, STALE_PENDING_IDLE_MS, blockingRedis, boundedInteger, consumer, redis, redisCommand } from '../shared/infra'
+import { routeOutboxEvent } from './outbox-routing'
 import { resolveJobLeaseMs } from '../shared/runtime'
 
 // Heartbeat keys mark a message as in-flight so another worker's XAUTOCLAIM
@@ -27,20 +28,24 @@ export async function dispatchOutbox(client: Pick<ReturnType<typeof db>, 'query'
   // The CTE row locks live only for this statement, never over network I/O.
   const events = await client.query(
     `WITH ready AS (
-      SELECT id FROM outbox_events WHERE dispatched_at IS NULL
+      SELECT id FROM outbox_events WHERE dispatched_at IS NULL AND quarantined_at IS NULL
         AND (dispatch_lease_expires_at IS NULL OR dispatch_lease_expires_at <= now())
       ORDER BY created_at LIMIT 100 FOR UPDATE SKIP LOCKED
     ) UPDATE outbox_events e SET dispatch_token=$1, dispatch_lease_expires_at=now()+interval '120 seconds', attempts=attempts+1
-      FROM ready WHERE e.id=ready.id RETURNING e.id,e.aggregate_id,e.payload`, [token],
+      FROM ready WHERE e.id=ready.id RETURNING e.id,e.aggregate_id,e.event_type,e.payload`, [token],
   )
   await Promise.all(events.rows.map(async event => {
-    const payload = (event.payload as Record<string, unknown>) || {}
+    const route = routeOutboxEvent(event)
+    if (route.kind === 'quarantine') {
+      console.warn('outbox event quarantined', { eventId: event.id, eventType: route.code === 'UNKNOWN_EVENT_TYPE' ? 'unknown' : event.event_type, code: route.code })
+      await client.query(
+        'UPDATE outbox_events SET quarantined_at=now(),quarantine_code=$3,dispatch_token=NULL,dispatch_lease_expires_at=NULL WHERE id=$1 AND dispatch_token=$2 AND dispatch_lease_expires_at>now()',
+        [event.id, token, route.code],
+      )
+      return
+    }
     try {
-      await redisCommand(redis.xAdd(GENERATION_STREAM, '*', {
-        jobId: String((payload.jobId as string) || event.aggregate_id),
-        runId: String((payload.runId as string) || ''),
-        eventId: String(event.id),
-      }))
+      await redisCommand(redis.xAdd(route.stream, '*', route.fields))
       await client.query('UPDATE outbox_events SET dispatched_at=now(),dispatch_token=NULL,dispatch_lease_expires_at=NULL WHERE id=$1 AND dispatch_token=$2 AND dispatch_lease_expires_at>now()', [event.id, token])
     } catch {
       await client.query('UPDATE outbox_events SET dispatch_token=NULL,dispatch_lease_expires_at=NULL WHERE id=$1 AND dispatch_token=$2', [event.id, token])

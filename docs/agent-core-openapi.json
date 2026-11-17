@@ -1,0 +1,2064 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MuseCanvas Agent Core control plane",
+    "version": "1.0.0",
+    "description": "P4 admission/query API. AGENT_CORE_ENABLED defaults false; AGENT_CORE_ADMISSION_READY is a second explicit gate for new sessions/messages. This document does not claim a Runner, tool executor, media provider call, or UI."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "name": "agent-core",
+      "description": "Owner-scoped durable control-plane intent and finite event replay"
+    }
+  ],
+  "paths": {
+    "/api/agent/sessions": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "listAgentSessions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/SessionCursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SessionList"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "Strict body, query or header validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
+      },
+      "post": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "createAgentSession",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/CreateSession"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Session"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). clientRequestId is owner-global. Same key/body replays the frozen response even when admission is closed or definition retired; different body is 409. New sessions require AGENT_CORE_ADMISSION_READY=true and validated active owner/system definition."
+      }
+    },
+    "/api/agent/sessions/{id}": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "getAgentSession",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Snapshot"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
+      }
+    },
+    "/api/agent/sessions/{id}/messages": {
+      "post": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "createAgentMessage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Message"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Message"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). clientMessageId is scoped to the session and binds the session/content digest. Active Turn receives persistent steering; replay adds no revision/item/wake. New Turn requires admission-ready; existing active Turn steering does not. Cancel-requested active Turn rejects new input (409)."
+      }
+    },
+    "/api/agent/sessions/{id}/items": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "listAgentItems",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/DecimalCursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Items"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
+      }
+    },
+    "/api/agent/sessions/{id}/events": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "streamAgentEvents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/DecimalCursor"
+          },
+          {
+            "$ref": "#/components/parameters/LastEventId"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Finite replay and bounded polling SSE; abort closes only this transport.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Each data line is a DisplayEvent or TransportFrame JSON object; durable event names match data.type, id=sessionId:cursor."
+                }
+              }
+            },
+            "x-data-schemas": [
+              {
+                "$ref": "#/components/schemas/DisplayEvent"
+              },
+              {
+                "$ref": "#/components/schemas/TransportFrame"
+              }
+            ]
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Cursor is canonical decimal <= int64 maximum. Last-Event-ID is sessionId:cursor and must equal query cursor if both supplied (409 otherwise); cross-session/invalid IDs are 400. Ahead cursor is 409 before streaming. Frames have id/event/data. ready does not advance cursor. Heartbeat every ~5s; PG polling ~500ms, no connection held during waits; closes normally after 25s. Reconnect with last delivered ID; retention/gap/backlog emits resync.required and closes: fetch consistent snapshot, paginate all items until hasMore=false up to lastItemSequence, then reconnect at snapshot eventCursor. Max 500 durable events/~1MB per connection; slow/aborted readers cannot cancel Turns."
+      }
+    },
+    "/api/agent/turns/{id}": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "getAgentTurn",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Turn"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
+      }
+    },
+    "/api/agent/turns/{id}/cancel": {
+      "post": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "cancelAgentTurn",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Empty"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Turn"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). Terminal or already cancel-requested replay is idempotent. Safe queued/waiting turns cancel locally only when all tool calls and approvals are terminal and all reservations are settled or released; unknown or retained dependencies preserve status/active turn/leases, recording cancellation and a durable wake for a future Runner. Running work likewise only records cancellation and a durable wake, preserving its lease."
+      }
+    },
+    "/api/agent/turns/{id}/steer": {
+      "post": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "steerAgentTurn",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Message"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Message"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400)."
+      }
+    },
+    "/api/agent/approvals/{id}/resolve": {
+      "post": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "resolveAgentApproval",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Approval"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Approval"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApprovalExpired"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflicting decision/hash/cancel state, or persisted approval expiry with visible data."
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). Decision records intent only; checks immutable arguments hash, expiry, current cancellation and model/pricing reservation binding. Identical final decision replays fixed decision_revision; opposite decision/hash is 409. Rejection never cancels entire Turn; acceptance never blindly queues it."
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "Id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Uuid"
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "SessionCursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "$ref": "#/components/schemas/Uuid"
+        }
+      },
+      "DecimalCursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "$ref": "#/components/schemas/Decimal"
+        }
+      },
+      "LastEventId": {
+        "name": "Last-Event-ID",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f-]{36}:[0-9]+$"
+        }
+      },
+      "NoIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "description": "Rejected: request IDs in the JSON body are the sole idempotency authority.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "requestBodies": {
+      "CreateSession": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateSession"
+            }
+          }
+        }
+      },
+      "Message": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Message"
+            }
+          }
+        }
+      },
+      "Approval": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Approval"
+            }
+          }
+        }
+      },
+      "Empty": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Session": {
+        "description": "Accepted durable session intent",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionEnvelope"
+            }
+          }
+        }
+      },
+      "SessionList": {
+        "description": "Owner-scoped sessions",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionListEnvelope"
+            }
+          }
+        }
+      },
+      "Snapshot": {
+        "description": "Consistent owner-scoped snapshot",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SnapshotEnvelope"
+            }
+          }
+        }
+      },
+      "Items": {
+        "description": "Bounded item page",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ItemsEnvelope"
+            }
+          }
+        }
+      },
+      "Turn": {
+        "description": "Owner-scoped turn",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TurnEnvelope"
+            }
+          }
+        }
+      },
+      "Message": {
+        "description": "Accepted durable message intent",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MessageEnvelope"
+            }
+          }
+        }
+      },
+      "Approval": {
+        "description": "Accepted durable approval intent",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApprovalEnvelope"
+            }
+          }
+        }
+      },
+      "Invalid": {
+        "description": "Strict validation failure",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Failure"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Missing or foreign owner-scoped resource; disabled feature also uses 404",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Failure"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Idempotency, cursor or approval conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Failure"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "Feature/admission gate closed or safe definition unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Failure"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Uuid": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "Decimal": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+        "description": "Unsigned PostgreSQL bigint decimal, <= 9223372036854775807"
+      },
+      "CreateSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientRequestId",
+          "agentDefinitionId",
+          "definitionVersion"
+        ],
+        "properties": {
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9:_-]{1,128}$"
+          },
+          "agentDefinitionId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "definitionVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "defaultCanvasId": {
+            "$ref": "#/components/schemas/Uuid"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientMessageId",
+          "content"
+        ],
+        "properties": {
+          "clientMessageId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "x-maxUtf8Bytes": 32000,
+            "description": "Nonblank PostgreSQL-compatible UTF-8 text. Maximum 32000 UTF-8 bytes (x-maxUtf8Bytes); a multibyte string may pass maxLength and still be rejected by runtime byte validation. No NUL or unpaired surrogate."
+          }
+        }
+      },
+      "Approval": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "decision",
+          "expectedArgumentsHash"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected"
+            ]
+          },
+          "expectedArgumentsHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "Failure": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "Session": {
+        "type": "object",
+        "required": [
+          "id",
+          "ownerId",
+          "agentDefinitionId",
+          "definitionVersion",
+          "defaultCanvasId",
+          "activeTurnId",
+          "inputRevision",
+          "nextItemSequence",
+          "nextEventCursor",
+          "createdAt",
+          "updatedAt",
+          "archivedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "ownerId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "agentDefinitionId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "definitionVersion": {
+            "type": "integer"
+          },
+          "defaultCanvasId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activeTurnId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inputRevision": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "nextItemSequence": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "nextEventCursor": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "archivedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Turn": {
+        "type": "object",
+        "required": [
+          "id",
+          "sessionId",
+          "status",
+          "engineVersion",
+          "revision",
+          "inputRevision",
+          "cancelRequestedAt",
+          "terminalAt",
+          "deadlineAt",
+          "error"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "waiting_tools",
+              "waiting_approval",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "engineVersion": {
+            "type": "string"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "inputRevision": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "cancelRequestedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "terminalAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "deadlineAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "code": {
+                    "const": "TOOL_FAILED"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Snapshot": {
+        "type": "object",
+        "required": [
+          "session",
+          "activeTurn",
+          "items",
+          "eventCursor",
+          "lastItemSequence",
+          "itemsHasMore",
+          "nextItemsCursor",
+          "tools",
+          "approvals",
+          "summariesTruncated"
+        ],
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          },
+          "activeTurn": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Turn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            }
+          },
+          "eventCursor": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "lastItemSequence": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "itemsHasMore": {
+            "type": "boolean"
+          },
+          "nextItemsCursor": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolSummary"
+            }
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalSummary"
+            }
+          },
+          "summariesTruncated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MessageAccepted": {
+        "type": "object",
+        "required": [
+          "turn",
+          "acceptedInputRevision"
+        ],
+        "properties": {
+          "turn": {
+            "$ref": "#/components/schemas/Turn"
+          },
+          "acceptedInputRevision": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        }
+      },
+      "SessionEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/Session"
+          }
+        }
+      },
+      "SessionListEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/SessionsPage"
+          }
+        }
+      },
+      "SnapshotEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/Snapshot"
+          }
+        }
+      },
+      "ItemsEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ItemsPage"
+          }
+        }
+      },
+      "TurnEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/Turn"
+          }
+        }
+      },
+      "MessageEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/MessageAccepted"
+          }
+        }
+      },
+      "ApprovalEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ApprovalSummary"
+          }
+        }
+      },
+      "Item": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "sessionId",
+          "turnId",
+          "sequence",
+          "type",
+          "toolCallId",
+          "payload",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "turnId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "user_message",
+              "assistant_message",
+              "tool_call",
+              "tool_result",
+              "approval",
+              "artifact_reference",
+              "system_event"
+            ]
+          },
+          "toolCallId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ToolSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "turnId",
+          "toolName",
+          "status",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "turnId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "validating",
+              "waiting_approval",
+              "executing",
+              "waiting_external",
+              "completed",
+              "failed",
+              "cancelled",
+              "skipped"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        }
+      },
+      "ApprovalSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "sessionId",
+          "turnId",
+          "toolCallId",
+          "argumentsHash",
+          "modelRevision",
+          "pricingRevision",
+          "reservationId",
+          "status",
+          "expiresAt",
+          "resolvedBy",
+          "resolvedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "turnId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "toolCallId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "argumentsHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "modelRevision": {
+            "type": "string"
+          },
+          "pricingRevision": {
+            "type": "string"
+          },
+          "reservationId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "expired"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolvedBy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        },
+        "description": "revision is the parent Turn revision frozen at decision time when final, or current Turn revision when pending; not an independent approval counter."
+      },
+      "ItemsPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor",
+          "hasMore",
+          "lastItemSequence"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            }
+          },
+          "nextCursor": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "lastItemSequence": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        }
+      },
+      "SessionsPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessions",
+          "nextCursor"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ApprovalExpired": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "error",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "const": "APPROVAL_EXPIRED"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "data": {
+            "$ref": "#/components/schemas/ApprovalSummary"
+          }
+        }
+      },
+      "DisplayEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "eventId",
+              "sessionId",
+              "turnId",
+              "createdAt",
+              "cursor",
+              "itemSequence",
+              "entityRevision",
+              "type",
+              "payload"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "const": 1
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "sessionId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "turnId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "cursor": {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              "itemSequence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "entityRevision": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "const": "item.created"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "item"
+                ],
+                "properties": {
+                  "item": {
+                    "$ref": "#/components/schemas/Item"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "eventId",
+              "sessionId",
+              "turnId",
+              "createdAt",
+              "cursor",
+              "itemSequence",
+              "entityRevision",
+              "type",
+              "payload"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "const": 1
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "sessionId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "turnId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "cursor": {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              "itemSequence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "entityRevision": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "const": "turn.updated"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "turn"
+                ],
+                "properties": {
+                  "turn": {
+                    "$ref": "#/components/schemas/Turn"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "eventId",
+              "sessionId",
+              "turnId",
+              "createdAt",
+              "cursor",
+              "itemSequence",
+              "entityRevision",
+              "type",
+              "payload"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "const": 1
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "sessionId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "turnId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "cursor": {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              "itemSequence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "entityRevision": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "const": "tool.updated"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "tool"
+                ],
+                "properties": {
+                  "tool": {
+                    "$ref": "#/components/schemas/ToolSummary"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "eventId",
+              "sessionId",
+              "turnId",
+              "createdAt",
+              "cursor",
+              "itemSequence",
+              "entityRevision",
+              "type",
+              "payload"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "const": 1
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "sessionId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "turnId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "cursor": {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              "itemSequence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "entityRevision": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Decimal"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "const": "approval.required"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "approval"
+                ],
+                "properties": {
+                  "approval": {
+                    "$ref": "#/components/schemas/ApprovalSummary"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type"
+        }
+      },
+      "TransportFrame": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "sessionId",
+              "highWater"
+            ],
+            "properties": {
+              "type": {
+                "const": "ready"
+              },
+              "sessionId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "highWater": {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "sessionId",
+              "cursor"
+            ],
+            "properties": {
+              "type": {
+                "const": "heartbeat"
+              },
+              "sessionId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "cursor": {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "sessionId",
+              "reason"
+            ],
+            "properties": {
+              "type": {
+                "const": "resync.required"
+              },
+              "sessionId": {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "retention",
+                  "backlog",
+                  "unavailable"
+                ]
+              }
+            }
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type"
+        }
+      }
+    },
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "muse_session"
+      }
+    }
+  },
+  "security": [
+    {
+      "sessionCookie": []
+    }
+  ]
+}

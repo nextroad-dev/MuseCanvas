@@ -2,7 +2,9 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 
 import { AccountView } from '@/features/account/components/account-view'
+import { WorkspaceShell } from '@/features/workspace/components/workspace-shell'
 import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { WORKSPACE_MODE } from '@/shared/lib/workspace-mode'
 import { getAccount } from '@/shared/services/server-api'
 
 /**
@@ -35,9 +37,11 @@ export default async function AccountPage({ searchParams }: { searchParams: Acco
   }
 
   return (
-    <AccountView
-      initialAccount={account}
-      callback={{ linked: firstValue(params.linked), error: firstValue(params.error) }}
-    />
+    <WorkspaceShell mode={WORKSPACE_MODE} user={account.user}>
+      <AccountView
+        initialAccount={account}
+        callback={{ linked: firstValue(params.linked), error: firstValue(params.error) }}
+      />
+    </WorkspaceShell>
   )
 }

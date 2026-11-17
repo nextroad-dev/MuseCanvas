@@ -854,3 +854,5 @@ export * from './canvas'
 // cycle back into this module never becomes a runtime one.
 export * from './media-parameters'
 export * from './media-parameter-validation'
+
+export * from './agent/index'

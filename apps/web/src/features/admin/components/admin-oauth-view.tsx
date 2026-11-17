@@ -1,12 +1,14 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { ArrowClockwiseIcon as RefreshCw } from '@phosphor-icons/react'
+import { ArrowClockwiseIcon as RefreshCw, ShieldCheckIcon as ShieldCheck } from '@phosphor-icons/react'
 import { Alert } from '@/shared/components/ui/alert'
+import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Card } from '@/shared/components/ui/card'
 import { EmptyState } from '@/shared/components/ui/empty-state'
 import { PageHeader } from '@/shared/components/ui/page-header'
+import { Skeleton } from '@/shared/components/ui/skeleton'
 import { iconSize } from '@/shared/components/ui/size'
 import { queryKeys } from '@/shared/hooks/query-keys'
 import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
@@ -28,14 +30,33 @@ export function AdminOAuthView() {
 
   const providers = providersQuery.data ?? []
 
+  const enabledCount = providers.filter((provider) => provider.enabled).length
+
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <PageHeader
         title="OAuth 登录"
         description="管理 GitHub / Google 第三方登录的凭据与启停。密钥只写不回显；后台保存后立即接管环境变量中的同名凭据。"
+        meta={
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="inline-flex size-6 items-center justify-center rounded-control bg-accent-soft text-accent"
+            >
+              <ShieldCheck size={14} weight="duotone" />
+            </span>
+            <span className="text-caption font-medium text-muted-foreground">身份认证</span>
+            {providers.length > 0 ? (
+              <Badge tone={enabledCount > 0 ? 'success' : 'neutral'}>
+                已启用 {enabledCount}/{providers.length}
+              </Badge>
+            ) : null}
+          </div>
+        }
         actions={
           <Button
             variant="secondary"
+            size="sm"
             onClick={() => void providersQuery.refetch()}
             loading={providersQuery.isFetching}
             icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
@@ -50,15 +71,22 @@ export function AdminOAuthView() {
       </Alert>
 
       {providersQuery.isLoading ? (
-        <Card>
-          <p role="status" className="text-sm text-muted-foreground">
-            正在加载 OAuth 提供商…
-          </p>
-        </Card>
+        <div className="grid min-w-0 gap-4 xl:grid-cols-2" role="status" aria-label="正在加载 OAuth 提供商">
+          <Card className="gap-4 border border-border">
+            <Skeleton className="h-6 w-36" />
+            <Skeleton className="h-4 w-64" />
+            <Skeleton className="h-24 w-full" />
+          </Card>
+          <Card className="gap-4 border border-border">
+            <Skeleton className="h-6 w-36" />
+            <Skeleton className="h-4 w-64" />
+            <Skeleton className="h-24 w-full" />
+          </Card>
+        </div>
       ) : null}
 
       {providersQuery.isError && providersQuery.data === undefined ? (
-        <Card>
+        <Card className="border border-border">
           <EmptyState
             icon={RefreshCw}
             title="无法加载 OAuth 提供商"
@@ -70,7 +98,7 @@ export function AdminOAuthView() {
       ) : null}
 
       {providers.length === 0 && !providersQuery.isLoading && !providersQuery.isError ? (
-        <Card>
+        <Card className="border border-border">
           <EmptyState
             title="没有可配置的 OAuth 提供商"
             description="服务端应始终返回 GitHub 与 Google 两个提供商；若列表为空，请检查后端版本。"

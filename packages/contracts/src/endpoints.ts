@@ -7,6 +7,18 @@ export type OAuthProviderName = (typeof OAUTH_PROVIDERS)[number]
 const P = '/api'
 
 export const API_ENDPOINTS = {
+  agent: {
+    sessions: `${P}/agent/sessions`,
+    session: (id: string) => `${P}/agent/sessions/${encodeURIComponent(id)}`,
+    messages: (id: string) => `${P}/agent/sessions/${encodeURIComponent(id)}/messages`,
+    items: (id: string) => `${P}/agent/sessions/${encodeURIComponent(id)}/items`,
+    events: (id: string) => `${P}/agent/sessions/${encodeURIComponent(id)}/events`,
+    turn: (id: string) => `${P}/agent/turns/${encodeURIComponent(id)}`,
+    cancel: (id: string) => `${P}/agent/turns/${encodeURIComponent(id)}/cancel`,
+    steer: (id: string) => `${P}/agent/turns/${encodeURIComponent(id)}/steer`,
+    resolveApproval: (id: string) => `${P}/agent/approvals/${encodeURIComponent(id)}/resolve`,
+  },
+
   healthReady: `${P}/health/ready`,
   session: `${P}/session`,
   registration: `${P}/registration`,

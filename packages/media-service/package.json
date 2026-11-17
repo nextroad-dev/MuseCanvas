@@ -1,0 +1,29 @@
+{
+  "name": "@musecanvas/media-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./inputs": "./src/inputs/attach.ts",
+    "./image-edit": "./src/image-edit/index.ts",
+    "./model-snapshot": "./src/model-snapshot.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@musecanvas/contracts": "workspace:*",
+    "@musecanvas/domain": "workspace:*",
+    "@musecanvas/database": "workspace:*",
+    "@musecanvas/providers": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3",
+    "@types/pg": "^8.20.0"
+  }
+}

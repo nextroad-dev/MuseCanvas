@@ -129,7 +129,7 @@ export function AdminPromptOptimizationCard({ models }: AdminPromptOptimizationC
             />
           </div>
 
-          <Field label="语言模型" hint="使用 /admin/language-models 中已启用的语言模型。">
+          <Field label="语言模型" hint="从当前实例已配置并启用的语言模型中选择。">
             <LanguageModelSelect
               value={modelId}
               models={models}
@@ -258,7 +258,7 @@ export function AdminPromptAgentCard({ models }: AdminPromptAgentCardProps) {
           </Badge>
         </div>
         <CardDescription>
-          创作台的对话式生成助手：需要支持工具调用的语言模型。停用后创作台回退到手动参数面板。
+          用于配置旧版 Canvas Agent（画布对话助手）接口的语言模型与单回合护栏参数，需要支持工具调用的语言模型。
         </CardDescription>
       </CardHeader>
       <CardBody>
@@ -266,7 +266,9 @@ export function AdminPromptAgentCard({ models }: AdminPromptAgentCardProps) {
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-control bg-tonal px-4 py-3">
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="text-sm font-medium text-foreground">启用创作助手</span>
-              <span className="text-xs text-muted-foreground">关闭后 /generate 只提供表单式生成。</span>
+              <span className="text-xs text-muted-foreground">
+                控制旧版 Canvas Agent 接口的启用状态与护栏设置，不影响新版 Agent 操作台（/generate）。
+              </span>
             </div>
             <Switch
               aria-label="启用创作助手"

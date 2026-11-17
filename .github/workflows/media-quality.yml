@@ -84,6 +84,9 @@ jobs:
       - name: Test database package (no external services)
         run: pnpm --filter @musecanvas/database test
 
+      - name: Test shared media service (no external services)
+        run: pnpm --filter @musecanvas/media-service test
+
       - name: Test API app where script exists (no external services)
         run: pnpm --filter @musecanvas/api --if-present test
 

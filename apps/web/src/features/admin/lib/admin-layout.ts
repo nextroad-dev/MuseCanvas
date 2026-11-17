@@ -6,11 +6,7 @@ import { APP_ROUTES } from '@/shared/lib/app-routes'
 /** 侧栏图标槽的键：具体图标组件由 `admin-shell.tsx` 映射，纯模块不 import Phosphor。 */
 export type AdminNavIconKey =
   | 'overview'
-  | 'users'
-  | 'media'
-  | 'language'
   | 'prompt'
-  | 'jobs'
   | 'oauth'
   | 'settings'
 
@@ -27,7 +23,7 @@ export interface AdminNavGroup {
 }
 
 /**
- * 侧栏分组顺序（画板 07）：概览 / 用户与权限 / 生成资源 / 运行 / 系统设置。
+ * 侧栏分组顺序：概览 / 生成资源 / 系统设置。
  * 新增后台页时只改这里，导航、面包屑与当前项高亮会一起生效。
  */
 export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
@@ -36,20 +32,8 @@ export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
     items: [{ label: '概览', href: APP_ROUTES.admin, icon: 'overview' }],
   },
   {
-    title: '用户与权限',
-    items: [{ label: '用户管理', href: APP_ROUTES.adminUsers, icon: 'users' }],
-  },
-  {
     title: '生成资源',
-    items: [
-      { label: '媒体模型', href: APP_ROUTES.adminMediaModels, icon: 'media' },
-      { label: '语言模型', href: APP_ROUTES.adminLanguageModels, icon: 'language' },
-      { label: '提示词模板', href: APP_ROUTES.adminPromptTemplates, icon: 'prompt' },
-    ],
-  },
-  {
-    title: '运行',
-    items: [{ label: '任务监控', href: APP_ROUTES.adminJobs, icon: 'jobs' }],
+    items: [{ label: '提示词模板', href: APP_ROUTES.adminPromptTemplates, icon: 'prompt' }],
   },
   {
     title: '系统设置',
@@ -69,7 +53,7 @@ export function adminNavItems(): AdminNavItem[] {
 
 /**
  * 当前项判定：`/admin` 必须精确匹配，其余按路径前缀匹配，
- * 这样 `/admin/jobs/:id` 这类详情页仍高亮「任务监控」。
+ * 这样嵌套子路径仍高亮对应的后台导航项。
  */
 export function isAdminNavActive(
   pathname: string | null | undefined,

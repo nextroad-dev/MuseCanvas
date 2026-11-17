@@ -7,7 +7,8 @@ import type { MatchedRoute, Route, RouteParams } from './types'
  * replaces. That is on purpose: these widths are existing behaviour. Several
  * paths accept a loose lowercase id while the prompt-template and plugin ids
  * accept upper-case hex, and narrowing any of them would turn a working request
- * into a 404.
+ * into a 404. Agent Core alone accepts case-insensitive hex IDs; its handlers
+ * validate UUID shape and normalize case without changing the params.id key.
  */
 const SEGMENT_PATTERNS: Record<string, string> = {
   // /^jobs\/([0-9a-f-]+)$/, /^library\/([0-9a-f-]+)\/download$/ and friends
@@ -32,7 +33,7 @@ function compile(pattern: string): { regex: RegExp; keys: string[] } {
       const body = SEGMENT_PATTERNS[name]
       if (!body) throw new Error(`unknown route parameter :${name} in pattern "${pattern}"`)
       keys.push(name)
-      return `(${body})`
+      return `(${pattern.startsWith('agent/') && name === 'id' ? '[0-9a-fA-F-]+' : body})`
     })
     .join('/')
   return { regex: new RegExp(`^${source}$`), keys }

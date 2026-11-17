@@ -6,6 +6,7 @@ import { completeOAuthInvitation, handleOAuthCallback, startOAuth } from '../mod
 import { handleSetupPost, setupConfig, setupStatus } from '../modules/setup/handlers'
 import { setupDatabaseStatus } from '../modules/setup/database'
 import { readiness } from '../modules/health/handlers'
+import { agentHandlers } from '../modules/agent/handlers'
 import { readSession, registrationMode, setRegistrationMode } from '../modules/session/handlers'
 import { listLinkedIdentities, startLink, unlinkIdentity } from '../modules/auth/account'
 import { logout, requestOtp, verifyOtp } from '../modules/auth/handlers'
@@ -102,6 +103,12 @@ const setupRoute = (path: (typeof SETUP_POST_PATHS)[number]): Route => ({
 })
 
 export const GET_ROUTES: Route[] = [
+  // Core handlers apply feature gate before authentication; enabled requests still require an active actor.
+  { path: 'agent/sessions', access: 'public', handler: agentHandlers.listSessions },
+  { path: 'agent/sessions/:id', access: 'public', handler: agentHandlers.snapshot },
+  { path: 'agent/sessions/:id/items', access: 'public', handler: agentHandlers.items },
+  { path: 'agent/sessions/:id/events', access: 'public', handler: agentHandlers.events },
+  { path: 'agent/turns/:id', access: 'public', handler: agentHandlers.turn },
   // --- public -------------------------------------------------------------
   { path: 'health/ready', access: 'public', handler: () => readiness() },
   { path: 'setup/status', access: 'public', handler: () => setupStatus() },
@@ -159,6 +166,11 @@ export const GET_ROUTES: Route[] = [
 ]
 
 export const POST_ROUTES: Route[] = [
+  { path: 'agent/sessions', access: 'public', handler: agentHandlers.createSession },
+  { path: 'agent/sessions/:id/messages', access: 'public', handler: agentHandlers.message },
+  { path: 'agent/turns/:id/cancel', access: 'public', handler: agentHandlers.cancel },
+  { path: 'agent/turns/:id/steer', access: 'public', handler: agentHandlers.steer },
+  { path: 'agent/approvals/:id/resolve', access: 'public', handler: agentHandlers.resolveApproval },
   // The wizard never reaches the session gate.
   ...SETUP_POST_PATHS.map(setupRoute),
   // Plugin uploads are multipart, so they are dispatched before anything that

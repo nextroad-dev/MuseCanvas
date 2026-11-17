@@ -167,9 +167,10 @@ export function OtpInput({
   return (
     <fieldset className="m-0 flex min-w-0 flex-col border-0 p-0">
       {label ? <legend className="mb-2 text-ui font-medium text-foreground">{label}</legend> : null}
-      <div className="grid grid-cols-6 gap-2">
+      <div className="grid grid-cols-6 gap-2.5">
         {Array.from({ length }, (_, index) => {
           const isActive = index === activeIndex
+          const hasValue = Boolean(digits[index])
           return (
             <input
               key={index}
@@ -192,12 +193,15 @@ export function OtpInput({
               onPaste={(event) => handlePaste(index, event)}
               onFocus={(event) => event.target.select()}
               className={cn(
-                'h-[var(--control-xl)] min-w-0 rounded-control border bg-surface text-center font-mono text-subtitle tabular-nums text-foreground transition-colors',
+                'h-[var(--control-xl)] min-w-0 rounded-card border bg-canvas text-center font-mono text-subtitle font-medium tabular-nums text-foreground transition-all outline-none',
+                'focus-visible:border-accent focus-visible:bg-surface focus-visible:ring-2 focus-visible:ring-accent-soft',
                 invalid
-                  ? 'border-danger bg-danger-soft'
-                  : isActive
-                    ? 'border-2 border-primary'
-                    : 'border-border-control',
+                  ? 'border-danger bg-danger-soft text-danger focus-visible:border-danger focus-visible:ring-danger/20'
+                  : isActive && !disabled
+                    ? 'border-accent bg-surface shadow-soft ring-2 ring-accent-soft'
+                    : hasValue
+                      ? 'border-border-strong bg-surface'
+                      : 'border-border-control hover:border-border-strong',
                 disabled && 'is-disabled',
               )}
             />

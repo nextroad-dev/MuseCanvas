@@ -61,13 +61,10 @@ const nextConfig = {
     ]
   },
   async redirects() {
-    // 旧信息架构的别名路径，全部临时重定向（307）到新路由。
+    // 旧信息架构的别名路径，临时重定向（307）到真实存在的路由。
     return [
       { source: '/history', destination: '/library', permanent: false },
-      { source: '/admin/registration', destination: '/admin/users', permanent: false },
-      { source: '/admin/models', destination: '/admin/language-models', permanent: false },
-      { source: '/admin/plugins', destination: '/admin/media-models', permanent: false },
-      { source: '/admin/providers', destination: '/admin/media-models', permanent: false },
+      { source: '/agent', destination: '/generate', permanent: false },
     ]
   },
   async rewrites() {

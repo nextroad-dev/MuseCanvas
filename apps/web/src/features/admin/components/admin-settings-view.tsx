@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowClockwiseIcon as RefreshCw } from '@phosphor-icons/react'
+import { ArrowClockwiseIcon as RefreshCw, HardDrivesIcon as HardDrives } from '@phosphor-icons/react'
 import type { SetupConfigDto } from '@musecanvas/contracts'
 import { Alert } from '@/shared/components/ui/alert'
 import { Badge } from '@/shared/components/ui/badge'
@@ -62,6 +62,7 @@ export function AdminSettingsView() {
         actions={
           <Button
             variant="secondary"
+            size="sm"
             onClick={() => void configQuery.refetch()}
             loading={configQuery.isFetching}
             icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
@@ -71,37 +72,51 @@ export function AdminSettingsView() {
         }
       />
 
-      <Card>
+      <Card className="border border-border">
         <CardHeader>
-          <CardTitle level={2}>实例状态</CardTitle>
-          <CardDescription>初始化完成情况与数据库连接摘要；配置修订号用于判断是否有并发修改。</CardDescription>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span
+                aria-hidden="true"
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent"
+              >
+                <HardDrives size={18} weight="duotone" />
+              </span>
+              <div>
+                <CardTitle level={2}>实例状态</CardTitle>
+                <CardDescription>初始化完成情况与数据库连接摘要；配置修订号用于判断是否有并发修改。</CardDescription>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={status?.setupComplete ? 'success' : 'warning'} dot>
+                {status?.setupComplete ? '初始化已完成' : '初始化未完成'}
+              </Badge>
+              {typeof config?.site.revision === 'number' ? (
+                <Badge tone="neutral">配置修订 #{config.site.revision}</Badge>
+              ) : null}
+            </div>
+          </div>
         </CardHeader>
         <CardBody className="gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={status?.setupComplete ? 'success' : 'warning'} dot>
-              {status?.setupComplete ? '初始化已完成' : '初始化未完成'}
-            </Badge>
-            {typeof config?.site.revision === 'number' ? (
-              <Badge tone="neutral">配置修订 #{config.site.revision}</Badge>
-            ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-control bg-canvas px-4 py-3">
+            {database ? (
+              <p className="text-sm text-foreground">
+                数据库：<span className="font-mono text-xs">{database.driver}</span>
+                {database.connection.host ? ` · ${database.connection.host}:${database.connection.port ?? ''}` : ''}
+                {database.serverVersion ? ` · ${database.serverVersion}` : ''}
+                <span className={database.reachable ? 'text-success' : 'text-danger'}>
+                  {database.reachable ? ' · 连接正常' : ' · 连接不可用'}
+                </span>
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">数据库状态暂不可用。</p>
+            )}
             {status?.completedAt ? (
               <span className="font-mono text-xs text-muted-foreground">
                 完成于 {formatDateTime(status.completedAt)}
               </span>
             ) : null}
           </div>
-          {database ? (
-            <p className="text-sm text-foreground">
-              数据库：<span className="font-mono text-xs">{database.driver}</span>
-              {database.connection.host ? ` · ${database.connection.host}:${database.connection.port ?? ''}` : ''}
-              {database.serverVersion ? ` · ${database.serverVersion}` : ''}
-              <span className={database.reachable ? 'text-success' : 'text-danger'}>
-                {database.reachable ? ' · 连接正常' : ' · 连接不可用'}
-              </span>
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">数据库状态暂不可用。</p>
-          )}
         </CardBody>
       </Card>
 

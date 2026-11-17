@@ -6,6 +6,14 @@
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import type {
   AdminPluginDocsDto,
+  AgentApprovalSummaryDTO,
+  AgentDecimal,
+  AgentItemsPageDTO,
+  AgentMessageAcceptedDTO,
+  AgentSessionDTO,
+  AgentSessionSnapshotDTO,
+  AgentSessionsPageDTO,
+  AgentTurnDTO,
   CanvasAgentApplyResultDto,
   CanvasAgentConfirmResultDto,
   CanvasAgentHistoryDto,
@@ -14,6 +22,8 @@ import type {
   CanvasAgentTurnRecoveryDto,
   CanvasDto,
   CanvasListPageDto,
+  CreateAgentMessageRequest,
+  CreateAgentSessionRequest,
   CreateCanvasRequest,
   CreateGenerationRequest,
   CreatePromptTemplateEntryInput,
@@ -26,6 +36,7 @@ import type {
   PublicModelDto,
   RenderPromptTemplateInput,
   RenderPromptTemplateResult,
+  ResolveAgentApprovalRequest,
   SetupClaimInput,
   SetupClaimResult,
   SetupCompletionPayload,
@@ -48,6 +59,7 @@ import type {
 } from '@musecanvas/contracts'
 import { ApiError, apiFetch, resolveApiUrl } from './api'
 import { WORKSPACE_MODE } from '../lib/workspace-mode'
+import { mockAgentApi, mockCanvasesApi } from './mock-agent-api'
 import { mockWorkspaceApi } from './mock-workspace-api'
 import type {
   AccountDto,
@@ -161,17 +173,73 @@ export const generationsApi = {
 }
 
 // ---------------------------------------------------------------------------
+// agent core v1
+// ---------------------------------------------------------------------------
+
+export const agentApi = {
+  listSessions: (params?: { limit?: number; cursor?: string }) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.listSessions(params)
+      : get<AgentSessionsPageDTO>(API_ENDPOINTS.agent.sessions, params),
+  createSession: (body: CreateAgentSessionRequest) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.createSession(body)
+      : post<AgentSessionDTO>(API_ENDPOINTS.agent.sessions, body),
+  getSnapshot: (sessionId: string, params?: { limit?: number }) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.getSnapshot(sessionId, params)
+      : get<AgentSessionSnapshotDTO>(API_ENDPOINTS.agent.session(sessionId), params),
+  listItems: (sessionId: string, params?: { cursor?: AgentDecimal; limit?: number }) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.listItems(sessionId, params)
+      : get<AgentItemsPageDTO>(API_ENDPOINTS.agent.items(sessionId), params),
+  sendMessage: (sessionId: string, body: CreateAgentMessageRequest) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.sendMessage(sessionId, body)
+      : post<AgentMessageAcceptedDTO>(API_ENDPOINTS.agent.messages(sessionId), body),
+  steerTurn: (turnId: string, body: CreateAgentMessageRequest) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.steerTurn(turnId, body)
+      : post<AgentMessageAcceptedDTO>(API_ENDPOINTS.agent.steer(turnId), body),
+  getTurn: (turnId: string) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.getTurn(turnId)
+      : get<AgentTurnDTO>(API_ENDPOINTS.agent.turn(turnId)),
+  cancelTurn: (turnId: string) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.cancelTurn(turnId)
+      : post<AgentTurnDTO>(API_ENDPOINTS.agent.cancel(turnId), {}),
+  resolveApproval: (approvalId: string, body: ResolveAgentApprovalRequest) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockAgentApi.resolveApproval(approvalId, body)
+      : post<AgentApprovalSummaryDTO>(API_ENDPOINTS.agent.resolveApproval(approvalId), body),
+}
+
+// ---------------------------------------------------------------------------
 // canvases + canvas agent
 // ---------------------------------------------------------------------------
 
 export const canvasesApi = {
   list: (params?: { limit?: number; cursor?: string }) =>
-    get<CanvasListPageDto>(API_ENDPOINTS.canvases.list, params),
-  create: (body: CreateCanvasRequest = {}) => post<CanvasDto>(API_ENDPOINTS.canvases.create, body),
-  detail: (id: string) => get<CanvasDto>(API_ENDPOINTS.canvases.detail(id)),
+    WORKSPACE_MODE === 'mock'
+      ? mockCanvasesApi.list(params)
+      : get<CanvasListPageDto>(API_ENDPOINTS.canvases.list, params),
+  create: (body: CreateCanvasRequest = {}) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockCanvasesApi.create(body)
+      : post<CanvasDto>(API_ENDPOINTS.canvases.create, body),
+  detail: (id: string) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockCanvasesApi.detail(id)
+      : get<CanvasDto>(API_ENDPOINTS.canvases.detail(id)),
   update: (id: string, body: UpdateCanvasRequest) =>
-    patch<CanvasDto>(API_ENDPOINTS.canvases.update(id), body),
-  remove: (id: string) => del<{ id: string }>(API_ENDPOINTS.canvases.remove(id)),
+    WORKSPACE_MODE === 'mock'
+      ? mockCanvasesApi.update(id, body)
+      : patch<CanvasDto>(API_ENDPOINTS.canvases.update(id), body),
+  remove: (id: string) =>
+    WORKSPACE_MODE === 'mock'
+      ? mockCanvasesApi.remove(id)
+      : del<{ id: string }>(API_ENDPOINTS.canvases.remove(id)),
 }
 
 /** 历史倒序分页：首页用 `beforeSeq = LATEST_HISTORY_SEQ`。 */
@@ -502,6 +570,7 @@ export const adminApi = {
 
 /** 领域聚合，便于 `import { clientApi } from '@/shared/services/client-api'`。 */
 export const clientApi = {
+  agent: agentApi,
   session: sessionApi,
   auth: authApi,
   account: accountApi,

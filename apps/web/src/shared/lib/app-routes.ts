@@ -8,10 +8,6 @@ export const APP_ROUTES = {
   library: '/library',
   account: '/account',
   admin: '/admin',
-  adminMediaModels: '/admin/media-models',
-  adminUsers: '/admin/users',
-  adminJobs: '/admin/jobs',
-  adminLanguageModels: '/admin/language-models',
   adminOAuth: '/admin/oauth',
   adminPromptTemplates: '/admin/prompt-templates',
   adminSettings: '/admin/settings',
@@ -21,10 +17,15 @@ export const APP_ROUTES = {
 } as const
 
 export type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES]
+export type WorkspaceInspectorTab = 'artifacts' | 'tools'
 
 export const GENERATE_ROUTE = APP_ROUTES.generate
 export const LIBRARY_ROUTE = APP_ROUTES.library
 export const LOGIN_ROUTE = APP_ROUTES.login
+
+export function agentConsoleInspectorRoute(panel: WorkspaceInspectorTab): string {
+  return `${APP_ROUTES.generate}?panel=${panel}`
+}
 
 export function isOnGenerate(pathname: string | null | undefined): boolean {
   if (!pathname) return false

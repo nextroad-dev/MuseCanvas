@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import Link from 'next/link'
+import { SlidersHorizontalIcon } from '@phosphor-icons/react/ssr'
 
 import { BrandMark } from '@/shared/components/brand-mark'
 import { Badge } from '@/shared/components/ui'
@@ -13,17 +14,20 @@ import { APP_ROUTES } from '@/shared/lib/app-routes'
 export default function SetupLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col bg-canvas text-foreground">
-      <header className="border-b border-border bg-surface">
+      <header className="sticky top-0 z-[var(--z-index-sticky)] border-b border-border bg-surface/90 backdrop-blur-md">
         <div className="mx-auto flex min-h-[var(--layout-header)] w-full max-w-[var(--container-content)] flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-8">
           <Link
             href={APP_ROUTES.home}
             aria-label="返回 MuseCanvas 首页"
-            className="flex items-center gap-2 rounded-control"
+            className="flex items-center gap-2.5 rounded-control px-1.5 py-1 transition-colors hover:bg-surface-hover"
           >
-            <BrandMark variant="mark" height={19} />
-            <span className="text-compact font-medium text-foreground">MuseCanvas</span>
+            <BrandMark variant="mark" height={20} />
+            <span className="text-compact font-medium tracking-tight text-foreground">MuseCanvas</span>
           </Link>
-          <Badge tone="neutral">系统初始化</Badge>
+          <Badge tone="neutral" className="gap-1.5 px-3 py-1">
+            <SlidersHorizontalIcon weight="bold" aria-hidden="true" className="h-3.5 w-3.5 text-accent" />
+            <span>系统初始化</span>
+          </Badge>
         </div>
       </header>
       <div className="flex flex-1 flex-col">{children}</div>

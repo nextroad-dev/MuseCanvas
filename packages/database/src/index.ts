@@ -48,3 +48,5 @@ export * from './repositories/canvas-documents'
 export * from './repositories/canvas-agent'
 
 export * from './repositories/canvas-agent-preparations'
+export * from './repositories/agent-core'
+export * from './repositories/agent-runtime'

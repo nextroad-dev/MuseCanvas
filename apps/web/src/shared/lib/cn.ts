@@ -31,6 +31,7 @@ const twMerge = extendTailwindMerge({
         'text-ui',
         'text-overline',
         'text-caption',
+        'text-brand',
       ],
       // --z-index-* 层级阶梯
       z: ['z-sticky', 'z-dropdown', 'z-overlay', 'z-modal', 'z-toast', 'z-tooltip', 'z-command'],

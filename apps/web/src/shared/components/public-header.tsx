@@ -61,8 +61,7 @@ export function PublicHeader({ className }: PublicHeaderProps) {
               aria-label="MuseCanvas 首页"
               className="flex min-w-0 items-center rounded-control"
             >
-              <BrandMark variant="lockup" height={17} className="sm:hidden" />
-              <BrandMark variant="lockup" height={19} className="hidden sm:inline-flex" />
+              <BrandMark variant="lockup" height={19} responsive />
             </Link>
 
             <nav aria-label="页面导航" className="hidden items-center gap-6 md:flex">

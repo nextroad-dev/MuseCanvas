@@ -58,7 +58,7 @@ import type {
   BuiltinProviderTemplate,
 } from '@musecanvas/contracts'
 import { ApiError, apiFetch, resolveApiUrl } from './api'
-import { WORKSPACE_MODE, type WorkspaceMode } from '../lib/workspace-mode'
+import { WORKSPACE_MODE } from '../lib/workspace-mode'
 import { mockAgentApi, mockCanvasesApi } from './mock-agent-api'
 import { mockWorkspaceApi } from './mock-workspace-api'
 import type {
@@ -177,48 +177,44 @@ export const generationsApi = {
 // agent core v1
 // ---------------------------------------------------------------------------
 
-export function createAgentApi(mode: WorkspaceMode) {
-  return {
+export const agentApi = {
   listSessions: (params?: { limit?: number; cursor?: string }) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.listSessions(params)
       : get<AgentSessionsPageDTO>(API_ENDPOINTS.agent.sessions, params),
   createSession: (body: CreateAgentSessionRequest) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.createSession(body)
       : post<AgentSessionDTO>(API_ENDPOINTS.agent.sessions, body),
   getSnapshot: (sessionId: string, params?: { limit?: number }) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.getSnapshot(sessionId, params)
       : get<AgentSessionSnapshotDTO>(API_ENDPOINTS.agent.session(sessionId), params),
   listItems: (sessionId: string, params?: { cursor?: AgentDecimal; limit?: number }) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.listItems(sessionId, params)
       : get<AgentItemsPageDTO>(API_ENDPOINTS.agent.items(sessionId), params),
   sendMessage: (sessionId: string, body: CreateAgentMessageRequest) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.sendMessage(sessionId, body)
       : post<AgentMessageAcceptedDTO>(API_ENDPOINTS.agent.messages(sessionId), body),
   steerTurn: (turnId: string, body: CreateAgentMessageRequest) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.steerTurn(turnId, body)
       : post<AgentMessageAcceptedDTO>(API_ENDPOINTS.agent.steer(turnId), body),
   getTurn: (turnId: string) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.getTurn(turnId)
       : get<AgentTurnDTO>(API_ENDPOINTS.agent.turn(turnId)),
   cancelTurn: (turnId: string) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.cancelTurn(turnId)
       : post<AgentTurnDTO>(API_ENDPOINTS.agent.cancel(turnId), {}),
   resolveApproval: (approvalId: string, body: ResolveAgentApprovalRequest) =>
-    mode === 'mock'
+    WORKSPACE_MODE === 'mock'
       ? mockAgentApi.resolveApproval(approvalId, body)
       : post<AgentApprovalSummaryDTO>(API_ENDPOINTS.agent.resolveApproval(approvalId), body),
 }
-}
-
-export const agentApi = createAgentApi(WORKSPACE_MODE)
 
 // ---------------------------------------------------------------------------
 // canvases + canvas agent

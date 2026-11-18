@@ -12,7 +12,7 @@ export interface LibraryFilters {
 }
 
 export interface LibraryUiState {
-  /** 网格列数；1440 宽按设计稿默认 6 列。 */
+  /** 网格列数；默认 3 列（舒适）。 */
   columns: 2 | 3 | 4 | 6
   selectedIds: string[]
   filters: LibraryFilters
@@ -26,7 +26,7 @@ export interface LibraryUiState {
 }
 
 export const useLibraryUiStore = create<LibraryUiState>((set) => ({
-  columns: 6,
+  columns: 3,
   selectedIds: [],
   filters: { tab: 'all', q: '' },
 

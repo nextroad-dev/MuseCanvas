@@ -38,8 +38,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
             aria-label="返回 MuseCanvas 首页"
             className="flex items-center gap-2.5 rounded-control px-1.5 py-1 transition-colors hover:bg-surface-hover"
           >
-            <BrandMark variant="mark" height={20} />
-            <span className="text-compact font-medium tracking-tight text-foreground">MuseCanvas</span>
+            <BrandMark variant="lockup" height={20} responsive />
           </Link>
           <Link
             href={APP_ROUTES.home}

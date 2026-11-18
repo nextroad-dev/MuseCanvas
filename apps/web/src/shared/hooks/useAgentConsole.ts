@@ -30,13 +30,12 @@ import type {
   ResolveAgentApprovalRequest,
 } from '@musecanvas/contracts'
 import type { SessionDto } from '@/shared/types'
-import { clientApi, createAgentApi } from '@/shared/services/client-api'
+import { clientApi } from '@/shared/services/client-api'
 import { isApiError } from '@/shared/services/api'
 import { subscribeAgentEvents } from '@/shared/services/agent-events'
 import { mockAgentApi } from '@/shared/services/mock-agent-api'
 import {
   agentConsoleScopeChanged,
-  canReleaseScopedRequest,
   applyAgentEvent,
   applyAgentSnapshot,
   applyAgentTransportFrame,
@@ -192,6 +191,21 @@ export interface AgentConsoleController {
   }
 }
 
+function resolveInitialTimeline(
+  queryClient: ReturnType<typeof useQueryClient>,
+  canQuery: boolean,
+  actorId: string,
+  sessionId: string | null,
+): AgentConsoleTimelineState {
+  const empty = createEmptyAgentConsoleState()
+  if (!canQuery || !sessionId) return empty
+  const cached = queryClient.getQueryData<AgentSessionSnapshotDTO>(
+    queryKeys.agent.snapshot(actorId, sessionId),
+  )
+  if (!cached || cached.session.id !== sessionId) return empty
+  return applyAgentSnapshot(empty, cached)
+}
+
 /**
  * 拥有当前选定 Agent 会话的生命周期。
  * 切换会话 / 用户或卸载组件时中止 SSE，绝不将 A 会话的事件或回调写入 B 会话，也绝不触发 `cancelTurn`。
@@ -202,7 +216,6 @@ export function useAgentConsole(
 ): AgentConsoleController {
   const mode = options.mode ?? WORKSPACE_MODE
   const queryClient = useQueryClient()
-  const agentApi = useMemo(() => createAgentApi(mode), [mode])
 
   // 与 useSession 共享同一 queryKey，但 mock 模式下不发起 `/api/session` 请求。
   const liveSessionQuery = useQuery<SessionDto | null>({
@@ -225,7 +238,9 @@ export function useAgentConsole(
   const actorId = mode === 'mock' ? 'mock-preview' : (liveSessionQuery.data?.user.id ?? '')
   const canQuery = mode === 'mock' || actorId !== ''
 
-  const [timeline, setTimeline] = useState<AgentConsoleTimelineState>(createEmptyAgentConsoleState)
+  const [timeline, setTimeline] = useState<AgentConsoleTimelineState>(() =>
+    resolveInitialTimeline(queryClient, canQuery, actorId, sessionId),
+  )
   const timelineRef = useRef(timeline)
   const [connectionState, setConnectionState] = useState<AgentConnectionState>(() =>
     sessionId ? 'connecting' : 'idle',
@@ -234,7 +249,7 @@ export function useAgentConsole(
   const [admissionError, setAdmissionError] = useState<Error | null>(null)
   const [loadOlderError, setLoadOlderError] = useState<Error | null>(null)
   const [loadingOlderItems, setLoadingOlderItems] = useState(false)
-  const loadingOlderRef = useRef<number | null>(null)
+  const loadingOlderRef = useRef(false)
   const [reconnectTick, setReconnectTick] = useState(0)
   const appliedSnapshotVersionRef = useRef<string>('')
 
@@ -276,7 +291,7 @@ export function useAgentConsole(
     enabled: canQuery,
     initialPageParam: undefined,
     queryFn: ({ pageParam }) =>
-      agentApi.listSessions({
+      clientApi.agent.listSessions({
         limit: SESSION_PAGE_SIZE,
         ...(pageParam ? { cursor: pageParam } : {}),
       }),
@@ -287,7 +302,7 @@ export function useAgentConsole(
   const snapshotQuery = useQuery<AgentSessionSnapshotDTO, Error>({
     queryKey: queryKeys.agent.snapshot(actorId, sessionId ?? ''),
     enabled: Boolean(canQuery && sessionId),
-    queryFn: () => agentApi.getSnapshot(sessionId as string, { limit: SNAPSHOT_ITEMS_LIMIT }),
+    queryFn: () => clientApi.agent.getSnapshot(sessionId as string, { limit: SNAPSHOT_ITEMS_LIMIT }),
     retry: shouldRetryAgentQuery,
   })
 
@@ -324,7 +339,7 @@ export function useAgentConsole(
     connectionState,
   ])
 
-  // 切换会话或 actor 时清空本地时间线与重连状态，绝不保留上一会话残影。
+  // 切换会话或 actor 时恢复目标会话缓存快照（无缓存时回退为空时间线）并重置重连状态，绝不保留上一会话残影。
   const previousActorRef = useRef(actorId)
   useEffect(() => {
     const previousActor = previousActorRef.current
@@ -340,12 +355,12 @@ export function useAgentConsole(
     }
 
     appliedSnapshotVersionRef.current = ''
-    loadingOlderRef.current = null
+    loadingOlderRef.current = false
     setLoadingOlderItems(false)
     setLoadOlderError(null)
     setSseError(null)
     setConnectionState(sessionId && canQuery ? 'connecting' : 'idle')
-    updateTimeline(() => createEmptyAgentConsoleState())
+    updateTimeline(() => resolveInitialTimeline(queryClient, canQuery, actorId, sessionId))
   }, [actorId, sessionId, canQuery, queryClient, updateTimeline])
 
   // 卸载时递增代次，确保任何尚未落地的异步回调不再触碰已失效上下文。
@@ -370,13 +385,13 @@ export function useAgentConsole(
   const syncSnapshot = useCallback(
     async (scope: ConsoleScopeState) => {
       if (!scope.sessionId) return null
-      const fresh = await agentApi.getSnapshot(scope.sessionId, { limit: SNAPSHOT_ITEMS_LIMIT })
+      const fresh = await clientApi.agent.getSnapshot(scope.sessionId, { limit: SNAPSHOT_ITEMS_LIMIT })
       if (!isCurrentScope(scope)) return null
       queryClient.setQueryData(queryKeys.agent.snapshot(scope.actorId, scope.sessionId), fresh)
       updateTimeline((prev) => applyAgentSnapshot(prev, fresh))
       return fresh
     },
-    [agentApi, isCurrentScope, queryClient, updateTimeline],
+    [isCurrentScope, queryClient, updateTimeline],
   )
 
   // Live 模式：有限 SSE 自动重连循环（25s EOF 无缝续接，网络断流指数退避，resync.required 拉快照重置）。
@@ -560,12 +575,12 @@ export function useAgentConsole(
   const loadOlderItems = useCallback(async () => {
     const scope = { ...latestRef.current }
     const targetSessionId = scope.sessionId
-    if (!targetSessionId || !timelineRef.current.itemsHasMore || loadingOlderRef.current !== null) return
-    loadingOlderRef.current = scope.generation
+    if (!targetSessionId || !timelineRef.current.itemsHasMore || loadingOlderRef.current) return
+    loadingOlderRef.current = true
     setLoadingOlderItems(true)
     setLoadOlderError(null)
     try {
-      const page = await agentApi.listItems(targetSessionId, {
+      const page = await clientApi.agent.listItems(targetSessionId, {
         cursor: timelineRef.current.nextItemsCursor,
         limit: SNAPSHOT_ITEMS_LIMIT,
       })
@@ -576,12 +591,10 @@ export function useAgentConsole(
         setLoadOlderError(err instanceof Error ? err : new Error('加载后续记录失败，请稍后重试。'))
       }
     } finally {
-      if (canReleaseScopedRequest(loadingOlderRef.current, scope.generation)) {
-        loadingOlderRef.current = null
-        if (isCurrentScope(scope)) setLoadingOlderItems(false)
-      }
+      loadingOlderRef.current = false
+      if (isCurrentScope(scope)) setLoadingOlderItems(false)
     }
-  }, [agentApi, isCurrentScope, updateTimeline])
+  }, [isCurrentScope, updateTimeline])
 
   const reconnect = useCallback(() => {
     const scope = latestRef.current
@@ -628,7 +641,7 @@ export function useAgentConsole(
     Error,
     { payload: CreateAgentSessionRequest; scope: ConsoleScopeState }
   >({
-    mutationFn: ({ payload }) => agentApi.createSession(payload),
+    mutationFn: ({ payload }) => clientApi.agent.createSession(payload),
     onSuccess: (created, { scope }) => {
       setAdmissionError(null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.agent.sessions(scope.actorId) })
@@ -657,7 +670,7 @@ export function useAgentConsole(
     Error,
     { targetSessionId: string; payload: { clientMessageId: string; content: string }; scope: ConsoleScopeState }
   >({
-    mutationFn: ({ targetSessionId, payload }) => agentApi.sendMessage(targetSessionId, payload),
+    mutationFn: ({ targetSessionId, payload }) => clientApi.agent.sendMessage(targetSessionId, payload),
     onSuccess: (accepted, { targetSessionId, scope }) => {
       setAdmissionError(null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.agent.sessions(scope.actorId) })
@@ -693,7 +706,7 @@ export function useAgentConsole(
     Error,
     { turnId: string; payload: { clientMessageId: string; content: string }; scope: ConsoleScopeState }
   >({
-    mutationFn: ({ turnId, payload }) => agentApi.steerTurn(turnId, payload),
+    mutationFn: ({ turnId, payload }) => clientApi.agent.steerTurn(turnId, payload),
     onSuccess: (accepted, { scope }) => {
       if (!isCurrentScope(scope)) return
       updateTimeline((prev) => {
@@ -712,7 +725,7 @@ export function useAgentConsole(
     Error,
     { turnId: string; scope: ConsoleScopeState }
   >({
-    mutationFn: ({ turnId }) => agentApi.cancelTurn(turnId),
+    mutationFn: ({ turnId }) => clientApi.agent.cancelTurn(turnId),
     onSuccess: (turn, { scope }) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.agent.sessions(scope.actorId) })
       if (!isCurrentScope(scope)) return
@@ -735,7 +748,7 @@ export function useAgentConsole(
     Error,
     { approvalId: string; payload: ResolveAgentApprovalRequest; scope: ConsoleScopeState }
   >({
-    mutationFn: ({ approvalId, payload }) => agentApi.resolveApproval(approvalId, payload),
+    mutationFn: ({ approvalId, payload }) => clientApi.agent.resolveApproval(approvalId, payload),
     onSuccess: (approval, { scope }) => {
       if (!isCurrentScope(scope)) return
       updateTimeline((prev) => {

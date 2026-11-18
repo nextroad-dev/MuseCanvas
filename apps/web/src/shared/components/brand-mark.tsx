@@ -12,6 +12,8 @@ export interface BrandMarkProps {
   height?: number
   /** 文字部分是否使用衬线字体（落地页深色收尾区）。 */
   displayFont?: boolean
+  /** 是否随视口流式缩放（用于顶栏品牌 lockup）。 */
+  responsive?: boolean
   className?: string
 }
 
@@ -27,26 +29,38 @@ export function BrandMark({
   size = 40,
   height,
   displayFont = false,
+  responsive = false,
   className,
 }: BrandMarkProps) {
   const width = height ? Math.round(height * MARK_RATIO) : size
   const pixelHeight = height ?? Math.round(width / MARK_RATIO)
 
   return (
-    <span className={cn('inline-flex items-center gap-2.5', className)}>
+    <span
+      className={cn(
+        'inline-flex items-center',
+        responsive ? 'gap-[clamp(8px,0.75vw,11px)]' : 'gap-2.5',
+        className,
+      )}
+    >
       <img
         src="/brand/brand-mark.png"
         alt={variant === 'lockup' ? '' : 'MuseCanvas'}
         width={width}
         height={pixelHeight}
         decoding="async"
-        className="block shrink-0 object-contain"
-        style={{ width, height: pixelHeight }}
+        className={cn('block shrink-0 object-contain', responsive && 'aspect-[40/19]')}
+        style={
+          responsive
+            ? { height: 'clamp(16px, 1.35vw, 21px)', width: 'auto' }
+            : { width, height: pixelHeight }
+        }
       />
       {variant === 'lockup' ? (
         <span
           className={cn(
-            'text-base font-semibold text-foreground',
+            'text-foreground',
+            responsive ? 'text-brand' : 'text-base font-semibold',
             displayFont && 'font-display',
           )}
         >

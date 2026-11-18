@@ -95,7 +95,7 @@ const ERROR_CODE_LABELS: Record<AgentErrorCode, string> = {
   BUDGET_EXCEEDED: '已达到本轮预算配额上限',
   APPROVAL_CONFLICT: '审批状态或参数摘要冲突',
   APPROVAL_EXPIRED: '审批已过期',
-  APPROVAL_REJECTED: '审批已拒绝',
+  APPROVAL_REJECTED: '审批已被拒绝',
   TOOL_FAILED: '工具执行失败',
   DEADLINE_EXCEEDED: '执行超时（超出截止时间）',
   SUBMISSION_UNKNOWN: '外部任务提交状态未知',
@@ -263,91 +263,6 @@ export function extractToolPayloadInfo(item: Pick<AgentItemDTO, 'payload'>): Too
     code: asString(payload.code),
     reason: asString(payload.reason),
   }
-}
-
-export type MediaJobStatus = 'completed' | 'failed' | 'cancelled' | 'succeeded' | 'running'
-
-export interface MediaJobInfo {
-  jobId: string
-  status: MediaJobStatus
-  assetIds: string[]
-}
-
-/** 单次工具结果最多展示的 job 数与每个 job 的资产数，避免异常载荷撑爆时间线。 */
-export const MAX_MEDIA_JOBS = 8
-export const MAX_MEDIA_ASSETS_PER_JOB = 16
-
-const MEDIA_JOB_STATUS_ALIASES: Record<string, MediaJobStatus> = {
-  completed: 'completed',
-  succeeded: 'succeeded',
-  failed: 'failed',
-  cancelled: 'cancelled',
-  // 媒体 job 的数据库终态拼写是 `canceled`（单 l），展示时归一到 `cancelled`。
-  canceled: 'cancelled',
-  running: 'running',
-}
-
-function asObject(value: JsonValue | undefined): JsonObject | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : null
-}
-
-function asUuidId(value: JsonValue | undefined): string | null {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return UUID_REGEX.test(trimmed) ? trimmed.toLowerCase() : null
-}
-
-/** `tool_result` 的 `jobs` 既可能在持久化载荷的 `result` 里，也可能直接平铺，或藏在 JSON 字符串正文中。 */
-function mediaJobLists(payload: JsonObject): JsonValue[] {
-  const lists: JsonValue[] = []
-  const resultJobs = asObject(payload.result)?.jobs
-  if (resultJobs !== undefined) lists.push(resultJobs)
-  if (payload.jobs !== undefined) lists.push(payload.jobs)
-  const content = asString(payload.content)
-  if (content && content.trimStart().startsWith('{')) {
-    try {
-      const parsed = JSON.parse(content) as JsonValue
-      const jobs = asObject(parsed)?.jobs
-      if (jobs !== undefined) lists.push(jobs)
-    } catch {
-      // 正文不是 JSON 时忽略，不影响其它候选来源。
-    }
-  }
-  return lists
-}
-
-/**
- * 安全解析媒体工具结果中的 `{ content, jobs: [{ jobId, status, assetIds }] }`。
- * 只认 UUID 形态的 id 与已知状态；超出上限、结构不符或字段未知时返回空数组。
- */
-export function extractMediaJobs(payload: JsonObject | null | undefined): MediaJobInfo[] {
-  const root = safePayload(payload)
-  for (const list of mediaJobLists(root)) {
-    if (!Array.isArray(list)) continue
-    const jobs: MediaJobInfo[] = []
-    for (const entry of list.slice(0, MAX_MEDIA_JOBS)) {
-      const job = asObject(entry)
-      if (!job) continue
-      const jobId = asUuidId(job.jobId)
-      const rawStatus = typeof job.status === 'string' ? job.status.trim().toLowerCase() : ''
-      const status = MEDIA_JOB_STATUS_ALIASES[rawStatus]
-      if (!jobId || !status) continue
-      const assetIds: string[] = []
-      const rawAssetIds = Array.isArray(job.assetIds) ? job.assetIds : []
-      for (const rawAssetId of rawAssetIds.slice(0, MAX_MEDIA_ASSETS_PER_JOB)) {
-        const assetId = asUuidId(rawAssetId)
-        if (assetId && !assetIds.includes(assetId)) assetIds.push(assetId)
-      }
-      jobs.push({ jobId, status, assetIds })
-    }
-    if (jobs.length > 0) return jobs
-  }
-  return []
-}
-
-/** 媒体 job 状态复用工具状态文案（`succeeded` 与 `completed` 等价）。 */
-export function formatMediaJobStatus(status: MediaJobStatus): StatusPresentation {
-  return formatToolStatus(status === 'succeeded' ? 'completed' : status)
 }
 
 /** 仅允许站内相对路径或 http(s)/blob/安全图片 data URI，拒绝 `javascript:` 等协议。 */

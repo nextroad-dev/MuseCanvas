@@ -1,11 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import {
-  ArrowClockwiseIcon,
+  CheckCircleIcon,
+  ImagesIcon,
+  PlusIcon,
+  ShieldWarningIcon,
   SidebarSimpleIcon,
-  SlidersHorizontalIcon,
+  XCircleIcon,
 } from '@phosphor-icons/react'
 import type { AgentApprovalSummaryDTO } from '@musecanvas/contracts'
 import {
@@ -17,28 +21,36 @@ import {
   type BadgeTone,
 } from '@/shared/components/ui'
 import { useAgentConsole } from '@/shared/hooks/useAgentConsole'
-import { agentSessionRoute } from '@/shared/lib/app-routes'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import type { WorkspaceMode } from '@/shared/lib/workspace-mode'
 import { isApiError } from '@/shared/services/api'
-import { MOCK_SEED_SESSION_ID } from '@/shared/services/mock-agent-api'
 import {
-  parseInspectorPanelQuery,
+  MOCK_AGENT_DEFINITION_ID,
+  MOCK_SEED_SESSION_ID,
+  mockAgentApi,
+} from '@/shared/services/mock-agent-api'
+import {
+  parseReuseImageQuery,
   parseReuseKindQuery,
 } from '../lib/agent-console-reuse'
 import {
+  extractToolPayloadInfo,
   formatConnectionState,
   formatTurnStatus,
+  isValidUuid,
 } from '../lib/agent-status'
-import { useAgentConsoleStore } from '../stores/agent-console-store'
+import {
+  useAgentConsoleStore,
+  type ReferenceImageAttachment,
+} from '../stores/agent-console-store'
 import { AgentComposer } from './agent-composer'
 import { ExecutionTimeline } from './execution-timeline'
-import { InspectorPanel } from './inspector-panel'
 import { SessionSidebar } from './session-sidebar'
+import { useWorkspaceShell } from '@/features/workspace/components/workspace-shell-context'
 
 export interface AgentConsoleViewProps {
   mode: WorkspaceMode
-  initialSessionId?: string
 }
 
 const subscribeHydration = () => () => {}
@@ -59,9 +71,52 @@ function isDesktopLeftInline(): boolean {
   return window.matchMedia?.('(min-width: 960px)')?.matches ?? true
 }
 
-function isWideInspectorInline(): boolean {
-  if (typeof window === 'undefined') return true
-  return window.matchMedia?.('(min-width: 1280px)')?.matches ?? true
+function hashSeed(seed: string): number {
+  let hash = 0
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) | 0
+  }
+  return Math.abs(hash)
+}
+
+function getHeroGreeting(hour: number, userName: string | null, seed: string): string {
+  const who = userName ? `，${userName}` : ''
+  let templates: string[]
+  if (hour >= 5 && hour < 12) {
+    templates = [
+      `早上好${who}`,
+      `早安${who}，今天想画点什么`,
+      `晨光正好${who}`,
+      `新的一天${who}，灵感就位`,
+    ]
+  } else if (hour >= 12 && hour < 14) {
+    templates = [
+      `中午好${who}`,
+      `午间好${who}，来点新灵感`,
+      `午后微光${who}，随时开画`,
+    ]
+  } else if (hour >= 14 && hour < 18) {
+    templates = [
+      `下午好${who}`,
+      `午后好${who}，聊聊你的画面`,
+      `灵感时刻${who}`,
+      `下午好${who}，想把什么变成画面`,
+    ]
+  } else if (hour >= 18 && hour < 23) {
+    templates = [
+      `晚上好${who}`,
+      `夜色温柔${who}，继续创作吧`,
+      `忙完一天了吗${who}`,
+      `晚间时光${who}，来一张新作品`,
+    ]
+  } else {
+    templates = [
+      `夜深了${who}`,
+      `深夜灵感不打烊${who}`,
+      `星光正好${who}，写下你的构想`,
+    ]
+  }
+  return templates[hashSeed(seed) % templates.length]!
 }
 
 function ConsoleHydrationSkeleton() {
@@ -78,20 +133,13 @@ function ConsoleHydrationSkeleton() {
         <SkeletonRow cells={1} />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/40 bg-canvas/85 px-3 sm:px-5">
-          <Skeleton className="h-5 w-24 rounded-control" />
-          <div className="flex items-center gap-2">
-            <Skeleton className="h-7 w-16 rounded-pill" />
-            <Skeleton className="h-7 w-20 rounded-pill" />
-          </div>
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col justify-between px-4 pb-4 pt-6 sm:px-6 sm:pb-6">
-          <div className="mx-auto w-full max-w-3xl space-y-4">
+        <div className="flex min-h-0 flex-1 flex-col justify-between px-4 pb-4 pt-16 sm:px-6 sm:pb-6 sm:pt-14 lg:px-10">
+          <div className="mx-auto w-full max-w-3xl space-y-4 lg:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
             <Skeleton className="ml-auto h-14 w-2/3 rounded-panel" />
             <Skeleton className="h-28 w-5/6 rounded-card" />
             <Skeleton className="h-20 w-3/4 rounded-card" />
           </div>
-          <div className="mx-auto mt-6 w-full max-w-3xl">
+          <div className="mx-auto mt-6 w-full max-w-3xl lg:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
             <Skeleton className="h-24 w-full rounded-panel" />
           </div>
         </div>
@@ -106,44 +154,45 @@ function ConsoleHydrationSkeleton() {
  * 左侧会话栏自 `md`（>=960px）内联停靠，右侧检查器自 `lg`（>=1280px）内联停靠；
  * 全量服务端状态交由 `useAgentConsole` 与 TanStack Query，易失 UI 状态交由 `useAgentConsoleStore`。
  */
-export function AgentConsoleView({ mode, initialSessionId }: AgentConsoleViewProps) {
-  const router = useRouter()
+export function AgentConsoleView({ mode }: AgentConsoleViewProps) {
   const hydrated = useSyncExternalStore(subscribeHydration, clientSnapshot, serverSnapshot)
   const reuseQuery = useSearchParams().toString()
   const reuseKind = parseReuseKindQuery(reuseQuery)
   const { toast } = useToast()
+  const shellState = useWorkspaceShell()
 
-  const storedSessionId = useAgentConsoleStore((state) => state.activeSessionId)
-  const activeSessionId = initialSessionId ?? storedSessionId
+  const activeSessionId = useAgentConsoleStore((state) => state.activeSessionId)
   const leftSidebarOpen = useAgentConsoleStore((state) => state.leftSidebarOpen)
-  const rightPanelOpen = useAgentConsoleStore((state) => state.rightPanelOpen)
-  const rightPanelTab = useAgentConsoleStore((state) => state.rightPanelTab)
   const draftPrompt = useAgentConsoleStore((state) => state.draftPrompt)
-  const definitionDraft = useAgentConsoleStore((state) => state.definitionDraft)
+  const draftAttachments = useAgentConsoleStore((state) => state.draftAttachments)
+  const deletedSessionIds = useAgentConsoleStore((state) => state.deletedSessionIds)
+  const pinnedSessionIds = useAgentConsoleStore((state) => state.pinnedSessionIds)
+  const sessionTitles = useAgentConsoleStore((state) => state.sessionTitles)
+  const messageAttachments = useAgentConsoleStore((state) => state.messageAttachments)
 
   const setActiveSessionId = useAgentConsoleStore((state) => state.setActiveSessionId)
   const toggleLeftSidebar = useAgentConsoleStore((state) => state.toggleLeftSidebar)
   const setLeftSidebarOpen = useAgentConsoleStore((state) => state.setLeftSidebarOpen)
-  const toggleRightPanel = useAgentConsoleStore((state) => state.toggleRightPanel)
-  const setRightPanelOpen = useAgentConsoleStore((state) => state.setRightPanelOpen)
-  const setRightPanelTab = useAgentConsoleStore((state) => state.setRightPanelTab)
   const setDraftPrompt = useAgentConsoleStore((state) => state.setDraftPrompt)
   const consumeReuseQuery = useAgentConsoleStore((state) => state.consumeReuseQuery)
-  const setDefinitionDraft = useAgentConsoleStore((state) => state.setDefinitionDraft)
+  const addDraftAttachment = useAgentConsoleStore((state) => state.addDraftAttachment)
+  const removeDraftAttachment = useAgentConsoleStore((state) => state.removeDraftAttachment)
+  const clearDraftAttachments = useAgentConsoleStore((state) => state.clearDraftAttachments)
+  const recordMessageAttachments = useAgentConsoleStore((state) => state.recordMessageAttachments)
+  const deleteSession = useAgentConsoleStore((state) => state.deleteSession)
+  const clearSessions = useAgentConsoleStore((state) => state.clearSessions)
+  const togglePinSession = useAgentConsoleStore((state) => state.togglePinSession)
+  const renameSession = useAgentConsoleStore((state) => state.renameSession)
+  const ensureSessionTitle = useAgentConsoleStore((state) => state.ensureSessionTitle)
   const resetForActor = useAgentConsoleStore((state) => state.resetForActor)
 
-  const selectSession = useCallback((id: string) => {
-    setActiveSessionId(id)
-    router.push(agentSessionRoute(id))
-  }, [router, setActiveSessionId])
-
-  useEffect(() => {
-    if (initialSessionId) setActiveSessionId(initialSessionId)
-  }, [initialSessionId, setActiveSessionId])
-
   const agentConsole = useAgentConsole(hydrated ? activeSessionId : null, { mode })
+  const visibleSessions = agentConsole.sessions.filter(
+    (session) => !(deletedSessionIds ?? []).includes(session.id),
+  )
 
-  const [newSessionOpen, setNewSessionOpen] = useState(false)
+  const [creatingSession, setCreatingSession] = useState(false)
+  const creatingSessionRef = useRef(false)
   const [resolvingApproval, setResolvingApproval] = useState<{
     id: string
     decision: 'approved' | 'rejected'
@@ -164,33 +213,20 @@ export function AgentConsoleView({ mode, initialSessionId }: AgentConsoleViewPro
 
   useEffect(() => {
     consumeReuseQuery(reuseQuery)
-    const panel = parseInspectorPanelQuery(reuseQuery)
-    if (panel) {
-      setRightPanelTab(panel)
-      setRightPanelOpen(true)
-      if (!isDesktopLeftInline()) {
-        setLeftSidebarOpen(false)
-      }
+    const imageReuse = parseReuseImageQuery(reuseQuery)
+    if (imageReuse) {
+      addDraftAttachment?.({
+        id: imageReuse.assetId ? `lib-${imageReuse.assetId}` : `reuse-${imageReuse.url}`,
+        url: imageReuse.url,
+        name: imageReuse.label || '图库参考图',
+        source: 'library',
+        assetId: imageReuse.assetId ?? undefined,
+        prompt: imageReuse.prompt ?? undefined,
+      })
     }
-  }, [reuseQuery, consumeReuseQuery, setLeftSidebarOpen, setRightPanelTab, setRightPanelOpen])
+  }, [reuseQuery, consumeReuseQuery, addDraftAttachment])
 
-  // 当已在 /generate 时再次点击顶部导航「任务与产物」，即使 URL query 未变也重新打开检查器。
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const onOpenInspector = (event: Event) => {
-      const panel = (event as CustomEvent<{ panel?: string }>).detail?.panel
-      if (panel !== 'artifacts' && panel !== 'tools') return
-      setRightPanelTab(panel)
-      setRightPanelOpen(true)
-      if (!isDesktopLeftInline()) {
-        setLeftSidebarOpen(false)
-      }
-    }
-    window.addEventListener('muse:open-inspector', onOpenInspector)
-    return () => window.removeEventListener('muse:open-inspector', onOpenInspector)
-  }, [setLeftSidebarOpen, setRightPanelTab, setRightPanelOpen])
-
-  // 窄视口首屏折叠会以抽屉形态挂载的侧栏：<960px 收起左栏，<1280px（无 ?panel= 时）收起右栏。
+  // 窄视口首屏折叠会以抽屉形态挂载的左侧栏（<960px 收起左栏）。
   const viewportInitializedRef = useRef(false)
   useEffect(() => {
     if (!hydrated || viewportInitializedRef.current || typeof window === 'undefined') return
@@ -198,45 +234,45 @@ export function AgentConsoleView({ mode, initialSessionId }: AgentConsoleViewPro
     if (!isDesktopLeftInline()) {
       setLeftSidebarOpen(false)
     }
-    if (!isWideInspectorInline() && !parseInspectorPanelQuery(reuseQuery)) {
-      setRightPanelOpen(false)
-    }
-  }, [hydrated, reuseQuery, setLeftSidebarOpen, setRightPanelOpen])
+  }, [hydrated, setLeftSidebarOpen])
 
   // 抽屉形态侧栏打开时支持 Esc 关闭，且保留桌面内联侧栏。
   useEffect(() => {
     if (!hydrated || typeof window === 'undefined') return
-    if (!leftSidebarOpen && !rightPanelOpen) return
+    if (!leftSidebarOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || newSessionOpen) return
+      if (event.key !== 'Escape' || event.defaultPrevented) return
       if (leftSidebarOpen && !isDesktopLeftInline()) {
         setLeftSidebarOpen(false)
-      }
-      if (rightPanelOpen && !isWideInspectorInline()) {
-        setRightPanelOpen(false)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [
-    hydrated,
-    leftSidebarOpen,
-    rightPanelOpen,
-    newSessionOpen,
-    setLeftSidebarOpen,
-    setRightPanelOpen,
-  ])
+  }, [hydrated, leftSidebarOpen, setLeftSidebarOpen])
 
   // Mock 模式首次加载自动选中内置演示会话，展示完整交互时间线。
   useEffect(() => {
     if (mode !== 'mock' || !hydrated) return
     if (activeSessionId !== null) return
-    if (agentConsole.sessions.length === 0) return
+    if (visibleSessions.length === 0) return
     const seeded =
-      agentConsole.sessions.find((session) => session.id === MOCK_SEED_SESSION_ID) ??
-      agentConsole.sessions[0]
-    if (seeded) selectSession(seeded.id)
-  }, [mode, hydrated, activeSessionId, agentConsole.sessions, selectSession])
+      visibleSessions.find((session) => session.id === MOCK_SEED_SESSION_ID) ??
+      visibleSessions[0]
+    if (seeded) setActiveSessionId(seeded.id)
+  }, [mode, hydrated, activeSessionId, visibleSessions, setActiveSessionId])
+
+  // 自动根据首条用户消息生成对话标题（若用户尚未手动命名）。
+  useEffect(() => {
+    if (!activeSessionId || agentConsole.items.length === 0) return
+    const firstUserMsg = agentConsole.items.find((item) => item.type === 'user_message')
+    const rawContent =
+      firstUserMsg && typeof firstUserMsg.payload?.content === 'string'
+        ? firstUserMsg.payload.content.trim()
+        : ''
+    if (rawContent) {
+      ensureSessionTitle?.(activeSessionId, rawContent.slice(0, 32))
+    }
+  }, [activeSessionId, agentConsole.items, ensureSessionTitle])
 
   // 登录用户切换时重置客户端易失状态，防止跨账号残留选中会话或草稿。
   const previousActorRef = useRef('')
@@ -302,6 +338,66 @@ export function AgentConsoleView({ mode, initialSessionId }: AgentConsoleViewPro
     }
   }
 
+  function resolveDefaultDefinition(): { agentDefinitionId: string; definitionVersion: number } | null {
+    if (mode === 'mock') {
+      return { agentDefinitionId: MOCK_AGENT_DEFINITION_ID, definitionVersion: 1 }
+    }
+    const baseSession = agentConsole.session ?? agentConsole.sessions[0]
+    if (baseSession) {
+      return {
+        agentDefinitionId: baseSession.agentDefinitionId,
+        definitionVersion: baseSession.definitionVersion,
+      }
+    }
+    const envDefinitionId =
+      typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_AGENT_DEFINITION_ID?.trim() : ''
+    if (envDefinitionId && isValidUuid(envDefinitionId)) {
+      const envVersion = Number(
+        typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_AGENT_DEFINITION_VERSION : '1',
+      )
+      return {
+        agentDefinitionId: envDefinitionId.toLowerCase(),
+        definitionVersion: Number.isSafeInteger(envVersion) && envVersion >= 1 ? envVersion : 1,
+      }
+    }
+    return null
+  }
+
+  async function handleCreateSession() {
+    if (
+      creatingSessionRef.current ||
+      agentConsole.mutations.createSession.isPending ||
+      agentConsole.serviceStatus === 'disabled_404'
+    ) {
+      return
+    }
+    const resolved = resolveDefaultDefinition()
+    if (!resolved) {
+      toast.warning(
+        '暂无法一键新建对话',
+        '当前服务端尚未配置默认 Agent，请联系管理员设置或稍后再试。',
+      )
+      return
+    }
+    creatingSessionRef.current = true
+    setCreatingSession(true)
+    try {
+      const created = await agentConsole.createSession(resolved)
+      setActiveSessionId(created.id)
+      if (!isDesktopLeftInline()) {
+        setLeftSidebarOpen(false)
+      }
+    } catch (error) {
+      toast.error(
+        '新建对话失败',
+        error instanceof Error && error.message ? error.message : '请检查服务状态后重试。',
+      )
+    } finally {
+      creatingSessionRef.current = false
+      setCreatingSession(false)
+    }
+  }
+
   if (!hydrated) {
     return <ConsoleHydrationSkeleton />
   }
@@ -323,57 +419,102 @@ export function AgentConsoleView({ mode, initialSessionId }: AgentConsoleViewPro
   const pendingApprovalCount = agentConsole.pendingApprovals.length
 
   function handleToggleLeftSidebar() {
-    if (!leftSidebarOpen && !isDesktopLeftInline()) {
-      setRightPanelOpen(false)
-    }
     toggleLeftSidebar()
   }
 
-  function handleToggleRightPanel() {
-    if (!rightPanelOpen && !isDesktopLeftInline()) {
-      setLeftSidebarOpen(false)
+  function handleDeleteSession(sessionId: string) {
+    const remaining = visibleSessions.filter((session) => session.id !== sessionId)
+    const nextActiveId =
+      activeSessionId === sessionId ? (remaining[0]?.id ?? null) : activeSessionId
+    deleteSession?.(sessionId)
+    setActiveSessionId(nextActiveId)
+    if (mode === 'mock') {
+      void mockAgentApi?.deleteSession?.(sessionId)
+      void agentConsole.sessionsQuery.refetch?.()
     }
-    toggleRightPanel()
+    toast.info('已删除对话')
   }
+
+  function handleClearSessions() {
+    if (visibleSessions.length === 0) return
+    clearSessions?.(visibleSessions.map((session) => session.id))
+    setActiveSessionId(null)
+    if (mode === 'mock') {
+      void mockAgentApi?.clearSessions?.()
+      void agentConsole.sessionsQuery.refetch?.()
+    }
+    toast.info('已清空全部对话')
+  }
+
+  function handleReuseImage(attachment: ReferenceImageAttachment) {
+    const added = addDraftAttachment ? addDraftAttachment(attachment) : true
+    if (added) {
+      toast.success('已添加参考图到输入框', '可在下方输入区继续编辑指令或叠加参考图')
+    } else {
+      toast.warning('参考图数量已达上限', '单次最多附加 4 张参考图，请先移除部分图片')
+    }
+  }
+
+  const isEmptyComposerCentered =
+    Boolean(agentConsole.sessionId) &&
+    !agentConsole.snapshotQuery.isPending &&
+    agentConsole.serviceStatus !== 'disabled_404' &&
+    agentConsole.serviceStatus !== 'admission_closed_503' &&
+    !(agentConsole.serviceStatus === 'error' && agentConsole.error) &&
+    !agentConsole.timeline.resyncRequired &&
+    !agentConsole.hasOlderItems &&
+    agentConsole.items.length === 0 &&
+    !agentConsole.turnActive &&
+    pendingApprovalCount === 0
+
+  const userName =
+    shellState?.user?.email?.split('@')[0] ?? (mode === 'mock' ? '创作者' : null)
+  const heroGreeting = getHeroGreeting(
+    new Date().getHours(),
+    userName,
+    agentConsole.sessionId ?? 'default',
+  )
 
   return (
     <div
       data-workspace-mode={mode}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-canvas"
     >
-      {/* 抽屉遮罩：仅在当前视口存在以抽屉形态覆盖主画布的侧栏时显示（960px–1279px 仅右抽屉触发） */}
-      {leftSidebarOpen || rightPanelOpen ? (
+      {/* 移动端抽屉遮罩（<960px 左栏展开时显示） */}
+      {leftSidebarOpen ? (
         <div
           aria-hidden="true"
           onClick={() => {
             if (!isDesktopLeftInline()) setLeftSidebarOpen(false)
-            if (!isWideInspectorInline()) setRightPanelOpen(false)
           }}
-          className={cn(
-            'absolute inset-0 z-sticky bg-overlay/35 backdrop-blur-xs',
-            rightPanelOpen ? 'lg:hidden' : 'md:hidden',
-          )}
+          className="motion-fade-in absolute inset-0 z-sticky bg-overlay/35 backdrop-blur-xs md:hidden"
         />
       ) : null}
 
-      {/* 左栏：会话列表（>=960px 内联停靠，<960px 抽屉；始终挂载以承载新建会话 Dialog） */}
+      {/* 左栏：会话列表与本对话产物胶片（>=960px 内联停靠，<960px 抽屉） */}
       <aside
         aria-label="Agent 会话侧栏"
         className={cn(
-          'absolute inset-y-0 left-0 z-sticky w-72 max-w-[85vw] border-r border-border/70 bg-surface/95 backdrop-blur-md shadow-drawer',
+          'max-md:motion-drawer-in-left absolute inset-y-0 left-0 z-sticky w-72 max-w-[85vw] border-r border-border/70 bg-surface/95 backdrop-blur-md shadow-drawer',
           'md:static md:inset-y-auto md:z-auto md:h-full md:w-64 md:max-w-none md:shrink-0 md:bg-surface/60 md:backdrop-blur-none md:shadow-none lg:w-72',
           !leftSidebarOpen && 'hidden',
         )}
       >
         <SessionSidebar
           console={agentConsole}
+          sessions={visibleSessions}
           activeSessionId={activeSessionId}
-          onSelectSession={selectSession}
-          definitionDraft={definitionDraft}
-          onUpdateDefinitionDraft={setDefinitionDraft}
-          newSessionOpen={newSessionOpen}
-          onOpenNewSession={() => setNewSessionOpen(true)}
-          onCloseNewSession={() => setNewSessionOpen(false)}
+          pinnedSessionIds={pinnedSessionIds}
+          sessionTitles={sessionTitles}
+          onSelectSession={(id) => setActiveSessionId(id)}
+          onCreateSession={() => void handleCreateSession()}
+          onDeleteSession={handleDeleteSession}
+          onClearSessions={handleClearSessions}
+          onTogglePinSession={togglePinSession}
+          onRenameSession={renameSession}
+          onReuseImage={handleReuseImage}
+          creatingSession={creatingSession || agentConsole.mutations.createSession.isPending}
+          onToggleSidebar={handleToggleLeftSidebar}
           onCloseMobile={() => {
             if (!isDesktopLeftInline()) {
               setLeftSidebarOpen(false)
@@ -382,129 +523,180 @@ export function AgentConsoleView({ mode, initialSessionId }: AgentConsoleViewPro
         />
       </aside>
 
-      {/* 中栏：轻量化顶栏 + 执行时间线 + 悬浮交互输入器 */}
-      <section aria-label="Agent 执行控制台" className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
-        <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border/40 bg-canvas/85 px-3 backdrop-blur-sm sm:px-5">
-          <div className="flex min-w-0 flex-1 items-center gap-2">
+      {/* 主画布：无顶栏沉浸画布 + 悬浮角标控件 + 执行时间线 + 待审批控制栏 + 悬浮交互输入器 */}
+      <section
+        aria-label="Agent 执行控制台"
+        className={cn(
+          'relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas',
+          isEmptyComposerCentered && 'justify-center',
+        )}
+      >
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-sticky flex items-start justify-between gap-2 p-3 sm:px-5 sm:pt-3.5">
+          <div
+            className={cn(
+              'pointer-events-auto flex items-center gap-0.5 rounded-pill border border-border/60 bg-surface/85 p-1 shadow-soft backdrop-blur-md',
+              leftSidebarOpen && 'md:hidden',
+            )}
+          >
             <Button
               size="icon"
               variant="ghost"
+              className="rounded-pill sm:size-8"
               aria-label={leftSidebarOpen ? '收起会话列表' : '展开会话列表'}
               aria-expanded={leftSidebarOpen}
               onClick={handleToggleLeftSidebar}
-              icon={<SidebarSimpleIcon className={iconSize.md} aria-hidden="true" />}
+              icon={<SidebarSimpleIcon className={iconSize.sm} aria-hidden="true" />}
             />
-
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span
-                className={cn(
-                  'truncate text-ui font-medium',
-                  agentConsole.session ? 'text-foreground' : 'text-muted-foreground',
-                )}
-              >
-                {agentConsole.session
-                  ? '当前会话'
-                  : activeSessionId
-                    ? '加载会话中…'
-                    : '新会话'}
-              </span>
-
-              {inlineStatus ? (
-                <span className="inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
-                  <span
-                    aria-hidden="true"
-                    className={cn('size-1.5 shrink-0 rounded-pill', STATUS_DOT_TONES[inlineStatus.tone])}
-                  />
-                  <span className="truncate">{inlineStatus.label}</span>
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-1.5">
             <Button
-              size="sm"
+              size="icon"
               variant="ghost"
-              aria-label="刷新"
-              className="rounded-pill"
-              disabled={!agentConsole.sessionId}
-              loading={agentConsole.connectionState === 'resyncing'}
-              onClick={() => void agentConsole.resync()}
-              icon={<ArrowClockwiseIcon className={iconSize.sm} aria-hidden="true" />}
-            >
-              <span className="hidden sm:inline">刷新</span>
-            </Button>
-
-            <Button
-              size="sm"
-              variant={rightPanelOpen ? 'secondary' : 'ghost'}
-              className="rounded-pill"
-              aria-label={
-                pendingApprovalCount > 0
-                  ? `${rightPanelOpen ? '收起' : '展开'}检查器面板（${pendingApprovalCount} 项待审批）`
-                  : rightPanelOpen
-                    ? '收起检查器面板'
-                    : '展开检查器面板'
+              className="rounded-pill sm:size-8"
+              aria-label="新建对话"
+              loading={creatingSession || agentConsole.mutations.createSession.isPending}
+              disabled={
+                agentConsole.serviceStatus === 'disabled_404' ||
+                creatingSession ||
+                agentConsole.mutations.createSession.isPending
               }
-              aria-expanded={rightPanelOpen}
-              onClick={handleToggleRightPanel}
-              icon={<SlidersHorizontalIcon className={iconSize.sm} aria-hidden="true" />}
+              onClick={() => void handleCreateSession()}
+              icon={<PlusIcon className={iconSize.sm} aria-hidden="true" />}
+            />
+            <Button
+              asChild
+              size="icon"
+              variant="ghost"
+              className="rounded-pill sm:size-8"
+              aria-label="作品图库"
             >
-              <span className="hidden sm:inline">
-                {pendingApprovalCount > 0 ? `检查器 (${pendingApprovalCount})` : '检查器'}
-              </span>
-              {pendingApprovalCount > 0 ? (
-                <span className="text-caption font-medium sm:hidden">
-                  ({pendingApprovalCount})
-                </span>
-              ) : null}
+              <Link href={APP_ROUTES.library} prefetch>
+                <ImagesIcon className={iconSize.sm} aria-hidden="true" />
+              </Link>
             </Button>
           </div>
-        </header>
+
+          {inlineStatus ? (
+            <div className="pointer-events-auto ml-auto flex items-center gap-1.5 rounded-pill border border-border/60 bg-surface/85 px-3 py-1.5 text-caption text-muted-foreground shadow-soft backdrop-blur-md">
+              <span
+                aria-hidden="true"
+                className={cn('size-1.5 shrink-0 rounded-pill', STATUS_DOT_TONES[inlineStatus.tone])}
+              />
+              <span className="max-w-32 truncate">{inlineStatus.label}</span>
+            </div>
+          ) : null}
+        </div>
 
         <ExecutionTimeline
           console={agentConsole}
-          onOpenNewSession={() => setNewSessionOpen(true)}
+          onCreateSession={() => void handleCreateSession()}
+          creatingSession={creatingSession || agentConsole.mutations.createSession.isPending}
           onReusePrompt={(prompt) => {
             setDraftPrompt(prompt)
             toast.info('已填入提示词草稿', '可在下方输入区编辑后发送')
           }}
+          onReuseImage={handleReuseImage}
+          messageAttachments={messageAttachments}
           onResolveApproval={handleResolveApproval}
           resolvingApproval={resolvingApproval}
           approvalErrors={approvalErrors}
         />
+
+        {pendingApprovalCount > 0 && agentConsole.serviceStatus !== 'disabled_404' ? (
+          <div
+            role="region"
+            aria-label="待审批工具控制栏"
+            className="shrink-0 px-4 pt-2 sm:px-6 lg:px-10"
+          >
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 rounded-panel border border-warning-border bg-warning-soft/55 p-3 shadow-soft backdrop-blur-sm lg:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
+              {agentConsole.pendingApprovals.map((approval) => {
+                const matchedTool = agentConsole.timeline.tools[approval.toolCallId]
+                const matchedApprovalItem = agentConsole.items.find(
+                  (item) =>
+                    item.type === 'approval' &&
+                    (extractToolPayloadInfo(item).approvalId === approval.id ||
+                      item.toolCallId === approval.toolCallId),
+                )
+                const payloadInfo = matchedApprovalItem
+                  ? extractToolPayloadInfo(matchedApprovalItem)
+                  : null
+                const toolName = matchedTool?.toolName ?? payloadInfo?.toolName ?? 'generate_image'
+                const promptPreview =
+                  payloadInfo?.prompt || payloadInfo?.message || '等待确认执行当前工具调用'
+                const resolvingDecision =
+                  resolvingApproval?.id === approval.id ? resolvingApproval.decision : null
+                const busy = resolvingDecision !== null
+
+                return (
+                  <div
+                    key={approval.id}
+                    className="flex flex-wrap items-center justify-between gap-3"
+                  >
+                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                      <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-control bg-warning-soft text-warning">
+                        <ShieldWarningIcon className={iconSize.sm} aria-hidden="true" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-ui font-medium text-foreground">
+                          待审批工具 · {toolName}
+                        </p>
+                        <p className="truncate text-caption text-muted-foreground">
+                          {promptPreview}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="danger-ghost"
+                        className="rounded-pill"
+                        disabled={busy}
+                        loading={resolvingDecision === 'rejected'}
+                        onClick={() => void handleResolveApproval(approval, 'rejected')}
+                        icon={<XCircleIcon className={iconSize.sm} aria-hidden="true" />}
+                      >
+                        拒绝
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        className="rounded-pill"
+                        disabled={busy}
+                        loading={resolvingDecision === 'approved'}
+                        onClick={() => void handleResolveApproval(approval, 'approved')}
+                        icon={<CheckCircleIcon className={iconSize.sm} aria-hidden="true" />}
+                      >
+                        批准执行
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {isEmptyComposerCentered ? (
+          <div className="motion-fade-in mx-auto w-full max-w-3xl px-4 pb-6 text-center sm:px-6 lg:max-w-4xl lg:px-10 xl:max-w-5xl 2xl:max-w-6xl">
+            <h1 className="font-art text-cta font-normal tracking-tight break-words text-foreground">
+              {heroGreeting}
+            </h1>
+          </div>
+        ) : null}
 
         <AgentComposer
           console={agentConsole}
           draftPrompt={draftPrompt}
           onChangeDraft={setDraftPrompt}
+          draftAttachments={draftAttachments ?? []}
+          onAddAttachment={addDraftAttachment}
+          onRemoveAttachment={removeDraftAttachment}
+          onClearAttachments={clearDraftAttachments}
+          onRecordMessageAttachments={recordMessageAttachments}
           reuseKind={reuseKind}
-          onOpenNewSession={() => setNewSessionOpen(true)}
+          onCreateSession={() => void handleCreateSession()}
+          creatingSession={creatingSession || agentConsole.mutations.createSession.isPending}
         />
       </section>
-
-      {/* 右栏：检查器面板（>=1280px 内联停靠，<1280px 右缘抽屉） */}
-      <aside
-        aria-label="Agent 检查器面板"
-        className={cn(
-          'absolute inset-y-0 right-0 z-sticky w-88 max-w-[92vw] border-l border-border/80 bg-surface/95 backdrop-blur-md shadow-drawer',
-          'lg:static lg:inset-y-auto lg:z-auto lg:h-full lg:w-88 lg:max-w-none lg:shrink-0 lg:backdrop-blur-none lg:shadow-none',
-          !rightPanelOpen && 'hidden',
-        )}
-      >
-        <InspectorPanel
-          console={agentConsole}
-          activeTab={rightPanelTab}
-          onChangeTab={setRightPanelTab}
-          onReusePrompt={(prompt) => {
-            setDraftPrompt(prompt)
-            toast.info('已填入提示词草稿', '可在下方输入区编辑后发送')
-          }}
-          onResolveApproval={handleResolveApproval}
-          resolvingApproval={resolvingApproval}
-          approvalErrors={approvalErrors}
-        />
-      </aside>
     </div>
   )
 }

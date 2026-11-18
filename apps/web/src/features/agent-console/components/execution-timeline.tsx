@@ -1,8 +1,8 @@
 'use client'
 
 import { useId, useState } from 'react'
-import Link from 'next/link'
 import {
+  ArrowDownIcon,
   CaretDownIcon,
   CheckCircleIcon,
   CheckIcon,
@@ -25,6 +25,7 @@ import type {
 import {
   Alert,
   Button,
+  Dialog,
   EmptyState,
   Skeleton,
   SkeletonText,
@@ -33,24 +34,19 @@ import {
   type BadgeTone,
 } from '@/shared/components/ui'
 import type { AgentConsoleController } from '@/shared/hooks/useAgentConsole'
-import { useAssetDetail } from '@/shared/hooks/useLibrary'
-import { APP_ROUTES, assetDetailHref } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import { formatDateTime, formatRelativeTime } from '@/shared/lib/format'
 import {
   extractArtifactPreview,
   extractItemText,
-  extractMediaJobs,
   extractToolPayloadInfo,
   formatAgentErrorCode,
   formatApprovalStatus,
-  formatMediaJobStatus,
   formatToolStatus,
   formatTurnStatus,
   isSafeDisplayUrl,
-  shortUuid,
-  type MediaJobInfo,
 } from '../lib/agent-status'
+import type { ReferenceImageAttachment } from '../stores/agent-console-store'
 
 const STATUS_TEXT_TONE: Record<BadgeTone, string> = {
   neutral: 'text-muted-foreground',
@@ -63,8 +59,11 @@ const STATUS_TEXT_TONE: Record<BadgeTone, string> = {
 
 export interface ExecutionTimelineProps {
   console: AgentConsoleController
-  onOpenNewSession: () => void
+  onCreateSession: () => void
+  creatingSession?: boolean
   onReusePrompt: (prompt: string) => void
+  onReuseImage?: (attachment: ReferenceImageAttachment) => void
+  messageAttachments?: Record<string, ReferenceImageAttachment[]>
   onResolveApproval: (
     approval: AgentApprovalSummaryDTO,
     decision: 'approved' | 'rejected',
@@ -77,6 +76,7 @@ interface ApprovalCardProps {
   approval: AgentApprovalSummaryDTO | null
   toolName: string | null
   summaryText: string
+  promptText?: string | null
   createdAt: string
   disabledService: boolean
   resolvingDecision: 'approved' | 'rejected' | null
@@ -88,6 +88,7 @@ function ApprovalCard({
   approval,
   toolName,
   summaryText,
+  promptText,
   createdAt,
   disabledService,
   resolvingDecision,
@@ -113,7 +114,7 @@ function ApprovalCard({
       className={cn(
         'w-full rounded-panel border p-4',
         isPending
-          ? 'border-warning-border bg-warning-soft/45 sm:p-5'
+          ? 'motion-pop border-warning-border bg-warning-soft/45 sm:p-5'
           : 'border-border/75 bg-surface/80',
       )}
     >
@@ -144,6 +145,13 @@ function ApprovalCard({
         <p className="mt-2.5 whitespace-pre-wrap break-words text-ui leading-relaxed text-foreground">
           {summaryText}
         </p>
+      ) : null}
+
+      {promptText && promptText !== summaryText ? (
+        <div className="mt-2.5 rounded-card border border-border/70 bg-canvas/80 px-3 py-2 text-caption text-muted-foreground">
+          <span className="font-medium text-foreground">调用参数：</span>
+          <span className="break-words">{promptText}</span>
+        </div>
       ) : null}
 
       {errorMessage ? (
@@ -182,7 +190,11 @@ function ApprovalCard({
   )
 }
 
-function AssistantMessageCard({ item }: { item: AgentItemDTO }) {
+function AssistantMessageCard({
+  item,
+}: {
+  item: AgentItemDTO
+}) {
   const [copied, setCopied] = useState(false)
   const text = extractItemText(item)
 
@@ -240,18 +252,39 @@ function AssistantMessageCard({ item }: { item: AgentItemDTO }) {
 function ArtifactReferenceCard({
   item,
   onReusePrompt,
+  onReuseImage,
 }: {
   item: AgentItemDTO
   onReusePrompt: (prompt: string) => void
+  onReuseImage?: (attachment: ReferenceImageAttachment) => void
 }) {
-  const [imageError, setImageError] = useState(false)
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
   const preview = extractArtifactPreview(item)
   const candidateUrl = preview.thumbnailUrl || preview.url
   const safeImageUrl = isSafeDisplayUrl(candidateUrl) ? candidateUrl : null
+  const imageError = Boolean(safeImageUrl && failedUrl === safeImageUrl)
+  const imageLoaded = Boolean(safeImageUrl && loadedUrl === safeImageUrl)
   const captionTitle =
     preview.label && preview.message && !preview.message.includes(preview.label)
       ? `${preview.label} · ${preview.message}`
       : preview.message || (preview.label ? `产物参考 · ${preview.label}` : '生成产物参考')
+
+  function handleReuseAsReference() {
+    if (!safeImageUrl || !onReuseImage) return
+    onReuseImage({
+      id: preview.assetId ? `art-${preview.assetId}` : `art-${item.id}`,
+      url: safeImageUrl,
+      name: preview.label || preview.prompt?.slice(0, 24) || '会话生成产物',
+      mimeType: preview.mimeType ?? undefined,
+      width: preview.width ?? undefined,
+      height: preview.height ?? undefined,
+      source: 'artifact',
+      assetId: preview.assetId ?? undefined,
+      prompt: preview.prompt ?? undefined,
+    })
+  }
 
   return (
     <article
@@ -263,15 +296,24 @@ function ArtifactReferenceCard({
       )}
     >
       {safeImageUrl && !imageError ? (
-        <div className="inline-flex max-w-full overflow-hidden rounded-card border border-border/80 bg-tonal shadow-soft">
+        <button
+          type="button"
+          aria-label={`放大查看产物：${preview.label || preview.prompt || '生成产物'}`}
+          onClick={() => setLightboxOpen(true)}
+          className="group relative inline-flex max-w-full overflow-hidden rounded-card border border-border/80 bg-tonal text-left shadow-soft transition-shadow duration-(--motion-base) hover:shadow-floating"
+        >
           <img
             src={safeImageUrl}
             alt={preview.prompt || preview.label || 'Agent 产物预览'}
             loading="lazy"
-            onError={() => setImageError(true)}
-            className="block max-h-96 w-auto max-w-full object-contain"
+            onLoad={() => setLoadedUrl(safeImageUrl)}
+            onError={() => setFailedUrl(safeImageUrl)}
+            className={cn(
+              'block max-h-96 w-auto max-w-full object-contain',
+              imageLoaded && 'motion-fade-in-slow',
+            )}
           />
-        </div>
+        </button>
       ) : safeImageUrl && imageError ? (
         <div className="inline-flex max-w-full items-center gap-2 rounded-card border border-border/70 bg-tonal/60 px-3.5 py-2.5 text-caption text-muted-foreground">
           <ImageIcon className={cn(iconSize.sm, 'shrink-0')} aria-hidden="true" />
@@ -292,17 +334,48 @@ function ArtifactReferenceCard({
             <span>· {formatRelativeTime(item.createdAt)}</span>
           </div>
 
-          {preview.prompt ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="rounded-pill px-2.5 text-caption text-muted-foreground hover:text-foreground"
-              onClick={() => onReusePrompt(preview.prompt!)}
-              icon={<MagicWandIcon className={iconSize.xs} aria-hidden="true" />}
-            >
-              复用提示词
-            </Button>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-1">
+            {safeImageUrl && onReuseImage ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="作为参考图复用"
+                className="rounded-pill px-2.5 text-caption text-muted-foreground hover:text-foreground"
+                onClick={handleReuseAsReference}
+                icon={<ImageIcon className={iconSize.xs} aria-hidden="true" />}
+              >
+                作为参考图
+              </Button>
+            ) : null}
+            {preview.prompt ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="rounded-pill px-2.5 text-caption text-muted-foreground hover:text-foreground"
+                onClick={() => onReusePrompt(preview.prompt!)}
+                icon={<MagicWandIcon className={iconSize.xs} aria-hidden="true" />}
+              >
+                复用提示词
+              </Button>
+            ) : null}
+            {safeImageUrl ? (
+              <Button
+                asChild
+                size="sm"
+                variant="ghost"
+                className="rounded-pill px-2.5 text-caption text-muted-foreground hover:text-foreground"
+                icon={<ArrowDownIcon className={iconSize.xs} aria-hidden="true" />}
+              >
+                <a
+                  href={preview.downloadUrl || safeImageUrl}
+                  download={`musecanvas-${preview.assetId || item.id}.svg`}
+                  aria-label="下载产物图片"
+                >
+                  下载
+                </a>
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {preview.prompt ? (
@@ -311,83 +384,67 @@ function ArtifactReferenceCard({
           </p>
         ) : null}
       </div>
-    </article>
-  )
-}
 
-/** 缩略图只在用户展开卡片后挂载：复用既有 owner-scoped 资产详情查询，不额外拉取列表。 */
-function MediaAssetThumbnail({ assetId }: { assetId: string }) {
-  const [failed, setFailed] = useState(false)
-  const detail = useAssetDetail(assetId)
-  const candidate = detail.data?.thumbnailUrl || detail.data?.url || null
-  const src = !failed && isSafeDisplayUrl(candidate) ? candidate : null
-  if (!src) {
-    return (
-      <span className="inline-flex size-12 items-center justify-center rounded-control bg-tonal text-muted-foreground">
-        <ImageIcon className={iconSize.sm} aria-hidden="true" />
-      </span>
-    )
-  }
-  return (
-    <img
-      src={src}
-      alt="生成结果缩略图"
-      loading="lazy"
-      onError={() => setFailed(true)}
-      className="size-12 rounded-control object-cover"
-    />
-  )
-}
-
-function MediaAssetLink({ assetId }: { assetId: string }) {
-  const href = assetDetailHref(assetId)
-  if (!href) return null
-  const label = shortUuid(assetId)
-  return (
-    <Link
-      href={href}
-      aria-label={`查看资产 ${label}`}
-      className="inline-flex min-h-7 items-center gap-2 rounded-control border border-border/70 bg-canvas p-1 pr-2.5 text-caption text-muted-foreground transition-colors hover:border-border hover:bg-tonal/70 hover:text-foreground"
-    >
-      <MediaAssetThumbnail assetId={assetId} />
-      <span className="font-mono">{label}</span>
-    </Link>
-  )
-}
-
-function mediaJobCanShowAssets(job: MediaJobInfo): boolean {
-  return job.status === 'succeeded' || job.status === 'completed'
-}
-
-/** 工具结果里的媒体 job 摘要：状态始终可见，资产缩略图仅在展开后加载。 */
-function MediaJobSummary({ jobs, expanded }: { jobs: MediaJobInfo[]; expanded: boolean }) {
-  return (
-    <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
-      {jobs.map((job) => {
-        const statusMeta = formatMediaJobStatus(job.status)
-        return (
-          <div key={job.jobId} className="flex flex-wrap items-center gap-2 text-caption">
-            <span className={cn('font-medium', STATUS_TEXT_TONE[statusMeta.tone])}>
-              {statusMeta.label}
-            </span>
-            <span className="font-mono text-muted-foreground">{shortUuid(job.jobId)}</span>
-            {job.assetIds.length === 0 ? (
-              <Link href={APP_ROUTES.library} className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
-                打开图库
-              </Link>
-            ) : expanded && mediaJobCanShowAssets(job) ? (
-              <span className="flex flex-wrap gap-1.5">
-                {job.assetIds.map((assetId) => (
-                  <MediaAssetLink key={assetId} assetId={assetId} />
-                ))}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">{job.assetIds.length} 个产出资产</span>
-            )}
+      <Dialog
+        open={lightboxOpen}
+        onClose={() => setLightboxOpen(false)}
+        title={preview.label || '生成产物预览'}
+        description={
+          preview.width && preview.height
+            ? `分辨率 ${preview.width} × ${preview.height}`
+            : undefined
+        }
+        size="wide"
+        footer={
+          <>
+            {safeImageUrl && onReuseImage ? (
+              <Button
+                variant="secondary"
+                icon={<ImageIcon aria-hidden="true" />}
+                onClick={() => {
+                  handleReuseAsReference()
+                  setLightboxOpen(false)
+                }}
+              >
+                作为参考图
+              </Button>
+            ) : null}
+            {preview.prompt ? (
+              <Button
+                variant="secondary"
+                icon={<MagicWandIcon aria-hidden="true" />}
+                onClick={() => {
+                  onReusePrompt(preview.prompt!)
+                  setLightboxOpen(false)
+                }}
+              >
+                复用提示词
+              </Button>
+            ) : null}
+            <Button variant="primary" onClick={() => setLightboxOpen(false)}>
+              关闭
+            </Button>
+          </>
+        }
+      >
+        {safeImageUrl ? (
+          <div className="space-y-4">
+            <div className="flex justify-center overflow-hidden rounded-card border border-border bg-tonal p-2">
+              <img
+                src={safeImageUrl}
+                alt={preview.prompt || preview.label || '产物大图'}
+                className="max-h-[65dvh] w-auto max-w-full rounded-control object-contain"
+              />
+            </div>
+            {preview.prompt ? (
+              <p className="rounded-card border border-border bg-tonal/40 p-3 text-ui text-muted-foreground">
+                {preview.prompt}
+              </p>
+            ) : null}
           </div>
-        )
-      })}
-    </div>
+        ) : null}
+      </Dialog>
+    </article>
   )
 }
 
@@ -407,21 +464,22 @@ function ToolTraceCard({
     toolSummary?.status ?? payloadInfo.status ?? (isResult ? 'completed' : 'recorded')
   const statusMeta = formatToolStatus(status)
   const detailText = payloadInfo.error ?? payloadInfo.message
-  const mediaJobs = isResult ? extractMediaJobs(item.payload) : []
   const Icon = isResult ? TerminalWindowIcon : WrenchIcon
 
   return (
-    <article className="w-full rounded-card border border-border/70 bg-surface/75 px-3.5 py-2.5 transition-colors hover:bg-surface">
+    <article
+      className="w-full rounded-card border border-border/70 bg-surface/75 px-3.5 py-2.5 transition-colors hover:bg-surface"
+    >
       <button
         type="button"
         aria-expanded={expanded}
         aria-controls={payloadId}
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full min-w-0 items-center justify-between gap-3 rounded-control text-left"
+        className="motion-press flex w-full min-w-0 items-center justify-between gap-3 rounded-control text-left"
       >
         <span className="flex min-w-0 flex-1 items-center gap-2">
           <Icon className={cn(iconSize.sm, 'shrink-0 text-muted-foreground')} aria-hidden="true" />
-          <span className="max-w-44 shrink-0 truncate text-ui font-medium text-foreground sm:max-w-none">
+          <span className="max-w-32 shrink-0 truncate text-ui font-medium text-foreground sm:max-w-none">
             {toolName}
           </span>
           {!expanded && detailText ? (
@@ -449,21 +507,37 @@ function ToolTraceCard({
         </span>
       </button>
 
-      {mediaJobs.length > 0 ? <MediaJobSummary jobs={mediaJobs} expanded={expanded} /> : null}
-
       {expanded ? (
-        <div id={payloadId} className="mt-2.5 border-t border-border/60 pt-2.5">
+        <div id={payloadId} className="motion-reveal mt-2.5 space-y-2 border-t border-border/60 pt-2.5">
           {detailText ? (
-            <p className="mb-2 break-words text-caption leading-relaxed text-muted-foreground">
+            <p className="break-words text-caption leading-relaxed text-muted-foreground">
               {detailText}
             </p>
           ) : null}
-          <p className="mb-2 text-caption text-muted-foreground sm:hidden">
-            {formatRelativeTime(item.createdAt)}
-          </p>
-          <pre className="max-h-56 overflow-auto rounded-control border border-border/70 bg-canvas p-2.5 font-mono text-caption text-foreground">
-            {JSON.stringify(item.payload, null, 2)}
-          </pre>
+          <dl className="grid grid-cols-1 gap-2 rounded-control border border-border/70 bg-canvas p-3 text-caption sm:grid-cols-2">
+            <div>
+              <dt className="text-muted-foreground">调用工具</dt>
+              <dd className="mt-0.5 font-mono text-foreground">{toolName}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">执行状态</dt>
+              <dd className={cn('mt-0.5 font-medium', STATUS_TEXT_TONE[statusMeta.tone])}>
+                {statusMeta.label} · {formatRelativeTime(item.createdAt)}
+              </dd>
+            </div>
+            {payloadInfo.prompt ? (
+              <div className="sm:col-span-2">
+                <dt className="text-muted-foreground">创作提示词</dt>
+                <dd className="mt-0.5 break-words text-foreground">{payloadInfo.prompt}</dd>
+              </div>
+            ) : null}
+            {payloadInfo.size ? (
+              <div>
+                <dt className="text-muted-foreground">画幅参数</dt>
+                <dd className="mt-0.5 font-mono text-foreground">{payloadInfo.size}</dd>
+              </div>
+            ) : null}
+          </dl>
         </div>
       ) : null}
     </article>
@@ -476,8 +550,11 @@ function ToolTraceCard({
  */
 export function ExecutionTimeline({
   console: agentConsole,
-  onOpenNewSession,
+  onCreateSession,
+  creatingSession = false,
   onReusePrompt,
+  onReuseImage,
+  messageAttachments,
   onResolveApproval,
   resolvingApproval,
   approvalErrors,
@@ -535,11 +612,29 @@ export function ExecutionTimeline({
         })
       : null
 
+  const hasAlerts =
+    serviceStatus === 'disabled_404' ||
+    serviceStatus === 'admission_closed_503' ||
+    (serviceStatus === 'error' && Boolean(error)) ||
+    Boolean(timeline.resyncRequired)
+
+  if (
+    sessionId &&
+    !snapshotQuery.isPending &&
+    !hasAlerts &&
+    !hasOlderItems &&
+    items.length === 0 &&
+    !turnActive &&
+    unrenderedPendingApprovals.length === 0
+  ) {
+    return null
+  }
+
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-6 sm:px-6 [scrollbar-gutter:stable_both-edges]">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-20 pb-6 sm:px-6 sm:pt-16 lg:px-10 md:[scrollbar-gutter:stable_both-edges]">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 lg:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
         {serviceStatus === 'disabled_404' ? (
-          <Alert tone="warning" title="Agent Core 服务未启用（404）">
+          <Alert tone="warning" title="Agent Core 服务未启用（404）" className="motion-fade-in">
             当前后端配置关闭了 Agent Core V1（<code>AGENT_CORE_ENABLED=false</code>），控制台无法创建会话或发起执行。
           </Alert>
         ) : null}
@@ -548,6 +643,7 @@ export function ExecutionTimeline({
           <Alert
             tone="warning"
             title="执行队列准入暂未就绪（503）"
+            className="motion-fade-in"
             action={
               <Button size="sm" variant="secondary" onClick={reconnect}>
                 重新检查
@@ -563,6 +659,7 @@ export function ExecutionTimeline({
             tone="danger"
             role="alert"
             title="控制台同步异常"
+            className="motion-fade-in"
             action={
               <Button size="sm" variant="secondary" onClick={() => void resync()}>
                 重试同步
@@ -574,30 +671,32 @@ export function ExecutionTimeline({
         ) : null}
 
         {timeline.resyncRequired ? (
-          <Alert tone="info" title="事件流重同步中">
+          <Alert tone="info" title="事件流重同步中" className="motion-fade-in">
             检测到事件流滞后（{timeline.resyncRequired}），正在拉取最新会话快照。
           </Alert>
         ) : null}
 
         {!sessionId ? (
-          <div className="rounded-panel border border-border/70 bg-surface/70 p-8">
+          <div className="motion-fade-in rounded-panel border border-border/70 bg-surface/70 p-8">
             <EmptyState
               icon={SparkleIcon}
               title="选择或新建 Agent 会话"
               description={
                 disabledService
                   ? 'Agent Core V1 尚未在服务端启用，请等待管理员配置开启后再试。'
-                  : '从左侧会话列表选择一个已有对话，或点击新建绑定 Agent 定义开始执行。'
+                  : '从左侧列表选择一个已有对话，或直接点击新建开启新对话。'
               }
               action={
                 !disabledService ? (
                   <Button
                     variant="primary"
                     className="rounded-pill"
-                    onClick={onOpenNewSession}
+                    loading={creatingSession}
+                    disabled={creatingSession}
+                    onClick={onCreateSession}
                     icon={<PlusIcon className={iconSize.sm} aria-hidden="true" />}
                   >
-                    新建会话
+                    新建对话
                   </Button>
                 ) : null
               }
@@ -613,27 +712,43 @@ export function ExecutionTimeline({
           </div>
         ) : (
           <>
-            {items.length === 0 && !turnActive && unrenderedPendingApprovals.length === 0 ? (
-              <div className="rounded-panel border border-border/70 bg-surface/70 p-8">
-                <EmptyState
-                  density="compact"
-                  icon={SparkleIcon}
-                  title="等待首条指令"
-                  description="在下方输入你的创作需求或执行目标，Agent 会按步骤规划、发起工具审批并产出结果。"
-                />
-              </div>
-            ) : null}
-
             <div className="flex flex-col gap-5" role="log" aria-label="Agent 执行时间线">
               {items.map((item) => {
                 if (item.type === 'user_message') {
+                  const messageText = extractItemText(item)
+                  const attached =
+                    sessionId && messageAttachments
+                      ? (messageAttachments[`${sessionId}:${messageText.trim()}`] ?? [])
+                      : []
                   return (
                     <article
                       key={item.id}
-                      className="ml-auto max-w-[82%] rounded-panel rounded-br-control bg-tonal px-4 py-2.5 text-compact leading-relaxed text-foreground sm:max-w-[75%]"
+                      className="ml-auto max-w-[82%] space-y-2 rounded-panel rounded-br-control bg-tonal px-4 py-2.5 text-compact leading-relaxed text-foreground sm:max-w-[75%]"
                     >
+                      {attached.length > 0 ? (
+                        <div className="flex flex-wrap gap-2 pb-1">
+                          {attached.map((att) => (
+                            <div
+                              key={att.id}
+                              className="flex items-center gap-2 rounded-card border border-border/70 bg-surface/90 p-1.5 pr-2.5"
+                            >
+                              <img
+                                src={att.url}
+                                alt={att.name}
+                                className="size-11 shrink-0 rounded-control object-cover"
+                              />
+                              <div className="min-w-0">
+                                <p className="max-w-32 truncate text-caption font-medium text-foreground">
+                                  {att.name}
+                                </p>
+                                <p className="text-caption text-muted-foreground">参考图</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                       <p className="whitespace-pre-wrap break-words">
-                        {extractItemText(item)}
+                        {messageText}
                       </p>
                       <p className="mt-1 text-right text-caption text-muted-foreground">
                         {formatRelativeTime(item.createdAt)}
@@ -643,14 +758,25 @@ export function ExecutionTimeline({
                 }
 
                 if (item.type === 'assistant_message') {
-                  return <AssistantMessageCard key={item.id} item={item} />
+                  return (
+                    <AssistantMessageCard
+                      key={item.id}
+                      item={item}
+                    />
+                  )
                 }
 
                 if (item.type === 'tool_call' || item.type === 'tool_result') {
                   const matchedTool = item.toolCallId
                     ? timeline.tools[item.toolCallId]
                     : undefined
-                  return <ToolTraceCard key={item.id} item={item} toolSummary={matchedTool} />
+                  return (
+                    <ToolTraceCard
+                      key={item.id}
+                      item={item}
+                      toolSummary={matchedTool}
+                    />
+                  )
                 }
 
                 if (item.type === 'approval') {
@@ -670,6 +796,7 @@ export function ExecutionTimeline({
                       approval={matchedApproval}
                       toolName={matchedTool?.toolName ?? payloadInfo.toolName}
                       summaryText={extractItemText(item)}
+                      promptText={payloadInfo.prompt}
                       createdAt={item.createdAt}
                       disabledService={disabledService}
                       resolvingDecision={resolvingDecision}
@@ -685,13 +812,17 @@ export function ExecutionTimeline({
                       key={item.id}
                       item={item}
                       onReusePrompt={onReusePrompt}
+                      onReuseImage={onReuseImage}
                     />
                   )
                 }
 
                 // system_event
                 return (
-                  <div key={item.id} className="flex items-center gap-3 py-1">
+                  <div
+                    key={item.id}
+                    className="flex items-center gap-3 py-1"
+                  >
                     <span className="h-px flex-1 bg-border/70" aria-hidden="true" />
                     <span className="inline-flex max-w-full items-center gap-1.5 text-caption text-muted-foreground">
                       <span className="truncate">{extractItemText(item)}</span>
@@ -727,6 +858,7 @@ export function ExecutionTimeline({
                 tone="danger"
                 role="alert"
                 title="加载后续记录失败"
+                className="motion-fade-in"
                 action={
                   <Button
                     size="sm"
@@ -761,7 +893,7 @@ export function ExecutionTimeline({
               <div
                 role="status"
                 aria-live="polite"
-                className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-border/60 bg-surface/70 px-3.5 py-2.5"
+                className="motion-fade-in flex flex-wrap items-center justify-between gap-2 rounded-card border border-border/60 bg-surface/70 px-3.5 py-2.5"
               >
                 <div className="flex min-w-0 items-center gap-2">
                   <Spinner size="sm" label="轮次执行中" />

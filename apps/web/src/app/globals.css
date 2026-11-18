@@ -29,6 +29,7 @@
   --font-sans: "Google Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-display: "Google Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-art: "Playfair Display", "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "STKaiti", Georgia, serif;
 
   /*
    * --- 字号阶梯 ---
@@ -41,29 +42,34 @@
   --text-display--letter-spacing: -0.0175em;
   --text-display--font-weight: 400;
 
-  --text-hero: clamp(48px, 7vw, 96px);
+  --text-hero: clamp(38px, 6.8vw, 96px);
   --text-hero--line-height: 1.06;
   --text-hero--letter-spacing: -0.02em;
   --text-hero--font-weight: 600;
 
-  --text-headline: clamp(30px, 3.4vw, 48px);
+  --text-headline: clamp(26px, 3.4vw, 48px);
   --text-headline--line-height: 1.15;
   --text-headline--letter-spacing: -0.015em;
   --text-headline--font-weight: 600;
 
-  --text-cta: 44px;
+  --text-cta: clamp(28px, 3.2vw, 44px);
   --text-cta--line-height: 1.25;
   --text-cta--letter-spacing: -0.015em;
   --text-cta--font-weight: 600;
 
-  --text-title: 32px;
+  --text-title: clamp(24px, 2.4vw, 32px);
   --text-title--line-height: 1.25;
   --text-title--font-weight: 400;
 
-  --text-statement: 28px;
+  --text-statement: clamp(22px, 2.2vw, 28px);
   --text-statement--line-height: 1.35;
   --text-statement--letter-spacing: -0.01em;
   --text-statement--font-weight: 600;
+
+  --text-brand: clamp(15px, 1.2vw, 18px);
+  --text-brand--line-height: 1.2;
+  --text-brand--letter-spacing: -0.015em;
+  --text-brand--font-weight: 600;
 
   --text-section: 24px;
   --text-section--line-height: 1.35;
@@ -145,7 +151,7 @@
 
   /* --- 布局框架 --- */
   --layout-header: 56px;
-  --layout-public-header: 64px;
+  --layout-public-header: clamp(56px, 4.5vw, 64px);
   --layout-sidebar: 260px;
   --layout-sidebar-collapsed: 64px;
   --layout-widget-min: 280px;
@@ -246,7 +252,7 @@
   --color-tonal: #eef1f6;
   --color-tonal-hover: #e5e9f0;
   --color-tonal-active: #dce1ea;
-  --color-tonal-selected: #e3e8f2;
+  --color-tonal-selected: #e4ece7;
 
   --color-foreground: #111318;
   --color-muted-foreground: #5b6170;
@@ -263,19 +269,19 @@
 
   --color-border: #e3e6ee;
   --color-border-control: #8b92a1;
-  --color-border-focus: #1a73e8;
+  --color-border-focus: #15803d;
   --color-border-strong: #464c59;
 
-  /* 主操作：深墨色实底；品牌强调色为 studio cobalt/blue。 */
+  /* 主操作：深墨色实底；品牌强调色为 studio emerald green（与品牌图标一致）。 */
   --color-primary: #111318;
   --color-primary-hover: #252932;
   --color-primary-active: #111318;
   --color-primary-soft: #eef1f6;
 
-  --color-accent: #1a73e8;
-  --color-accent-strong: #1557b0;
-  --color-accent-soft: #e8f0fe;
-  --color-accent-hover: #1557b0;
+  --color-accent: #15803d;
+  --color-accent-strong: #166534;
+  --color-accent-soft: #eaf7ef;
+  --color-accent-hover: #166534;
   --color-accent-contrast: #ffffff;
 
   --color-success: #166534;
@@ -329,7 +335,7 @@
   --color-tonal: #232832;
   --color-tonal-hover: #2c323e;
   --color-tonal-active: #353c4a;
-  --color-tonal-selected: #2f3644;
+  --color-tonal-selected: #21312a;
 
   --color-foreground: #eef0f4;
   --color-muted-foreground: #9ca3b2;
@@ -345,7 +351,7 @@
 
   --color-border: #2a2f3a;
   --color-border-control: #5d6473;
-  --color-border-focus: #8ab4f8;
+  --color-border-focus: #6ee7b7;
   --color-border-strong: #7b8394;
 
   --color-primary: #eef0f4;
@@ -353,11 +359,11 @@
   --color-primary-active: #d9dde6;
   --color-primary-soft: #232832;
 
-  --color-accent: #669df6;
-  --color-accent-strong: #8ab4f8;
-  --color-accent-soft: #17253d;
-  --color-accent-hover: #8ab4f8;
-  --color-accent-contrast: #0b1426;
+  --color-accent: #34d399;
+  --color-accent-strong: #6ee7b7;
+  --color-accent-soft: #112a20;
+  --color-accent-hover: #6ee7b7;
+  --color-accent-contrast: #062117;
 
   --color-success: #4ade80;
   --color-success-soft: #052e16;

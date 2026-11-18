@@ -61,9 +61,6 @@ export type { SelectProps } from './select'
 export { Checkbox } from './checkbox'
 export type { CheckboxProps } from './checkbox'
 
-export { Radio, RadioGroup } from './radio'
-export type { RadioGroupProps, RadioProps } from './radio'
-
 export { Switch } from './switch'
 export type { SwitchProps } from './switch'
 
@@ -121,14 +118,8 @@ export type {
   TableStateRowProps,
 } from './table'
 
-export { Pagination } from './pagination'
-export type { CursorPaginationProps, PagePaginationProps, PaginationProps } from './pagination'
-
 export { Stepper } from './stepper'
 export type { StepperProps, StepperStep } from './stepper'
-
-export { Dropzone, FileDropZone, formatFileSize, matchesAccept } from './dropzone'
-export type { DropZoneFile, DropZoneFileStatus, DropzoneProps } from './dropzone'
 
 // --- Shared size maps / interaction classes ----------------------------------
 export { controlMinHeight, controlSquare, iconSize, iconSlot } from './size'

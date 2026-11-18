@@ -1,8 +1,6 @@
-import { Suspense } from 'react'
 import type { Metadata } from 'next'
-import { AgentConsoleView } from '@/features/agent-console/components/agent-console-view'
+import { StudioWorkspace } from '@/features/workspace/components/studio-workspace'
 import { WORKSPACE_MODE } from '@/shared/lib/workspace-mode'
-import StudioLoading from '../loading'
 
 export const metadata: Metadata = {
   title: 'Agent 操作台',
@@ -10,9 +8,5 @@ export const metadata: Metadata = {
 }
 
 export default function GeneratePage() {
-  return (
-    <Suspense fallback={<StudioLoading />}>
-      <AgentConsoleView mode={WORKSPACE_MODE} />
-    </Suspense>
-  )
+  return <StudioWorkspace mode={WORKSPACE_MODE} initialRoute="generate" />
 }

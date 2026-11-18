@@ -27,11 +27,14 @@ export function componentHarness(url, name, mocks = {}) {
     },
     useCallback: (callback) => callback,
     useId: () => 'test-id',
+    createContext: (defaultValue) => ({ Provider: 'ContextProvider', _defaultValue: defaultValue }),
+    useContext: (ctx) => (ctx && '_defaultValue' in ctx ? ctx._defaultValue : undefined),
     Children: { only: (child) => child },
     isValidElement: (element) => Boolean(element?.props),
     cloneElement: (element, props) => ({ ...element, props: { ...element.props, ...props } }),
     Fragment: 'Fragment',
   }
+  react.default = { ...react }
   const element = (type, props) => ({ type, props: props ?? {} })
   const fallback = new Proxy({ __esModule: true }, { get: (target, key) => target[key] ?? String(key) })
   const document = { activeElement: null }

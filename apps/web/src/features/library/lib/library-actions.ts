@@ -9,6 +9,25 @@ export function generationSearch(asset: Pick<AssetDto, 'inputPrompt' | 'prompt' 
   return new URLSearchParams({ prompt: reusablePrompt(asset), kind: asset.mediaKind }).toString()
 }
 
+export function imageReuseSearch(
+  asset: AssetDto,
+  options?: { includePrompt?: boolean },
+): string {
+  const image = previewSource(asset)
+  const params = new URLSearchParams()
+  if (options?.includePrompt) {
+    params.set('prompt', reusablePrompt(asset))
+  }
+  params.set('kind', asset.mediaKind)
+  if (image) {
+    params.set('image', image)
+    params.set('assetId', asset.id)
+    const label = reusablePrompt(asset)
+    if (label) params.set('label', label.slice(0, 48))
+  }
+  return params.toString()
+}
+
 export function visibleSelection(selectedIds: string[], assets: Pick<AssetDto, 'id'>[]): string[] {
   const visible = new Set(assets.map((asset) => asset.id))
   return [...new Set(selectedIds)].filter((id) => visible.has(id))

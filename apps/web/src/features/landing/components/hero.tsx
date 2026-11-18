@@ -41,12 +41,12 @@ export function Hero() {
     <section aria-labelledby="hero-title" className="bg-canvas">
       <LandingFrame className="grid grid-cols-1 items-center gap-10 pb-0 pt-10 sm:gap-16 sm:pb-24 sm:pt-16 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col items-start gap-7">
-          <span className="inline-flex items-center gap-2 rounded-pill bg-accent-soft px-3.5 py-1.5 text-ui font-medium text-accent">
-            <SparkleIcon weight="duotone" aria-hidden="true" className={iconSize.sm} />
+          <span className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-pill bg-accent-soft px-3.5 py-1.5 text-ui font-medium text-accent">
+            <SparkleIcon weight="duotone" aria-hidden="true" className={cn(iconSize.sm, 'shrink-0')} />
             AI 创意工作室 · 自托管图像与视频生成
           </span>
 
-          <h1 id="hero-title" className="font-display text-hero text-foreground">
+          <h1 id="hero-title" className="font-display text-hero break-words text-foreground">
             让创意
             <br />
             快速落地

@@ -38,6 +38,8 @@ export interface DropdownMenuItem {
   danger?: boolean
   /** `aria-disabled` + `.is-disabled`, kept out of the roving sequence. */
   disabled?: boolean
+  /** Highlight as the currently active option. */
+  selected?: boolean
   /** Draw a separator rule before this item (grouping). */
   separator?: boolean
 }
@@ -48,6 +50,8 @@ export interface DropdownMenuProps {
   items: DropdownMenuItem[]
   /** Which edge of the trigger the panel lines up with. */
   align?: 'start' | 'end'
+  /** Vertical placement relative to the trigger. */
+  side?: 'bottom' | 'top'
   /** Free node above the items (the signed-in address, a summary line…). */
   header?: ReactNode
   /** Accessible name of the `role="menu"` panel. Falls back to no name. */
@@ -61,6 +65,8 @@ export interface DropdownMenuProps {
   /** Controlled visibility; omit and the menu owns its state. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** How the trigger opens the menu: `'click'` (default) or `'hover'`. */
+  triggerMode?: 'click' | 'hover'
 }
 
 const ITEM_BASE = [
@@ -84,6 +90,7 @@ export function DropdownMenu({
   trigger,
   items,
   align = 'end',
+  side = 'bottom',
   header,
   menuLabel,
   size = 'md',
@@ -91,12 +98,14 @@ export function DropdownMenu({
   menuClassName,
   open,
   onOpenChange,
+  triggerMode = 'click',
 }: DropdownMenuProps) {
   const uid = useId()
   const panelId = `${uid}-menu`
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
   const itemRefs = useRef(new Map<number, HTMLButtonElement | null>())
+  const hoverCloseTimerRef = useRef<number | null>(null)
   const [internalOpen, setInternalOpen] = useState(false)
   const isOpen = open ?? internalOpen
   // `mounted` 比 `isOpen` 多停留一个退场动画；计时器是 `animationend` 没触发时的兜底。
@@ -137,14 +146,31 @@ export function DropdownMenu({
     [setOpen],
   )
 
-  // 打开后聚焦第一个可用项，键盘用户不必自己找入口。
+  const clearHoverCloseTimer = useCallback(() => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current)
+      hoverCloseTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleHoverClose = useCallback(() => {
+    clearHoverCloseTimer()
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null
+      setOpen(false)
+    }, 120)
+  }, [clearHoverCloseTimer, setOpen])
+
+  useEffect(() => clearHoverCloseTimer, [clearHoverCloseTimer])
+
+  // 打开后聚焦第一个可用项，键盘用户不必自己找入口（hover 模式下不抢占焦点）。
   useEffect(() => {
-    if (!isOpen || !mounted || closing) return
+    if (!isOpen || !mounted || closing || triggerMode === 'hover') return
     const firstIndex = items.findIndex((item) => !item.disabled)
     if (firstIndex >= 0) itemRefs.current.get(firstIndex)?.focus()
     // 刻意不依赖 `items`：打开期间的普通重渲染不能把焦点拽回第一项。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, mounted, closing])
+  }, [isOpen, mounted, closing, triggerMode])
 
   // 点击/触摸外部关闭。用 document 监听，而不是铺一层全屏接球层。
   useEffect(() => {
@@ -162,8 +188,9 @@ export function DropdownMenu({
   function activate(index: number) {
     const item = items[index]
     if (!item || item.disabled) return
+    clearHoverCloseTimer()
     setOpen(false)
-    triggerRef.current?.focus()
+    if (triggerMode !== 'hover') triggerRef.current?.focus()
     item.onSelect?.()
   }
 
@@ -227,6 +254,8 @@ export function DropdownMenu({
     throw new Error('DropdownMenu: `trigger` must be a single React element.')
   }
 
+  const isTriggerDisabled = Boolean((triggerElement.props as { disabled?: boolean }).disabled)
+
   const clonedTrigger = cloneElement(triggerElement as ReactElement<Record<string, unknown>>, {
     ref: (node: HTMLElement | null) => {
       triggerRef.current = node
@@ -237,7 +266,7 @@ export function DropdownMenu({
     onClick: (event: unknown) => {
       const original = (triggerElement.props as { onClick?: (e: unknown) => void }).onClick
       original?.(event)
-      setOpen(!isOpen)
+      if (triggerMode === 'click') setOpen(!isOpen)
     },
     onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
       const original = (triggerElement.props as { onKeyDown?: (e: ReactKeyboardEvent<HTMLElement>) => void }).onKeyDown
@@ -248,7 +277,20 @@ export function DropdownMenu({
   })
 
   return (
-    <div ref={wrapperRef} className={cn('relative inline-flex', className)}>
+    <div
+      ref={wrapperRef}
+      className={cn('relative inline-flex', className)}
+      onMouseEnter={
+        triggerMode === 'hover'
+          ? () => {
+              if (isTriggerDisabled) return
+              clearHoverCloseTimer()
+              setOpen(true)
+            }
+          : undefined
+      }
+      onMouseLeave={triggerMode === 'hover' ? scheduleHoverClose : undefined}
+    >
       {clonedTrigger}
 
       {mounted ? (
@@ -259,7 +301,8 @@ export function DropdownMenu({
           tabIndex={-1}
           onKeyDown={onPanelKeyDown}
           className={cn(
-            'absolute top-full z-dropdown mt-2 flex w-56 flex-col gap-0.5 rounded-popover border border-border bg-surface p-1.5 shadow-dropdown',
+            'absolute z-dropdown flex w-56 flex-col gap-0.5 rounded-popover border border-border bg-surface p-1.5 shadow-dropdown',
+            side === 'top' ? 'bottom-full mb-2' : 'top-full mt-2',
             align === 'end' ? 'right-0' : 'left-0',
             closing ? 'pointer-events-none motion-fade-out' : 'motion-menu',
             menuClassName,
@@ -283,11 +326,12 @@ export function DropdownMenu({
                   ITEM_BASE,
                   ITEM_SIZE[size],
                   ITEM_TONE[item.danger ? 'danger' : 'default'],
+                  item.selected && !item.danger && 'bg-tonal-selected font-medium text-foreground',
                   item.disabled && 'is-disabled',
                 )}
               >
                 {item.icon}
-                {item.label}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
               </button>
             </Fragment>
           ))}

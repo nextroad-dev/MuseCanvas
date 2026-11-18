@@ -2,17 +2,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   AGENT_MESSAGE_MAX_BYTES,
-  MAX_MEDIA_ASSETS_PER_JOB,
-  MAX_MEDIA_JOBS,
   deriveSessionStatus,
   extractArtifactPreview,
   extractItemText,
-  extractMediaJobs,
   extractToolPayloadInfo,
   formatAgentErrorCode,
   formatApprovalStatus,
   formatConnectionState,
-  formatMediaJobStatus,
   formatSessionStatus,
   formatToolStatus,
   formatTurnStatus,
@@ -22,7 +18,6 @@ import {
   shortUuid,
   utf8ByteLength,
 } from './agent-status.ts'
-import { assetDetailHref } from '../../../shared/lib/app-routes.ts'
 
 test('deriveSessionStatus and formatSessionStatus map lifecycle states cleanly', () => {
   assert.equal(deriveSessionStatus({ activeTurnId: null, archivedAt: null }), 'idle')
@@ -156,140 +151,6 @@ test('extractItemText, extractArtifactPreview, and extractToolPayloadInfo handle
   assert.equal(richTool.toolName, 'generate_image')
   assert.equal(richTool.approvalId, 'app-1')
   assert.equal(richTool.size, '1024x1024')
-})
-
-const COMPLETED_ASSET_ID = '00000000-0000-4000-8000-000000000301'
-const COMPLETED_ASSET_ID_2 = '00000000-0000-4000-8000-000000000302'
-const MEDIA_JOB_ID = '00000000-0000-4000-8000-000000000201'
-const FAILED_JOB_ID = '00000000-0000-4000-8000-000000000202'
-
-function mediaToolResult(result) {
-  return { content: JSON.stringify(result), status: 'completed', result, error: null }
-}
-
-test('extractMediaJobs reads the persisted tool_result result shape', () => {
-  const jobs = extractMediaJobs(
-    mediaToolResult({
-      content: 'Media generation completed',
-      jobs: [{ jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: [COMPLETED_ASSET_ID, COMPLETED_ASSET_ID_2] }],
-    }),
-  )
-  assert.deepEqual(jobs, [
-    { jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: [COMPLETED_ASSET_ID, COMPLETED_ASSET_ID_2] },
-  ])
-})
-
-test('extractMediaJobs keeps failed and cancelled jobs without executing anything', () => {
-  const jobs = extractMediaJobs({
-    result: {
-      content: 'Media generation failed.',
-      jobs: [
-        { jobId: FAILED_JOB_ID, status: 'failed', assetIds: [] },
-        { jobId: MEDIA_JOB_ID, status: 'canceled', assetIds: [COMPLETED_ASSET_ID] },
-      ],
-    },
-  })
-  assert.deepEqual(jobs, [
-    { jobId: FAILED_JOB_ID, status: 'failed', assetIds: [] },
-    { jobId: MEDIA_JOB_ID, status: 'cancelled', assetIds: [COMPLETED_ASSET_ID] },
-  ])
-})
-
-test('extractMediaJobs accepts flat and content-string payloads', () => {
-  const flat = { jobs: [{ jobId: MEDIA_JOB_ID, status: 'running', assetIds: [] }] }
-  assert.deepEqual(extractMediaJobs(flat), [
-    { jobId: MEDIA_JOB_ID, status: 'running', assetIds: [] },
-  ])
-  const embedded = {
-    content: JSON.stringify({ jobs: [{ jobId: MEDIA_JOB_ID, status: 'completed', assetIds: [COMPLETED_ASSET_ID] }] }),
-  }
-  assert.deepEqual(extractMediaJobs(embedded), [
-    { jobId: MEDIA_JOB_ID, status: 'completed', assetIds: [COMPLETED_ASSET_ID] },
-  ])
-})
-
-test('extractMediaJobs returns an empty array for malformed and foreign payloads', () => {
-  assert.deepEqual(extractMediaJobs(null), [])
-  assert.deepEqual(extractMediaJobs(undefined), [])
-  assert.deepEqual(extractMediaJobs({}), [])
-  assert.deepEqual(extractMediaJobs({ result: null }), [])
-  assert.deepEqual(extractMediaJobs({ result: 'jobs' }), [])
-  assert.deepEqual(extractMediaJobs({ jobs: 'not-an-array' }), [])
-  assert.deepEqual(extractMediaJobs({ content: 'not json {' }), [])
-  assert.deepEqual(extractMediaJobs({ content: 42, result: [1, 2, 3] }), [])
-  assert.deepEqual(extractMediaJobs({ result: { jobs: [null, 1, 'job'] } }), [])
-  // 未知字段与已知字段混在一起时只取已知字段
-  assert.deepEqual(
-    extractMediaJobs({ result: { jobs: [{ jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: [COMPLETED_ASSET_ID], provider: 'x' }] } }),
-    [{ jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: [COMPLETED_ASSET_ID] }],
-  )
-})
-
-test('extractMediaJobs drops non-UUID ids and unknown statuses', () => {
-  const jobs = extractMediaJobs({
-    result: {
-      jobs: [
-        { jobId: 'job-1', status: 'succeeded', assetIds: [COMPLETED_ASSET_ID] },
-        { jobId: MEDIA_JOB_ID, status: 'exploded', assetIds: [COMPLETED_ASSET_ID] },
-      ],
-    },
-  })
-  assert.deepEqual(jobs, [])
-
-  const mixed = extractMediaJobs({
-    result: { jobs: [{ jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: ['asset-1', 7, COMPLETED_ASSET_ID] }] },
-  })
-  assert.deepEqual(mixed, [{ jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: [COMPLETED_ASSET_ID] }])
-})
-
-test('extractMediaJobs bounds job and asset counts', () => {
-  const jobId = (index) => `00000000-0000-4000-8000-0000000002${String(index).padStart(2, '0')}`
-  const assetId = (index) => `00000000-0000-4000-8000-0000000003${String(index).padStart(2, '0')}`
-  const oversized = {
-    result: {
-      jobs: Array.from({ length: MAX_MEDIA_JOBS + 4 }, (_, index) => ({
-        jobId: jobId(index),
-        status: 'succeeded',
-        assetIds: Array.from({ length: MAX_MEDIA_ASSETS_PER_JOB + 4 }, (_, assetIndex) => assetId(assetIndex)),
-      })),
-    },
-  }
-  const jobs = extractMediaJobs(oversized)
-  assert.equal(jobs.length, MAX_MEDIA_JOBS)
-  assert.equal(jobs[0].assetIds.length, MAX_MEDIA_ASSETS_PER_JOB)
-  assert.equal(jobs[0].assetIds[0], assetId(0))
-  assert.equal(jobs[0].assetIds.at(-1), assetId(MAX_MEDIA_ASSETS_PER_JOB - 1))
-
-  const duplicated = extractMediaJobs({
-    result: { jobs: [{ jobId: MEDIA_JOB_ID.toUpperCase(), status: 'SUCCEEDED', assetIds: [COMPLETED_ASSET_ID, COMPLETED_ASSET_ID.toUpperCase()] }] },
-  })
-  assert.deepEqual(duplicated, [{ jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: [COMPLETED_ASSET_ID] }])
-})
-
-test('formatMediaJobStatus reuses the existing tool status wording', () => {
-  assert.deepEqual(formatMediaJobStatus('succeeded'), { label: '已完成', tone: 'success' })
-  assert.deepEqual(formatMediaJobStatus('completed'), { label: '已完成', tone: 'success' })
-  assert.deepEqual(formatMediaJobStatus('failed'), { label: '失败', tone: 'danger' })
-  assert.deepEqual(formatMediaJobStatus('cancelled'), { label: '已取消', tone: 'neutral' })
-  assert.deepEqual(formatMediaJobStatus('running'), { label: '执行中', tone: 'accent' })
-})
-
-test('completed media results produce asset detail links, malformed payloads produce none', () => {
-  const completedJobs = extractMediaJobs(
-    mediaToolResult({
-      content: 'Media generation completed',
-      jobs: [{ jobId: MEDIA_JOB_ID, status: 'succeeded', assetIds: [COMPLETED_ASSET_ID] }],
-    }),
-  )
-  const links = completedJobs.flatMap((job) => job.assetIds.map((assetId) => assetDetailHref(assetId)))
-  assert.deepEqual(links, [`/library?asset=${COMPLETED_ASSET_ID}`])
-
-  const malformedJobs = extractMediaJobs({
-    result: { jobs: [{ jobId: 'job-1', status: 'succeeded', assetIds: ['asset-1', COMPLETED_ASSET_ID] }] },
-  })
-  assert.deepEqual(malformedJobs, [])
-  assert.deepEqual(malformedJobs.flatMap((job) => job.assetIds.map((assetId) => assetDetailHref(assetId))), [])
-  assert.deepEqual(extractMediaJobs({ content: 'not json {' }), [])
 })
 
 test('UUID and URL safety helpers validate strictly', () => {

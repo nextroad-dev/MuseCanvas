@@ -1,4 +1,4 @@
-// Agent Console 的 URL 复用消费（如从 /library 点「复用同款提示词」跳回 /generate）。
+// Agent Console 的 URL 复用消费（如从 /library 点「复用同款提示词」或「作为参考图」跳回 /generate）。
 // 纯模块：零 React/DOM，仅 `import type`。一次消费后保留用户后续编辑，不因普通切 tab/路由清空草稿。
 
 import type { WorkspaceInspectorTab } from '@/shared/lib/app-routes'
@@ -6,6 +6,13 @@ import type { WorkspaceInspectorTab } from '@/shared/lib/app-routes'
 export interface AgentConsoleReuseDraft {
   draftPrompt: string
   lastReuseQuery: string
+}
+
+export interface ReuseImageQueryPayload {
+  url: string
+  assetId: string | null
+  label: string | null
+  prompt: string | null
 }
 
 const VALID_PANELS = new Set<WorkspaceInspectorTab>(['artifacts', 'tools'])
@@ -43,4 +50,26 @@ export function parseInspectorPanelQuery(query: string): WorkspaceInspectorTab |
 export function parseReuseKindQuery(query: string): string | null {
   const kind = parseQuery(query).get('kind')
   return kind && kind.trim().length > 0 ? kind.trim() : null
+}
+
+/** 提取本次 URL 中的参考图复用参数（如有）。 */
+export function parseReuseImageQuery(query: string): ReuseImageQueryPayload | null {
+  const params = parseQuery(query)
+  const url = params.get('image')?.trim()
+  if (!url) return null
+  if (
+    !url.startsWith('/') &&
+    !url.startsWith('http://') &&
+    !url.startsWith('https://') &&
+    !url.startsWith('blob:') &&
+    !url.startsWith('data:image/')
+  ) {
+    return null
+  }
+  return {
+    url,
+    assetId: params.get('assetId')?.trim() || null,
+    label: params.get('label')?.trim() || null,
+    prompt: params.get('prompt')?.trim() || null,
+  }
 }

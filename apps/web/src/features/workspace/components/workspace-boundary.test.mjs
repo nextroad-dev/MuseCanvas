@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { APP_ROUTES, agentConsoleInspectorRoute, isOnGenerate } from '../../../shared/lib/app-routes.ts'
+import { APP_ROUTES } from '../../../shared/lib/app-routes.ts'
 import { componentHarness, nodes } from '../../../shared/components/ui/isolated-ui-fixes-test-harness.mjs'
 
 const layoutUrl = new URL('../../../app/(workspace)/(studio)/layout.tsx', import.meta.url)
@@ -25,7 +25,7 @@ function shellHarness(pathname = APP_ROUTES.library, router = { push() {}, repla
     '@/shared/hooks/useAuth': {
       useAuth: () => ({ logout: async () => ({ loggedOut: true }) }),
     },
-    '@/shared/lib/app-routes': { APP_ROUTES, agentConsoleInspectorRoute, isOnGenerate },
+    '@/shared/lib/app-routes': { APP_ROUTES },
   })
 }
 
@@ -50,23 +50,7 @@ test('live studio propagates upstream failures instead of silently falling back 
   await assert.rejects(layoutHarness('live', async () => { throw unavailable }).render({ children: null }), (error) => error === unavailable)
 })
 
-test('mock shell names the preview honestly and never exposes an account link', () => {
-  const harness = shellHarness(APP_ROUTES.library)
-  const rendered = harness.render({ mode: 'mock', user: null, children: 'gallery' })
-  assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.account).length, 0)
-  assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.admin).length, 0)
-  assert.equal(nodes(rendered, (node) => node.props['aria-current'] === 'page' && node.props.href === APP_ROUTES.library).length, 1)
-  assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.generate).length, 1)
-  assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.library).length, 1)
-  assert.equal(nodes(rendered, (node) => node.props.href === `${APP_ROUTES.generate}?panel=canvas`).length, 0)
-  assert.equal(nodes(rendered, (node) => node.props.href === agentConsoleInspectorRoute('artifacts')).length, 1)
-  assert.equal(nodes(rendered, (node) => node.type === 'Badge').length, 0)
-  assert.equal(nodes(rendered, (node) => node.props.role === 'note').length, 1)
-  assert.equal(nodes(rendered, (node) => node.props.id === 'workspace-main').length, 1)
-  assert.equal(nodes(rendered, (node) => node.props.menuLabel === '账户菜单').length, 0)
-})
-
-test('live admin shell exposes admin link and account menu without mock banner', () => {
+test('headerless studio shell applies full-bleed h-dvh layout on /generate and /library while providing session context', () => {
   const adminUser = {
     id: 'admin-1',
     email: 'admin@example.invalid',
@@ -74,40 +58,81 @@ test('live admin shell exposes admin link and account menu without mock banner',
     status: 'active',
     createdAt: '2026-01-01T00:00:00.000Z',
   }
-  const harness = shellHarness(APP_ROUTES.generate)
-  const rendered = harness.render({ mode: 'live', user: adminUser, children: 'console' })
-  assert.equal(nodes(rendered, (node) => node.props.role === 'note').length, 0)
-  assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.admin).length, 1)
-  assert.equal(nodes(rendered, (node) => node.props['aria-current'] === 'page' && node.props.href === APP_ROUTES.generate).length, 1)
-
-  const menus = nodes(rendered, (node) => node.props.menuLabel === '账户菜单')
-  assert.equal(menus.length, 1)
-  const itemIds = Array.from(menus[0].props.items.map((item) => item.id))
-  assert.deepEqual(itemIds, ['account', 'admin', 'logout'])
-
-  // Non-admin live user still sees account menu without admin entries.
   const regularUser = { ...adminUser, id: 'user-1', role: 'user' }
-  const regularTree = harness.render({ mode: 'live', user: regularUser, children: 'console' })
-  assert.equal(nodes(regularTree, (node) => node.props.href === APP_ROUTES.admin).length, 0)
-  const regularMenus = nodes(regularTree, (node) => node.props.menuLabel === '账户菜单')
-  assert.equal(regularMenus.length, 1)
-  assert.deepEqual(Array.from(regularMenus[0].props.items.map((item) => item.id)), ['account', 'logout'])
+
+  for (const pathname of [APP_ROUTES.generate, APP_ROUTES.library]) {
+    const harness = shellHarness(pathname)
+    for (const scenario of [
+      { mode: 'live', user: adminUser },
+      { mode: 'live', user: regularUser },
+      { mode: 'mock', user: null },
+    ]) {
+      const rendered = harness.render({ ...scenario, children: 'studio-content' })
+      assert.equal(nodes(rendered, (node) => node.type === 'header').length, 0)
+      assert.equal(nodes(rendered, (node) => node.props.role === 'note').length, 0)
+      assert.equal(nodes(rendered, (node) => node.props.role === 'alert').length, 0)
+      assert.equal(nodes(rendered, (node) => node.props.id === 'workspace-mobile-nav').length, 0)
+      assert.equal(nodes(rendered, (node) => node.type === 'WorkspaceJobObserver').length, 1)
+      assert.equal(nodes(rendered, (node) => node.props.href === '#workspace-main').length, 1)
+      assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.account).length, 0)
+      assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.admin).length, 0)
+
+      const providers = nodes(rendered, (node) => node.type === 'WorkspaceShellProvider')
+      assert.equal(providers.length, 1)
+      assert.equal(providers[0].props.value.mode, scenario.mode)
+      assert.equal(providers[0].props.value.user, scenario.user)
+      assert.equal(providers[0].props.value.loggingOut, false)
+      assert.equal(providers[0].props.value.logoutError, null)
+      assert.equal(typeof providers[0].props.value.onLogout, 'function')
+      assert.equal(typeof providers[0].props.value.onDismissLogoutError, 'function')
+
+      const containers = nodes(rendered, (node) => node.type === 'div' && (node.props.className ?? '').split(/\s+/).includes('h-dvh'))
+      assert.equal(containers.length, 1)
+      assert.match(containers[0].props.className, /\boverflow-hidden\b/)
+
+      const mains = nodes(rendered, (node) => node.props.id === 'workspace-main')
+      assert.equal(mains.length, 1)
+      assert.match(mains[0].props.className, /\boverflow-hidden\b/)
+      assert.equal(mains[0].props.children, 'studio-content')
+    }
+  }
 })
 
+test('headerless account shell uses min-h-dvh and boxed content padding when not full-bleed', () => {
+  const user = {
+    id: 'user-1',
+    email: 'artist@example.invalid',
+    role: 'user',
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }
 
-test('session deep link keeps the actual shell full-height and selects Console navigation on desktop and mobile', () => {
-  const harness = shellHarness('/agent/sessions/44444444-4444-4444-8444-444444444444')
-  const props = { mode: 'live', user: null, children: 'session-console' }
-  let rendered = harness.render(props)
-  assert.match(rendered.props.className, /\bh-dvh overflow-hidden\b/)
-  const main = nodes(rendered, (node) => node.props.id === 'workspace-main')[0]
-  assert.match(main.props.className, /\bmin-h-0\b/)
-  assert.match(main.props.className, /\boverflow-hidden\b/)
-  assert.doesNotMatch(main.props.className, /(?:^|\s)(?:[a-z]+:)?(?:p[xy]?|max-w)-/)
-  const selectedConsole = (tree) => nodes(tree, (node) => node.props.href === APP_ROUTES.generate && node.props['aria-current'] === 'page')
-  assert.equal(selectedConsole(rendered).length, 1)
-  nodes(rendered, (node) => node.props['aria-label'] === '打开导航菜单')[0].props.onClick()
-  rendered = harness.render(props)
-  assert.equal(selectedConsole(rendered).length, 2)
-  assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.library && node.props['aria-current'] === 'page').length, 0)
+  for (const config of [
+    { pathname: APP_ROUTES.account, fullBleed: undefined },
+    { pathname: APP_ROUTES.library, fullBleed: false },
+  ]) {
+    const harness = shellHarness(config.pathname)
+    const rendered = harness.render({ mode: 'live', user, fullBleed: config.fullBleed, children: 'account-content' })
+    assert.equal(nodes(rendered, (node) => node.type === 'header').length, 0)
+    assert.equal(nodes(rendered, (node) => node.props.role === 'note').length, 0)
+    assert.equal(nodes(rendered, (node) => node.props.role === 'alert').length, 0)
+    assert.equal(nodes(rendered, (node) => node.type === 'WorkspaceJobObserver').length, 1)
+    assert.equal(nodes(rendered, (node) => node.props.href === '#workspace-main').length, 1)
+
+    const providers = nodes(rendered, (node) => node.type === 'WorkspaceShellProvider')
+    assert.equal(providers.length, 1)
+    assert.equal(providers[0].props.value.mode, 'live')
+    assert.equal(providers[0].props.value.user, user)
+    assert.equal(typeof providers[0].props.value.onLogout, 'function')
+
+    const containers = nodes(rendered, (node) => node.type === 'div' && (node.props.className ?? '').split(/\s+/).includes('min-h-dvh'))
+    assert.equal(containers.length, 1)
+    assert.equal(containers[0].props.className.split(/\s+/).includes('h-dvh'), false)
+
+    const mains = nodes(rendered, (node) => node.props.id === 'workspace-main')
+    assert.equal(mains.length, 1)
+    assert.match(mains[0].props.className, /max-w-\[var\(--container-content\)\]/)
+    assert.equal(/\boverflow-hidden\b/.test(mains[0].props.className), false)
+    assert.equal(mains[0].props.children, 'account-content')
+  }
 })

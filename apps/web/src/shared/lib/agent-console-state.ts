@@ -57,13 +57,6 @@ export function createEmptyAgentConsoleState(): AgentConsoleTimelineState {
   }
 }
 
-export function canReleaseScopedRequest(
-  lockedGeneration: number | null,
-  requestGeneration: number,
-): boolean {
-  return lockedGeneration === requestGeneration
-}
-
 export function isTurnActive(turn: AgentTurnDTO | null | undefined): boolean {
   if (!turn) return false
   return !TERMINAL_TURN_STATUSES.has(turn.status)

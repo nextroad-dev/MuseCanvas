@@ -1,8 +1,11 @@
 'use client'
 
-// 图库读取：cursor 分页与 owner-scoped 单资产详情。
+// 图库读取：cursor 分页的 infinite query + 单资产详情（缓存优先）。
+// 后端没有 `GET /api/library/:id`（只有 /download），灯箱需要的完整 DTO
+// 通常已在网格页的列表缓存里；缓存缺失时回源最近 100 条兜底（契约缺口见报告）。
 
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -35,6 +38,7 @@ export function useLibrary(
   return useInfiniteQuery({
     queryKey: queryKeys.library.list(params),
     initialPageParam: undefined as string | undefined,
+    placeholderData: keepPreviousData,
     queryFn: ({ pageParam }) =>
       clientApi.library.list({ ...params, ...(pageParam ? { cursor: pageParam } : {}) }),
     getNextPageParam: (lastPage) =>

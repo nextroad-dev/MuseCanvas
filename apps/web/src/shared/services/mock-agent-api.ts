@@ -244,7 +244,7 @@ function createInitialState(): StoredState {
       type: 'assistant_message',
       toolCallId: null,
       payload: {
-        content: '已完成「晨雾水乡的乌篷船」本地样片演示与画布参考整理。你可以继续输入新的灵感描述，或点击「新建会话」开启新对话。',
+        content: '已完成「晨雾水乡的乌篷船」本地样片演示与执行记录整理。你可以继续输入新的灵感描述，或点击「新建」开启新对话。',
       },
       createdAt: seedUpdatedAt,
     },
@@ -656,7 +656,7 @@ export function createMockAgentApi({ now = Date.now, storage }: MockAgentOptions
         turn.id,
         'assistant_message',
         {
-          content: `已完成「${turn.prompt.slice(0, 48)}」的本地样片生成与参考归档，你可以在右侧检查器中查看生成结果。`,
+          content: `已完成「${turn.prompt.slice(0, 48)}」的本地样片生成与参考归档，可直接在上方画布或作品图库中查看与复用。`,
         },
         null,
         doneIso,
@@ -1102,6 +1102,26 @@ export function createMockAgentApi({ now = Date.now, storage }: MockAgentOptions
         if (current.size === 0) listeners.delete(sessionId)
       }
     },
+
+    deleteSession: async (sessionId: string): Promise<{ deleted: boolean }> => {
+      delete state.sessions[sessionId]
+      for (const [reqId, receipt] of Object.entries(state.sessionReceipts)) {
+        if (receipt.sessionId === sessionId) {
+          delete state.sessionReceipts[reqId]
+        }
+      }
+      listeners.delete(sessionId)
+      save()
+      return { deleted: true }
+    },
+
+    clearSessions: async (): Promise<{ cleared: boolean }> => {
+      state.sessions = {}
+      state.sessionReceipts = {}
+      listeners.clear()
+      save()
+      return { cleared: true }
+    },
   }
 
   const canvases = {
@@ -1219,6 +1239,8 @@ export const mockAgentApi: MockAgentApi = {
   resolveApproval: (approvalId, body) => browserMock().resolveApproval(approvalId, body),
   getEvents: (sessionId, params) => browserMock().getEvents(sessionId, params),
   subscribe: (sessionId, listener) => browserMock().subscribe(sessionId, listener),
+  deleteSession: (sessionId) => browserMock().deleteSession(sessionId),
+  clearSessions: () => browserMock().clearSessions(),
 }
 
 export const mockCanvasesApi: MockCanvasesApi = {

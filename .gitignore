@@ -64,6 +64,7 @@ docs/*
 !docs/agent-core-openapi.json
 !docs/agent-core-remaining-plan.md
 !docs/agent-core-m5-runbook.md
+!docs/canvas-deprecation.md
 agents.md
 **/agents.md
 AGENTS.md

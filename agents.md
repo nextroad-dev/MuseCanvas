@@ -2,6 +2,8 @@
 
 本文档为在 MuseCanvas 项目中工作的 AI 智能体规范与协作准则。所有在本代码库中执行任务的 Agent 必须严格遵守 **Plan & Execute** 范式与 **多 Agent 协同（Multi-Agent Collaboration）** 流程。
 
+> ⚠️ **画布（Canvas）功能已决策废弃（2026-11-18）**：前端 `apps/web` 禁止新增画布相关代码，现有触点待统一移除；后端暂时保留冻结。凡涉及前端或 Agent 链路的改动，先阅读 `docs/canvas-deprecation.md`。
+
 ---
 
 ## 核心原则 (Core Principles)

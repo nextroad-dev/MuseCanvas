@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test, { mock } from 'node:test'
+import { Socket } from 'node:net'
 import { db } from '@musecanvas/database'
 import { NextRequest } from 'next/server'
 import type { AuthedContext } from '../../router/types'
-import { getJob, listJobs } from './handlers'
+import { cancelJob, getJob, listJobs } from './handlers'
 
 const actorId = '00000000-0000-4000-8000-000000000001'
 const context = (id = 'job-1'): AuthedContext => ({
@@ -139,4 +140,44 @@ test('getJob returns 404 before loading inputs or outputs for an unavailable job
     assert.equal(body.error.code, 'NOT_FOUND')
     assert.equal(h.calls.length, 1)
   } finally { h.restore() }
+})
+
+
+test('queued/retry_wait cancel commits terminal media event atomically; Outbox failure rolls cancellation back', async t => {
+  // Rate limiting remains real code, but every socket attempt is rejected in
+  // memory. This test never connects to Redis or any other network endpoint.
+  t.mock.method(Socket.prototype, 'connect', () => { throw new Error('NETWORK_DISABLED_IN_TEST') })
+  t.mock.method(console, 'error', () => {})
+  for (const initial of ['queued', 'retry_wait']) {
+    let committed = initial
+    let staged = initial
+    let failOutbox = true
+    const statements: string[] = []
+    const query = async (sql: string) => {
+      statements.push(sql)
+      if (sql === 'BEGIN') staged = committed
+      else if (sql === 'COMMIT') committed = staged
+      else if (sql.startsWith('SELECT id,status,attempt')) return { rows: [{ id: 'job-1', status: staged, attempt: 0 }] }
+      else if (sql.startsWith('UPDATE generation_jobs')) staged = 'canceled'
+      else if (sql.includes("SELECT 'media.job.completed'")) {
+        assert.equal(staged, 'canceled')
+        if (failOutbox) throw new Error('OUTBOX_FAILED')
+      }
+      return { rows: [], rowCount: 0 }
+    }
+    const connect = t.mock.method(db(), 'connect', async () => ({ query, release() {} }))
+    const reads = t.mock.method(db(), 'query', async (sql: string) => {
+      if (sql.includes('FROM generation_jobs j')) return { rows: [{ ...job('job-1'), status: committed }] }
+      return { rows: [] }
+    })
+    await assert.rejects(cancelJob(context()), /OUTBOX_FAILED/)
+    assert.equal(committed, initial)
+    assert.equal(statements.at(-1), 'ROLLBACK')
+    failOutbox = false
+    assert.equal((await cancelJob(context())).status, 200)
+    assert.equal(committed, 'canceled')
+    assert.equal(statements.at(-1), 'COMMIT')
+    assert.ok(!statements.some(sql => sql.includes('generation.cancel.requested')))
+    connect.mock.restore(); reads.mock.restore()
+  }
 })

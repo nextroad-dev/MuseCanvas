@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   ArrowClockwiseIcon,
   SidebarSimpleIcon,
@@ -17,6 +17,7 @@ import {
   type BadgeTone,
 } from '@/shared/components/ui'
 import { useAgentConsole } from '@/shared/hooks/useAgentConsole'
+import { agentSessionRoute } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import type { WorkspaceMode } from '@/shared/lib/workspace-mode'
 import { isApiError } from '@/shared/services/api'
@@ -37,6 +38,7 @@ import { SessionSidebar } from './session-sidebar'
 
 export interface AgentConsoleViewProps {
   mode: WorkspaceMode
+  initialSessionId?: string
 }
 
 const subscribeHydration = () => () => {}
@@ -104,13 +106,15 @@ function ConsoleHydrationSkeleton() {
  * 左侧会话栏自 `md`（>=960px）内联停靠，右侧检查器自 `lg`（>=1280px）内联停靠；
  * 全量服务端状态交由 `useAgentConsole` 与 TanStack Query，易失 UI 状态交由 `useAgentConsoleStore`。
  */
-export function AgentConsoleView({ mode }: AgentConsoleViewProps) {
+export function AgentConsoleView({ mode, initialSessionId }: AgentConsoleViewProps) {
+  const router = useRouter()
   const hydrated = useSyncExternalStore(subscribeHydration, clientSnapshot, serverSnapshot)
   const reuseQuery = useSearchParams().toString()
   const reuseKind = parseReuseKindQuery(reuseQuery)
   const { toast } = useToast()
 
-  const activeSessionId = useAgentConsoleStore((state) => state.activeSessionId)
+  const storedSessionId = useAgentConsoleStore((state) => state.activeSessionId)
+  const activeSessionId = initialSessionId ?? storedSessionId
   const leftSidebarOpen = useAgentConsoleStore((state) => state.leftSidebarOpen)
   const rightPanelOpen = useAgentConsoleStore((state) => state.rightPanelOpen)
   const rightPanelTab = useAgentConsoleStore((state) => state.rightPanelTab)
@@ -127,6 +131,15 @@ export function AgentConsoleView({ mode }: AgentConsoleViewProps) {
   const consumeReuseQuery = useAgentConsoleStore((state) => state.consumeReuseQuery)
   const setDefinitionDraft = useAgentConsoleStore((state) => state.setDefinitionDraft)
   const resetForActor = useAgentConsoleStore((state) => state.resetForActor)
+
+  const selectSession = useCallback((id: string) => {
+    setActiveSessionId(id)
+    router.push(agentSessionRoute(id))
+  }, [router, setActiveSessionId])
+
+  useEffect(() => {
+    if (initialSessionId) setActiveSessionId(initialSessionId)
+  }, [initialSessionId, setActiveSessionId])
 
   const agentConsole = useAgentConsole(hydrated ? activeSessionId : null, { mode })
 
@@ -222,8 +235,8 @@ export function AgentConsoleView({ mode }: AgentConsoleViewProps) {
     const seeded =
       agentConsole.sessions.find((session) => session.id === MOCK_SEED_SESSION_ID) ??
       agentConsole.sessions[0]
-    if (seeded) setActiveSessionId(seeded.id)
-  }, [mode, hydrated, activeSessionId, agentConsole.sessions, setActiveSessionId])
+    if (seeded) selectSession(seeded.id)
+  }, [mode, hydrated, activeSessionId, agentConsole.sessions, selectSession])
 
   // 登录用户切换时重置客户端易失状态，防止跨账号残留选中会话或草稿。
   const previousActorRef = useRef('')
@@ -355,7 +368,7 @@ export function AgentConsoleView({ mode }: AgentConsoleViewProps) {
         <SessionSidebar
           console={agentConsole}
           activeSessionId={activeSessionId}
-          onSelectSession={(id) => setActiveSessionId(id)}
+          onSelectSession={selectSession}
           definitionDraft={definitionDraft}
           onUpdateDefinitionDraft={setDefinitionDraft}
           newSessionOpen={newSessionOpen}

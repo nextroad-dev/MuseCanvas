@@ -27,9 +27,34 @@ export function agentConsoleInspectorRoute(panel: WorkspaceInspectorTab): string
   return `${APP_ROUTES.generate}?panel=${panel}`
 }
 
+export function agentSessionRoute(id: string): string {
+  return `/agent/sessions/${encodeURIComponent(id)}`
+}
+
+const ASSET_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** 图库资产 id 只接受 UUID；大小写归一到小写，非法值返回 null。 */
+function normalizeAssetId(id: string | null | undefined): string | null {
+  if (!id) return null
+  const clean = id.trim()
+  return ASSET_ID_PATTERN.test(clean) ? clean.toLowerCase() : null
+}
+
+/** 图库资产深链：图库页以 `?asset=` 打开既有灯箱；id 非法时返回 null。 */
+export function assetDetailHref(id: string): string | null {
+  const assetId = normalizeAssetId(id)
+  return assetId ? `${APP_ROUTES.library}?asset=${encodeURIComponent(assetId)}` : null
+}
+
+/** 从查询串（可含前导 `?`）读取资产深链 id；缺省或非法时返回 null。 */
+export function assetIdFromSearch(search: string | null | undefined): string | null {
+  if (!search) return null
+  return normalizeAssetId(new URLSearchParams(search).get('asset'))
+}
+
 export function isOnGenerate(pathname: string | null | undefined): boolean {
   if (!pathname) return false
-  return pathname === GENERATE_ROUTE || pathname.startsWith(`${GENERATE_ROUTE}/`)
+  return pathname === GENERATE_ROUTE || pathname.startsWith(`${GENERATE_ROUTE}/`) || pathname.startsWith('/agent/sessions/')
 }
 
 export function isOnAdmin(pathname: string | null | undefined): boolean {

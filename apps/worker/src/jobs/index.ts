@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
 import {
   acquireModelCapacity,
+  appendMediaJobCompleted,
   db,
   getLatestModelConfigRevision,
   getLatestProviderRunForJob,
@@ -362,6 +363,7 @@ export async function persistJobSuccess(
     "UPDATE generation_jobs SET status='succeeded',phase='completed',progress=100,completed_at=now(),updated_at=now(),error_code=NULL,provider_error=NULL WHERE id=$1",
     [input.jobId],
   )
+  await appendMediaJobCompleted(client, input.jobId)
   return true
 }
 
@@ -395,7 +397,9 @@ export async function persistJobFailure(
       input.providerError?.providerReferenceId || null,
     ],
   )
-  return Boolean(updated.rowCount && updated.rowCount > 0)
+  const changed = Boolean(updated.rowCount && updated.rowCount > 0)
+  if (changed && !input.retryable) await appendMediaJobCompleted(client, input.jobId)
+  return changed
 }
 
 /** The job transition and its next delivery must commit together. */
@@ -695,6 +699,7 @@ async function persistCanceledRun(client: pg.PoolClient, run: ProviderRunEntity,
     nextActionAt: null,
   })
   await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running','retry_wait')", [job.id])
+  await appendMediaJobCompleted(client, String(job.id))
 }
 
 async function cancelJobWithRun(run: ProviderRunEntity, job: Record<string, unknown>, terminalState: 'canceled' | 'succeeded' = 'canceled'): Promise<void> {
@@ -1112,6 +1117,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
     if (claimDecision === 'ignore') return null
     if (claimDecision === 'cancel') {
       await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [job.id])
+      await appendMediaJobCompleted(client, String(job.id))
       return { ...(job as object), status: 'canceled', canceledAtClaim: true } as unknown as Record<string, unknown>
     }
     await client.query("UPDATE generation_jobs SET status='running',started_at=COALESCE(started_at,now()),updated_at=now(),attempt=attempt+1,phase=COALESCE(phase,'preprocessing') WHERE id=$1", [job.id])
@@ -1147,7 +1153,14 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         })
         if (canceled === undefined) throw new ProviderLeaseLostError()
       } else if (current) {
-        await db().query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1", [claimed.id]).catch(() => {})
+        try {
+          await transaction(async client => {
+            await client.query("UPDATE generation_jobs SET status='canceled',phase='completed',completed_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running','retry_wait')", [claimed.id])
+            await appendMediaJobCompleted(client, String(claimed.id))
+          })
+        } catch (error) {
+          throw new LifecyclePersistenceError(error)
+        }
       }
       return true
     }

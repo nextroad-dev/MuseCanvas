@@ -1,8 +1,6 @@
 'use client'
 
-// 图库读取：cursor 分页的 infinite query + 单资产详情（缓存优先）。
-// 后端没有 `GET /api/library/:id`（只有 /download），灯箱需要的完整 DTO
-// 通常已在网格页的列表缓存里；缓存缺失时回源最近 100 条兜底（契约缺口见报告）。
+// 图库读取：cursor 分页与 owner-scoped 单资产详情。
 
 import {
   useInfiniteQuery,
@@ -75,14 +73,7 @@ export function useAssetDetail(assetId: string | null | undefined): UseQueryResu
     queryKey: queryKeys.library.detail(assetId ?? ''),
     enabled: Boolean(assetId),
     staleTime: 30_000,
-    queryFn: async () => {
-      const cached = findCachedAsset(queryClient, assetId as string)
-      if (cached) return cached
-      const page = await clientApi.library.list({ limit: 100 })
-      const found = page.items.find((item) => item.id === assetId)
-      if (!found) throw new ApiError(404, 'NOT_FOUND', '资产不存在或不在最近作品中')
-      return found
-    },
+    queryFn: async () => findCachedAsset(queryClient, assetId as string) ?? clientApi.library.detail(assetId as string),
   })
 }
 

@@ -1381,6 +1381,25 @@ pnpm build
 - `docs/agent-core-v1-design.md` 本条与实现同步；单元用例 40 项、database 全套 191/191、domain 33/33、typecheck、`git diff --check` 通过。
 - **真实 PostgreSQL 17.12 验证（已执行）**：在已授权的隔离部署机 Postgres 容器上运行 `tests/integration/agent-runtime-pg.test.ts`（专用 `MUSECANVAS_AGENT_RUNTIME_PG_URL`，独立临时库自动建删），**11/11 通过**：并发首取仅一次 revision/event；过期接管后旧 token 不可 renew/release/写效果；steering 与 renewal 并发不丢 input/lease；cancel intent 与最终 guard 阻断效果写入并整体回滚；event 插入失败原子回滚 lease/fence/revision/cursor；SQL 错误回滚 round 而保留 lease；archival/pointer 清理与停用 actor 释放安全；cancel intent、停用 actor、作用域不匹配拒绝 claim/renewal；deadline 已过与 wrong engine 不受领。测试后已删除临时库、`fixture` 角色与隧道，部署机无残留。该验证不覆盖 Worker/Redis/HTTP/Provider 集成。
 
-后续 P5b：模型轮次（round checkpoint/预算 reserve/steering supersede）与 Agent consumer 接入（独立 stream/group、durable dedupe、心跳），先 review 后接入。两个开关仍默认关闭；admission 仍需 recovery/control cleanup、completion producer 等前置。
+后续 P5b–f 的实际集成进展见 §19.4；两个开关仍默认关闭，源码与本地验证不构成真实媒体执行准入。
+
+### 19.4 P5b–f、Console 与 M5 工作树集成（本地代码验收通过，媒体提案流程未接通）
+
+- 集成目录为 `D:/Project/MuseCanvas-agent-remaining`（`feat/agent-core-remaining`），共同基线 `f55e9d4`。Runner、媒体、语言上下文、只读工具、Console、故障 fixture 分别在隔离 worktree 实现并独立审查；用户完成 M5 后，真实未提交快照以三方合并纳入，原 `MuseCanvas-agent-m5` 的 31 个变更文件哈希校验未变。没有新建提交、推送或部署。
+- Runner 先持久化模型意图与预留，再在 SQL 事务外调用固定模型；已知响应完整保存 checkpoint、assistant 与全部工具调用，再执行效果。预算不足与不可用工具保留完整已知批次并产生配对失败结果；未知模型结果保留保守下界，禁止盲目重复付费。受保护状态转移独立于 P5a 的 running 前后守卫，依赖校验、终态/等待、公开事件、lease 与 active pointer 同事务。
+- 每个 wake 独立绑定 owner/session/turn/deadline 模型实例与 Definition 白名单；每次模型调用重新检查不可变 revision、活跃模型与 Provider 凭据关联，凭据仅在内存使用。上下文以只读一致快照加载原始 Item/round/tool，严格核对 canonical 工具身份与 `name__vN` wire name、顺序及唯一结果，允许合法取消/失败的 user-only 历史，不支持的 artifact reference 显式拒绝。
+- 版本化只读工具为 `list_models@v1`、`search_assets@v1`、`get_asset@v1`、`get_canvas@v1`；schema 子集严格闭合、有界，注册入口与实际 execute 均校验白名单、版本、输入、owner 和 UTF-8 字节上限。媒体模型工具使用严格 raw intent schema；内部 canonical 提案通过独立 executor 校验持久审批、语言/媒体双 revision、参数 digest、价格和输入身份，禁止默认放行。
+- 媒体完成 producer 覆盖 Worker 成功/终止失败/取消、maintenance 本地取消、API 直接取消、生成任务删除和用户批量删除，同终态事务写 durable Outbox。事件以 job ID 与 DB 原精度 `completed_at::text` 去重，手动重试产生新终态身份；预处理后取消的持久化失败向外传播，不伪装成生成失败或 ACK。
+- `0044` 为用户 M5 的真实恢复索引；`0045` 为 Core 可信蒙版准备身份。`agentPreparation:true` 只在真实 alpha 规范化/蒙版生成及 ready 上传之后记录 owner、源/蒙版 checksum、尺寸、版本与期限；普通 ready PNG 不能替代。准备身份不可变，keyed upload 延长 TTL 不延长身份，过期返回明确 409 并要求新 key。默认手工/Canvas 准备流程不写新表；所有迁移仅为文件，未实际应用。
+- Console 新增认证布局下 `/agent/sessions/[id]`；操作台固定高度与导航选择覆盖深链。资产详情使用真实 owner-scoped `GET /api/library/:id`，无效 UUID 查询前统一 404，签名 DTO 隐藏存储 key/私有提示词。mock 请求不落入真实 API；旧分页完成回调不能释放后来 generation 的锁。
+- 媒体提案的独立复审发现两个 P1 与两个 P2，均已修复并回补回归：零价预留不再被结算为 unknown（否则媒体成功后 Turn 永不恢复或终态）；canonical 提案行作为内部行不进入模型可见轮次，其结果在同一事务镜像到 raw 调用以保持唯一配对；物化失败不再逃出 Runner 而是产生配对失败；审批期间 steering 后已批准但过期的提案显式失败而非静默挂起。二次复审又发现两个竞态 P2（审批过期未落库会使下一轮整体回滚；终态 Turn 遗留的无链路 `waiting_external` 镜像行会阻塞后续 Turn 上下文），已按“同一事务内落库过期”与“终态时只终结无链路行”修复。
+- 收尾轮补齐的运行时缺口（均有单测）：集成 fixture 的迁移头断言由固定 0044 改为“至少 0044”，恢复/租约 PG fixture 重新可执行；新增 `settleAbandonedMedia` 扫描并在终态 Turn 上结算已终结媒体的预留与结果（此前取消的 Turn 会永久遗留 `reserved` 与缺失结果）；协调器初轮错误不再产生未处理拒绝，且成功 sweep 会刷新健康进度；schema 预检新增 0044 四个恢复索引的命名检查（`WORKER_SCHEMA_0044_INDEX_REQUIRED`）；runbook 更新到 0045 并说明操作者需自备 definition。Console 现在解析媒体 `tool_result.jobs`，按 job 展示状态并在展开时以 `useAssetDetail` 渲染缩略图，深链到图库 `?asset=<uuid>`（新增 `assetDetailHref`，无新端点、无 N+1）；新增 `scripts/agent-definition.ts` 操作者 CLI（默认 dry-run，`--apply` 才写，幂等，校验 owner/模型协议/预算/工具白名单），应用仍不自动 seed definition。
+- 仍缺：`edit_image` 的可信蒙版准备没有生产调用方，也没有 Console 端的上传/选区入口，因此 Agent 编辑在真实使用中仍不可达（需新增准备端点 + Composer 输入面）；`artifact_reference` 无生产 writer 与 resolver，上下文显式拒绝；rectangle/brush staging 未实现。
+- 已知迁移期限制：发布前已经处于 `waiting_approval` 的旧形状 Turn，在升级后被批准时，其 raw 行已经是终态失败，因此模型看到的是 `APPROVAL_REQUIRED` 元数据而非真实媒体结果；新流程无此问题。真实环境下仍需验证镜像与恢复扫描对同一行的并发投影。
+- Worker 默认入口已接入 composition，generation/Agent/media 使用独立消费循环；任一循环失败先 abort，再等待全部排空。schema 预检在 Redis/health/调度之前核对 0042、0043、0045 实际字段。协调器关闭时停止新 sweep 并等待当前 sweep 完成。
+- M5/Runner 组合审查的 3 项 P1、3 项 P2 已分别修复并独立复核通过：恢复工具终态与唯一 result Item/公开事件同事务；取消/超时把不确定模型意图保留为 unknown，不能释放成未使用；普通媒体事件与恢复扫描共用实际输出结算及完整依赖/预算排队门；unknownCost 不伪造金额；审批终态发布冻结 decision_revision；协调器退出等待当前 sweep。远端 Provider 未终结时保留并发预留，费用未知时保留 unknown。
+- 最终集成目录全仓 `pnpm test`：**1708 passed / 0 failed / 0 skipped**（contracts 74、observability 5、domain 33、database 341、providers 241、media-service 26、Web 192、Worker 295、API 501）。`pnpm typecheck`、`pnpm lint`（0 errors / 160 warnings）、`pnpm build` 均 exit 0，`git diff --check` 通过。上述计数包含媒体提案链、内部行镜像、零价结算与过期/终态竞态修复的回归；迁移连续性与 runner/source 定向检查属于数据库套件，不重复计数。
+
+能力与验证边界：媒体提案链路已接通。raw 模型调用仍保持不可变身份，不侵入式改写；缺少持久审批时持久化为 `APPROVAL_REQUIRED`，并在同一 fenced 事务内物化一条新的 canonical 提案 ToolCall（严格原始参数校验、钉住媒体 revision/描述符、托管输入 checksum 与可信蒙版身份、零价 `free-v1` 定价、参数哈希与媒体服务效果绑定哈希相等）、estimated_cost 预留与 pending approval，然后 Turn 进入 `waiting_approval`。审批通过后 `claimTurnLease` 可从 waiting 状态重新受领，Runner 仅对带批准绑定的 canonical 行调用内部已批准执行器；拒绝/过期生成配对失败且不产生媒体任务。迁移 0044/0045 仍只是文件，未实际应用；rectangle/brush/tool upload staging、artifact resolver 未实现；可靠模型定价缺失时有限金额预算仍拒绝调用。真实 PostgreSQL 0044/0045 迁移、锁/触发器、Redis、HTTP/browser 与 Provider 烟雾未运行；新增 opt-in fixture 的 skip 不计为行为通过。发布与开启 admission 仍需完成这些验证。
 
 

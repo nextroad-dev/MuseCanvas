@@ -58,7 +58,7 @@ import type {
   BuiltinProviderTemplate,
 } from '@musecanvas/contracts'
 import { ApiError, apiFetch, resolveApiUrl } from './api'
-import { WORKSPACE_MODE } from '../lib/workspace-mode'
+import { WORKSPACE_MODE, type WorkspaceMode } from '../lib/workspace-mode'
 import { mockAgentApi, mockCanvasesApi } from './mock-agent-api'
 import { mockWorkspaceApi } from './mock-workspace-api'
 import type {
@@ -74,6 +74,7 @@ import type {
   AdminPluginValidateResult,
   AdminUserDto,
   AssetDownloadDto,
+  AssetDto,
   AssetListDto,
   GenerationJobDto,
   GenerationJobListDto,
@@ -176,44 +177,48 @@ export const generationsApi = {
 // agent core v1
 // ---------------------------------------------------------------------------
 
-export const agentApi = {
+export function createAgentApi(mode: WorkspaceMode) {
+  return {
   listSessions: (params?: { limit?: number; cursor?: string }) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.listSessions(params)
       : get<AgentSessionsPageDTO>(API_ENDPOINTS.agent.sessions, params),
   createSession: (body: CreateAgentSessionRequest) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.createSession(body)
       : post<AgentSessionDTO>(API_ENDPOINTS.agent.sessions, body),
   getSnapshot: (sessionId: string, params?: { limit?: number }) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.getSnapshot(sessionId, params)
       : get<AgentSessionSnapshotDTO>(API_ENDPOINTS.agent.session(sessionId), params),
   listItems: (sessionId: string, params?: { cursor?: AgentDecimal; limit?: number }) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.listItems(sessionId, params)
       : get<AgentItemsPageDTO>(API_ENDPOINTS.agent.items(sessionId), params),
   sendMessage: (sessionId: string, body: CreateAgentMessageRequest) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.sendMessage(sessionId, body)
       : post<AgentMessageAcceptedDTO>(API_ENDPOINTS.agent.messages(sessionId), body),
   steerTurn: (turnId: string, body: CreateAgentMessageRequest) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.steerTurn(turnId, body)
       : post<AgentMessageAcceptedDTO>(API_ENDPOINTS.agent.steer(turnId), body),
   getTurn: (turnId: string) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.getTurn(turnId)
       : get<AgentTurnDTO>(API_ENDPOINTS.agent.turn(turnId)),
   cancelTurn: (turnId: string) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.cancelTurn(turnId)
       : post<AgentTurnDTO>(API_ENDPOINTS.agent.cancel(turnId), {}),
   resolveApproval: (approvalId: string, body: ResolveAgentApprovalRequest) =>
-    WORKSPACE_MODE === 'mock'
+    mode === 'mock'
       ? mockAgentApi.resolveApproval(approvalId, body)
       : post<AgentApprovalSummaryDTO>(API_ENDPOINTS.agent.resolveApproval(approvalId), body),
 }
+}
+
+export const agentApi = createAgentApi(WORKSPACE_MODE)
 
 // ---------------------------------------------------------------------------
 // canvases + canvas agent
@@ -276,6 +281,7 @@ export const jobsApi = {
 // ---------------------------------------------------------------------------
 
 export const libraryApi = {
+  detail: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.library.detail(id) : get<AssetDto>(API_ENDPOINTS.library.detail(id)),
   list: (params?: { limit?: number; cursor?: string; q?: string; kind?: 'image' | 'video'; eligible?: boolean }) =>
     WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.library.list(params) : get<AssetListDto>(API_ENDPOINTS.library.list, params),
   download: (id: string) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.library.download(id) : get<AssetDownloadDto>(API_ENDPOINTS.library.download(id)),

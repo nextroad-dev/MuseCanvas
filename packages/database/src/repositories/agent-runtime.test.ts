@@ -10,6 +10,7 @@ const token = (value: string) => agentCoreDecimal(value)
 const claim = { ...scope, leaseOwner: 'worker-a', leaseDurationMs: 1000 }
 const held: AgentTurnLeaseIdentity = { ...scope, leaseOwner: 'worker-a', fencingToken: token('1') }
 const fence: AgentTurnExecutionFence = { ...held, expectedInputRevision: token('1') }
+const CLAIMABLE = ['queued', 'running', 'waiting_tools', 'waiting_approval']
 function initial() {
   return {
     actor: { id: scope.ownerId, active: true },
@@ -18,6 +19,7 @@ function initial() {
       revision: '1', input_revision: '1', fencing_token: '0', lease_owner: null as string | null, lease_until: null as Date | null,
       cancel_requested_at: null as Date | null, terminal_at: null as Date | null, deadline_at: new Date(now + 10000), error: null },
     events: [] as { cursor: string; revision: string; payload: string }[], effects: 0,
+    tools: [] as { id:string; status:string; has_result:boolean }[], approvals: [] as {status:string}[], reservations: [] as {status:string}[], rounds: [] as {status:string}[],
   }
 }
 // This is a deliberately limited in-memory transaction/SQL-result model. It
@@ -44,10 +46,10 @@ function fixture() {
     if (sql.startsWith('SELECT id,owner_id')) return { rows: state.session.owner_id === args[0] && state.session.id === args[1] ? [copy(state.session)] : [] }
     if (sql.startsWith('SELECT * FROM agent_turns')) return { rows: matches(args) ? [copy(t)] : [] }
     if (sql.startsWith('UPDATE agent_turns SET lease_owner=$3')) {
-      if (!matches(args) || t.engine_version !== 'agent-core-v1' || !['queued', 'running'].includes(t.status) || live() || !executable()) return { rows: [] }
+      if (!matches(args) || t.engine_version !== 'agent-core-v1' || !CLAIMABLE.includes(t.status) || live() || !executable()) return { rows: [] }
       t.lease_owner = String(args[2]); t.lease_until = new Date(Math.min(t.deadline_at.getTime(), dbTime + Number(args[3])))
       t.fencing_token = String(BigInt(t.fencing_token) + 1n)
-      if (t.status === 'queued') t.revision = String(BigInt(t.revision) + 1n)
+      if (t.status !== 'running') t.revision = String(BigInt(t.revision) + 1n)
       t.status = 'running'
       return { rows: [copy(t)] }
     }
@@ -73,6 +75,20 @@ function fixture() {
     if (sql.startsWith('INSERT INTO agent_session_events')) {
       state.events.push({ cursor: String(args[2]), revision: String(args[3]), payload: String(args[4]) })
       return { rows: [] }
+    }
+    if (sql.startsWith('SELECT x.id,x.status')) return { rows: copy(state.tools) }
+    if (sql.startsWith('SELECT status FROM agent_approvals')) return { rows: copy(state.approvals) }
+    if (sql.startsWith('SELECT status FROM agent_budget_reservations')) return { rows: copy(state.reservations) }
+    if (sql.startsWith('SELECT status FROM agent_model_rounds')) return { rows: copy(state.rounds) }
+    if (sql.startsWith('UPDATE agent_turns SET status=$6')) {
+      if (!matches(args) || t.status!=='running' || t.lease_owner!==args[2] || t.fencing_token!==args[3] || t.input_revision!==args[4] || !live() || !executable()) return {rows:[]}
+      t.status=String(args[5]); t.error=args[6] ? JSON.parse(String(args[6])) : null
+      t.terminal_at=args[7] ? new Date(dbTime) : null; t.lease_owner=null; t.lease_until=null; t.revision=String(BigInt(t.revision)+1n)
+      return {rows:[copy(t)]}
+    }
+    if (sql.startsWith('UPDATE agent_sessions SET active_turn_id=NULL')) {
+      if (state.session.id!==args[0] || state.session.owner_id!==args[1] || state.session.active_turn_id!==args[2]) return {rows:[],rowCount:0}
+      state.session.active_turn_id=null; return {rows:[],rowCount:1}
     }
     if (sql === 'INSERT INTO fixture_effect') { state.effects++; return { rows: [] } }
     throw new Error(`unexpected fixture SQL: ${sql}`)
@@ -105,8 +121,8 @@ test('agent-runtime: fresh queued claim locks actor -> session -> turn, advances
   assert.deepEqual(f.calls.slice(0, 3).map(c => c.args), [[scope.ownerId], [scope.ownerId, scope.sessionId], [scope.sessionId, scope.turnId]])
   const sql = f.calls[3]!.sql
   assert.match(sql, /fencing_token=fencing_token\+1/)
-  assert.match(sql, /status='running',revision=revision\+CASE WHEN status='queued' THEN 1 ELSE 0 END/)
-  assert.match(sql, /status IN \('queued','running'\)/)
+  assert.match(sql, /status='running',revision=revision\+CASE WHEN status='running' THEN 0 ELSE 1 END/)
+  assert.match(sql, /status IN \('queued','running','waiting_tools','waiting_approval'\)/)
   assert.match(sql, /lease_until IS NULL OR lease_until<=clock_timestamp\(\)/)
   assert.match(sql, /cancel_requested_at IS NULL AND clock_timestamp\(\)<deadline_at/)
   assert.match(sql, /LEAST\(deadline_at,clock_timestamp\(\)\+\$4::int\*interval '1 millisecond'\)/)
@@ -140,12 +156,46 @@ test('agent-runtime: running turn with no lease is claimable; release and same-o
   assert.equal(f.state.turn.revision, '2'); assert.equal(f.state.events.length, 0)
 })
 
+for (const status of ['queued', 'waiting_tools', 'waiting_approval'] as const) {
+  test(`agent-runtime: ${status} claim enters running, advances revision once and publishes exactly one turn.updated`, async () => {
+    const f = fixture()
+    f.state.turn.status = status; f.state.turn.revision = '5'
+    const claimed = await f.repo.claimTurnLease(claim)
+    assert.deepEqual(claimed, { ...held, leaseUntil: new Date(now + 1000).toISOString(), revision: '6', inputRevision: '1' })
+    assert.equal(f.state.turn.status, 'running'); assert.equal(f.state.turn.revision, '6')
+    assert.equal(f.state.session.next_event_cursor, '4'); assert.equal(f.state.events.length, 1)
+    assert.deepEqual(f.state.events[0], { cursor: '3', revision: '6', payload: JSON.stringify({ turn: {
+      id: scope.turnId, sessionId: scope.sessionId, status: 'running', engineVersion: 'agent-core-v1', revision: '6', inputRevision: '1',
+      cancelRequestedAt: null, terminalAt: null, deadlineAt: new Date(now + 10000).toISOString(), error: null,
+    } }) })
+    assert.equal(f.calls.filter(c => c.sql.startsWith('INSERT INTO agent_session_events')).length, 1)
+    assert.ok(f.calls.every(c => !/outbox|consumed|ACK/i.test(c.sql)))
+  })
+}
+
+const blockedWaitingClaims: [string, (f: ReturnType<typeof fixture>) => void][] = [
+  ['cancel intent', f => { f.state.turn.cancel_requested_at = new Date(now) }],
+  ['deadline equality', f => { f.state.turn.deadline_at = new Date(now) }],
+  ['foreign owner session', f => { f.state.session.owner_id = '00000000-0000-4000-8000-000000000099' }],
+]
+for (const status of ['waiting_tools', 'waiting_approval'] as const) {
+  for (const [name, mutate] of blockedWaitingClaims) {
+    test(`agent-runtime: ${status} claim still rejects ${name} without revision, event or lease`, async () => {
+      const f = fixture(); f.state.turn.status = status; mutate(f)
+      const before = structuredClone(f.state)
+      assert.equal(await f.repo.claimTurnLease(claim), null)
+      assert.deepEqual(f.state, before)
+      assert.equal(f.commits, 1); assert.equal(f.rollbacks, 0)
+    })
+  }
+}
+
 const invalidClaimCases: [string, (f: ReturnType<typeof fixture>) => void][] = [
   ['inactive user', f => { f.state.actor.active = false }],
   ['archived session', f => { f.state.session.archived_at = new Date(now) }],
   ['wrong active pointer', f => { f.state.session.active_turn_id = null }],
   ['wrong engine', f => { f.state.turn.engine_version = 'legacy' }],
-  ...['waiting_tools', 'waiting_approval', 'completed', 'failed', 'cancelled'].map(status => [status, (f: ReturnType<typeof fixture>) => { f.state.turn.status = status }] as [string, (f: ReturnType<typeof fixture>) => void]),
+  ...['completed', 'failed', 'cancelled'].map(status => [status, (f: ReturnType<typeof fixture>) => { f.state.turn.status = status }] as [string, (f: ReturnType<typeof fixture>) => void]),
   ['cancel intent', f => { f.state.turn.cancel_requested_at = new Date(now) }],
   ['deadline equality', f => { f.state.turn.deadline_at = new Date(now) }],
   ['deadline past', f => { f.state.turn.deadline_at = new Date(now - 1) }],
@@ -307,4 +357,44 @@ test('agent-runtime: rejects empty owner, invalid durations and zero token befor
   assert.throws(() => f.repo.claimTurnLease({ ...claim, leaseOwner: '  ' }), { code: 'INVALID_INPUT' })
   assert.throws(() => f.repo.releaseTurnLease({ ...held, fencingToken: token('0') }), { code: 'INVALID_INPUT' })
   assert.equal(f.calls.length, 0); assert.equal(f.commits, 0)
+})
+
+test('agent-runtime: successful completion independently guards terminal dependencies and commits full public DTO/pointer/lease atomically',async()=>{
+  const f=fixture();await f.repo.claimTurnLease(claim)
+  f.state.tools.push({id:'tool',status:'completed',has_result:true});f.state.reservations.push({status:'settled'});f.state.rounds.push({status:'completed'})
+  const result=await f.repo.transitionWithTurnLease(fence,{to:'completed'},async c=>{await c.query('INSERT INTO fixture_effect');return 'checkpoint'})
+  assert.equal(result.work,'checkpoint');assert.equal(result.turn.status,'completed');assert.equal(f.state.session.active_turn_id,null);assert.equal(f.state.turn.lease_owner,null);assert.equal(f.state.turn.terminal_at?.getTime(),now);assert.equal(f.state.effects,1)
+  const payload=JSON.parse(f.state.events.at(-1)!.payload).turn
+  assert.deepEqual(payload,result.turn);assert.equal(payload.sessionId,scope.sessionId);assert.equal(payload.revision,'3');assert.equal(payload.inputRevision,'1');assert.equal(payload.engineVersion,'agent-core-v1');assert.equal(payload.deadlineAt,new Date(now+10000).toISOString())
+  const update=f.calls.find(call=>call.sql.startsWith('UPDATE agent_turns SET status=$6'))!.sql
+  assert.match(update,/lease_owner=\$3 AND fencing_token=\$4 AND clock_timestamp\(\)<lease_until/);assert.match(update,/input_revision=\$5/)
+})
+for(const dependency of ['unpaired tool','running tool','reserved budget','unknown budget','pending approval','running round']) {
+  test(`agent-runtime: terminal transition rejects ${dependency} and rolls back callback effects`,async()=>{
+    const f=fixture();await f.repo.claimTurnLease(claim)
+    if(dependency==='unpaired tool')f.state.tools.push({id:'tool',status:'completed',has_result:false})
+    if(dependency==='running tool')f.state.tools.push({id:'tool',status:'executing',has_result:false})
+    if(dependency==='reserved budget')f.state.reservations.push({status:'reserved'})
+    if(dependency==='unknown budget')f.state.reservations.push({status:'unknown'})
+    if(dependency==='pending approval')f.state.approvals.push({status:'pending'})
+    if(dependency==='running round')f.state.rounds.push({status:'running'})
+    const before=structuredClone(f.state)
+    await assert.rejects(f.repo.transitionWithTurnLease(fence,{to:'completed'},async c=>c.query('INSERT INTO fixture_effect')),{code:'TRANSITION_REJECTED'})
+    assert.deepEqual(f.state,before)
+  })
+}
+test('agent-runtime: media handoff requires durable waiting dependency, releases lease, preserves active pointer',async()=>{
+  const f=fixture();await f.repo.claimTurnLease(claim)
+  await assert.rejects(f.repo.transitionWithTurnLease(fence,{to:'waiting_tools'},async()=>undefined),{code:'TRANSITION_REJECTED'})
+  f.state.tools.push({id:'tool',status:'waiting_external',has_result:false})
+  const result=await f.repo.transitionWithTurnLease(fence,{to:'waiting_tools'},async()=>undefined)
+  assert.equal(result.turn.status,'waiting_tools');assert.equal(f.state.turn.lease_owner,null);assert.equal(f.state.turn.terminal_at,null);assert.equal(f.state.session.active_turn_id,scope.turnId)
+})
+test('agent-runtime: terminal event failure rolls back checkpoint, pointer, revision and lease together',async()=>{
+  const f=fixture();await f.repo.claimTurnLease(claim);const before=structuredClone(f.state);f.failOn(/INSERT INTO agent_session_events/)
+  await assert.rejects(f.repo.transitionWithTurnLease(fence,{to:'completed'},async c=>c.query('INSERT INTO fixture_effect')),/injected SQL failure/);assert.deepEqual(f.state,before)
+})
+test('agent-runtime: final running fence still rejects cancellation during terminal callback',async()=>{
+  const f=fixture();await f.repo.claimTurnLease(claim);const before=structuredClone(f.state)
+  await assert.rejects(f.repo.transitionWithTurnLease(fence,{to:'completed'},async c=>{await c.query('INSERT INTO fixture_effect');f.state.turn.cancel_requested_at=new Date(now)}),{code:'LEASE_REJECTED'});assert.deepEqual(f.state,before)
 })

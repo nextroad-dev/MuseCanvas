@@ -30,7 +30,8 @@ test('isolated PostgreSQL: Agent runtime leases and SQL transaction fencing', { 
     target.pathname = `/${name}`
     pool = new Pool({ connectionString: target.toString(), max: 6, connectionTimeoutMillis: 5000, statement_timeout: 5000, lock_timeout: 3000 })
     const fixturePool = pool
-    assert.equal((await runMigrations({ pool: fixturePool })).latest, '0043')
+    const latest = (await runMigrations({ pool: fixturePool })).latest
+    assert.ok(latest && latest >= '0044', `Agent runtime fixture requires migrations through 0044, got ${latest}`)
     const tx: AgentCoreTransaction = async work => {
       const c = await fixturePool.connect()
       try { await c.query('BEGIN'); const value = await work(c); await c.query('COMMIT'); return value }

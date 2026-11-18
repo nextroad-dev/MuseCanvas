@@ -35,7 +35,7 @@ test('isolated PostgreSQL: migrations, leases, rollback, microseconds and index 
   const report: Record<string, unknown> = { engine: 'PostgreSQL 17', fixture: true }
   try {
     const migration = await runMigrations({ pool })
-    assert.equal(migration.latest, '0043')
+    assert.equal(migration.latest, '0044')
     await assertWorkerSchema(pool)
     assert.deepEqual((await runMigrations({ pool })).applied, [])
     const owners = (await pool.query("INSERT INTO users(email) SELECT 'fixture-'||g||'@example.invalid' FROM generate_series(1,100) g RETURNING id")).rows.map(row => String(row.id))
@@ -543,7 +543,7 @@ test('isolated PostgreSQL: migrations, leases, rollback, microseconds and index 
     })
 
     await t.test('all new schema changes have executable reverse SQL', async () => {
-      const agentMigrations = ['0041_agent_core.sql', '0042_agent_ledgers_outbox_quarantine.sql', '0043_agent_control_plane.sql']
+      const agentMigrations = ['0041_agent_core.sql', '0042_agent_ledgers_outbox_quarantine.sql', '0043_agent_control_plane.sql', '0044_agent_recovery_indexes.sql']
       for (let pass = 0; pass < 2; pass++) {
         for (const filename of [...agentMigrations].reverse()) await pool.query(await readFile(new URL(`../../packages/database/rollback/${filename}`, import.meta.url), 'utf8'))
       }

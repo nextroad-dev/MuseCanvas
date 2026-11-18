@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { NextRequest, NextResponse } from 'next/server'
 import { AgentCoreError, type AgentCoreClient } from '@musecanvas/database'
-import type { AgentEventsPageDTO, AgentMessageAcceptedDTO, AgentSessionDTO, AgentTurnDTO } from '@musecanvas/contracts'
+import type { AgentApprovalSummaryDTO, AgentEventsPageDTO, AgentMessageAcceptedDTO, AgentSessionDTO, AgentTurnDTO } from '@musecanvas/contracts'
 import { createAgentHandlers } from './handlers'
 import { type AgentControlPort, validateAgentDefinition } from './service'
 import { approvalInput, boundedBody, createSessionInput, definitionBudget, emptyInput, eventCursor, messageInput, pageQuery, storageString, uuid } from './validation'
@@ -29,12 +29,13 @@ function request(path = `agent/sessions/${id}/messages`, body: unknown = { clien
   return new NextRequest(`https://muse.test/api/${path}`, { method, headers: { host: 'muse.test', origin: 'https://muse.test', 'content-type': 'application/json', ...headers },
     ...(method === 'GET' ? {} : { body: JSON.stringify(body) }), signal })
 }
-function harness(overrides: Partial<AgentControlPort> = {}, options: { enabled?: boolean; ready?: boolean; unauthorized?: boolean; disabled?: boolean; rate?: boolean } = {}) {
+function harness(overrides: Partial<AgentControlPort> = {}, options: { enabled?: boolean; ready?: (actorId: string) => boolean; unauthorized?: boolean; disabled?: boolean; rate?: boolean } = {}) {
   const calls: string[] = []
   const unavailable = async (): Promise<never> => { calls.push('unexpected'); throw new Error('unexpected repository call') }
   const port: AgentControlPort = { createSession: unavailable, listSessions: unavailable, snapshot: unavailable, items: unavailable, events: unavailable,
     message: unavailable, steer: unavailable, getTurn: unavailable, cancel: unavailable, resolveApproval: unavailable, ...overrides }
-  const h = createAgentHandlers({ control: port, enabled: () => options.enabled ?? true, admissionReady: () => options.ready ?? false,
+  const h = createAgentHandlers({ control: port, enabled: () => options.enabled ?? true,
+    admissionReady: actorId => { calls.push(`admission:${actorId}`); return options.ready?.(actorId) ?? false },
     authorize: async () => { calls.push('auth'); return options.unauthorized ? NextResponse.json({}, { status: 401 }) : { ...actor, status: options.disabled ? 'disabled' : 'active' } },
     limited: async () => { calls.push('rate'); return options.rate ?? false } })
   return { h, calls }
@@ -50,7 +51,7 @@ test('agent: disabled handler gate answers every operation 404 before auth/rate/
 })
 test('agent: feature flags accept only exact true and narrow namespace excludes all legacy routes', t => {
   flag(t, 'AGENT_CORE_ENABLED', 'TRUE'); flag(t, 'AGENT_CORE_ADMISSION_READY', '1')
-  assert.equal(agentCoreEnabled(), false); assert.equal(agentCoreAdmissionReady(), false)
+  assert.equal(agentCoreEnabled(), false); assert.equal(agentCoreAdmissionReady(actor.id), false)
   for (const path of ['agent', 'agent/sessions', 'agent/unknown', 'agent/turns/bad!']) assert.equal(agentCorePathDisabled(path), true)
   for (const path of ['canvas-agent/status', `canvases/${id}/agent/messages`, 'agents', 'agentx']) assert.equal(agentCorePathDisabled(path), false)
 })
@@ -117,11 +118,48 @@ test('agent: 202 message/steer/cancel, digest 409 and admission-closed replay/co
   const conflict = harness({ message: async () => { throw new AgentCoreError('CONFLICT') } })
   assert.equal((await conflict.h.message({ request: request(), params: { id } })).status, 409)
 })
+test('agent: createSession and message evaluate admission for the authenticated actor and forward both decisions', async () => {
+  const session = { id } as AgentSessionDTO
+  for (const ready of [false, true]) {
+    const { h, calls } = harness({
+      createSession: async (owner, _input, admit) => { assert.equal(owner, actor.id); assert.equal(admit, ready); return session },
+      message: async (owner, sessionId, _input, admit) => { assert.equal(owner, actor.id); assert.equal(sessionId, other); assert.equal(admit, ready); return accepted },
+    }, { ready: actorId => { assert.equal(actorId, actor.id); return ready } })
+    assert.equal((await h.createSession({ request: request('agent/sessions', { clientRequestId: 'key', agentDefinitionId: id, definitionVersion: 1 }), params: {} })).status, 202)
+    assert.equal((await h.message({ request: request(`agent/sessions/${other}/messages`), params: { id: other } })).status, 202)
+    assert.deepEqual(calls.filter(call => call.startsWith('admission:')), [`admission:${actor.id}`, `admission:${actor.id}`])
+  }
+})
+test('agent: closed admission keeps reads, steer, cancel, approval and events accessible without evaluating rollout', async t => {
+  const session = { id } as AgentSessionDTO
+  const ac = new AbortController()
+  t.after(() => ac.abort())
+  const { h, calls } = harness({
+    listSessions: async () => ({ sessions: [session], nextCursor: null }),
+    snapshot: async () => ({ session, activeTurn: turn, items: [], eventCursor: '0', lastItemSequence: '0', itemsHasMore: false, nextItemsCursor: '0', tools: [], approvals: [], summariesTruncated: false }),
+    items: async () => ({ items: [], nextCursor: '0', hasMore: false, lastItemSequence: '0' }),
+    getTurn: async () => turn, steer: async () => accepted, cancel: async () => turn,
+    resolveApproval: async () => ({ approval: { id, status: 'approved' } as AgentApprovalSummaryDTO, expired: false }),
+    events: async () => emptyPage,
+  }, { enabled: true, ready: () => false })
+  assert.equal((await h.listSessions({ request: request('agent/sessions', null, 'GET'), params: {} })).status, 200)
+  assert.equal((await h.snapshot({ request: request(`agent/sessions/${id}`, null, 'GET'), params: { id } })).status, 200)
+  assert.equal((await h.items({ request: request(`agent/sessions/${id}/items`, null, 'GET'), params: { id } })).status, 200)
+  assert.equal((await h.turn({ request: request(`agent/turns/${id}`, null, 'GET'), params: { id } })).status, 200)
+  assert.equal((await h.steer({ request: request(`agent/turns/${id}/steer`), params: { id } })).status, 202)
+  assert.equal((await h.cancel({ request: request(`agent/turns/${id}/cancel`, {}), params: { id } })).status, 202)
+  assert.equal((await h.resolveApproval({ request: request(`agent/approvals/${id}/resolve`, { decision: 'approved', expectedArgumentsHash: 'a'.repeat(64) }), params: { id } })).status, 202)
+  const response = await h.events({ request: request(`agent/sessions/${id}/events`, null, 'GET', {}, ac.signal), params: { id } })
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/)
+  await response.body!.cancel()
+  assert.deepEqual(calls.filter(call => call.startsWith('admission:')), [])
+})
 test('agent: create/list/detail/items expose bounded query and snapshot ports and 202 create', async () => {
   const session = { id } as AgentSessionDTO
   const { h } = harness({ createSession: async () => session, listSessions: async (_o, limit) => { assert.equal(limit, 1); return { sessions: [session], nextCursor: null } },
     snapshot: async () => ({ session, activeTurn: null, items: [], eventCursor: '5', lastItemSequence: '4', itemsHasMore: true, nextItemsCursor: '1', tools: [], approvals: [], summariesTruncated: false }),
-    items: async (_o, _i, cursor) => { assert.equal(cursor, '9007199254740993'); return { items: [], nextCursor: cursor as `${bigint}`, hasMore: false, lastItemSequence: cursor as `${bigint}` } } }, { ready: true })
+    items: async (_o, _i, cursor) => { assert.equal(cursor, '9007199254740993'); return { items: [], nextCursor: cursor as `${bigint}`, hasMore: false, lastItemSequence: cursor as `${bigint}` } } }, { ready: () => true })
   assert.equal((await h.createSession({ request: request('agent/sessions', { clientRequestId: 'key', agentDefinitionId: id, definitionVersion: 1 }), params: {} })).status, 202)
   assert.equal((await h.listSessions({ request: request('agent/sessions?limit=1', null, 'GET'), params: {} })).status, 200)
   assert.equal((await (await h.snapshot({ request: request(`agent/sessions/${id}`, null, 'GET'), params: { id } })).json()).data.itemsHasMore, true)

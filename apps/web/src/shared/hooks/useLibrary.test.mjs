@@ -29,7 +29,7 @@ function loadLibrary(client, list, remove) {
       useMutation: (options) => new reactQuery.MutationObserver(client, options),
     } : reactQuery,
     './query-keys': { queryKeys },
-    '@/shared/services/client-api': { clientApi: { library: { list, remove } } },
+    '@/shared/services/client-api': { clientApi: { library: { detail: list, list, remove } } },
     '@/shared/services/api': api,
   })
 }
@@ -74,37 +74,23 @@ test('asset detail cache hit resolves through QueryClient without a network requ
   assert.deepEqual(await client.fetchQuery({ ...options, retry: false }), target)
 })
 
-test('asset detail falls back to the most recent 100 assets on a list-cache miss', async () => {
+test('asset detail cache miss reads the owner-scoped detail endpoint', async () => {
   const client = new reactQuery.QueryClient()
   const target = { id: 'target' }
   const calls = []
-  const { useAssetDetail } = loadLibrary(client, async (params) => {
-    calls.push(params)
-    return { items: [{ id: 'other' }, target] }
+  const { useAssetDetail } = loadLibrary(client, async (id) => {
+    calls.push(id)
+    return target
   })
   assert.deepEqual(await client.fetchQuery({ ...useAssetDetail('target'), retry: false }), target)
-  assert.deepEqual(calls, [{ limit: 100 }])
+  assert.deepEqual(calls, ['target'])
 })
 
-test('asset detail fallback miss produces the real 404 ApiError', async () => {
+test('asset detail propagates the detail endpoint not-found response unchanged', async () => {
   const client = new reactQuery.QueryClient()
-  const { useAssetDetail } = loadLibrary(client, async () => ({ items: [{ id: 'other' }] }))
-  await assert.rejects(client.fetchQuery({ ...useAssetDetail('missing'), retry: false }), (error) => {
-    assert.ok(error instanceof api.ApiError)
-    assert.equal(error.status, 404)
-    assert.equal(error.code, 'NOT_FOUND')
-    return true
-  })
-})
-
-test('asset detail propagates fallback network failures unchanged', async () => {
-  const client = new reactQuery.QueryClient()
-  const failure = new Error('network unavailable')
-  const { useAssetDetail } = loadLibrary(client, async () => { throw failure })
-  await assert.rejects(client.fetchQuery({ ...useAssetDetail('target'), retry: false }), (error) => {
-    assert.equal(error, failure)
-    return true
-  })
+  const missing = new api.ApiError(404, 'NOT_FOUND', 'asset not found')
+  const { useAssetDetail } = loadLibrary(client, async () => { throw missing })
+  await assert.rejects(client.fetchQuery({ ...useAssetDetail('missing'), retry: false }), (error) => error === missing)
 })
 
 function seedDeleteCaches(client) {

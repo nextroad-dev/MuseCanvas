@@ -62,6 +62,8 @@ Desktop.ini
 docs/*
 !docs/agent-core-v1-design.md
 !docs/agent-core-openapi.json
+!docs/agent-core-remaining-plan.md
+!docs/agent-core-m5-runbook.md
 agents.md
 **/agents.md
 AGENTS.md

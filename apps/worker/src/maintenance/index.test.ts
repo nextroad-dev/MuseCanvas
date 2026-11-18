@@ -146,3 +146,39 @@ test('account completion waits for object deletion jobs of already soft-deleted 
   assert.ok(calls.some(sql => sql.startsWith('SELECT 1 FROM asset_deletion_jobs')))
   assert.equal(calls.some(sql => sql.startsWith('UPDATE deletion_jobs SET completed_at')), false)
 })
+
+
+test('maintenance cancellation appends media completion only for actual local terminal transitions and rolls back on Outbox failure', async t => {
+  for (const initial of ['queued', 'retry_wait', 'running']) {
+    let committed = initial
+    let staged = initial
+    let failOutbox = true
+    const calls: string[] = []
+    const client = { async query(sql: string) {
+      calls.push(sql)
+      if (sql === 'BEGIN') staged = committed
+      else if (sql === 'COMMIT') committed = staged
+      else if (sql.startsWith('SELECT status FROM generation_jobs')) return { rows: [{ status: staged }] }
+      else if (sql.startsWith('UPDATE generation_jobs')) staged = 'canceled'
+      else if (sql.includes("SELECT 'media.job.completed'")) {
+        assert.equal(staged, 'canceled')
+        if (failOutbox) throw new Error('OUTBOX_FAILED')
+      }
+      return { rows: [] }
+    }, release() {} }
+    const connection = t.mock.method(db(), 'connect', async () => client)
+    const query = t.mock.method(db(), 'query', async (sql: string) => {
+      if (sql.includes('SELECT id FROM generation_jobs')) return { rows: [{ id: 'job' }] }
+      return { rows: [] }
+    })
+    await assert.rejects(scheduleMaintenance(), /OUTBOX_FAILED/)
+    assert.equal(committed, initial)
+    assert.equal(calls.at(-1), 'ROLLBACK')
+    failOutbox = false
+    await scheduleMaintenance()
+    assert.equal(committed, 'canceled')
+    assert.equal(calls.at(-1), 'COMMIT')
+    assert.equal(calls.filter(sql => sql.includes("SELECT 'media.job.completed'")).length, 2)
+    connection.mock.restore(); query.mock.restore()
+  }
+})

@@ -9,9 +9,10 @@ import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitRes
 import { isNonTerminalRunState, shouldCreateNewRun } from '../provider-state'
 import { db } from '@musecanvas/database'
 import type pg from 'pg'
-import { persistJobSuccess, persistPreRunFailure, pollProviderRun, processJob } from './index'
+import { persistJobSuccess, persistJobFailure, persistPreRunFailure, pollProviderRun, processJob } from './index'
 import { LifecyclePersistenceError, MAX_PRE_RUN_ATTEMPTS, reconcileCancellation, reconcileUnknownSubmission, unknownSubmissionExpired } from './lifecycle'
 import { ProviderLeaseLostError } from './lease'
+import { scheduleMaintenance } from '../maintenance'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -206,6 +207,10 @@ test('pre-run retry atomically commits failure and deduplicated delivery, rolls 
         staged.status = String(values[1])
         return { rows: [{ id: 'job' }], rowCount: 1 }
       } else if (sql.startsWith('INSERT INTO outbox_events')) {
+        if (sql.includes("SELECT 'media.job.completed'")) {
+          assert.equal(staged.status, 'failed')
+          return { rows: [], rowCount: 1 }
+        }
         assert.match(sql, /dedupe_key.*ON CONFLICT DO NOTHING/)
         if (failOutbox) throw new Error('OUTBOX_UNAVAILABLE')
         if (!staged.outbox.includes(String(values[3]))) staged.outbox.push(String(values[3]))
@@ -273,6 +278,10 @@ test('processJob preprocessing recovery retries even after a previous terminal r
       if (values[1] === attempt && values[2] === activeCycle) { status = 'queued'; attempt-- }
     }
     else if (sql.startsWith('INSERT INTO outbox_events')) {
+      if (sql.includes("SELECT 'media.job.completed'")) {
+        assert.equal(status, 'failed')
+        return { rows: [], rowCount: 1 }
+      }
       if (failOutbox) throw new Error('OUTBOX_FAILED')
       const key = String(values[3])
       if (!keys.has(key)) { keys.add(key); outbox++ }
@@ -655,4 +664,113 @@ test('input body enforces per-object and remaining-total caps while streaming', 
       assert.equal(yielded, 2, 'stream stops as soon as the first over-limit chunk arrives')
     }
   }
+})
+
+
+test('media terminal producer follows saved outputs and shares caller rollback; retry_wait emits no completion', async () => {
+  let committed = { status: 'running', assets: 0, outputs: 0, events: 0 }
+  let staged = structuredClone(committed)
+  let failOutbox = true
+  const calls: string[] = []
+  const client = { async query(sql: string, params: unknown[] = []) {
+    calls.push(sql)
+    if (sql === 'BEGIN') staged = structuredClone(committed)
+    else if (sql === 'COMMIT') committed = structuredClone(staged)
+    else if (sql.startsWith('SELECT status,deleted_at,cancel_requested_at')) return { rows: [{ status: staged.status, deleted_at: null, cancel_requested_at: null }] }
+    else if (sql.startsWith('INSERT INTO assets')) { staged.assets++; return { rows: [{ id: 'asset' }] } }
+    else if (sql.startsWith('INSERT INTO generation_outputs')) staged.outputs++
+    else if (sql.startsWith("UPDATE generation_jobs SET status='succeeded'")) staged.status = 'succeeded'
+    else if (sql.startsWith('UPDATE generation_jobs SET status=$2')) { staged.status = String(params[1]); return { rows: [{ id: 'job' }], rowCount: 1 } }
+    else if (sql.includes("SELECT 'media.job.completed'")) {
+      assert.ok(['succeeded', 'failed'].includes(staged.status))
+      if (staged.status === 'succeeded') { assert.equal(staged.assets, 1); assert.equal(staged.outputs, 1) }
+      if (failOutbox) throw new Error('OUTBOX_FAILED')
+      staged.events++
+    }
+    return { rows: [], rowCount: 0 }
+  } } as unknown as pg.PoolClient
+  const withTransaction = async (work: () => Promise<unknown>) => {
+    await client.query('BEGIN')
+    try { await work(); await client.query('COMMIT') }
+    catch (error) { await client.query('ROLLBACK'); throw error }
+  }
+  const success = () => persistJobSuccess(client, { jobId: 'job', createdBy: 'owner', prompt: 'draw', uploaded: [{ key: 'object', image: { mimeType: 'image/png', data: Buffer.from('fixture') }, checksum: 'a'.repeat(64) }] })
+  await assert.rejects(withTransaction(success), /OUTBOX_FAILED/)
+  assert.deepEqual(committed, { status: 'running', assets: 0, outputs: 0, events: 0 })
+  assert.equal(calls.at(-1), 'ROLLBACK')
+  failOutbox = false
+  await withTransaction(success)
+  assert.deepEqual(committed, { status: 'succeeded', assets: 1, outputs: 1, events: 1 })
+  committed.status = 'running'
+  const failure = { jobId: 'job', phase: 'generation_failed', code: 'FAILED', retryable: true }
+  await withTransaction(() => persistJobFailure(client, failure))
+  assert.equal(committed.status, 'retry_wait')
+  assert.equal(committed.events, 1)
+  committed.status = 'running'
+  failOutbox = true
+  await assert.rejects(withTransaction(() => persistJobFailure(client, { ...failure, retryable: false })), /OUTBOX_FAILED/)
+  assert.equal(committed.status, 'running')
+  assert.equal(committed.events, 1)
+  failOutbox = false
+  await withTransaction(() => persistJobFailure(client, { ...failure, retryable: false }))
+  assert.equal(committed.status, 'failed')
+  assert.equal(committed.events, 2)
+})
+
+
+test('post-preprocess cancel completion failure rejects delivery without failed commit, replay commits canceled', async t => {
+  let committed = { status: 'queued', attempt: 0, cancel_requested_at: null as string | null, events: [] as string[] }
+  let staged = structuredClone(committed)
+  let inTransaction = false
+  let failCompletion = true
+  const statements: string[] = []
+  const job = () => ({ id: 'job', ...staged, prompt: 'draw', optimization_mode: 'enabled', prompt_optimization_id: 'optimization', retry_cycle: '2026-10-25 00:00:00.123456+00' })
+  const query = async (sql: string, values: unknown[] = []) => {
+    statements.push(sql)
+    if (sql === 'BEGIN') { staged = structuredClone(committed); inTransaction = true }
+    else if (sql === 'COMMIT') { committed = structuredClone(staged); inTransaction = false }
+    else if (sql === 'ROLLBACK') { staged = structuredClone(committed); inTransaction = false }
+    else if (sql.startsWith('SELECT * FROM provider_runs')) return { rows: [] }
+    else if (sql.includes('WITH ready AS') || sql.startsWith('UPDATE provider_runs') || sql.includes('FROM provider_runs WHERE job_id=') || sql.includes('SELECT id, job_id, state_revision')) return { rows: [] }
+    else if (sql.includes('SELECT id FROM generation_jobs') && sql.includes('cancel_requested_at')) return { rows: [{ id: 'job' }] }
+    else if (sql.startsWith('SELECT status FROM generation_jobs')) return { rows: [{ status: staged.status }] }
+    else if (sql.startsWith('SELECT *') && sql.includes('generation_jobs')) return { rows: [job()] }
+    else if (sql.includes('attempt=attempt+1')) { staged.status = 'running'; staged.attempt++ }
+    else if (sql.startsWith('SELECT po.*')) {
+      // A concurrent cancel arrives while real preprocessing is in progress.
+      assert.equal(inTransaction, false)
+      committed.cancel_requested_at = 'cancel-requested'
+      staged = structuredClone(committed)
+      return { rows: [{ final_prompt: 'prepared prompt' }] }
+    } else if (sql.startsWith('UPDATE generation_jobs SET phase=')) return { rows: [] }
+    else if (sql.startsWith("UPDATE generation_jobs SET status='canceled'")) staged.status = 'canceled'
+    else if (sql.includes("SELECT 'media.job.completed'")) {
+      assert.equal(inTransaction, true)
+      assert.equal(staged.status, 'canceled')
+      if (failCompletion) throw new Error('OUTBOX_FAILED')
+      staged.events.push(staged.status)
+    } else if (sql.startsWith('SELECT id FROM generation_jobs')) return { rows: [{ id: 'job' }] }
+    else if (sql.startsWith('UPDATE generation_jobs SET status=$2')) {
+      // The regression reached this branch and ACKed a failed job after rollback.
+      staged.status = String(values[1])
+      return { rows: [{ id: 'job' }], rowCount: 1 }
+    } else if (!['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)) assert.fail(`Unexpected SQL: ${sql}`)
+    return { rows: [], rowCount: 0 }
+  }
+  t.mock.method(db(), 'query', query)
+  t.mock.method(db(), 'connect', async () => ({ query, release() {} }))
+  await assert.rejects(processJob('job'), LifecyclePersistenceError)
+  assert.equal(committed.status, 'running')
+  assert.equal(committed.cancel_requested_at, 'cancel-requested')
+  assert.deepEqual(committed.events, [])
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.ok(!statements.some(sql => sql.startsWith('UPDATE generation_jobs SET status=$2')))
+  failCompletion = false
+  // Real maintenance commits the existing no-run cancellation before redelivery.
+  await scheduleMaintenance()
+  assert.equal(committed.status, 'canceled')
+  assert.equal(await processJob('job'), true)
+  assert.equal(committed.status, 'canceled')
+  assert.deepEqual(committed.events, ['canceled'])
+  assert.ok(!statements.some(sql => sql.includes('INSERT INTO provider_runs')))
 })

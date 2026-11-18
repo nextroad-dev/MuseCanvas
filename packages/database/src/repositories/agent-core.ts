@@ -1,6 +1,6 @@
 import type pg from 'pg'
 import type {
-  AgentApprovalDTO, AgentApprovalSummaryDTO, AgentDecimal, AgentEventEnvelope, AgentEventsPageDTO,
+  AgentApprovalDTO, AgentApprovalSummaryDTO, AgentDecimal, AgentError, AgentErrorCode, AgentEventEnvelope, AgentEventsPageDTO,
   AgentItemDTO, AgentItemsPageDTO, AgentMessageAcceptedDTO, AgentSessionDTO, AgentSessionSnapshotDTO,
   AgentSessionsPageDTO, AgentToolSummaryDTO, AgentTurnDTO, CreateAgentMessageRequest,
   CreateAgentSessionRequest, ResolveAgentApprovalRequest, JsonObject, AgentBudgetDTO,
@@ -20,6 +20,28 @@ const decimal = (value: unknown) => String(value) as AgentDecimal
 const iso = (value: any): string => value instanceof Date ? value.toISOString() : String(value)
 const nullableTime = (value: any) => value == null ? null : iso(value)
 const terminal = (status: string) => ['completed', 'failed', 'cancelled'].includes(status)
+// Public error projection is a fixed allowlist: stored messages may contain provider
+// bodies, URLs or credentials, so they are never forwarded to clients or events.
+const agentErrorMessages: Record<AgentErrorCode, string> = {
+  IDEMPOTENCY_CONFLICT: 'Agent request idempotency conflict',
+  RESYNC_REQUIRED: 'Agent event cursor must be resynchronized',
+  INVALID_TRANSITION: 'Agent turn transition is invalid',
+  LEASE_LOST: 'Agent turn lease was lost',
+  BUDGET_EXCEEDED: 'Agent turn budget was exceeded',
+  APPROVAL_CONFLICT: 'Agent approval conflicted with a prior decision',
+  APPROVAL_EXPIRED: 'Agent approval expired',
+  APPROVAL_REJECTED: 'Agent approval was rejected',
+  TOOL_FAILED: 'Agent tool execution failed',
+  DEADLINE_EXCEEDED: 'Agent turn deadline was exceeded',
+  SUBMISSION_UNKNOWN: 'Agent media submission state is unknown',
+}
+function agentError(value: unknown): AgentError | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const stored = value as Row
+  const code = typeof stored.code === 'string' && Object.hasOwn(agentErrorMessages, stored.code)
+    ? stored.code as AgentErrorCode : 'TOOL_FAILED'
+  return { code, message: agentErrorMessages[code], retryable: stored.retryable === true }
+}
 function required<T>(value: T | undefined | null): T { if (value == null) throw new AgentCoreError('NOT_FOUND'); return value }
 function bound(limit: number) { if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new AgentCoreError('INVALID_INPUT') }
 export function agentCoreDecimal(value: string): AgentDecimal {
@@ -36,7 +58,7 @@ export function agentTurnDTO(r: Row): AgentTurnDTO {
   return { id: r.id, sessionId: r.session_id, status: r.status, engineVersion: r.engine_version,
     revision: decimal(r.revision), inputRevision: decimal(r.input_revision), cancelRequestedAt: nullableTime(r.cancel_requested_at),
     terminalAt: nullableTime(r.terminal_at), deadlineAt: iso(r.deadline_at),
-    error: r.error ? { code: 'TOOL_FAILED', message: 'Agent turn failed', retryable: false } : null }
+    error: agentError(r.error) }
 }
 /** Only public display text is admitted. Tool arguments/results, URLs and arbitrary JSON never pass through. */
 function displayPayload(value: Row): JsonObject {
@@ -95,7 +117,9 @@ async function session(c: AgentCoreClient, owner: string, id: string, lock = fal
   return required(await one(c, `SELECT * FROM agent_sessions WHERE owner_id=$1 AND id=$2${lock ? ' FOR UPDATE' : ''}`, [owner, id]))
 }
 async function turn(c: AgentCoreClient, owner: string, id: string, lock = false) {
-  return required(await one(c, `SELECT t.* FROM agent_turns t JOIN agent_sessions s ON s.id=t.session_id
+  // deadline_open uses the database clock, matching every other fence in this
+  // module; control commands must not revive a turn past its frozen deadline.
+  return required(await one(c, `SELECT t.*,clock_timestamp()<t.deadline_at AS deadline_open FROM agent_turns t JOIN agent_sessions s ON s.id=t.session_id
     WHERE s.owner_id=$1 AND t.id=$2${lock ? ' FOR UPDATE OF t' : ''}`, [owner, id]))
 }
 async function lockTurn(c: AgentCoreClient, owner: string, id: string) {
@@ -216,7 +240,7 @@ export class AgentCoreRepository {
       if (s.archived_at) throw new AgentCoreError('CONFLICT')
       let t = s.active_turn_id ? await turn(c, owner, s.active_turn_id, true) : undefined
       if (targetTurnId && (!t || t.id !== targetTurnId)) throw new AgentCoreError('CONFLICT')
-      if (t?.cancel_requested_at || (t && terminal(t.status))) throw new AgentCoreError('CONFLICT')
+      if (t?.cancel_requested_at || (t && terminal(t.status)) || t?.deadline_open === false) throw new AgentCoreError('CONFLICT')
       if (!t && !admit) throw new AgentCoreError('UNAVAILABLE')
       let config: AgentAdmissionSnapshot | undefined
       if (!t) config = await this.validate(c, await definition(c, owner, s.agent_definition_id, s.definition_version))
@@ -282,7 +306,7 @@ export class AgentCoreRepository {
         if (a.status !== input.decision && a.status !== 'expired') throw new AgentCoreError('CONFLICT')
         return { approval: { ...approvalDTO(a), revision: decimal(a.decision_revision ?? prior.revision) }, expired: a.status === 'expired' }
       }
-      if (terminal(prior.status) || prior.cancel_requested_at || s.active_turn_id !== prior.id) throw new AgentCoreError('CONFLICT')
+      if (terminal(prior.status) || prior.cancel_requested_at || prior.deadline_open === false || s.active_turn_id !== prior.id) throw new AgentCoreError('CONFLICT')
       const reservation = required(await one(c, `SELECT * FROM agent_budget_reservations WHERE id=$1 AND tool_call_id=$2 AND turn_id=$3 AND session_id=$4 FOR UPDATE`, [a.reservation_id, tool.id, prior.id, s.id]))
       if (canvasAgentRequestDigest(tool.arguments) !== tool.arguments_hash || tool.status !== 'waiting_approval' || reservation.status !== 'reserved' || reservation.pricing_revision !== a.pricing_revision
         || prior.config_snapshot.modelRevisionId !== a.model_revision) throw new AgentCoreError('CONFLICT')

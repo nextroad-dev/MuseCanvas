@@ -1159,7 +1159,19 @@
                 ],
                 "properties": {
                   "code": {
-                    "const": "TOOL_FAILED"
+                    "enum": [
+                      "IDEMPOTENCY_CONFLICT",
+                      "RESYNC_REQUIRED",
+                      "INVALID_TRANSITION",
+                      "LEASE_LOST",
+                      "BUDGET_EXCEEDED",
+                      "APPROVAL_CONFLICT",
+                      "APPROVAL_EXPIRED",
+                      "APPROVAL_REJECTED",
+                      "TOOL_FAILED",
+                      "DEADLINE_EXCEEDED",
+                      "SUBMISSION_UNKNOWN"
+                    ]
                   },
                   "message": {
                     "type": "string"

@@ -56,6 +56,18 @@ export async function listLibrary(context: AuthedContext) {
   })
 }
 
+export async function getLibraryAsset(context: AuthedContext) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(context.params.id)) {
+    return fail('NOT_FOUND', '资源不存在', 404)
+  }
+  const result = await db().query(`${LIBRARY_SELECT_COLUMNS} ${LIBRARY_FROM_CLAUSE}
+    WHERE a.id=$1 AND a.created_by=$2 AND a.deleted_at IS NULL AND j.deleted_at IS NULL LIMIT 1`,
+  [context.params.id, context.actor.id])
+  const row = result.rows[0]
+  if (!row) return fail('NOT_FOUND', '资源不存在', 404)
+  return ok(await libraryAssetDto(row, createAssetSigner()))
+}
+
 /** GET /api/library/:id/download */
 export async function downloadAsset(context: AuthedContext) {
   const result = await db().query('SELECT id,object_key,media_kind,mime_type,duration_seconds FROM assets WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL', [context.params.id, context.actor.id])

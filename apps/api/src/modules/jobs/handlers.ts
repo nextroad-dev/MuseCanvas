@@ -1,4 +1,4 @@
-import { db, transaction } from '@musecanvas/database'
+import { appendMediaJobCompleted, db, transaction } from '@musecanvas/database'
 import { fail, ok } from '../../shared/http'
 import { jobDto } from '../../shared/dto'
 import { limited } from '../../shared/redis'
@@ -61,6 +61,7 @@ export async function cancelJob(context: AuthedContext) {
     }
     if (job.status === 'queued' || job.status === 'retry_wait') {
       await client.query("UPDATE generation_jobs SET status='canceled',completed_at=now(),updated_at=now() WHERE id=$1", [id])
+      await appendMediaJobCompleted(client, id)
       return { kind: 'canceled' as const }
     }
     // Active job: cooperative cancel. Record local intent and enqueue provider

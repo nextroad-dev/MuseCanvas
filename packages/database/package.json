@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@musecanvas/contracts": "workspace:*",
+    "@musecanvas/domain": "workspace:*",
     "pg": "^8.22.0"
   },
   "devDependencies": {

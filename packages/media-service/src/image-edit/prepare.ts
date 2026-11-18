@@ -101,6 +101,8 @@ export interface PrepareImageEditInput {
   stableUploadIds?: { derive: (purpose: 'source' | 'mask', checksum: string) => string }
   /** Validate, decode and compute only; write no object and no row (idempotent replay pre-check). */
   dryRun?: boolean
+  /** Opt in only for Agent Core; requires unapplied 0045 before enabling this path. */
+  agentPreparation?: boolean
 }
 
 export interface PreparedImageEdit {
@@ -123,6 +125,7 @@ function stagingFailure(error: unknown, label: string): MediaServiceError {
   const message = error instanceof Error ? error.message : ''
   if (message === 'INPUT_ROW_RECLAIMED') return fail('IDEMPOTENCY_CONFLICT', '该请求标识对应的临时输入已过期或被回收，请使用新的请求标识重新发起', 409)
   if (message === 'INPUT_ROW_CONFLICT') return fail('IDEMPOTENCY_CONFLICT', '该请求标识对应的临时输入与本次请求不一致，请使用新的请求标识重新发起', 409)
+  if (message === 'PREPARED_MASK_IDENTITY_EXPIRED') return fail('IDEMPOTENCY_CONFLICT', '该请求标识对应的临时输入已过期或被回收，请使用新的请求标识重新发起', 409)
   return fail('GENERATION_CREATE_FAILED', `${label}存储失败，请稍后重试`, 503)
 }
 
@@ -413,6 +416,30 @@ export async function prepareImageEditCommand(input: PrepareImageEditInput): Pro
   }
   const maskInput: GenerationInputItem = { uploadId: maskUploadId, role: MASK_INPUT_ROLE, position: 1 }
   const maskArtifact: PreparedImageEdit['artifacts']['mask'] = { checksum: maskChecksum, width: source.width, height: source.height, sizeBytes: maskBytes.length }
+  if (input.agentPreparation && !input.dryRun) {
+    try {
+      await ports.runTransaction(async client => {
+        const ready = await client.query(`SELECT id FROM media_uploads WHERE id=$1 AND created_by=$2 AND status='ready'
+          AND checksum=$3 AND width=$4 AND height=$5 AND mime_type='image/png' AND deleted_at IS NULL
+          AND object_deleted_at IS NULL AND clock_timestamp()<expires_at FOR UPDATE`,
+        [maskUploadId, ownerId, maskChecksum, source.width, source.height])
+        if (!ready.rows.length) throw new Error('PREPARED_MASK_NOT_READY')
+        await client.query(`INSERT INTO agent_media_mask_preparations(upload_id,owner_id,source_checksum,mask_checksum,width,height,preparation_version,expires_at)
+          SELECT id,created_by,$3,$4,$5,$6,1,expires_at FROM media_uploads WHERE id=$1 AND created_by=$2
+          ON CONFLICT(upload_id) DO NOTHING`, [maskUploadId, ownerId, sourceChecksum, maskChecksum, source.width, source.height])
+        const identity = await client.query(`SELECT owner_id,source_checksum,mask_checksum,width,height,preparation_version,
+          clock_timestamp()<expires_at AS preparation_live FROM agent_media_mask_preparations WHERE upload_id=$1`, [maskUploadId])
+        const saved = identity.rows[0]
+        if (!saved || saved.preparation_live !== true) throw new Error('PREPARED_MASK_IDENTITY_EXPIRED')
+        if (saved.owner_id !== ownerId || saved.source_checksum !== sourceChecksum || saved.mask_checksum !== maskChecksum
+          || Number(saved.width) !== source.width || Number(saved.height) !== source.height || Number(saved.preparation_version) !== 1) {
+          throw new Error('PREPARED_MASK_IDENTITY_CONFLICT')
+        }
+      })
+    } catch (error) {
+      return { success: false, error: stagingFailure(error, '遮罩准备身份') }
+    }
+  }
 
   const parameters: Record<string, unknown> = { ...clientParameters, size }
   if (quality) parameters.quality = quality

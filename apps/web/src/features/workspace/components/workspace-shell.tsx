@@ -18,7 +18,7 @@ import {
 import { BrandMark } from '@/shared/components/brand-mark'
 import { Avatar, Button, DropdownMenu, ThemeToggle, iconSize } from '@/shared/components/ui'
 import { useAuth } from '@/shared/hooks/useAuth'
-import { APP_ROUTES, agentConsoleInspectorRoute } from '@/shared/lib/app-routes'
+import { APP_ROUTES, agentConsoleInspectorRoute, isOnGenerate } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import type { WorkspaceMode } from '@/shared/lib/workspace-mode'
 import type { SessionUserDto } from '@/shared/types'
@@ -27,7 +27,7 @@ import { WorkspaceJobObserver } from './workspace-job-observer'
 export interface WorkspaceShellProps {
   mode: WorkspaceMode
   user: SessionUserDto | null
-  /** Full-bleed console layout without boxed padding; defaults to true on `/generate`. */
+  /** Full-bleed console layout without boxed padding; defaults to true on Console routes. */
   fullBleed?: boolean
   children: ReactNode
 }
@@ -65,7 +65,7 @@ export function WorkspaceShell({ mode, user, fullBleed, children }: WorkspaceShe
   const [loggingOut, setLoggingOut] = useState(false)
   const [logoutError, setLogoutError] = useState<string | null>(null)
 
-  const isFullConsole = fullBleed ?? isPathMatch(pathname, APP_ROUTES.generate)
+  const isFullConsole = fullBleed ?? isOnGenerate(pathname)
   const onAccount = isPathMatch(pathname, APP_ROUTES.account)
 
   // Close mobile drawer when Escape is pressed or viewport expands to desktop (>=960px).
@@ -151,7 +151,7 @@ export function WorkspaceShell({ mode, user, fullBleed, children }: WorkspaceShe
 
             <nav aria-label="工作区主导航" className="hidden items-center gap-1 md:flex">
               {PRIMARY_NAV.map(({ id, href, label, icon: Icon, matchPrefix }) => {
-                const active = isPathMatch(pathname, matchPrefix)
+                const active = id === 'generate' ? isOnGenerate(pathname) : isPathMatch(pathname, matchPrefix)
                 return (
                   <Link
                     key={id}
@@ -295,7 +295,7 @@ export function WorkspaceShell({ mode, user, fullBleed, children }: WorkspaceShe
 
             <nav aria-label="工作区移动导航" className="mt-3 flex flex-col gap-1">
               {PRIMARY_NAV.map(({ id, href, label, icon: Icon, matchPrefix }) => {
-                const active = isPathMatch(pathname, matchPrefix)
+                const active = id === 'generate' ? isOnGenerate(pathname) : isPathMatch(pathname, matchPrefix)
                 return (
                   <Link
                     key={id}

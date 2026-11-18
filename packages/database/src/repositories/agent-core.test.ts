@@ -237,3 +237,27 @@ test('agent-core: 0043 adds immutable request receipts, owner FK, monotonic rete
   assert.doesNotMatch(sql, /INSERT INTO|UPDATE users|agent_legacy_links/)
   assert.match(readFileSync(new URL('../../rollback/0043_agent_control_plane.sql', import.meta.url), 'utf8'), /DROP TABLE IF EXISTS agent_message_receipts/)
 })
+test('agent-core: turn error projection exposes only allowlisted codes and fixed public messages', () => {
+  const failed = agentTurnDTO({ ...t, status: 'failed', terminal_at: now,
+    error: { code: 'DEADLINE_EXCEEDED', message: 'provider body token=secret', retryable: false } })
+  assert.deepEqual(failed.error, { code: 'DEADLINE_EXCEEDED', message: 'Agent turn deadline was exceeded', retryable: false })
+  const unknown = agentTurnDTO({ ...t, error: { code: 'PROVIDER_SECRET', message: 'https://signed.example/secret', retryable: true } })
+  assert.deepEqual(unknown.error, { code: 'TOOL_FAILED', message: 'Agent tool execution failed', retryable: true })
+  assert.equal(agentTurnDTO({ ...t, error: null }).error, null)
+})
+test('agent-core: steering and approval decisions are rejected after the frozen deadline', async () => {
+  const late = { ...t, status: 'running', lease_owner: 'runner', deadline_open: false }
+  const steer = fixture([actor, lockedSession, [/FROM agent_message_receipts/, []], [/FROM agent_turns .*FOR UPDATE OF t/, [late]]])
+  await assert.rejects(steer.repo.message(owner, sid, { clientMessageId: mid, content: 'late steer' }, false), { code: 'CONFLICT' })
+  assert.doesNotMatch(steer.calls.map(c => c.sql).join(''), /INSERT INTO agent_items|UPDATE agent_sessions SET input_revision|INSERT INTO outbox_events/)
+  steer.done()
+
+  const { a, hash } = approvalFixture()
+  const approval = fixture([actor, [/SELECT a.turn_id,a.tool_call_id FROM agent_approvals .*s.owner_id=\$1/, [a]],
+    [/FROM agent_turns t JOIN agent_sessions s .*t.id=\$2$/, [late]],
+    lockedSession, [/FOR UPDATE OF t/, [late]], [/FROM agent_tool_calls .*FOR UPDATE/, [{ id: mid, arguments: {}, arguments_hash: hash, status: 'waiting_approval' }]],
+    [/FROM agent_approvals .*FOR UPDATE/, [a]]])
+  await assert.rejects(approval.repo.resolveApproval(owner, mid, { decision: 'approved', expectedArgumentsHash: hash }), { code: 'CONFLICT' })
+  assert.doesNotMatch(approval.calls.map(c => c.sql).join(''), /UPDATE agent_approvals SET|INSERT INTO outbox_events/)
+  approval.done()
+})

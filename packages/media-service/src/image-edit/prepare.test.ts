@@ -21,15 +21,23 @@ const capabilities: ModelCapabilities = {
 }
 const bytes = await createEditMask({ imageWidth: 1024, imageHeight: 1024, selection: { x: 0, y: 0, width: 32, height: 32 } })
 
-function fixture(owned = true) {
+function fixture(owned = true, expiredPreparation = false) {
   const queries: Array<{ sql: string; params: unknown[] }> = []
   const puts: string[] = []
   let inTransaction = false
+  let preparation: Record<string, unknown> | undefined
+  let keyedRow: Record<string, unknown> | undefined
   const client: SqlClient = { query: async (sql, params = []) => {
     queries.push({ sql, params })
     if (sql.includes('FROM model_configs')) return { rows: [{ id: modelId, model_kind: 'image', capabilities }] }
     if (sql.includes('FROM assets')) return { rows: owned ? [{ id: assetId, object_key: 'source.png', mime_type: 'image/png' }] : [] }
-    return { rows: [] }
+    if (sql.startsWith('SELECT id FROM media_uploads WHERE')) return { rows: [{ id: params[0] }] }
+    if (sql.startsWith('INSERT INTO media_uploads(') || sql.startsWith('INSERT INTO generation_input_images(')) { keyedRow = { created_by: params[1], object_key: params[2], mime_type: params[3], width: params[4], height: params[5], size_bytes: params[6], checksum: params[7], status: 'pending', expires_at: '2099-01-01T00:00:00Z', object_deleted_at: null }; return { rows: [] } }
+    if (sql.startsWith('SELECT created_by, object_key, mime_type')) return { rows: keyedRow ? [keyedRow] : [] }
+    if (sql.startsWith('UPDATE media_uploads SET expires_at') || sql.startsWith('UPDATE generation_input_images SET expires_at') || sql.startsWith("UPDATE media_uploads SET status='ready'") || sql.startsWith("UPDATE generation_input_images SET status='ready'")) return { rows: [] }
+    if (sql.startsWith('SELECT owner_id,source_checksum,mask_checksum')) return { rows: preparation ? [{ ...preparation, preparation_live: !expiredPreparation }] : [] }
+    if (sql.startsWith('INSERT INTO agent_media_mask_preparations')) { preparation ??= { owner_id: params[1], source_checksum: params[2], mask_checksum: params[3], width: params[4], height: params[5], preparation_version: 1 }; return { rows: [] } }
+    assert.fail(`Unexpected SQL: ${sql}`)
   } }
   const ports: ImageEditStoragePorts = {
     db: () => client,
@@ -64,7 +72,7 @@ test('reserved mask persistence fences immutable storage outside generation tran
   const f = fixture()
   const uploadId = '44444444-4444-4444-8444-444444444444'
   let persisted: ReadyInputWrite | undefined
-  const result = await prepareImageEditCommand({ ...input(), ports: f.ports, reservedMask: {
+  const result = await prepareImageEditCommand({ ...input(), ports: f.ports, agentPreparation: true, reservedMask: {
     uploadId, expiresAt: '2099-01-01T00:00:00Z', persist: async (row, put) => {
       persisted = row
       assert.equal(f.puts.length, 0)
@@ -75,6 +83,8 @@ test('reserved mask persistence fences immutable storage outside generation tran
   assert.equal(persisted?.uploadId, uploadId)
   assert.equal(persisted?.actorId, ownerId)
   assert.deepEqual(f.puts, [`inputs/${ownerId}/${uploadId}.png`])
+  assert.ok(f.queries.some(call => call.sql.startsWith('INSERT INTO agent_media_mask_preparations')))
+  assert.ok(f.queries.find(call => call.sql.startsWith('INSERT INTO agent_media_mask_preparations'))!.params.includes(createHash('sha256').update(bytes).digest('hex')))
   const denied = fixture()
   const rejected = await prepareImageEditCommand({ ...input(), ports: denied.ports, reservedMask: {
     uploadId, expiresAt: '2099-01-01T00:00:00Z', persist: async () => { throw new Error('PREPARATION_LEASE_LOST') },
@@ -106,4 +116,38 @@ test('all staging row primitives propagate SQL errors immediately for caller rol
     assert.equal(statements.length, 1)
     assert.match(statements[0], /media_uploads/)
   }
+})
+
+
+test('keyed preparation refuses an expired immutable provenance while its upload is still live', async () => {
+  const f = fixture(true, true)
+  const result = await prepareImageEditCommand({ ...input(), ports: f.ports, agentPreparation: true })
+  assert.equal(result.success, false)
+  if (!result.success) {
+    assert.equal(result.error.code, 'IDEMPOTENCY_CONFLICT')
+    assert.equal(result.error.status, 409)
+    assert.match(result.error.message, /新的请求标识/)
+  }
+  const identity = f.queries.find(call => call.sql.startsWith('SELECT owner_id,source_checksum,mask_checksum'))!
+  assert.match(identity.sql, /clock_timestamp\(\)<expires_at AS preparation_live/)
+  const ready = f.queries.find(call => call.sql.startsWith('SELECT id FROM media_uploads WHERE'))!
+  assert.match(ready.sql, /status='ready'[\s\S]*clock_timestamp\(\)<expires_at/)
+  assert.equal(String(ready.params[2]).length, 64)
+  assert.ok(!f.queries.some(call => call.sql.startsWith('UPDATE agent_media_mask_preparations')))
+})
+
+test('Agent preparation refuses ordinary RGB PNG before provenance, and manual preparation leaves Core provenance off', async () => {
+  const opaquePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAoUlEQVR4nO2SQQkAQRDDqqRKTkn8C1kR9wgDhQpIQtOP04tO0AmgV+wuxN1FJ+gE0Ct2F+LuohN0AugVuwtxd9EJOgH0it2FuLvoBJ0AesXuQtxddIJOAL1idyHuLjpBJ4BesbsQdxedoBNAr9hdiLuLTtAJoFfsLsTdRSfoBNArdhfi7qITdALoFbsLcXfRCToB9Irdhbi76ASdAHrFPxd6WAxApm1NYrAAAAAASUVORK5CYII=', 'base64')
+  const f = fixture()
+  const invalidMask = await prepareImageEditCommand({ ownerId, modelId, assetId, prompt: 'edit', maskBytes: opaquePng, ports: f.ports, agentPreparation: true })
+  assert.equal(invalidMask.success, false)
+  assert.equal(f.puts.length, 0)
+  assert.ok(!f.queries.some(call => call.sql.includes('agent_media_mask_preparations')))
+  const manual = fixture()
+  const uploadId = '44444444-4444-4444-8444-444444444444'
+  const prepared = await prepareImageEditCommand({ ...input(), ports: manual.ports, reservedMask: {
+    uploadId, expiresAt: '2099-01-01T00:00:00Z', persist: async (_row, put) => put(),
+  } })
+  assert.equal(prepared.success, true)
+  assert.ok(!manual.queries.some(call => call.sql.includes('agent_media_mask_preparations')))
 })

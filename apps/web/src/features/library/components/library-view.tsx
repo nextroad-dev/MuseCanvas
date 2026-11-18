@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownIcon,
@@ -16,7 +17,7 @@ import {
 import { Alert, Button, Checkbox, Dialog, EmptyState, Input, PageHeader, Skeleton, useToast } from '@/shared/components/ui'
 import { libraryItems, useLibrary, useDeleteAsset, useBatchDeleteAssets, useAssetDownloadUrl } from '@/shared/hooks/useLibrary'
 import { queryKeys } from '@/shared/hooks/query-keys'
-import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { APP_ROUTES, assetIdFromSearch } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import { formatBytes, formatDate, formatDateTime } from '@/shared/lib/format'
 import type { WorkspaceMode } from '@/shared/lib/workspace-mode'
@@ -39,7 +40,10 @@ export function LibraryView({ mode }: LibraryViewProps) {
   const library = useLibrary({ ...(filters.tab === 'all' ? {} : { kind: filters.tab }), q: filters.q.trim() })
   const items = libraryItems(library.data)
   const selected = visibleSelection(selectedIds, items)
-  const [activeId, setActiveId] = useState<string | null>(null)
+  // 控制台媒体结果用 `?asset=<uuid>` 深链到单个作品；非法参数等同未提供。
+  const initialAssetId = assetIdFromSearch(useSearchParams().toString())
+  const keepInitialAssetRef = useRef(true)
+  const [activeId, setActiveId] = useState<string | null>(initialAssetId)
   const [pendingDelete, setPendingDelete] = useState<string[]>([])
   const [actionError, setActionError] = useState('')
   const remove = useDeleteAsset()
@@ -53,7 +57,12 @@ export function LibraryView({ mode }: LibraryViewProps) {
   const filtered = Boolean(filters.q.trim() || filters.tab !== 'all')
   const total = library.data?.pages[0]?.total ?? 0
 
-  useEffect(() => { clearSelection(); setActiveId(null) }, [filters.q, filters.tab, clearSelection])
+  // 深链只在首次渲染保留；之后筛选变化仍按原行为关闭详情。
+  useEffect(() => {
+    clearSelection()
+    setActiveId((current) => (keepInitialAssetRef.current && current === initialAssetId ? current : null))
+    keepInitialAssetRef.current = false
+  }, [filters.q, filters.tab, clearSelection, initialAssetId])
 
   function resetFilters() { setQuery(''); setTab('all') }
 

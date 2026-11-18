@@ -1,6 +1,7 @@
 'use client'
 
 import { useId, useState } from 'react'
+import Link from 'next/link'
 import {
   CaretDownIcon,
   CheckCircleIcon,
@@ -32,17 +33,23 @@ import {
   type BadgeTone,
 } from '@/shared/components/ui'
 import type { AgentConsoleController } from '@/shared/hooks/useAgentConsole'
+import { useAssetDetail } from '@/shared/hooks/useLibrary'
+import { APP_ROUTES, assetDetailHref } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import { formatDateTime, formatRelativeTime } from '@/shared/lib/format'
 import {
   extractArtifactPreview,
   extractItemText,
+  extractMediaJobs,
   extractToolPayloadInfo,
   formatAgentErrorCode,
   formatApprovalStatus,
+  formatMediaJobStatus,
   formatToolStatus,
   formatTurnStatus,
   isSafeDisplayUrl,
+  shortUuid,
+  type MediaJobInfo,
 } from '../lib/agent-status'
 
 const STATUS_TEXT_TONE: Record<BadgeTone, string> = {
@@ -308,6 +315,82 @@ function ArtifactReferenceCard({
   )
 }
 
+/** 缩略图只在用户展开卡片后挂载：复用既有 owner-scoped 资产详情查询，不额外拉取列表。 */
+function MediaAssetThumbnail({ assetId }: { assetId: string }) {
+  const [failed, setFailed] = useState(false)
+  const detail = useAssetDetail(assetId)
+  const candidate = detail.data?.thumbnailUrl || detail.data?.url || null
+  const src = !failed && isSafeDisplayUrl(candidate) ? candidate : null
+  if (!src) {
+    return (
+      <span className="inline-flex size-12 items-center justify-center rounded-control bg-tonal text-muted-foreground">
+        <ImageIcon className={iconSize.sm} aria-hidden="true" />
+      </span>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt="生成结果缩略图"
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="size-12 rounded-control object-cover"
+    />
+  )
+}
+
+function MediaAssetLink({ assetId }: { assetId: string }) {
+  const href = assetDetailHref(assetId)
+  if (!href) return null
+  const label = shortUuid(assetId)
+  return (
+    <Link
+      href={href}
+      aria-label={`查看资产 ${label}`}
+      className="inline-flex min-h-7 items-center gap-2 rounded-control border border-border/70 bg-canvas p-1 pr-2.5 text-caption text-muted-foreground transition-colors hover:border-border hover:bg-tonal/70 hover:text-foreground"
+    >
+      <MediaAssetThumbnail assetId={assetId} />
+      <span className="font-mono">{label}</span>
+    </Link>
+  )
+}
+
+function mediaJobCanShowAssets(job: MediaJobInfo): boolean {
+  return job.status === 'succeeded' || job.status === 'completed'
+}
+
+/** 工具结果里的媒体 job 摘要：状态始终可见，资产缩略图仅在展开后加载。 */
+function MediaJobSummary({ jobs, expanded }: { jobs: MediaJobInfo[]; expanded: boolean }) {
+  return (
+    <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
+      {jobs.map((job) => {
+        const statusMeta = formatMediaJobStatus(job.status)
+        return (
+          <div key={job.jobId} className="flex flex-wrap items-center gap-2 text-caption">
+            <span className={cn('font-medium', STATUS_TEXT_TONE[statusMeta.tone])}>
+              {statusMeta.label}
+            </span>
+            <span className="font-mono text-muted-foreground">{shortUuid(job.jobId)}</span>
+            {job.assetIds.length === 0 ? (
+              <Link href={APP_ROUTES.library} className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+                打开图库
+              </Link>
+            ) : expanded && mediaJobCanShowAssets(job) ? (
+              <span className="flex flex-wrap gap-1.5">
+                {job.assetIds.map((assetId) => (
+                  <MediaAssetLink key={assetId} assetId={assetId} />
+                ))}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">{job.assetIds.length} 个产出资产</span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function ToolTraceCard({
   item,
   toolSummary,
@@ -324,6 +407,7 @@ function ToolTraceCard({
     toolSummary?.status ?? payloadInfo.status ?? (isResult ? 'completed' : 'recorded')
   const statusMeta = formatToolStatus(status)
   const detailText = payloadInfo.error ?? payloadInfo.message
+  const mediaJobs = isResult ? extractMediaJobs(item.payload) : []
   const Icon = isResult ? TerminalWindowIcon : WrenchIcon
 
   return (
@@ -364,6 +448,8 @@ function ToolTraceCard({
           />
         </span>
       </button>
+
+      {mediaJobs.length > 0 ? <MediaJobSummary jobs={mediaJobs} expanded={expanded} /> : null}
 
       {expanded ? (
         <div id={payloadId} className="mt-2.5 border-t border-border/60 pt-2.5">

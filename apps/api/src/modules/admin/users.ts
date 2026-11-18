@@ -1,4 +1,4 @@
-import { db, transaction } from '@musecanvas/database'
+import { appendMediaJobCompleted, db, transaction } from '@musecanvas/database'
 import { writeAudit } from '../../shared/audit'
 import { userDto } from '../../shared/dto'
 import { fail, ok } from '../../shared/http'
@@ -85,7 +85,8 @@ export async function deleteUser(context: AuthedContext) {
     const result = await client.query('UPDATE users SET deleted_at=now(),deletion_requested_at=now(),session_version=session_version+1,updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id', [id])
     if (!result.rows[0]) return false
     await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL', [id])
-    await client.query("UPDATE generation_jobs SET status='canceled',completed_at=now() WHERE created_by=$1 AND status IN('queued','retry_wait','running')", [id])
+    const canceledJobs = await client.query("UPDATE generation_jobs SET status='canceled',completed_at=now() WHERE created_by=$1 AND status IN('queued','retry_wait','running') RETURNING id", [id])
+    for (const job of canceledJobs.rows) await appendMediaJobCompleted(client, String(job.id))
     await client.query('INSERT INTO deletion_jobs(user_id) VALUES($1) ON CONFLICT DO NOTHING', [id])
     await client.query("UPDATE generation_input_images SET status='deleted',deleted_at=now() WHERE created_by=$1", [id])
     await writeAudit(client, actor.id, 'user.delete', 'user', id)

@@ -1,4 +1,4 @@
-import { transaction } from '@musecanvas/database'
+import { appendMediaJobCompleted, transaction } from '@musecanvas/database'
 
 export async function deleteJobWithAssets(userId: string, jobId: string) {
   return transaction(async (client) => {
@@ -14,6 +14,7 @@ export async function deleteJobWithAssets(userId: string, jobId: string) {
         `UPDATE generation_jobs SET deleted_at=now(),updated_at=now(),status=CASE WHEN status IN('queued','retry_wait','running') THEN 'canceled' ELSE status END,completed_at=CASE WHEN status IN('queued','retry_wait','running') THEN COALESCE(completed_at,now()) ELSE completed_at END WHERE id=$1 AND created_by=$2`,
         [jobId, userId],
       )
+      if (['queued', 'retry_wait', 'running'].includes(String(job.status))) await appendMediaJobCompleted(client, jobId)
       if (String(job.status) === 'running') {
         // Mirror the cooperative cancel flow of the API cancel endpoint: record
         // local intent and enqueue provider cancel work so an in-flight remote

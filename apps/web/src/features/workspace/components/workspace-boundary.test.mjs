@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { APP_ROUTES, agentConsoleInspectorRoute } from '../../../shared/lib/app-routes.ts'
+import { APP_ROUTES, agentConsoleInspectorRoute, isOnGenerate } from '../../../shared/lib/app-routes.ts'
 import { componentHarness, nodes } from '../../../shared/components/ui/isolated-ui-fixes-test-harness.mjs'
 
 const layoutUrl = new URL('../../../app/(workspace)/(studio)/layout.tsx', import.meta.url)
@@ -25,7 +25,7 @@ function shellHarness(pathname = APP_ROUTES.library, router = { push() {}, repla
     '@/shared/hooks/useAuth': {
       useAuth: () => ({ logout: async () => ({ loggedOut: true }) }),
     },
-    '@/shared/lib/app-routes': { APP_ROUTES, agentConsoleInspectorRoute },
+    '@/shared/lib/app-routes': { APP_ROUTES, agentConsoleInspectorRoute, isOnGenerate },
   })
 }
 
@@ -92,4 +92,22 @@ test('live admin shell exposes admin link and account menu without mock banner',
   const regularMenus = nodes(regularTree, (node) => node.props.menuLabel === '账户菜单')
   assert.equal(regularMenus.length, 1)
   assert.deepEqual(Array.from(regularMenus[0].props.items.map((item) => item.id)), ['account', 'logout'])
+})
+
+
+test('session deep link keeps the actual shell full-height and selects Console navigation on desktop and mobile', () => {
+  const harness = shellHarness('/agent/sessions/44444444-4444-4444-8444-444444444444')
+  const props = { mode: 'live', user: null, children: 'session-console' }
+  let rendered = harness.render(props)
+  assert.match(rendered.props.className, /\bh-dvh overflow-hidden\b/)
+  const main = nodes(rendered, (node) => node.props.id === 'workspace-main')[0]
+  assert.match(main.props.className, /\bmin-h-0\b/)
+  assert.match(main.props.className, /\boverflow-hidden\b/)
+  assert.doesNotMatch(main.props.className, /(?:^|\s)(?:[a-z]+:)?(?:p[xy]?|max-w)-/)
+  const selectedConsole = (tree) => nodes(tree, (node) => node.props.href === APP_ROUTES.generate && node.props['aria-current'] === 'page')
+  assert.equal(selectedConsole(rendered).length, 1)
+  nodes(rendered, (node) => node.props['aria-label'] === '打开导航菜单')[0].props.onClick()
+  rendered = harness.render(props)
+  assert.equal(selectedConsole(rendered).length, 2)
+  assert.equal(nodes(rendered, (node) => node.props.href === APP_ROUTES.library && node.props['aria-current'] === 'page').length, 0)
 })

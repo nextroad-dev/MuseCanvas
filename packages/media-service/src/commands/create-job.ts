@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto'
-import type pg from 'pg'
-import { findProviderCredential } from '@musecanvas/database'
 import { hasStoredCredentialSecret } from '@musecanvas/providers'
 import { validateGenerationRequest, prepareRequestDigestInput, serializeCanonicalJson } from '@musecanvas/domain'
 import {
@@ -34,6 +32,8 @@ export interface CreateGenerationCommand {
   inputLanguage?: string
   /** Internal frozen Agent intent. Absent for public/manual compatibility. */
   intendedMode?: GenerationMode
+  /** Agent-only exact approved revision. Manual callers keep existing latest-revision semantics. */
+  expectedModelRevisionId?: string
 }
 
 export interface GenerationInputLimits {
@@ -131,7 +131,16 @@ function normalizeGeneration(cmd: CreateGenerationCommand, model: Record<string,
     normalized.mode = mode
   }
   const frozenPayload = { modelId: normalized.modelId, prompt: normalized.prompt, parameters: normalized.parameters, inputs: normalized.inputs, mode: normalized.mode }
-  return { mediaKind, normalized, frozenPayload }
+  // Exact immutable execution identity, so a caller that approved this revision
+  // can refuse a later lock that resolved a different one.
+  const modelRevision = {
+    modelRevisionId: typeof model.revision_id === 'string' ? model.revision_id : null,
+    modelRevision: typeof model.revision === 'number' || typeof model.revision === 'string' ? String(model.revision) : null,
+    providerId: typeof model.provider_id === 'string' ? model.provider_id : null,
+    pluginId: typeof model.plugin_id === 'string' ? model.plugin_id : null,
+    pluginVersion: typeof model.plugin_version === 'string' ? model.plugin_version : null,
+  }
+  return { mediaKind, normalized, frozenPayload, modelRevision }
 }
 
 export interface PreparedGeneration {
@@ -149,13 +158,16 @@ export async function prepareGeneration(command: CreateGenerationCommand, ports:
     normalizedInputs: normalizeGenerationInputs(command.normalizedInputs),
   }
   const modelResult = await ports.database().query(
-    `SELECT m.*, rev.capabilities, rev.defaults, rev.revision FROM model_configs m
+    `SELECT m.*, rev.id AS revision_id, rev.capabilities, rev.defaults, rev.revision FROM model_configs m
      LEFT JOIN model_config_revisions rev ON rev.id=m.latest_revision_id
      WHERE m.id=$1 AND m.model_kind IN ('image','video') AND m.enabled=true AND m.deleted_at IS NULL`,
     [cmd.modelId],
   )
   const model = modelResult.rows[0]
   if (!model) throw new MediaServiceError('MODEL_NOT_AVAILABLE', '模型当前不可用')
+  if (cmd.expectedModelRevisionId !== undefined && model.revision_id !== cmd.expectedModelRevisionId) {
+    throw new MediaServiceError('MODEL_NOT_AVAILABLE', '模型版本已更新，请重新审批', 409)
+  }
   // Resolved runtime input limits (DB first) enforce both raised and
   // lowered settings; canonical defaults are the safe fallback.
   let runtimeLimits: GenerationInputLimits
@@ -188,12 +200,13 @@ export interface CreatedGeneration {
  * the caller must roll back instead of committing partial writes.
  * Requires the current migrated schema, including media_uploads (0016_wave1_media_uploads.sql).
  */
-export async function createGenerationInTransaction(client: pg.PoolClient, prepared: PreparedGeneration): Promise<CreatedGeneration> {
+export async function createGenerationInTransaction(client: SqlClient, prepared: PreparedGeneration): Promise<CreatedGeneration> {
   const { command: cmd, runtimeLimits } = prepared
   const { modelId, normalizedInputs, idempotencyKey } = cmd
   const { mediaKind, normalized, frozenPayload } = prepared.snapshot
   const matchingExisting = (existing: Record<string, unknown>): Record<string, unknown> => {
     if (existing.model_id !== modelId || existing.media_kind !== mediaKind
+      || (cmd.expectedModelRevisionId !== undefined && existing.model_revision_id !== cmd.expectedModelRevisionId)
       || serializeCanonicalJson(existing.normalized_request) !== serializeCanonicalJson(frozenPayload)) throw new MediaServiceError('IDEMPOTENCY_CONFLICT', '同一请求标识不能用于不同的生成内容', 409)
     return existing
   }
@@ -216,20 +229,26 @@ export async function createGenerationInTransaction(client: pg.PoolClient, prepa
     ...lockedModel,
     capabilities: lockedModel.revision_capabilities,
     defaults: lockedModel.revision_defaults,
+    revision: lockedModel.revision_number,
   }, runtimeLimits)
-  if (serializeCanonicalJson(locked.frozenPayload) !== serializeCanonicalJson(frozenPayload)) {
+  if (serializeCanonicalJson(locked.frozenPayload) !== serializeCanonicalJson(frozenPayload)
+    || (cmd.expectedModelRevisionId !== undefined
+      && serializeCanonicalJson(locked.modelRevision) !== serializeCanonicalJson(prepared.snapshot.modelRevision))) {
     throw new MediaServiceError('MODEL_NOT_AVAILABLE', '模型参数契约已更新，请重新提交', 409)
   }
 
   const optRes = await client.query('SELECT * FROM prompt_optimization_settings WHERE singleton=true FOR SHARE')
   const optRow = optRes.rows[0] || { singleton: true, enabled: false }
+  if (cmd.expectedModelRevisionId !== undefined && optRow.enabled) {
+    throw new MediaServiceError('APPROVAL_CONFLICT', '已审批的精确提示词不能再次自动优化', 409)
+  }
 
   let credId: string | null = null; let credName: string | null = null; let providerBaseUrl = lockedModel.base_url
   if (lockedModel.provider_credential_id) {
-    const cred = await findProviderCredential(client, lockedModel.provider_credential_id)
+    const cred = (await client.query('SELECT * FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL', [lockedModel.provider_credential_id])).rows[0]
     if (!cred || !cred.enabled || !hasStoredCredentialSecret(cred)) throw new MediaServiceError('PROVIDER_NOT_CONFIGURED', '生成供应商凭据未配置', 503)
-    credId = cred.id
-    credName = cred.display_name
+    credId = String(cred.id)
+    credName = String(cred.display_name)
     providerBaseUrl = cred.base_url || lockedModel.base_url
   }
 
@@ -260,7 +279,7 @@ export async function createGenerationInTransaction(client: pg.PoolClient, prepa
   const insertSql = `INSERT INTO generation_jobs(created_by,model_id,model_name,adapter,vendor_model_id,provider_base_url,prompt,size,quality,count,watermark,idempotency_key,provider_credential_id,provider_credential_name,optimization_mode,phase,media_kind,model_revision_id,provider_id,plugin_id,plugin_version,normalized_request,request_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) ON CONFLICT (created_by, idempotency_key) DO NOTHING RETURNING *`
   const insertParams = [cmd.ownerId, lockedModel.id, lockedModel.display_name, lockedModel.adapter, lockedModel.vendor_model_id, providerBaseUrl, prompt, jobSize, jobQuality, jobCount, lockedModel.watermark, idempotencyKey, credId, credName, optimizationMode, phase, mediaKind, lockedModel.revision_id || null, lockedModel.provider_id || null, lockedModel.plugin_id || null, lockedModel.plugin_version || '1.0.0', normalizedRequestJson, requestDigest]
   const inserted = await client.query(insertSql, insertParams)
-  if (inserted.rowCount === 0) {
+  if (inserted.rows.length === 0) {
     // Concurrent create with the same idempotency key: the winner
     // already committed the job, its input bindings and outbox event.
     // Return the existing row and skip every write.
@@ -268,7 +287,7 @@ export async function createGenerationInTransaction(client: pg.PoolClient, prepa
     if (replayed.rows[0]) return { jobId: String(replayed.rows[0].id), row: matchingExisting(replayed.rows[0]), replayed: true }
     throw new MediaServiceError('GENERATION_CREATE_FAILED', '创建生成任务失败', 503)
   }
-  await attachGenerationInputs(client, cmd.ownerId, inserted.rows[0].id, normalizedInputs, runtimeLimits)
+  await attachGenerationInputs(client, cmd.ownerId, String(inserted.rows[0].id), normalizedInputs, runtimeLimits)
   if (optRow.enabled) {
     const optimization = await client.query(`INSERT INTO prompt_optimizations(job_id,created_by,input_prompt,input_language,language_model_config_id,language_model_name_snapshot,language_model_vendor_id_snapshot,language_model_protocol_snapshot,language_model_adapter_snapshot,language_model_base_url_snapshot,language_model_max_output_tokens_snapshot,language_model_temperature_snapshot,language_model_reasoning_effort_snapshot,provider_credential_id,provider_credential_name_snapshot)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`, [inserted.rows[0].id, cmd.ownerId, prompt, cmd.inputLanguage ?? 'und', optSettings.language_model_config_id, optSettings.display_name, optSettings.vendor_model_id, optSettings.language_protocol, optSettings.adapter, optSettings.credential_base_url || optSettings.base_url, optSettings.max_output_tokens, optSettings.temperature, optSettings.reasoning_effort, optSettings.credential_id, optSettings.credential_name])

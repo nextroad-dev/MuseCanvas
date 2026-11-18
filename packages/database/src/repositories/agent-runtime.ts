@@ -1,4 +1,4 @@
-import type { AgentDecimal, AgentTurnDTO } from '@musecanvas/contracts'
+import type { AgentDecimal, AgentTurnDTO, JsonObject } from '@musecanvas/contracts'
 import { agentCoreDecimal, agentTurnDTO, type AgentCoreClient, type AgentCoreTransaction } from './agent-core'
 
 export interface AgentTurnScope {
@@ -19,8 +19,9 @@ export interface AgentTurnExecutionFence extends AgentTurnLeaseIdentity {
   readonly expectedInputRevision: AgentDecimal
 }
 export class AgentRuntimeError extends Error {
-  constructor(readonly code: 'INVALID_INPUT' | 'LEASE_REJECTED') { super(code) }
+  constructor(readonly code: 'INVALID_INPUT' | 'LEASE_REJECTED' | 'TRANSITION_REJECTED') { super(code) }
 }
+export type AgentTurnTransitionTarget = 'waiting_tools' | 'waiting_approval' | 'completed' | 'failed'
 interface SessionRow { id: string; owner_id: string; active_turn_id: string | null; archived_at: Date | null }
 interface TurnRow {
   id: string
@@ -84,10 +85,12 @@ async function executionGuard(c: AgentCoreClient, input: AgentTurnExecutionFence
  * tx must own BEGIN/COMMIT, roll back the ENTIRE transaction on every thrown
  * error, and propagate it. It must not catch a callback error and commit.
  *
- * Only queued -> running changes the public revision/event cursor. Running
- * reclaims, renewals and releases are private lease bookkeeping: no revision,
- * public event, input revision or wake changes. Every claim (including a same
- * owner reclaim after expiry/release) advances the fencing token exactly once.
+ * A claim moves every non-running state (queued or waiting_tools/
+ * waiting_approval) to running and that handoff changes the public
+ * revision/event cursor. Running reclaims, renewals and releases are private
+ * lease bookkeeping: no revision, public event, input revision or wake changes.
+ * Every claim (including a same owner reclaim after expiry/release) advances the
+ * fencing token exactly once.
  */
 export class AgentRuntimeRepository {
   constructor(private readonly tx: AgentCoreTransaction) {}
@@ -101,13 +104,14 @@ export class AgentRuntimeRepository {
       if (!previous) return null
       const t = (await c.query<TurnRow>(`UPDATE agent_turns SET lease_owner=$3,
         lease_until=LEAST(deadline_at,clock_timestamp()+$4::int*interval '1 millisecond'),fencing_token=fencing_token+1,
-        status='running',revision=revision+CASE WHEN status='queued' THEN 1 ELSE 0 END,updated_at=clock_timestamp()
-        WHERE session_id=$1 AND id=$2 AND engine_version='agent-core-v1' AND status IN ('queued','running')
+        status='running',revision=revision+CASE WHEN status='running' THEN 0 ELSE 1 END,updated_at=clock_timestamp()
+        WHERE session_id=$1 AND id=$2 AND engine_version='agent-core-v1'
+          AND status IN ('queued','running','waiting_tools','waiting_approval')
           AND (lease_until IS NULL OR lease_until<=clock_timestamp())
           AND cancel_requested_at IS NULL AND clock_timestamp()<deadline_at RETURNING *`,
       [scope.sessionId, scope.turnId, leaseOwner, leaseDurationMs])).rows[0]
       if (!t) return null
-      if (previous.status === 'queued') {
+      if (previous.status !== 'running') {
         const counter = (await c.query<{ cursor: string }>(`UPDATE agent_sessions SET next_event_cursor=next_event_cursor+1,updated_at=clock_timestamp()
           WHERE id=$1 AND owner_id=$2 RETURNING (next_event_cursor-1)::text AS cursor`, [scope.sessionId, scope.ownerId])).rows[0]
         if (!counter) throw new AgentRuntimeError('LEASE_REJECTED')
@@ -170,5 +174,67 @@ export class AgentRuntimeRepository {
       await executionGuard(c, snapshot)
       return result
     })
+  }
+
+  /**
+   * Narrow successful/failed handoff boundary added for the Worker Runner. The
+   * existing withTurnLease contract is unchanged; this method adds an explicit
+   * target so waiting/terminal state and its public event commit atomically.
+   * No cancel, expiry, recovery or approval policy lives here; M5 owns those.
+   */
+  transitionWithTurnLease<T>(input: AgentTurnExecutionFence, transition: { to: AgentTurnTransitionTarget; error?: JsonObject | null }, work: (client: AgentCoreClient, lease: AgentTurnLease) => Promise<T>): Promise<{ work: T; turn: AgentTurnDTO }> {
+    const snapshot = { ...input }
+    identity(snapshot); agentCoreDecimal(snapshot.expectedInputRevision)
+    const target = transition.to
+    return this.tx(async c => {
+      if (!await lockScope(c, snapshot)) throw new AgentRuntimeError('LEASE_REJECTED')
+      const current = await executionGuard(c, snapshot)
+      const result = await work(c, current)
+      await executionGuard(c, snapshot)
+      await transitionInvariants(c, snapshot, target)
+      const terminal = target === 'completed' || target === 'failed'
+      const t = (await c.query<TurnRow>(`UPDATE agent_turns SET status=$6,
+        error=CASE WHEN $6='failed' THEN $7::jsonb ELSE NULL END,
+        terminal_at=CASE WHEN $8 THEN clock_timestamp() ELSE NULL END,
+        lease_owner=NULL,lease_until=NULL,revision=revision+1,updated_at=clock_timestamp()
+        WHERE session_id=$1 AND id=$2 AND engine_version='agent-core-v1' AND status='running'
+          AND lease_owner=$3 AND fencing_token=$4 AND clock_timestamp()<lease_until
+          AND cancel_requested_at IS NULL AND clock_timestamp()<deadline_at AND input_revision=$5
+        RETURNING *`,
+      [snapshot.sessionId, snapshot.turnId, snapshot.leaseOwner, snapshot.fencingToken, snapshot.expectedInputRevision, target, target === 'failed' ? JSON.stringify(transition.error ?? { code: 'TOOL_FAILED', message: 'Agent turn failed', retryable: false }) : null, terminal])).rows[0]
+      if (!t) throw new AgentRuntimeError('TRANSITION_REJECTED')
+      if (terminal) {
+        const cleared = await c.query('UPDATE agent_sessions SET active_turn_id=NULL,updated_at=clock_timestamp() WHERE id=$1 AND owner_id=$2 AND active_turn_id=$3', [snapshot.sessionId, snapshot.ownerId, snapshot.turnId])
+        if (cleared.rowCount !== 1) throw new AgentRuntimeError('TRANSITION_REJECTED')
+      }
+      const counter = (await c.query<{ cursor: string }>(`UPDATE agent_sessions SET next_event_cursor=next_event_cursor+1,updated_at=clock_timestamp()
+        WHERE id=$1 AND owner_id=$2 RETURNING (next_event_cursor-1)::text AS cursor`, [snapshot.sessionId, snapshot.ownerId])).rows[0]
+      if (!counter) throw new AgentRuntimeError('TRANSITION_REJECTED')
+      await c.query(`INSERT INTO agent_session_events(session_id,turn_id,cursor,entity_revision,event_type,payload)
+        VALUES($1,$2,$3,$4,'turn.updated',$5::jsonb)`,
+      [snapshot.sessionId, snapshot.turnId, counter.cursor, t.revision, JSON.stringify({ turn: agentTurnDTO(t) })])
+      return { work: result, turn: agentTurnDTO(t) }
+    })
+  }
+}
+
+/** Terminal/waiting invariants read durable rows; callback claims are never trusted. */
+async function transitionInvariants(c: AgentCoreClient, scope: AgentTurnScope, target: AgentTurnTransitionTarget) {
+  if (!['waiting_tools','waiting_approval','completed','failed'].includes(target)) throw new AgentRuntimeError('INVALID_INPUT')
+  const tools = (await c.query<{ id: string; status: string; has_result: boolean }>(`SELECT x.id,x.status,
+    EXISTS(SELECT 1 FROM agent_items i WHERE i.tool_call_id=x.id AND i.item_type='tool_result') AS has_result
+    FROM agent_tool_calls x WHERE x.turn_id=$1 AND x.session_id=$2 ORDER BY x.position`, [scope.turnId, scope.sessionId])).rows
+  const approvals = (await c.query<{ status: string }>('SELECT status FROM agent_approvals WHERE turn_id=$1 AND session_id=$2', [scope.turnId, scope.sessionId])).rows
+  const reservations = (await c.query<{ status: string }>('SELECT status FROM agent_budget_reservations WHERE turn_id=$1 AND session_id=$2', [scope.turnId, scope.sessionId])).rows
+  const rounds = (await c.query<{ status: string }>('SELECT status FROM agent_model_rounds WHERE turn_id=$1 AND session_id=$2', [scope.turnId, scope.sessionId])).rows
+  if (rounds.some(r=>r.status==='running' || r.status==='recorded')) throw new AgentRuntimeError('TRANSITION_REJECTED')
+  if (tools.some(t=>['completed','failed','cancelled','skipped'].includes(t.status) && !t.has_result)) throw new AgentRuntimeError('TRANSITION_REJECTED')
+  if (target === 'waiting_approval' && tools.some(t=>!['completed','failed','cancelled','skipped','waiting_approval','waiting_external'].includes(t.status))) throw new AgentRuntimeError('TRANSITION_REJECTED')
+  if (approvals.some(a => a.status === 'pending') && target !== 'waiting_approval') throw new AgentRuntimeError('TRANSITION_REJECTED')
+  if (target === 'waiting_approval' && !approvals.some(a => a.status === 'pending')) throw new AgentRuntimeError('TRANSITION_REJECTED')
+  if (target === 'waiting_tools' && (!tools.some(t => t.status === 'waiting_external') || tools.some(t => ['recorded','validating','executing','waiting_approval'].includes(t.status)))) throw new AgentRuntimeError('TRANSITION_REJECTED')
+  if (target === 'completed' || target === 'failed') {
+    if (tools.some(t => !['completed','failed','cancelled','skipped'].includes(t.status) || !t.has_result)) throw new AgentRuntimeError('TRANSITION_REJECTED')
+    if (reservations.some(r => r.status === 'reserved' || r.status === 'unknown')) throw new AgentRuntimeError('TRANSITION_REJECTED')
   }
 }

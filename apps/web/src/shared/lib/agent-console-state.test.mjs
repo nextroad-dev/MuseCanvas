@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   agentConsoleScopeChanged,
+  canReleaseScopedRequest,
   applyAgentEvent,
   applyAgentSnapshot,
   applyAgentTransportFrame,
@@ -81,6 +82,13 @@ function makeApproval(revision = '2', status = 'pending', sessionId = SESSION_A)
   }
 }
 
+test('stale A-to-B-to-A item-page completion cannot release the current scope lock', () => {
+  const requestFromFirstA = 1
+  const requestFromSecondA = 3
+  const currentLockGeneration = requestFromSecondA
+  assert.equal(canReleaseScopedRequest(currentLockGeneration, requestFromFirstA), false)
+  assert.equal(canReleaseScopedRequest(currentLockGeneration, requestFromSecondA), true)
+})
 test('isTurnActive and agentConsoleScopeChanged classify states cleanly', () => {
   assert.equal(isTurnActive(null), false)
   assert.equal(isTurnActive(undefined), false)

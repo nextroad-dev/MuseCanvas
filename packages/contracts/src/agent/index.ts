@@ -11,7 +11,7 @@ export type AgentUsageKind = 'estimated' | 'actual' | 'unknown'
 export const AGENT_BUDGET_QUOTAS = ['model_calls', 'tool_calls', 'media_jobs', 'media_outputs', 'input_tokens', 'output_tokens', 'estimated_cost', 'concurrent_media_jobs'] as const
 export type AgentBudgetQuota = (typeof AGENT_BUDGET_QUOTAS)[number]
 export type AgentItemType = 'user_message' | 'assistant_message' | 'tool_call' | 'tool_result' | 'approval' | 'artifact_reference' | 'system_event'
-export type AgentErrorCode = 'IDEMPOTENCY_CONFLICT' | 'RESYNC_REQUIRED' | 'INVALID_TRANSITION' | 'LEASE_LOST' | 'BUDGET_EXCEEDED' | 'APPROVAL_CONFLICT' | 'TOOL_FAILED' | 'DEADLINE_EXCEEDED' | 'SUBMISSION_UNKNOWN'
+export type AgentErrorCode = 'IDEMPOTENCY_CONFLICT' | 'RESYNC_REQUIRED' | 'INVALID_TRANSITION' | 'LEASE_LOST' | 'BUDGET_EXCEEDED' | 'APPROVAL_CONFLICT' | 'APPROVAL_EXPIRED' | 'APPROVAL_REJECTED' | 'TOOL_FAILED' | 'DEADLINE_EXCEEDED' | 'SUBMISSION_UNKNOWN'
 export interface AgentError { code: AgentErrorCode; message: string; retryable: boolean }
 
 /** Decimal amounts match numeric(30,9); runtime checks belong to pure domain rules. */

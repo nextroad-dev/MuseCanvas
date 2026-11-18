@@ -13,7 +13,7 @@ export interface AgentHandlerContext { request: NextRequest; params: Record<stri
 interface AgentHandlerPorts {
   control: AgentControlPort
   enabled: () => boolean
-  admissionReady: () => boolean
+  admissionReady: (actorId: string) => boolean
   authorize: (request: NextRequest) => Promise<Actor | NextResponse>
   limited: (key: string, max: number, seconds: number) => Promise<boolean>
 }
@@ -44,7 +44,7 @@ export function createAgentHandlers(ports: AgentHandlerPorts) {
   return {
     createSession: wrap(async ({ request }, actor) => {
       noQuery(request)
-      return ok(await ports.control.createSession(actor.id, createSessionInput(await boundedBody(request)), ports.admissionReady()), { status: 202 })
+      return ok(await ports.control.createSession(actor.id, createSessionInput(await boundedBody(request)), ports.admissionReady(actor.id)), { status: 202 })
     }, true),
     listSessions: wrap(async ({ request }, actor) => {
       const q = pageQuery(request.nextUrl, 'sessions')
@@ -67,7 +67,7 @@ export function createAgentHandlers(ports: AgentHandlerPorts) {
     }),
     message: wrap(async ({ request, params }, actor) => {
       noQuery(request)
-      return ok(await ports.control.message(actor.id, uuid(params.id), messageInput(await boundedBody(request)), ports.admissionReady()), { status: 202 })
+      return ok(await ports.control.message(actor.id, uuid(params.id), messageInput(await boundedBody(request)), ports.admissionReady(actor.id)), { status: 202 })
     }, true),
     steer: wrap(async ({ request, params }, actor) => {
       noQuery(request)

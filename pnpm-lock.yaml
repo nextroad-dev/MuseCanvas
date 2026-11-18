@@ -238,6 +238,9 @@ importers:
       '@musecanvas/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@musecanvas/domain':
+        specifier: workspace:*
+        version: link:../domain
       pg:
         specifier: ^8.22.0
         version: 8.22.0

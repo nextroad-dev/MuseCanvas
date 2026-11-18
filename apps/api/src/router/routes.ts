@@ -13,7 +13,7 @@ import { logout, requestOtp, verifyOtp } from '../modules/auth/handlers'
 import { listAdminModels, listPublicModels } from '../modules/models/queries'
 import { deleteModel, upsertModel } from '../modules/models/handlers'
 import { cancelJob, deleteJob, getJob, listJobs, retryJob } from '../modules/jobs/handlers'
-import { deleteAsset, downloadAsset, listLibrary } from '../modules/library/handlers'
+import { deleteAsset, downloadAsset, getLibraryAsset, listLibrary } from '../modules/library/handlers'
 import { createGeneration } from '../modules/generations/create'
 import { listCanvases, createCanvas, getCanvas, updateCanvas, deleteCanvas } from '../modules/canvases/handlers'
 import { postCanvasAgentMessages, getCanvasAgentHistory, getCanvasAgentTurn, postCanvasAgentConfirm, postCanvasAgentApply, getCanvasAgentStatus } from '../modules/canvases/agent'
@@ -137,6 +137,7 @@ export const GET_ROUTES: Route[] = [
   { path: 'jobs', access: 'actor', handler: context => listJobs(context) },
   { path: 'jobs/:id', access: 'actor', handler: context => getJob(context) },
   { path: 'library', access: 'actor', handler: context => listLibrary(context) },
+  { path: 'library/:id', access: 'actor', handler: context => getLibraryAsset(context) },
   { path: 'library/:id/download', access: 'actor', handler: context => downloadAsset(context) },
 
   // --- administration -----------------------------------------------------

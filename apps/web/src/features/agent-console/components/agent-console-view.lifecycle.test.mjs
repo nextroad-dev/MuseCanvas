@@ -102,6 +102,7 @@ function setup({
 
   const { AgentConsoleView } = loadModule('./agent-console-view.tsx', {
     react: {
+      useCallback: (callback) => callback,
       useSyncExternalStore: (_subscribe, clientSnapshot, serverSnapshot) =>
         hydrating ? serverSnapshot() : clientSnapshot(),
       useState: (initial) => {
@@ -139,7 +140,8 @@ function setup({
       },
     },
     'react/jsx-runtime': jsxRuntime,
-    'next/navigation': { useSearchParams: () => new URLSearchParams(search) },
+    'next/navigation': { useRouter: () => ({ push() {} }), useSearchParams: () => new URLSearchParams(search) },
+    '@/shared/lib/app-routes': { agentSessionRoute: (id) => `/agent/sessions/${encodeURIComponent(id)}` },
     '@phosphor-icons/react': new Proxy({}, { get: (_target, name) => String(name) }),
     '@/shared/components/ui': new Proxy(
       {

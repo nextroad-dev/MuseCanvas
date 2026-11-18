@@ -137,6 +137,11 @@ export function createMockWorkspaceApi({ now = Date.now, storage }: MockWorkspac
       remove: async (id: string) => { find(id).removed = true; save(); return { deleted: true } },
     },
     library: {
+      detail: async (id: string) => {
+        const found = assets().find((item) => item.id === id)
+        if (!found) return fail(404, 'NOT_FOUND', '演示样片不存在。')
+        return copy(found)
+      },
       list: async (params?: { limit?: number; cursor?: string; q?: string; kind?: 'image' | 'video'; eligible?: boolean }): Promise<AssetListDto> => {
         const q = params?.q?.trim().toLocaleLowerCase()
         const items = assets().filter((asset) => (!params?.kind || asset.mediaKind === params.kind) &&
@@ -192,5 +197,5 @@ export const mockWorkspaceApi: MockWorkspaceApi = {
     list: (params) => browserMock().jobs.list(params), detail: (id) => browserMock().jobs.detail(id),
     cancel: (id) => browserMock().jobs.cancel(id), retry: (id) => browserMock().jobs.retry(id), remove: (id) => browserMock().jobs.remove(id),
   },
-  library: { list: (params) => browserMock().library.list(params), download: (id) => browserMock().library.download(id), remove: (id) => browserMock().library.remove(id) },
+  library: { detail: (id: string) => browserMock().library.detail(id), list: (params) => browserMock().library.list(params), download: (id) => browserMock().library.download(id), remove: (id) => browserMock().library.remove(id) },
 }

@@ -8,6 +8,7 @@ const migrations = loadMigrations()
 const core = migrations.find(migration => migration.name === 'agent_core')!
 const ledgers = migrations.find(migration => migration.name === 'agent_ledgers_outbox_quarantine')!
 const control = migrations.find(migration => migration.name === 'agent_control_plane')!
+const recovery = migrations.find(migration => migration.name === 'agent_recovery_indexes')!
 
 test('Agent migrations are additive, discoverable, transactional and have reverse scripts (source checks only)', () => {
   assert.equal(core.version, '0041')
@@ -81,4 +82,35 @@ test('Agent SQL reservation quota allowlist exactly matches public budget counte
   const sqlQuotas = [...quotaCheck[1].matchAll(/'([^']+)'/g)].map(match => match[1])
   assert.deepEqual(sqlQuotas, [...AGENT_BUDGET_QUOTAS])
   assert.match(ledgers.sql, /quota = 'estimated_cost' OR reserved_amount = trunc\(reserved_amount\)/)
+})
+
+test('M5 coordinator recovery indexes are additive, idempotent and reversible (source checks only)', () => {
+  assert.equal(recovery.version, '0044')
+  assert.equal(recovery.transactional, true)
+  assert.doesNotMatch(recovery.sql, /CREATE TABLE|ALTER TABLE|INSERT INTO|DELETE FROM|DROP /i)
+  const expected = [
+    'agent_turns_deadline_recovery_idx',
+    'agent_turns_cancel_recovery_idx',
+    'agent_tool_calls_waiting_external_idx',
+    'outbox_events_quarantine_idx',
+  ]
+  const statements = splitStatements(recovery.sql).map(normalizeStatement)
+  assert.equal(statements.length, expected.length)
+  for (const statement of statements) assert.match(statement, /^CREATE INDEX IF NOT EXISTS/)
+  for (const name of expected) {
+    assert.match(recovery.sql, new RegExp(`CREATE INDEX IF NOT EXISTS ${name}\\b`))
+    const reverse = readFileSync(new URL('../../rollback/0044_agent_recovery_indexes.sql', import.meta.url), 'utf8')
+    assert.match(reverse, new RegExp(`DROP INDEX IF EXISTS ${name};`))
+  }
+})
+
+test('Agent media mask preparation migration is additive, reversible and records immutable managed-byte provenance', () => {
+  const migration = migrations.find(item => item.name === 'agent_media_preparations')!
+  assert.equal(migration.version, '0045')
+  assert.equal(migration.transactional, true)
+  assert.match(migration.sql, /CREATE TABLE IF NOT EXISTS agent_media_mask_preparations/)
+  assert.match(migration.sql, /FOREIGN KEY\(upload_id, owner_id\) REFERENCES media_uploads\(id, created_by\)/)
+  assert.match(migration.sql, /source_checksum.*mask_checksum.*width.*height.*preparation_version/s)
+  assert.match(migration.sql, /BEFORE UPDATE OR DELETE ON agent_media_mask_preparations/)
+  assert.match(readFileSync(new URL('../../rollback/0045_agent_media_preparations.sql', import.meta.url), 'utf8'), /DROP TABLE IF EXISTS agent_media_mask_preparations/)
 })

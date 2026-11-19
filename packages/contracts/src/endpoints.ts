@@ -13,6 +13,11 @@ export const API_ENDPOINTS = {
     messages: (id: string) => `${P}/agent/sessions/${encodeURIComponent(id)}/messages`,
     items: (id: string) => `${P}/agent/sessions/${encodeURIComponent(id)}/items`,
     events: (id: string) => `${P}/agent/sessions/${encodeURIComponent(id)}/events`,
+    artifacts: (sessionId: string) => `${P}/agent/sessions/${encodeURIComponent(sessionId)}/artifacts`,
+    artifact: (sessionId: string, artifactId: string) => `${P}/agent/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}`,
+    artifactThreads: (sessionId: string, artifactId: string) => `${P}/agent/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/threads`,
+    artifactThread: (sessionId: string, artifactId: string, threadId: string) => `${P}/agent/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/threads/${encodeURIComponent(threadId)}`,
+    artifactThreadReplies: (sessionId: string, artifactId: string, threadId: string) => `${P}/agent/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/threads/${encodeURIComponent(threadId)}/replies`,
     turn: (id: string) => `${P}/agent/turns/${encodeURIComponent(id)}`,
     cancel: (id: string) => `${P}/agent/turns/${encodeURIComponent(id)}/cancel`,
     steer: (id: string) => `${P}/agent/turns/${encodeURIComponent(id)}/steer`,
@@ -40,30 +45,19 @@ export const API_ENDPOINTS = {
   },
 
   models: `${P}/models`,
-  generations: `${P}/generations`,
 
+  // @deprecated 画布已废弃（docs/canvas-deprecation.md）：后端路由已删除，仅为 web 前端过渡期保留。
   canvases: {
     list: `${P}/canvases`,
     create: `${P}/canvases`,
     detail: (id: string) => `${P}/canvases/${id}`,
     update: (id: string) => `${P}/canvases/${id}`,
     remove: (id: string) => `${P}/canvases/${id}`,
-    agent: {
-      messages: (id: string) => `${P}/canvases/${id}/agent/messages`,
-      turn: (id: string, turnId: string) => `${P}/canvases/${id}/agent/turns/${turnId}`,
-      history: (id: string) => `${P}/canvases/${id}/agent/history`,
-      confirm: (id: string) => `${P}/canvases/${id}/agent/confirm`,
-      apply: (id: string) => `${P}/canvases/${id}/agent/apply`,
-    },
   },
 
-  canvasAgent: {
-    status: `${P}/canvas-agent/status`,
-  },
-
-  // 局部修改：multipart 图片编辑，成功时返回与 POST /generations 相同的 job DTO
+  // 生成的 Agent 暂存端点：只准备源图与蒙版，不创建生成任务（生成能力仅作为 Agent 工具）
   images: {
-    edit: `${P}/images/edit`,
+    prepareEdit: `${P}/images/edit/preparations`,
   },
 
   // 媒体对象读取与上传：URL 由服务端签名生成（HMAC 查询串），web 客户端从不自行拼接这些地址
@@ -150,7 +144,6 @@ export const API_ENDPOINTS = {
     promptTemplatesPreview: `${P}/admin/prompt-templates/preview`,
     promptTemplatesExport: `${P}/admin/prompt-templates/export`,
     promptOptimizationSettings: `${P}/admin/prompt-optimization-settings`,
-    canvasAgentSettings: `${P}/admin/canvas-agent-settings`,
     // GET reads both kind defaults; PATCH elects or clears them. Both admin-only.
     mediaModelDefaults: `${P}/admin/media-model-defaults`,
   },

@@ -275,7 +275,7 @@ export function buildInpaintPrompt(userRequest: string): string {
   ].join('\n')
 }
 
-/** Parse the `region` form field of `POST /api/images/edit`. Accepts the
+/** Parse the `region` form field of `POST /api/images/edit/preparations`. Accepts the
  *  `EditRegion` rectangle object with or without its `type` discriminator, and
  *  nothing else — a malformed or out-of-range rectangle must fail loudly. */
 export function parseRectangleRegion(value: unknown): EditRegion | null {

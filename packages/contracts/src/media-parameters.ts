@@ -406,7 +406,7 @@ export type MediaModelDefaultsParseResult<T> =
 const MEDIA_DEFAULTS_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
- * Hand-written validator in the style of `parseUpdateCanvasAgentSettingsRequest`:
+ * Hand-written validator in the style of the legacy Canvas request parsers:
  * plain objects only, unknown fields rejected, an empty patch rejected. No
  * runtime validation library — this module must stay dependency-free for the
  * browser bundle.

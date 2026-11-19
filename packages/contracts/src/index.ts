@@ -850,6 +850,7 @@ export type PromptTemplateErrorCode = (typeof PromptTemplateErrorCode)[keyof typ
 export * from './endpoints'
 export * from './image-edit'
 export * from './canvas'
+export * from './uuid'
 // Media capability metadata and its validator. Loaded last so the type-only
 // cycle back into this module never becomes a runtime one.
 export * from './media-parameters'

@@ -6,8 +6,7 @@ test('static endpoints carry the /api prefix and match backend route strings', (
   assert.equal(API_ENDPOINTS.session, '/api/session')
   assert.equal(API_ENDPOINTS.registration, '/api/registration')
   assert.equal(API_ENDPOINTS.library.list, '/api/library')
-  assert.equal(API_ENDPOINTS.generations, '/api/generations')
-  assert.equal(API_ENDPOINTS.images.edit, '/api/images/edit')
+  assert.equal(API_ENDPOINTS.images.prepareEdit, '/api/images/edit/preparations')
   assert.equal(API_ENDPOINTS.media.object, '/api/media/object')
   assert.equal(API_ENDPOINTS.media.upload, '/api/media/upload')
   assert.equal(API_ENDPOINTS.setup.status, '/api/setup/status')
@@ -43,20 +42,13 @@ test('dynamic helpers interpolate id and provider segments', () => {
   assert.equal(API_ENDPOINTS.admin.pluginDocs('p1'), '/api/admin/plugins/p1/docs')
 })
 
-test('canvas M1/M2 endpoint samples use the shared helpers', () => {
+test('canvas CRUD endpoint samples use the shared helpers', () => {
   const id = '12345678-1234-1234-1234-123456789abc'
   assert.equal(API_ENDPOINTS.canvases.list, '/api/canvases')
   assert.equal(API_ENDPOINTS.canvases.create, '/api/canvases')
   assert.equal(API_ENDPOINTS.canvases.detail(id), `/api/canvases/${id}`)
   assert.equal(API_ENDPOINTS.canvases.update(id), `/api/canvases/${id}`)
   assert.equal(API_ENDPOINTS.canvases.remove(id), `/api/canvases/${id}`)
-  assert.equal(API_ENDPOINTS.canvases.agent.messages(id), `/api/canvases/${id}/agent/messages`)
-  assert.equal(API_ENDPOINTS.canvases.agent.turn(id, id), `/api/canvases/${id}/agent/turns/${id}`)
-  assert.equal(API_ENDPOINTS.canvases.agent.history(id), `/api/canvases/${id}/agent/history`)
-  assert.equal(API_ENDPOINTS.canvases.agent.confirm(id), `/api/canvases/${id}/agent/confirm`)
-  assert.equal(API_ENDPOINTS.canvases.agent.apply(id), `/api/canvases/${id}/agent/apply`)
-  assert.equal(API_ENDPOINTS.canvasAgent.status, '/api/canvas-agent/status')
-  assert.equal(API_ENDPOINTS.admin.canvasAgentSettings, '/api/admin/canvas-agent-settings')
   assert.equal(API_ENDPOINTS.admin.mediaModelDefaults, '/api/admin/media-model-defaults')
 })
 

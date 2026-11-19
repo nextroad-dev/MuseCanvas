@@ -1,5 +1,7 @@
 import type { JsonObject } from '../index'
 
+export * from './artifacts'
+
 /** PostgreSQL bigint values travel as base-10 strings, never JS numbers. */
 export type AgentDecimal = `${bigint}`
 export type AgentTurnStatus = 'queued' | 'running' | 'waiting_tools' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled'
@@ -52,6 +54,7 @@ export interface AgentSessionDTO {
   ownerId: string
   agentDefinitionId: string
   definitionVersion: number
+  /** @deprecated 画布已废弃（docs/canvas-deprecation.md），新会话恒为 null，仅为过渡兼容保留。 */
   defaultCanvasId: string | null
   activeTurnId: string | null
   inputRevision: AgentDecimal
@@ -179,7 +182,42 @@ export type AgentTransportFrame =
   | { type: 'heartbeat'; sessionId: string; cursor: AgentDecimal }
   | { type: 'resync.required'; sessionId: string; reason: 'retention' | 'backlog' | 'unavailable' }
 
+/** @deprecated defaultCanvasId 已随画布废弃（docs/canvas-deprecation.md），后端接受但忽略该字段。 */
 export interface CreateAgentSessionRequest { clientRequestId: string; agentDefinitionId: string; definitionVersion: number; defaultCanvasId?: string }
-export interface CreateAgentMessageRequest { clientMessageId: string; content: string }
+export const AGENT_MESSAGE_MAX_ATTACHMENTS = 4
+export interface AgentMessageAttachment {
+  kind: 'upload' | 'asset'
+  id: string
+  role: 'reference_image' | 'mask'
+  checksum: string
+  width: number
+  height: number
+  mimeType: 'image/png' | 'image/jpeg'
+  preparationVersion?: 1
+  sourceChecksum?: string
+}
+export interface CreateAgentMessageRequest { clientMessageId: string; content: string; attachments?: AgentMessageAttachment[] }
+/** Multipart metadata; image and mask bytes are separate binary parts, not JSON DTO values.
+ * turnId requires sessionId and proves an active admitted turn; session-only is new work.
+ */
+export interface PrepareAgentImageEditRequest {
+  modelId: string
+  assetId?: string
+  region?: { x: number; y: number; width: number; height: number }
+  idempotencyKey?: string
+  sessionId?: string
+  turnId?: string
+}
+export interface AgentEditPreparationDTO {
+  maskUploadId: string
+  source: { kind: 'upload' | 'asset'; id: string }
+  sourceChecksum: string
+  maskChecksum: string
+  width: number
+  height: number
+  selection?: { x: number; y: number; width: number; height: number }
+  expiresAt: string
+  preparationVersion: 1
+}
 export interface AgentMessageAcceptedDTO { turn: AgentTurnDTO; acceptedInputRevision: AgentDecimal }
 export interface ResolveAgentApprovalRequest { decision: 'approved' | 'rejected'; expectedArgumentsHash: string }

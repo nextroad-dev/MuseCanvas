@@ -1,11 +1,11 @@
 import type pg from 'pg'
 import type {
   AgentApprovalDTO, AgentApprovalSummaryDTO, AgentDecimal, AgentError, AgentErrorCode, AgentEventEnvelope, AgentEventsPageDTO,
-  AgentItemDTO, AgentItemsPageDTO, AgentMessageAcceptedDTO, AgentSessionDTO, AgentSessionSnapshotDTO,
+  AgentItemDTO, AgentItemsPageDTO, AgentMessageAcceptedDTO, AgentMessageAttachment, AgentSessionDTO, AgentSessionSnapshotDTO,
   AgentSessionsPageDTO, AgentToolSummaryDTO, AgentTurnDTO, CreateAgentMessageRequest,
   CreateAgentSessionRequest, ResolveAgentApprovalRequest, JsonObject, AgentBudgetDTO,
 } from '@musecanvas/contracts'
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 
 export type AgentCoreClient = Pick<pg.PoolClient, 'query'>
 export type AgentCoreTransaction = <T>(work: (client: AgentCoreClient) => Promise<T>, readOnly?: boolean) => Promise<T>
@@ -20,6 +20,59 @@ const decimal = (value: unknown) => String(value) as AgentDecimal
 const iso = (value: any): string => value instanceof Date ? value.toISOString() : String(value)
 const nullableTime = (value: any) => value == null ? null : iso(value)
 const terminal = (status: string) => ['completed', 'failed', 'cancelled'].includes(status)
+
+/**
+ * Attachments are canonicalised before hashing: the client picks the array order,
+ * so the same set in a different order must stay the same request (one receipt)
+ * while a different set must be a genuine conflict.
+ */
+function canonicalAgentAttachments(list: readonly AgentMessageAttachment[] | undefined): AgentMessageAttachment[] {
+  return (list ?? []).slice().sort((a, b) => a.role.localeCompare(b.role) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id))
+}
+
+/** The exact JSON that goes into the request digest; an unset mask identity stays absent. */
+function attachmentDigestShape(attachment: AgentMessageAttachment): JsonObject {
+  return { kind: attachment.kind, id: attachment.id, role: attachment.role, checksum: attachment.checksum,
+    width: attachment.width, height: attachment.height, mimeType: attachment.mimeType,
+    ...(attachment.preparationVersion === 1 && attachment.sourceChecksum
+      ? { preparationVersion: attachment.preparationVersion, sourceChecksum: attachment.sourceChecksum } : {}) }
+}
+
+/**
+ * Admission-time proof that every attached reference names a live row this owner
+ * controls. It is not the effect gate: `lockManagedGenerationInputs` re-verifies the
+ * trusted preparation inside the paid transaction. Proving it here keeps the stored
+ * item's ids honest and rejects a reference that could never become valid.
+ */
+async function verifyAgentAttachments(c: AgentCoreClient, owner: string, attachments: readonly AgentMessageAttachment[]): Promise<void> {
+  const sources = attachments.filter(attachment => attachment.role === 'reference_image')
+  for (const attachment of attachments) {
+    if (attachment.role === 'mask') {
+      const source = sources.find(candidate => candidate.checksum === attachment.sourceChecksum
+        && candidate.width === attachment.width && candidate.height === attachment.height)
+      if (!source) throw new AgentCoreError('INVALID_INPUT')
+      const prepared = await one(c, `SELECT 1 FROM agent_media_mask_preparations p
+        JOIN media_uploads u ON u.id=p.upload_id AND u.created_by=p.owner_id
+        WHERE p.upload_id=$1 AND p.owner_id=$2 AND p.source_checksum=$3 AND p.mask_checksum=$4
+          AND p.width=$5 AND p.height=$6 AND p.preparation_version=1 AND p.expires_at>clock_timestamp()
+          AND u.status IN ('ready','attached') AND u.deleted_at IS NULL AND u.object_deleted_at IS NULL
+          AND u.checksum=p.mask_checksum AND u.width=p.width AND u.height=p.height AND u.mime_type='image/png'
+          AND u.expires_at>clock_timestamp()`,
+      [attachment.id, owner, attachment.sourceChecksum, attachment.checksum, attachment.width, attachment.height])
+      if (!prepared) throw new AgentCoreError('INVALID_INPUT')
+      continue
+    }
+    const reference = attachment.kind === 'asset'
+      ? await one(c, `SELECT 1 FROM assets WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL AND media_kind='image'
+          AND checksum=$3 AND width=$4 AND height=$5 AND mime_type=$6`,
+        [attachment.id, owner, attachment.checksum, attachment.width, attachment.height, attachment.mimeType])
+      : await one(c, `SELECT 1 FROM media_uploads WHERE id=$1 AND created_by=$2 AND status IN ('ready','attached')
+          AND checksum=$3 AND width=$4 AND height=$5 AND mime_type=$6 AND media_kind='image'
+          AND deleted_at IS NULL AND object_deleted_at IS NULL AND clock_timestamp()<expires_at`,
+        [attachment.id, owner, attachment.checksum, attachment.width, attachment.height, attachment.mimeType])
+    if (!reference) throw new AgentCoreError('INVALID_INPUT')
+  }
+}
 // Public error projection is a fixed allowlist: stored messages may contain provider
 // bodies, URLs or credentials, so they are never forwarded to clients or events.
 const agentErrorMessages: Record<AgentErrorCode, string> = {
@@ -159,14 +212,14 @@ export class AgentCoreRepository {
   createSession(owner: string, input: CreateAgentSessionRequest, admit = true): Promise<AgentSessionDTO> {
     return this.tx(async c => {
       await actorLock(c, owner)
-      const digest = canvasAgentRequestDigest({ agentDefinitionId: input.agentDefinitionId, definitionVersion: input.definitionVersion, defaultCanvasId: input.defaultCanvasId ?? null })
+      const digest = canonicalJsonDigest({ agentDefinitionId: input.agentDefinitionId, definitionVersion: input.definitionVersion })
       const receipt = await one(c, 'SELECT request_digest,accepted_response FROM agent_session_requests WHERE owner_id=$1 AND client_request_key=$2', [owner, input.clientRequestId])
       if (receipt) { if (receipt.request_digest !== digest) throw new AgentCoreError('CONFLICT'); return receipt.accepted_response }
       if (!admit) throw new AgentCoreError('UNAVAILABLE')
       await this.validate(c, await definition(c, owner, input.agentDefinitionId, input.definitionVersion))
-      if (input.defaultCanvasId) required(await one(c, 'SELECT id FROM canvas_documents WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL FOR SHARE', [input.defaultCanvasId, owner]))
-      const s = required(await one(c, `INSERT INTO agent_sessions(owner_id,agent_definition_id,definition_version,default_canvas_id)
-        VALUES($1,$2,$3,$4) RETURNING *`, [owner, input.agentDefinitionId, input.definitionVersion, input.defaultCanvasId ?? null]))
+      // Canvas 已废弃（docs/canvas-deprecation.md）：CreateAgentSessionRequest.defaultCanvasId 仅作兼容接受，不再校验/存储。
+      const s = required(await one(c, `INSERT INTO agent_sessions(owner_id,agent_definition_id,definition_version)
+        VALUES($1,$2,$3) RETURNING *`, [owner, input.agentDefinitionId, input.definitionVersion]))
       const dto = agentSessionDTO(s)
       await c.query(`INSERT INTO agent_session_requests(owner_id,client_request_key,request_digest,session_id,accepted_response)
         VALUES($1,$2,$3,$4,$5::jsonb)`, [owner, input.clientRequestId, digest, s.id, JSON.stringify(dto)])
@@ -231,12 +284,19 @@ export class AgentCoreRepository {
     return this.tx(async c => {
       await actorLock(c, owner)
       const s = await session(c, owner, id, true)
-      const digest = canvasAgentRequestDigest({ sessionId: id, content: input.content })
+      const attachments = canonicalAgentAttachments(input.attachments)
+      const digest = canonicalJsonDigest({ sessionId: id, content: input.content,
+        ...(attachments.length ? { attachments: attachments.map(attachmentDigestShape) } : {}) })
+      // Replay is answered from the receipt before any admission-time proof runs: the
+      // references were proven for the original acceptance, and their uploads may since
+      // have expired, been consumed by the job or been reaped. Re-validating here would
+      // turn an honest retry of an accepted message into INVALID_INPUT.
       const receipt = await one(c, 'SELECT request_digest,accepted_response,turn_id FROM agent_message_receipts WHERE session_id=$1 AND client_message_id=$2', [id, input.clientMessageId])
       if (receipt) {
         if (receipt.request_digest !== digest || (targetTurnId && receipt.turn_id !== targetTurnId)) throw new AgentCoreError('CONFLICT')
         return receipt.accepted_response
       }
+      if (attachments.length) await verifyAgentAttachments(c, owner, attachments)
       if (s.archived_at) throw new AgentCoreError('CONFLICT')
       let t = s.active_turn_id ? await turn(c, owner, s.active_turn_id, true) : undefined
       if (targetTurnId && (!t || t.id !== targetTurnId)) throw new AgentCoreError('CONFLICT')
@@ -257,7 +317,7 @@ export class AgentCoreRepository {
           WHERE id=$1 AND session_id=$2 RETURNING *`, [t.id, id, counters.input_revision]))
       }
       const i = required(await one(c, `INSERT INTO agent_items(session_id,turn_id,sequence,item_type,payload,content_digest)
-        VALUES($1,$2,$3,'user_message',$4::jsonb,$5) RETURNING *`, [id, t.id, counters.sequence, JSON.stringify({ content: input.content }), digest]))
+        VALUES($1,$2,$3,'user_message',$4::jsonb,$5) RETURNING *`, [id, t.id, counters.sequence, JSON.stringify({ content: input.content, ...(attachments.length ? { attachments } : {}) }), digest]))
       await event(c, s, t, 'item.created', { item: agentItemDTO(i) }, counters.sequence)
       await event(c, s, t, 'turn.updated', { turn: agentTurnDTO(t) })
       await wake(c, t)
@@ -308,7 +368,7 @@ export class AgentCoreRepository {
       }
       if (terminal(prior.status) || prior.cancel_requested_at || prior.deadline_open === false || s.active_turn_id !== prior.id) throw new AgentCoreError('CONFLICT')
       const reservation = required(await one(c, `SELECT * FROM agent_budget_reservations WHERE id=$1 AND tool_call_id=$2 AND turn_id=$3 AND session_id=$4 FOR UPDATE`, [a.reservation_id, tool.id, prior.id, s.id]))
-      if (canvasAgentRequestDigest(tool.arguments) !== tool.arguments_hash || tool.status !== 'waiting_approval' || reservation.status !== 'reserved' || reservation.pricing_revision !== a.pricing_revision
+      if (canonicalJsonDigest(tool.arguments) !== tool.arguments_hash || tool.status !== 'waiting_approval' || reservation.status !== 'reserved' || reservation.pricing_revision !== a.pricing_revision
         || prior.config_snapshot.modelRevisionId !== a.model_revision) throw new AgentCoreError('CONFLICT')
       a = required(await one(c, `WITH decision_time AS (SELECT clock_timestamp() AS at)
         UPDATE agent_approvals SET status=CASE WHEN expires_at<=decision_time.at THEN 'expired' ELSE $4 END,

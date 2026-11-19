@@ -1,7 +1,7 @@
 import type { AgentBudgetDTO, AgentError, AgentItemDTO, AgentToolCallDTO, AgentToolCallStatus, AgentTurnDTO, JsonObject } from '@musecanvas/contracts'
 import { agentCoreDecimal, agentItemDTO, agentTurnDTO, type AgentCoreClient } from './agent-core'
 import type { AgentTurnScope } from './agent-runtime'
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 import { settleLinkedAgentMediaReservations } from './agent-media-settlement'
 
 export interface AgentToolResultInput { toolCallId: string; sessionId: string; turnId: string; idempotencyKey: string; status: Extract<AgentToolCallStatus,'completed'|'failed'|'cancelled'>; result: JsonObject | null; error: AgentError | null }
@@ -22,7 +22,7 @@ async function event(client: AgentCoreClient, scope: AgentTurnScope, type: 'item
 }
 export async function appendAgentExecutionItem(client: AgentCoreClient, scope: AgentTurnScope, type: 'assistant_message'|'tool_result'|'tool_call', payload: JsonObject, toolCallId: string | null): Promise<AgentItemDTO> {
   const counter = req((await client.query(`UPDATE agent_sessions SET next_item_sequence=next_item_sequence+1,updated_at=clock_timestamp() WHERE id=$1 AND owner_id=$2 RETURNING (next_item_sequence-1)::text AS sequence`,[scope.sessionId,scope.ownerId])).rows[0])
-  const value = req((await client.query(`INSERT INTO agent_items(session_id,turn_id,sequence,item_type,tool_call_id,payload,content_digest) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) RETURNING *`,[scope.sessionId,scope.turnId,counter.sequence,type,toolCallId,JSON.stringify(payload),canvasAgentRequestDigest(payload)])).rows[0])
+  const value = req((await client.query(`INSERT INTO agent_items(session_id,turn_id,sequence,item_type,tool_call_id,payload,content_digest) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) RETURNING *`,[scope.sessionId,scope.turnId,counter.sequence,type,toolCallId,JSON.stringify(payload),canonicalJsonDigest(payload)])).rows[0])
   const dto = agentItemDTO(value)
   await event(client,scope,'item.created',{ item: dto as unknown as JsonObject },dto.sequence)
   return dto

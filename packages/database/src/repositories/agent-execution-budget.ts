@@ -1,7 +1,7 @@
 import type { AgentBudgetDTO, AgentBudgetQuota, AgentDecimal, AgentEstimatedCost, AgentUsageKind, JsonObject } from '@musecanvas/contracts'
 import type { AgentCoreClient } from './agent-core'
 import type { AgentTurnScope } from './agent-runtime'
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 
 export interface AgentExecutionBudgetUsage { modelCalls: number; toolCalls: number; mediaJobs: number; mediaOutputs: number; inputTokens: bigint; outputTokens: bigint; concurrentMediaJobs: number; estimatedCost: AgentEstimatedCost | null }
 export interface AgentExecutionBudgetReserveInput { quota: AgentBudgetQuota; amount: AgentDecimal; currency?: string; pricingRevision?: string; idempotencyKey: string }
@@ -100,7 +100,7 @@ export function createAgentExecutionBudgetRepository(): AgentExecutionBudgetRepo
         if (previous.status !== input.outcome) return fail('BUDGET_CONFLICT')
         if (input.usage) {
           const stored=(await client.query<{amount:string;currency:string|null;usage_kind:string;details:JsonObject}>(`SELECT amount::text,currency,usage_kind,details FROM agent_usage_entries WHERE session_id=$1 AND turn_id=$2 AND reservation_id=$3 AND settlement_key=$4`,[...args(input.scope),input.reservationId,`reservation:${input.reservationId}`])).rows[0]
-          if (!stored || agentBudgetUnits(stored.amount)!==agentBudgetUnits(input.usage.amount) || stored.currency!==input.usage.currency || stored.usage_kind!==input.usage.kind || canvasAgentRequestDigest(stored.details)!==canvasAgentRequestDigest({...input.usage.details,quota:previous.quota})) return fail('BUDGET_CONFLICT')
+          if (!stored || agentBudgetUnits(stored.amount)!==agentBudgetUnits(input.usage.amount) || stored.currency!==input.usage.currency || stored.usage_kind!==input.usage.kind || canonicalJsonDigest(stored.details)!==canonicalJsonDigest({...input.usage.details,quota:previous.quota})) return fail('BUDGET_CONFLICT')
         }
         return
       }

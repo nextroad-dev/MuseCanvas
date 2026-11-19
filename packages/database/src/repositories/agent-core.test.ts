@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { AgentCoreError, AgentCoreRepository, agentCoreDecimal, agentTurnDTO, type AgentCoreClient, type AgentCoreTransaction, type AgentDefinitionValidator } from './agent-core'
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 
 const owner = '10000000-0000-4000-8000-000000000001'
 const sid = '20000000-0000-4000-8000-000000000001'
@@ -45,7 +45,7 @@ const wakeStep: Step = [/INSERT INTO outbox_events.*agent.turn.wake/, []]
 
 test('agent-core: session receipt checked before mutable definition/admission; owner-global changed-body conflict', async () => {
   const input = { clientRequestId: 'create-1', agentDefinitionId: mid, definitionVersion: 1 }
-  const digest = canvasAgentRequestDigest({ agentDefinitionId: mid, definitionVersion: 1, defaultCanvasId: null })
+  const digest = canonicalJsonDigest({ agentDefinitionId: mid, definitionVersion: 1 })
   const f = fixture([actor, [/FROM agent_session_requests WHERE owner_id=\$1 AND client_request_key=\$2/, [{ request_digest: digest, accepted_response: { id: sid } }]]])
   assert.deepEqual(await f.repo.createSession(owner, input, false), { id: sid })
   assert.equal(f.validations, 0); f.done()
@@ -53,16 +53,16 @@ test('agent-core: session receipt checked before mutable definition/admission; o
   await assert.rejects(conflict.repo.createSession(owner, { ...input, definitionVersion: 2 }, false), { code: 'CONFLICT' }); conflict.done()
 })
 
-test('agent-core: new session validates active owner/system definition and canvas under actor serialization', async () => {
+test('agent-core: new session validates active owner/system definition under actor serialization', async () => {
   const f = fixture([actor, [/FROM agent_session_requests/, []], [/FROM agent_definitions .*status='active'.*owner_id IS NULL OR owner_id=\$3.*FOR SHARE/, [{ id: mid }]],
-    [/FROM canvas_documents .*created_by=\$2 AND deleted_at IS NULL FOR SHARE/, [{ id: tid }]], [/INSERT INTO agent_sessions/, [s]], [/INSERT INTO agent_session_requests/, []]])
-  const result = await f.repo.createSession(owner, { clientRequestId: 'c', agentDefinitionId: mid, definitionVersion: 1, defaultCanvasId: tid })
+    [/INSERT INTO agent_sessions/, [s]], [/INSERT INTO agent_session_requests/, []]])
+  const result = await f.repo.createSession(owner, { clientRequestId: 'c', agentDefinitionId: mid, definitionVersion: 1 })
   assert.equal(result.id, sid); assert.equal(f.validations, 1); f.done()
 })
 
 test('agent-core: message replay survives cancellation/terminal/config changes and emits no second item/revision/wake', async () => {
   const input = { clientMessageId: mid, content: 'hello' }
-  const digest = canvasAgentRequestDigest({ sessionId: sid, content: 'hello' })
+  const digest = canonicalJsonDigest({ sessionId: sid, content: 'hello' })
   const f = fixture([actor, lockedSession, [/FROM agent_message_receipts WHERE session_id=\$1 AND client_message_id=\$2/, [{ request_digest: digest, turn_id: tid, accepted_response: accepted }]]])
   assert.deepEqual(await f.repo.message(owner, sid, input, false, tid), accepted)
   assert.equal(f.validations, 0); assert.equal(f.calls.length, 3); f.done()
@@ -167,7 +167,7 @@ test('agent-core: local cancel fails closed for each unfinished/unknown dependen
 })
 
 function approvalFixture(expired = false, decision: string = 'pending') {
-  const hash = canvasAgentRequestDigest({})
+  const hash = canonicalJsonDigest({})
   const a = { id: mid, session_id: sid, turn_id: tid, tool_call_id: mid, arguments_hash: hash, model_revision: mid,
     pricing_revision: 'pricing:1', reservation_id: mid, status: decision, expires_at: now, resolved_at: null, resolved_by: null, expired }
   const steps: Step[] = [actor, [/SELECT a.turn_id,a.tool_call_id FROM agent_approvals .*s.owner_id=\$1/, [a]], lookupTurn, lockedSession, lockedTurn,
@@ -260,4 +260,37 @@ test('agent-core: steering and approval decisions are rejected after the frozen 
   await assert.rejects(approval.repo.resolveApproval(owner, mid, { decision: 'approved', expectedArgumentsHash: hash }), { code: 'CONFLICT' })
   assert.doesNotMatch(approval.calls.map(c => c.sql).join(''), /UPDATE agent_approvals SET|INSERT INTO outbox_events/)
   approval.done()
+})
+
+/** The exact digest shape `message()` hashes: attachments are canonicalised, not client-ordered. */
+const digestShape = (a: { kind: string; id: string; role: string; checksum: string; width: number; height: number; mimeType: string; preparationVersion?: 1; sourceChecksum?: string }) => ({
+  kind: a.kind, id: a.id, role: a.role, checksum: a.checksum, width: a.width, height: a.height, mimeType: a.mimeType,
+  ...(a.preparationVersion === 1 && a.sourceChecksum ? { preparationVersion: 1 as const, sourceChecksum: a.sourceChecksum } : {}) })
+const maskUpload = '50000000-0000-4000-8000-000000000001'
+const assetRef = '60000000-0000-4000-8000-000000000001'
+const sourceChecksum = 'a'.repeat(64), maskChecksum = 'b'.repeat(64)
+const sourceAttachment = { kind: 'asset' as const, id: assetRef, role: 'reference_image' as const, checksum: sourceChecksum, width: 640, height: 480, mimeType: 'image/png' as const }
+const maskAttachment = { kind: 'upload' as const, id: maskUpload, role: 'mask' as const, checksum: maskChecksum, width: 640, height: 480,
+  mimeType: 'image/png' as const, preparationVersion: 1 as const, sourceChecksum }
+
+test('agent-core: attachment order is canonical for the replay digest and replay skips re-verification', async () => {
+  const canonical = [maskAttachment, sourceAttachment].map(digestShape)
+  const digest = canonicalJsonDigest({ sessionId: sid, content: 'edit the roof', attachments: canonical })
+  const f = fixture([actor, lockedSession, [/FROM agent_message_receipts/, [{ request_digest: digest, turn_id: tid, accepted_response: accepted }]]])
+  // Client order is reversed on purpose: the same set must still be the same request.
+  assert.deepEqual(await f.repo.message(owner, sid, { clientMessageId: mid, content: 'edit the roof', attachments: [sourceAttachment, maskAttachment] }, false, tid), accepted)
+  assert.equal(f.calls.length, 3); f.done()
+  const drifted = fixture([actor, lockedSession, [/FROM agent_message_receipts/, [{ request_digest: digest, turn_id: tid, accepted_response: accepted }]]])
+  await assert.rejects(drifted.repo.message(owner, sid, { clientMessageId: mid, content: 'edit the roof',
+    attachments: [sourceAttachment, { ...maskAttachment, checksum: 'c'.repeat(64) }] }, false, tid), { code: 'CONFLICT' }); drifted.done()
+})
+
+test('agent-core: a new message proves the prepared mask identity before writing any item', async () => {
+  const f = fixture([actor, lockedSession, [/FROM agent_message_receipts/, []],
+    [/FROM agent_media_mask_preparations p/, []]])
+  await assert.rejects(f.repo.message(owner, sid, { clientMessageId: mid, content: 'edit the roof',
+    attachments: [sourceAttachment, maskAttachment] }, false, tid), { code: 'INVALID_INPUT' })
+  // The mask proof runs before any write: no revision bump, no item, no wake.
+  assert.doesNotMatch(f.calls.map(c => c.sql).join('\n'), /INSERT INTO agent_items|UPDATE agent_sessions SET input_revision|INSERT INTO outbox_events/)
+  f.done()
 })

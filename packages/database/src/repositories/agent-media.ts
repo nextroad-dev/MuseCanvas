@@ -1,4 +1,4 @@
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 import type { AgentDecimal, JsonObject, JsonValue } from '@musecanvas/contracts'
 
 /** All writes use an existing caller-owned transaction; this module never commits. */
@@ -38,7 +38,7 @@ export async function assertAgentMediaApproval(client: AgentMediaSql, scope: Age
     WHERE c.id=$1 AND c.turn_id=$2 AND c.session_id=$3 AND c.round_id=$4 AND c.arguments_hash=$5
       AND c.status='executing' FOR UPDATE OF c`,
   [toolCallId, scope.turnId, scope.sessionId, roundId, argumentsHash])).rows[0]
-  if (!tool || !tool.arguments || canvasAgentRequestDigest(tool.arguments as JsonValue) !== argumentsHash) throw new AgentMediaError('APPROVAL_CONFLICT')
+  if (!tool || !tool.arguments || canonicalJsonDigest(tool.arguments as JsonValue) !== argumentsHash) throw new AgentMediaError('APPROVAL_CONFLICT')
   const approval = (await client.query(`SELECT a.id,a.model_revision,a.pricing_revision,a.reservation_id,b.reserved_amount::text AS amount,b.currency
     FROM agent_approvals a
     JOIN agent_turns t ON t.id=a.turn_id AND t.session_id=a.session_id

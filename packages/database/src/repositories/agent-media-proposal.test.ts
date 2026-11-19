@@ -2,14 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { appendAgentMediaProposalToolCall, createPendingAgentMediaApproval, expireAgentToolApproval, readAgentToolApproval } from './agent-media-proposal'
 import type { AgentCoreClient } from './agent-core'
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const ownerId = uuid(1), sessionId = uuid(2), turnId = uuid(3), roundId = uuid(4), toolCallId = uuid(5)
 const reservationId = uuid(6), approvalId = uuid(7)
 const now = Date.parse('2026-11-17T08:00:00Z')
 const args = { modelRevisionId: 'media-revision', prompt: 'draw' }
-const argsHash = canvasAgentRequestDigest(args)
+const argsHash = canonicalJsonDigest(args)
 const scope = { ownerId, sessionId, turnId }
 const toolInput = { scope, roundId, providerCallId: 'call-1', toolName: 'generate_image__v1', toolSchemaVersion: 2,
   arguments: args, argumentsHash: argsHash, idempotencyKey: 'idem-1' }

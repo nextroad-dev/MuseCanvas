@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { appendMediaJobCompleted, assertAgentMediaApproval, linkAgentMediaJob, mediaCompletionDependencies, type AgentMediaSql } from './agent-media'
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 
 const scope = { ownerId: 'owner', sessionId: 'session', turnId: 'turn' }
 function fixture(steps: Array<[RegExp, Record<string, unknown>[]]>) {
@@ -32,7 +32,7 @@ test('completion Outbox reads actual terminal timestamp/status on caller SQL, ex
 
 test('approval enforcement validates durable tool arguments, approval and owned reserved estimate together', async () => {
   const args = { modelRevisionId: 'media-revision', prompt: 'draw' }
-  const hash = canvasAgentRequestDigest(args)
+  const hash = canonicalJsonDigest(args)
   const f = fixture([
     [/c\.arguments_hash=\$5 AND c.status='executing' FOR UPDATE OF c/, [{ id: 'tool', arguments: args }]],
     [/JOIN agent_budget_reservations b .*a.status='approved'.*clock_timestamp\(\)<a.expires_at.*b.status='reserved'.*FOR UPDATE OF a,b/,
@@ -48,7 +48,7 @@ test('approval enforcement validates durable tool arguments, approval and owned 
 })
 
 test('approval missing/rejected/expired or changed durable tool arguments refuses before any effect', async () => {
-  const args = { prompt: 'draw' }, hash = canvasAgentRequestDigest(args)
+  const args = { prompt: 'draw' }, hash = canonicalJsonDigest(args)
   for (const approvedTool of [false, true]) {
     const steps: Array<[RegExp, Record<string, unknown>[]]> = [[/SELECT c.id,c.arguments/, [{ id: 'tool', arguments: approvedTool ? args : { prompt: 'different' } }]]]
     if (approvedTool) steps.push([/FROM agent_approvals/, []])

@@ -1,6 +1,6 @@
 import type { AgentDecimal, AgentModelRoundStatus, AgentToolCallStatus, JsonObject } from '@musecanvas/contracts'
 import type { AgentCoreClient } from './agent-core'
-import { canvasAgentRequestDigest } from './canvas-agent'
+import { canonicalJsonDigest } from '../canonical-json-digest'
 import type { AgentTurnScope } from './agent-runtime'
 
 export interface AgentRoundCheckpoint {
@@ -36,7 +36,7 @@ export function agentRoundCheckpoint(value: unknown): AgentRoundCheckpoint {
     if (blocks.some(block=>!block || (block.type !== 'text' && block.type !== 'tool_call'))) throw new Error('INVALID_ROUND_CHECKPOINT')
     const text = blocks.filter(block=>block.type==='text').map(block=>block.text)
     const calls = blocks.filter(block=>block.type==='tool_call').map(block=>block.toolCall)
-    if (text.some(value=>typeof value!=='string') || text.join('')!==raw.text || canvasAgentRequestDigest(calls as JsonObject[])!==canvasAgentRequestDigest(toolCalls)) throw new Error('INVALID_ROUND_CHECKPOINT')
+    if (text.some(value=>typeof value!=='string') || text.join('')!==raw.text || canonicalJsonDigest(calls as JsonObject[])!==canonicalJsonDigest(toolCalls)) throw new Error('INVALID_ROUND_CHECKPOINT')
   }
   if (toolCalls.length>32 || Buffer.byteLength(JSON.stringify(value))>1_000_000) throw new Error('INVALID_ROUND_CHECKPOINT')
   return { text: raw.text, toolCalls, ...(raw.contentBlocks ? { contentBlocks: raw.contentBlocks as JsonObject[] } : {}) }

@@ -113,9 +113,6 @@ importers:
       '@fontsource/noto-sans-sc':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource/noto-serif-sc':
-        specifier: ^5.3.1
-        version: 5.3.1
       '@musecanvas/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -165,6 +162,9 @@ importers:
       tailwindcss:
         specifier: ^4.1.0
         version: 4.3.1
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -335,9 +335,6 @@ importers:
 
   packages/providers:
     dependencies:
-      '@aws-sdk/client-s3':
-        specifier: ^3.1073.0
-        version: 3.1073.0
       '@musecanvas/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -706,9 +703,6 @@ packages:
 
   '@fontsource/noto-sans-sc@5.3.0':
     resolution: {integrity: sha512-HeqIlGm0+ohOKxZLuHj1qW6r6avHH0OWdKERAcSDI0RQ+MXrteuLKA+M+5eOA8rYy0MFvOR5AT0fQo2rUkye0Q==}
-
-  '@fontsource/noto-serif-sc@5.3.1':
-    resolution: {integrity: sha512-nIK2HyNGcUi2TGwIfrk2MItkh0O3Y5+TI8iPfPSzoNY6uyXYfQ9qqch8czk3aa1VhV4EU52uwCYCe1UDKJELpg==}
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -2341,8 +2335,6 @@ snapshots:
   '@fontsource/ibm-plex-sans@5.3.0': {}
 
   '@fontsource/noto-sans-sc@5.3.0': {}
-
-  '@fontsource/noto-serif-sc@5.3.1': {}
 
   '@humanfs/core@0.19.2':
     dependencies:

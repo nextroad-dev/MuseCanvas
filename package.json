@@ -8,6 +8,8 @@
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
     "check:tokens": "node scripts/check-web-tokens.mjs",
+    "check:docker-manifests": "node scripts/check-docker-workspace-manifests.mjs",
+    "test:tooling": "node --test \"scripts/*.test.mjs\"",
     "test": "pnpm -r --if-present test",
     "test:e2e:admin": "node tests/e2e/admin-panel.mjs",
     "prepare:prompt-templates": "node scripts/prepare-prompt-templates.mjs",

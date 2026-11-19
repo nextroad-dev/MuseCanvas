@@ -65,6 +65,10 @@ docs/*
 !docs/agent-core-remaining-plan.md
 !docs/agent-core-m5-runbook.md
 !docs/canvas-deprecation.md
+!docs/generation-api-removal.md
+!docs/audits/
+!docs/audits/backend-refactor-audit/
+!docs/audits/backend-refactor-audit/*.md
 agents.md
 **/agents.md
 AGENTS.md

@@ -3,13 +3,68 @@ name: Backend reliability fixtures
 on:
   pull_request:
     branches: [main]
-    paths: ['apps/api/**', 'apps/worker/**', 'packages/database/**', 'packages/media-service/**', 'scripts/**', 'tests/integration/backend-reliability*', 'deploy/**', '.github/workflows/backend-reliability.yml']
+    paths: ['apps/api/**', 'apps/worker/**', 'apps/**/package.json', 'packages/**', 'scripts/**', 'tests/integration/**', 'deploy/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.base.json', '.dockerignore', '.github/workflows/backend-reliability.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+      - run: node scripts/check-docker-workspace-manifests.mjs
+      - run: node --test "scripts/*.test.mjs"
+  agent-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U fixture -d postgres" --health-interval 3s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Agent runtime leases and transaction fencing
+        env:
+          MUSECANVAS_AGENT_RUNTIME_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
+        run: node scripts/run-agent-fixture.mjs runtime
+      - name: Agent recovery persistence
+        env:
+          MUSECANVAS_AGENT_RECOVERY_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
+        run: node scripts/run-agent-fixture.mjs recovery
+      - name: Agent media settlement and outbox faults
+        env:
+          MUSECANVAS_AGENT_MEDIA_TERMINAL_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
+        run: node scripts/run-agent-fixture.mjs media
+      - name: Cleanup claims and account convergence guards
+        env:
+          MUSECANVAS_AGENT_CLEANUP_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
+        run: node scripts/run-agent-fixture.mjs cleanup
+      - name: Agent streams replay and protected retention
+        env:
+          MUSECANVAS_AGENT_STREAMS_REDIS_URL: redis://127.0.0.1:6379/15
+        run: node scripts/run-agent-fixture.mjs streams
   fixtures:
     runs-on: ubuntu-latest
     timeout-minutes: 10

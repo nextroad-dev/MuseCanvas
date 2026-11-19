@@ -66,6 +66,14 @@ services:
       WORKER_STORAGE_TIMEOUT_MS: ${WORKER_STORAGE_TIMEOUT_MS:-60000}
       STREAM_RETENTION_SECONDS: ${STREAM_RETENTION_SECONDS:-604800}
       STREAM_TRIM_BATCH_SIZE: ${STREAM_TRIM_BATCH_SIZE:-1000}
+      # New-work gates default closed; Worker recovery drains independently.
+      AGENT_CORE_ENABLED: ${AGENT_CORE_ENABLED:-false}
+      AGENT_CORE_ADMISSION_READY: ${AGENT_CORE_ADMISSION_READY:-false}
+      AGENT_ADMISSION_PERCENT: ${AGENT_ADMISSION_PERCENT:-0}
+      AGENT_ADMISSION_ACTORS: ${AGENT_ADMISSION_ACTORS:-}
+      AGENT_STREAM_RETENTION_ENABLED: ${AGENT_STREAM_RETENTION_ENABLED:-false}
+      AGENT_STREAM_RETENTION_SECONDS: ${AGENT_STREAM_RETENTION_SECONDS:-0}
+      AGENT_STREAM_TRIM_BATCH_SIZE: ${AGENT_STREAM_TRIM_BATCH_SIZE:-0}
       DATABASE_URL: postgresql://musecanvas:${POSTGRES_PASSWORD}@postgres:5432/musecanvas
       REDIS_URL: redis://redis:6379
       APP_MASTER_KEY: ${APP_MASTER_KEY}
@@ -123,7 +131,7 @@ services:
     restart: unless-stopped
     build: { context: ., dockerfile: deploy/docker/web.Dockerfile }
     depends_on: { api: { condition: service_healthy } }
-    environment: { INTERNAL_API_BASE_URL: http://api:3001 }
+    environment: { INTERNAL_API_BASE_URL: http://api:3001, AGENT_DEFAULT_DEFINITION_ID: "${AGENT_DEFAULT_DEFINITION_ID:-}", AGENT_DEFAULT_DEFINITION_VERSION: "${AGENT_DEFAULT_DEFINITION_VERSION:-1}" }
     healthcheck: { test: [CMD, wget, -qO-, http://127.0.0.1:3000/], interval: 10s, timeout: 3s, retries: 30, start_period: 20s }
   nginx:
     restart: unless-stopped

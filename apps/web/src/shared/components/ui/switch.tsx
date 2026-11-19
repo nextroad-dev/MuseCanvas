@@ -2,7 +2,6 @@
 
 import { cn } from '@/shared/lib/cn'
 import { outlineHover } from './interaction'
-import { controlSquare } from './size'
 
 export interface SwitchProps {
   checked: boolean
@@ -15,10 +14,8 @@ export interface SwitchProps {
 }
 
 /**
- * 轨道 32px（`--control-sm`）× 56px、滑块 24px（`--control-xs`）内缩 3px，滑动距离
- * 恰好 24px。开态保持墨色填充、关态保留 `border-control` 描边——状态不靠明暗差
- * 单独辨认。原生 `<button role="switch">` 免费提供 Enter/Space，滑块位移走
- * `.motion-position`（base 时长 / standard 缓动）。
+ * 开关控件：32px（`--control-sm`）× 56px 轨道 + 24px 滑块（内缩 3px + 1px 描边，精确居中），
+ * 滑动行程 24px；滑块位移由 `.motion-position` 驱动。
  */
 export function Switch({
   checked,
@@ -49,8 +46,7 @@ export function Switch({
       <span
         aria-hidden="true"
         className={cn(
-          'flex items-center justify-center rounded-pill border motion-position',
-          controlSquare.xs,
+          'flex size-6 items-center justify-center rounded-pill border motion-position',
           checked ? 'translate-x-6 border-transparent bg-on-primary' : 'border-border-control bg-surface',
         )}
       />

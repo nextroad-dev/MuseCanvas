@@ -68,4 +68,6 @@ test('useFlipList: 减少动效的早退必须出现在 animate 调用之前', (
       hookSource.indexOf('if (prefersReducedMotion()) return') < hookSource.indexOf('.animate('),
     '减少动效的早退必须位于 animate 调用之前',
   )
+  assert.match(hookSource, /activeAnimations\.current\.get\(element\)/)
+  assert.match(hookSource, /running\.cancel\(\)/)
 })

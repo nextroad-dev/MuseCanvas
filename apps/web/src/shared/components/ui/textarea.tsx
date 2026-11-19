@@ -12,8 +12,7 @@ export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
 }
 
 /**
- * 多行控件：`min-h` 保留控件高度下限又不困住内容，`resize-y` 让长提示词可伸展——
- * 提交失败绝不能丢用户输入。
+ * 多行输入控件：保留 `resize-y` 与合理最小高度，与 `Input` 共享表面与描边规范。
  */
 export function Textarea({ variant = 'outline', invalid, className, id, rows = 3, ...rest }: TextareaProps) {
   const { field, id: controlId } = useControlWiring(id)
@@ -29,7 +28,7 @@ export function Textarea({ variant = 'outline', invalid, className, id, rows = 3
       className={cn(
         controlClasses,
         controlSurface[variant],
-        'min-h-[88px] resize-y py-2',
+        'min-h-22 resize-y py-2',
         rest.disabled && 'is-disabled',
         className,
       )}

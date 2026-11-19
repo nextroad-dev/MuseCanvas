@@ -9,20 +9,17 @@ import type { ThumbGeometry } from './segmented-math'
 import { controlMinHeight, iconSlot, touchTarget } from './size'
 
 export interface SegmentedControlItem<T extends string = string> {
-  /** Wire value — the string that leaves this component and comes back as `value`. */
   value: T
   label: ReactNode
-  /** Long-form explanation for hover / focus. */
   title?: string
   disabled?: boolean
 }
 
 export interface SegmentedControlProps<T extends string = string> {
   items: SegmentedControlItem<T>[]
-  /** Controlled selection: the value the group currently holds. */
   value: T | undefined
   onChange: (value: T) => void
-  /** `md` = 40px targets (default), `sm` = 32px for dense toolbars. */
+  /** `md` = 36px targets (default), `sm` = 32px for dense toolbars. */
   size?: 'sm' | 'md'
   /** Stretch the track to the container and share width evenly. */
   fullWidth?: boolean
@@ -32,14 +29,13 @@ export interface SegmentedControlProps<T extends string = string> {
   className?: string
 }
 
-/** Layout effect that degrades to `useEffect` on the server (no SSR warning). */
 const useSafeLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
-const TRACK_CLASS = 'relative flex gap-1 rounded-control bg-tonal p-1'
+const TRACK_CLASS = 'relative inline-flex gap-1 rounded-control border border-border/70 bg-tonal p-1'
 
 const ITEM_SIZE = {
-  sm: `${controlMinHeight.sm} ${touchTarget} px-3 text-xs`,
-  md: `${controlMinHeight.md} ${touchTarget} px-3.5 text-sm`,
+  sm: `${controlMinHeight.xs} ${touchTarget} px-2.5 text-xs`,
+  md: `${controlMinHeight.sm} ${touchTarget} px-3 text-ui`,
 } as const
 
 const ITEM_BASE = [
@@ -50,13 +46,7 @@ const ITEM_BASE = [
 ].join(' ')
 
 /**
- * 分段控件——选择“值”，不是切换面板，所以是 `radiogroup` + `radio`（方向键即选中），
- * 而不是 `tablist`；`Tabs` 回答“我在看哪个面板”。
- *
- * 选中白块是一个可测量的独立元素，用 `.motion-position`（180ms / standard 缓动）平移，
- * 切换时滑动而不是瞬移。`ResizeObserver` 负责 resize 与文案变化后的重新测量；
- * reduced-motion 由 globals.css 把过渡归零。每个实例自己持有 ref 与测量状态，
- * 同屏多个分段控件互不干扰。
+ * 分段控件（radiogroup + radio）：选中值滑块由 `.motion-position` 弹簧驱动。
  */
 export function SegmentedControl<T extends string = string>({
   items,
@@ -75,7 +65,6 @@ export function SegmentedControl<T extends string = string>({
   const enabledItems = items.filter((item) => !item.disabled)
   const selected = items.find((item) => item.value === value && !item.disabled)
   const checkedValue = selected?.value
-  // 整组只有一个 Tab 停靠点；没有合法选中值时，第一个可用项作为漫游锚点。
   const rovingValue = checkedValue ?? enabledItems[0]?.value
 
   const measure = useCallback(() => {
@@ -91,7 +80,6 @@ export function SegmentedControl<T extends string = string>({
     setThumb(thumbGeometry(node.offsetLeft, node.offsetWidth))
   }, [checkedValue])
 
-  // 布局阶段测量：白块不会先在 (0,0) 闪一帧。
   useSafeLayoutEffect(() => {
     measure()
   }, [measure])
@@ -150,12 +138,8 @@ export function SegmentedControl<T extends string = string>({
         select(enabledItems[enabledItems.length - 1])
         break
       case 'Enter':
-      case ' ':
-        // Space 由原生按钮行为触发；`role=radio` 的 Enter 没有平台行为，补上。
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          select(item)
-        }
+        event.preventDefault()
+        select(item)
         break
       default:
         break
@@ -168,7 +152,7 @@ export function SegmentedControl<T extends string = string>({
       role="radiogroup"
       aria-label={label}
       aria-labelledby={labelledBy}
-      className={cn(TRACK_CLASS, fullWidth && 'w-full', className)}
+      className={cn(TRACK_CLASS, fullWidth && 'flex w-full', className)}
     >
       {thumb && checkedValue !== undefined ? (
         <span
@@ -199,9 +183,7 @@ export function SegmentedControl<T extends string = string>({
               ITEM_BASE,
               ITEM_SIZE[size],
               fullWidth && 'flex-1',
-              checked
-                ? 'text-foreground'
-                : 'text-muted-foreground not-disabled:hover:text-foreground',
+              checked ? 'text-foreground' : 'text-muted-foreground not-disabled:hover:text-foreground',
               item.disabled && 'is-disabled',
             )}
           >

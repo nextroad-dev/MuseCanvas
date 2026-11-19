@@ -1,10 +1,11 @@
 'use client'
 
-// 安装向导专用的 6 位验证码输入。故意不引用登录页的 OtpInput（跨切片只读参考），
-// 这里保留最小可用行为：数字清洗、整串粘贴、退格回退、方向键、输满自动提交。
+// 安装向导专用的 6 位验证码输入。保持最小可用行为：
+// 数字清洗、整串粘贴、退格回退、方向键、输满自动提交。
 
 import { useEffect, useRef } from 'react'
 import type { ClipboardEvent, KeyboardEvent, Ref } from 'react'
+
 import { cn } from '@/shared/lib/cn'
 
 const OTP_LENGTH = 6
@@ -49,8 +50,6 @@ export function SetupOtpInput({
 
   useEffect(() => {
     if (autoFocus) focusCell(0)
-    // 只在挂载时定位一次，后续焦点由用户操作驱动。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoFocus])
 
   function commit(next: string, focusIndex: number | null) {
@@ -137,7 +136,7 @@ export function SetupOtpInput({
 
   return (
     <fieldset className="m-0 flex min-w-0 flex-col border-0 p-0">
-      <legend className="mb-2 text-ui font-medium text-foreground">{label}</legend>
+      <legend className="mb-2 text-sm font-medium text-foreground">{label}</legend>
       <div className="grid grid-cols-6 gap-2">
         {Array.from({ length: OTP_LENGTH }, (_, index) => {
           const isActive = index === activeIndex
@@ -166,12 +165,12 @@ export function SetupOtpInput({
               onPaste={(event) => handlePaste(index, event)}
               onFocus={(event) => event.target.select()}
               className={cn(
-                'h-[var(--control-xl)] min-w-0 rounded-control border bg-surface text-center font-mono text-subtitle tabular-nums text-foreground transition-colors',
+                'h-12 min-w-0 rounded-control border bg-surface text-center font-mono text-subtitle tabular-nums text-foreground transition-colors',
                 invalid
                   ? 'border-danger bg-danger-soft'
                   : isActive
-                    ? 'border-2 border-primary'
-                    : 'border-border-control',
+                    ? 'border-border-focus'
+                    : 'border-border-control hover:border-border-strong',
                 disabled && 'is-disabled',
               )}
             />

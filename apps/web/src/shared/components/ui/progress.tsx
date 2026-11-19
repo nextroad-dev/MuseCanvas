@@ -1,10 +1,7 @@
 import { cn } from '@/shared/lib/cn'
 
 export interface ProgressProps {
-  /**
-   * `min`…`max` 上的当前值。长度未知时传 `null`（或省略）：进度条转为不定态动画，
-   * 不伪造百分比。
-   */
+  /** 当前值；省略或 `null` 时切换为不定态动画，绝不伪造百分比。 */
   value?: number | null
   min?: number
   max?: number
@@ -14,11 +11,9 @@ export interface ProgressProps {
   valueLabel?: string
   /** Set `false` when the label row is rendered by the parent. */
   showLabelRow?: boolean
-  /** `sm` = 4px spec track; `md` = 8px page-level bar (the in-frame bar is 3px). */
+  /** `sm` = 4px track; `md` = 8px page-level bar. */
   size?: 'sm' | 'md'
-  /**
-   * `overlay` 用于深色媒体底上的进度条：浅色半透明轨道 + 反色填充，压在暗图上仍可见。
-   */
+  /** `overlay` 用于深色媒体底上的进度条。 */
   variant?: 'default' | 'overlay'
   className?: string
 }
@@ -33,10 +28,6 @@ const FILL_CLASS = {
   overlay: 'bg-on-media',
 } as const
 
-/**
- * 进度条：弱色轨道 + `bg-primary` 填充，可选标签与百分比行。已知值用
- * `.motion-position` 平滑滑动；未知值跑 `.motion-progress-indeterminate`，不编造百分比。
- */
 export function Progress({
   value,
   min = 0,
@@ -61,7 +52,9 @@ export function Progress({
         <div className="flex items-baseline justify-between gap-2 text-sm">
           <span className={cn('min-w-0 truncate', labelClass)}>{label}</span>
           {known ? (
-            <span className={cn('shrink-0 font-mono text-xs tabular-nums', labelClass)}>{valueLabel ?? `${percent}%`}</span>
+            <span className={cn('shrink-0 font-mono text-xs tabular-nums', labelClass)}>
+              {valueLabel ?? `${percent}%`}
+            </span>
           ) : null}
         </div>
       ) : null}

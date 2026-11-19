@@ -13,7 +13,7 @@ import {
 } from '@phosphor-icons/react'
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { Reveal } from '@/shared/components/reveal'
-import { iconSize } from '@/shared/components/ui/size'
+import { Badge, SectionHeader, controlSquare, iconSize } from '@/shared/components/ui'
 import { cn } from '@/shared/lib/cn'
 import { LandingFrame } from './landing-frame'
 
@@ -57,33 +57,38 @@ const CAPABILITIES: Capability[] = [
 ]
 
 /**
- * 能力区：左栏 studio 标题与声明，右栏 Bento 风格单开手风琴卡片。
+ * 能力区：左栏编辑式标题与声明，右栏单开 CSS Grid 手风琴卡片。
  *
- * 手风琴是唯一需要状态的 island：一次只开一行，点已展开的行收起；
- * `+` 号旋转 45° 表示开关，按钮带 aria-expanded / aria-controls。
+ * 手风琴一次只展开一项，点击已展开项可收起；
+ * 按钮带 `aria-expanded` / `aria-controls`，内容容器由 `.motion-accordion` + `data-open` 驱动。
  */
 export function Capabilities() {
   const [openIndex, setOpenIndex] = useState(0)
   const idPrefix = useId()
 
   return (
-    <section id="capabilities" aria-labelledby="cap-title" className="scroll-mt-20">
+    <section id="capabilities" aria-labelledby="cap-title" className="scroll-mt-20 bg-canvas">
       <Reveal>
         <LandingFrame className="flex flex-wrap items-start gap-x-16 gap-y-8 py-16 md:py-28">
-          <div className="flex min-w-0 max-w-[380px] flex-[1_1_300px] flex-col items-start gap-4">
-            <span className="inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-3 py-1 text-caption font-medium text-accent">
-              <SparkleIcon weight="duotone" aria-hidden="true" className={iconSize.sm} />
+          <div className="flex min-w-0 max-w-sm flex-[1_1_300px] flex-col items-start gap-4">
+            <Badge
+              tone="accent"
+              variant="soft"
+              icon={<SparkleIcon weight="duotone" />}
+              className="gap-1.5 px-3 py-1 text-caption"
+            >
               核心能力
-            </span>
-            <h2 id="cap-title" className="font-display text-headline text-foreground">
-              能力
-            </h2>
-            <p className="font-display text-statement text-foreground">
+            </Badge>
+            <SectionHeader
+              id="cap-title"
+              title={<span className="block font-display text-headline text-foreground">能力</span>}
+            />
+            <p className="m-0 font-display text-statement text-foreground">
               写、画、存，
               <br className="sm:hidden" />
               都在一个页面
             </p>
-            <p className="text-copy text-muted-foreground max-sm:hidden">
+            <p className="m-0 text-copy text-muted-foreground max-sm:hidden">
               从描述画面到找回旧图，不用切换其他工具。
             </p>
           </div>
@@ -115,7 +120,8 @@ export function Capabilities() {
                       <span className="flex min-w-0 items-center gap-3.5">
                         <span
                           className={cn(
-                            'inline-flex size-9 shrink-0 items-center justify-center rounded-control transition-colors',
+                            'inline-flex shrink-0 items-center justify-center rounded-control transition-colors',
+                            controlSquare.md,
                             open ? 'bg-accent-soft text-accent' : 'bg-tonal text-muted-foreground',
                           )}
                         >
@@ -131,22 +137,24 @@ export function Capabilities() {
                         aria-hidden="true"
                         className={cn(
                           iconSize.md,
-                          'shrink-0 text-muted-foreground transition-transform duration-[var(--motion-base)]',
+                          'shrink-0 text-muted-foreground transition-transform duration-[var(--motion-spring-snappy)] ease-spring-snappy',
                           open && 'rotate-45 text-accent',
                         )}
                       />
                     </button>
                   </h3>
 
-                  {open ? (
-                    <p
-                      id={panelId}
-                      aria-labelledby={triggerId}
-                      className="m-0 px-5 pb-5 pl-[4.5rem] text-sm leading-relaxed text-muted-foreground sm:px-6 sm:pb-6 sm:pl-[4.75rem] sm:text-base"
-                    >
-                      {capability.description}
-                    </p>
-                  ) : null}
+                  <div className="motion-accordion" data-open={open ? 'true' : 'false'} aria-hidden={!open}>
+                    <div className="motion-accordion-inner">
+                      <p
+                        id={panelId}
+                        aria-labelledby={triggerId}
+                        className="m-0 px-5 pb-5 pl-[4.5rem] text-sm leading-relaxed text-muted-foreground sm:px-6 sm:pb-6 sm:pl-[4.75rem] sm:text-base"
+                      >
+                        {capability.description}
+                      </p>
+                    </div>
+                  </div>
                 </li>
               )
             })}

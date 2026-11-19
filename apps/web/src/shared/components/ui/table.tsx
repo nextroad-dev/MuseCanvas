@@ -5,23 +5,10 @@ import type { ReactNode, Ref, TdHTMLAttributes, ThHTMLAttributes } from 'react'
 import { cn } from '@/shared/lib/cn'
 import { Card } from './card'
 
-/**
- * 后台表格原语（画板 07/08）。
- *
- * 每个后台页面曾经都重复声明同一层壳（卡片 + `overflow-x-auto` + `<table>` +
- * `sr-only` caption + 弱色表头 + 逐格 `px-4 py-3`），所以内边距、行节奏与表头样式
- * 各自只在这里决定一次；密度通过 context 传，调用方只写一次。
- *
- * 可访问性内置而不是留给调用方：`caption` 必填、表头单元格始终 `scope="col"`、
- * body 自带 `aria-busy`、可排序列有 `aria-sort`；行 hover 默认关闭，只有整行可点
- * 的表格显式开启，静态表格不会暗示可操作。
- */
-
 export type TableDensity = 'default' | 'dense'
 
 interface TableContextValue {
   density: TableDensity
-  /** Column count, so state rows span the grid without repeating it. */
   columns?: number
 }
 
@@ -35,36 +22,30 @@ const tableClass: Record<TableDensity, string> = {
 }
 
 const headClass: Record<TableDensity, string> = {
-  default: 'bg-tonal text-muted-foreground',
-  dense: 'text-muted-foreground',
+  default: 'border-b border-border bg-tonal/70 text-muted-foreground',
+  dense: 'border-b border-border text-muted-foreground',
 }
 
 const bodyClass: Record<TableDensity, string> = {
   default: 'divide-y divide-border',
-  dense: 'font-mono text-foreground',
+  dense: 'divide-y divide-border font-mono text-foreground',
 }
 
-/** Cell box, shared by `<th>` and `<td>` so headers and columns always align. */
 const cellBox: Record<TableDensity, string> = {
-  default: 'px-5 py-3',
-  dense: 'py-1 pr-3',
+  default: 'px-4 py-3',
+  dense: 'px-3 py-1.5',
 }
 
 export interface TableFrameProps {
   /** Announced to assistive tech; the table has no visible title of its own. */
   caption: ReactNode
   density?: TableDensity
-  /**
-   * 列数。在这里声明一次，`TableStateRow` 就能取到 colSpan，整行状态就不会与表头
-   * 对不上。
-   */
+  /** Column count so `TableStateRow` can span the full width automatically. */
   columns?: number
-  /** Merged onto the scrolling wrapper. */
   className?: string
   children: ReactNode
 }
 
-/** Bare table shell — use `Table` for the standard carded grid. */
 export function TableFrame({ caption, density = 'default', columns, className, children }: TableFrameProps) {
   return (
     <TableContext.Provider value={{ density, columns }}>
@@ -80,16 +61,13 @@ export function TableFrame({ caption, density = 'default', columns, className, c
 
 export interface TableProps {
   caption: ReactNode
-  /** See `TableFrameProps['columns']`. */
   columns?: number
-  /** Merged onto the `overflow-x-auto` wrapper, not the card. */
   className?: string
-  /** Merged onto the card, for the rare grid that needs a wider/narrower frame. */
   cardClassName?: string
   children: ReactNode
 }
 
-/** Standard admin grid: a card that clips its corners, table flush to the edges. */
+/** Standard carded data table with crisp surface border and clipped corners. */
 export function Table({ caption, columns, className, cardClassName, children }: TableProps) {
   return (
     <Card density="none" className={cn('overflow-hidden', cardClassName)}>
@@ -100,12 +78,10 @@ export function Table({ caption, columns, className, cardClassName, children }: 
   )
 }
 
-/** Alias — `Table` is the carded shell, `TableFrame` the bare one. */
 export const DataTable = Table
 
 export interface TableHeaderProps {
   className?: string
-  /** Header cells. `TableHeader` owns the `<tr>`, so pass cells directly. */
   children: ReactNode
 }
 
@@ -118,12 +94,10 @@ export function TableHeader({ className, children }: TableHeaderProps) {
   )
 }
 
-/** Alias kept for the previous component name. */
 export const TableHead = TableHeader
 
 export interface TableHeadCellProps extends Omit<ThHTMLAttributes<HTMLTableCellElement>, 'scope' | 'align'> {
   align?: 'left' | 'right'
-  /** Current sort direction of this column, if it is sortable. */
   sort?: 'ascending' | 'descending' | 'none' | 'other'
   ref?: Ref<HTMLTableCellElement>
 }
@@ -136,7 +110,7 @@ export function TableHeadCell({ align = 'left', sort, className, children, ...re
       aria-sort={sort}
       className={cn(
         cellBox[density],
-        density === 'default' ? 'text-sm font-medium' : 'font-normal',
+        density === 'default' ? 'text-ui font-medium' : 'font-normal',
         align === 'right' && 'text-right',
         className,
       )}
@@ -148,7 +122,6 @@ export function TableHeadCell({ align = 'left', sort, className, children, ...re
 }
 
 export interface TableBodyProps {
-  /** Renders `aria-busy` while a fetch is in flight. */
   busy?: boolean
   className?: string
   children: ReactNode
@@ -164,9 +137,6 @@ export function TableBody({ busy, className, children }: TableBodyProps) {
 }
 
 export interface TableRowProps {
-  /**
-   * 仅颜色变化的 hover。默认关闭：只有整行可点的表格才开启，静态表格不暗示操作。
-   */
   hover?: boolean
   className?: string
   children: ReactNode
@@ -185,7 +155,6 @@ export function TableRow({ hover = false, className, children }: TableRowProps) 
   )
 }
 
-/** Cell colour / weight; orthogonal to `align`, `mono`, `tabular`. */
 const cellTone = {
   default: '',
   muted: 'text-muted-foreground',
@@ -196,14 +165,20 @@ const cellTone = {
 export interface TableCellProps extends Omit<TdHTMLAttributes<HTMLTableCellElement>, 'align'> {
   align?: 'left' | 'right'
   tone?: keyof typeof cellTone
-  /** Identifier/code column: `font-mono`. */
   mono?: boolean
-  /** Digit column: `tabular-nums` so numbers line up across rows. */
   tabular?: boolean
   ref?: Ref<HTMLTableCellElement>
 }
 
-export function TableCell({ align = 'left', tone = 'default', mono, tabular, className, children, ...rest }: TableCellProps) {
+export function TableCell({
+  align = 'left',
+  tone = 'default',
+  mono,
+  tabular,
+  className,
+  children,
+  ...rest
+}: TableCellProps) {
   const density = useDensity()
   return (
     <td
@@ -224,15 +199,11 @@ export function TableCell({ align = 'left', tone = 'default', mono, tabular, cla
 }
 
 export interface TableStateRowProps {
-  /**
-   * 跨列数。省略时用外层 `columns`（推荐用法）；只有未声明 `columns` 的表格才显式传。
-   */
   colSpan?: number
   className?: string
   children: ReactNode
 }
 
-/** Full-width row for empty / no-results / error states; no hover, no rule. */
 export function TableStateRow({ colSpan, className, children }: TableStateRowProps) {
   const { columns } = useContext(TableContext)
   const span = colSpan ?? columns
@@ -254,15 +225,10 @@ export interface TableSkeletonCell {
 }
 
 export interface TableSkeletonRowProps {
-  /**
-   * One entry per column. Pass the placeholder itself; wrap it in
-   * `{ align: 'right', content }` only when the column is right-aligned.
-   */
   cells: Array<ReactNode | TableSkeletonCell>
   className?: string
 }
 
-/** Placeholder row that keeps the table's geometry while data is in flight. */
 export function TableSkeletonRow({ cells, className }: TableSkeletonRowProps) {
   return (
     <TableRow className={className}>

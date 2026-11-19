@@ -24,6 +24,7 @@ const ENTER_ANIMATIONS = new Set([
   'mc-slide-in-down',
   'mc-slide-in-right',
   'mc-slide-in-left',
+  'mc-panel-in',
 ])
 const EXIT_ANIMATIONS = new Set([
   'mc-fade-out',
@@ -31,6 +32,7 @@ const EXIT_ANIMATIONS = new Set([
   'mc-slide-out-down',
   'mc-slide-out-right',
   'mc-slide-out-left',
+  'mc-panel-out',
 ])
 
 export type DialogPhase = 'enter' | 'idle' | 'exit'

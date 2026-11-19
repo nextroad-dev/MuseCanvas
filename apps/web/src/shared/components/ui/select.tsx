@@ -1,9 +1,11 @@
 'use client'
 
 import type { ReactNode, Ref, SelectHTMLAttributes } from 'react'
+import { CaretDownIcon } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { controlClasses, controlHeight, controlSurface, useControlWiring } from './input'
 import type { ControlSize, ControlVariant } from './input'
+import { iconSize } from './size'
 
 export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'size'> {
   variant?: ControlVariant
@@ -24,8 +26,8 @@ const WIDTH_CLASS = {
 } as const
 
 /**
- * 原生 `<select>` 重新描样：键盘、type-ahead 与移动端选择器都来自平台，
- * `appearance-none` 去掉系统外观，不渲染额外的箭头图标。
+ * 原生 `<select>` 统一样式封装：内置右侧 `CaretDown` 指示箭头，
+ * 完整保留原生键盘导航、type-ahead 与移动端选择器体验。
  */
 export function Select({
   variant = 'outline',
@@ -42,7 +44,7 @@ export function Select({
   const isError = invalid ?? field?.invalid ?? false
 
   return (
-    <span className={cn('relative flex items-center', WIDTH_CLASS[width], className)}>
+    <span className={cn('relative inline-flex items-center', WIDTH_CLASS[width], className)}>
       <select
         id={controlId}
         aria-invalid={isError || undefined}
@@ -52,7 +54,7 @@ export function Select({
           controlClasses,
           controlSurface[variant],
           controlHeight[size],
-          'cursor-pointer appearance-none',
+          'cursor-pointer appearance-none pr-8',
           rest.disabled && 'is-disabled',
           selectClassName,
         )}
@@ -60,6 +62,15 @@ export function Select({
       >
         {children}
       </select>
+      <CaretDownIcon
+        weight="bold"
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute right-2.5 text-muted-foreground',
+          iconSize.xs,
+          rest.disabled && 'is-disabled',
+        )}
+      />
     </span>
   )
 }

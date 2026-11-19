@@ -27,8 +27,7 @@ export interface EmptyStateProps {
 }
 
 /**
- * 空状态：图标 + 标题 + 简短说明 + 恰好一个与原因匹配的操作。虚线容器只保留给
- * 上传/拖拽语义，这里绝不使用。
+ * 空状态：图标 + 标题 + 简短说明 + 清晰操作。
  */
 export function EmptyState({
   icon: Icon = Inbox,
@@ -51,7 +50,11 @@ export function EmptyState({
         className,
       )}
     >
-      <Icon weight="duotone" aria-hidden="true" className={cn(iconSize['2xl'], 'text-muted-foreground', iconClassName)} />
+      <Icon
+        weight="duotone"
+        aria-hidden="true"
+        className={cn(density === 'comfortable' ? iconSize['2xl'] : iconSize.xl, 'text-muted-foreground', iconClassName)}
+      />
       <div className="flex flex-col gap-1">
         <p className="text-module">{title}</p>
         {description ? <p className="max-w-reading text-sm text-muted-foreground">{description}</p> : null}

@@ -4,8 +4,9 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { SetupConfigDto, StorageDriverKind } from '@musecanvas/contracts'
-import { clientApi } from '@/shared/services/client-api'
+
 import { Alert, Badge, Button, Field, Input, SegmentedControl } from '@/shared/components/ui'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupSessionError } from '../../lib/setup-errors'
 import {
   STORAGE_DRIVER_OPTIONS,
@@ -14,7 +15,7 @@ import {
   toStorageInput,
   validateStorageDraft,
 } from '../../lib/setup-forms'
-import type { StorageDraft } from '../../lib/setup-forms'
+import type { StorageDraft, StorageFieldErrors } from '../../lib/setup-forms'
 import { SetupStepShell } from '../setup-step-shell'
 
 export interface StorageStepProps {
@@ -31,7 +32,7 @@ export interface StorageStepProps {
  */
 export function StorageStep({ config, complete, onDone, onSessionLost }: StorageStepProps) {
   const [draft, setDraft] = useState<StorageDraft>(() => storageDraftFromDto(config.storage))
-  const [errors, setErrors] = useState<ReturnType<typeof validateStorageDraft>>({})
+  const [errors, setErrors] = useState<StorageFieldErrors>({})
   const [notice, setNotice] = useState<string | null>(null)
 
   const verify = useMutation({
@@ -54,6 +55,19 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
 
   function patch(patchValue: Partial<StorageDraft>) {
     setDraft((previous) => ({ ...previous, ...patchValue }))
+    if ('driver' in patchValue) {
+      setErrors({})
+    } else {
+      setErrors((previous) => {
+        const next = { ...previous }
+        for (const key of Object.keys(patchValue) as Array<keyof StorageDraft>) {
+          if (key in next) {
+            delete next[key as keyof StorageFieldErrors]
+          }
+        }
+        return next
+      })
+    }
     setNotice(null)
   }
 
@@ -72,7 +86,11 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
       headingId="setup-storage-title"
       title="对象存储"
       description="生成的作品保存位置。S3 兼容存储（MinIO / AWS S3 / R2）或本地磁盘目录。"
-      status={<Badge tone={complete ? 'success' : status === 'error' ? 'danger' : 'neutral'}>{complete ? '已验证' : connectionStatusLabel(status)}</Badge>}
+      status={
+        <Badge tone={complete ? 'success' : status === 'error' ? 'danger' : 'neutral'}>
+          {complete ? '已验证' : connectionStatusLabel(status)}
+        </Badge>
+      }
     >
       {notice ? (
         <Alert tone="danger" role="alert" title="对象存储验证未通过">
@@ -114,6 +132,7 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
             hint="绝对路径，例如 /data/musecanvas/storage；API 与 Worker 必须挂载同一目录。"
           >
             <Input
+              size="md"
               value={draft.localRoot}
               disabled={verify.isPending}
               placeholder="/data/musecanvas/storage"
@@ -135,6 +154,7 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
               >
                 <Input
                   type="url"
+                  size="md"
                   value={draft.endpoint}
                   disabled={verify.isPending}
                   placeholder="https://s3.example.com"
@@ -153,6 +173,7 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
               >
                 <Input
                   type="url"
+                  size="md"
                   value={draft.publicEndpoint}
                   disabled={verify.isPending}
                   placeholder="https://files.example.com"
@@ -167,6 +188,7 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field id="setup-storage-region" label="区域" required error={errors.region}>
                 <Input
+                  size="md"
                   value={draft.region}
                   disabled={verify.isPending}
                   placeholder="us-east-1"
@@ -179,6 +201,7 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
 
               <Field id="setup-storage-bucket" label="存储桶" required error={errors.bucket}>
                 <Input
+                  size="md"
                   value={draft.bucket}
                   disabled={verify.isPending}
                   placeholder="musecanvas"
@@ -193,6 +216,7 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field id="setup-storage-access-key" label="访问密钥 ID" required error={errors.accessKeyId}>
                 <Input
+                  size="md"
                   value={draft.accessKeyId}
                   disabled={verify.isPending}
                   autoComplete="off"
@@ -211,6 +235,7 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
               >
                 <Input
                   type="password"
+                  size="md"
                   value={draft.secretAccessKey}
                   disabled={verify.isPending}
                   autoComplete="new-password"
@@ -230,17 +255,19 @@ export function StorageStep({ config, complete, onDone, onSessionLost }: Storage
         >
           <Input
             type="number"
+            size="md"
             inputMode="numeric"
             min={60}
             max={3600}
             value={draft.signedUrlTtlSeconds}
             disabled={verify.isPending}
+            className="font-mono tabular-nums"
             onChange={(event) => patch({ signedUrlTtlSeconds: event.target.value })}
           />
         </Field>
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" loading={verify.isPending}>
+          <Button type="submit" size="md" loading={verify.isPending}>
             测试连接并保存
           </Button>
           <span className="text-xs text-muted-foreground">测试会写入并删除一个测试对象；失败时不保存任何改动。</span>

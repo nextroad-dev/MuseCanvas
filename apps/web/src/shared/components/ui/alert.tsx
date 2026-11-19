@@ -14,7 +14,6 @@ import { iconSize, iconSlot } from './size'
 export type AlertTone = 'info' | 'success' | 'warning' | 'danger'
 
 const toneClasses: Record<AlertTone, { wrap: string; icon: string }> = {
-  // 纯色横幅：1px 语义描边 + `-soft` 底色，不用左侧装饰竖条。
   info: { wrap: 'border-info-border bg-info-soft', icon: 'text-info' },
   success: { wrap: 'border-success-border bg-success-soft', icon: 'text-success' },
   warning: { wrap: 'border-warning-border bg-warning-soft', icon: 'text-warning' },
@@ -40,9 +39,7 @@ export interface AlertProps {
   dismissLabel?: string
   /** `false` drops the leading icon; pass a node to replace it. */
   icon?: ReactNode | false
-  /**
-   * `status`（默认）是 polite 直播区；`alert` 会抢占播报，只在紧急信息时开启。
-   */
+  /** `status`（默认）为 polite 直播区；`alert` 用于紧急错误提示。 */
   role?: 'status' | 'alert'
   className?: string
 }
@@ -63,7 +60,10 @@ export function Alert({
   const shownIcon = icon === false ? null : (icon ?? <Icon weight="fill" aria-hidden="true" className={iconSize.md} />)
 
   return (
-    <div role={role} className={cn('flex items-start gap-3 rounded-control border p-4', toneClasses[tone].wrap, className)}>
+    <div
+      role={role}
+      className={cn('flex items-start gap-3 rounded-card border p-4', toneClasses[tone].wrap, className)}
+    >
       {shownIcon ? (
         <span className={cn('mt-0.5 shrink-0', iconSlot.md, toneClasses[tone].icon)}>{shownIcon}</span>
       ) : null}
@@ -75,7 +75,7 @@ export function Alert({
       {onDismiss ? (
         <IconButton
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           aria-label={dismissLabel}
           onClick={onDismiss}
           icon={<X weight="bold" aria-hidden="true" className={iconSize.sm} />}

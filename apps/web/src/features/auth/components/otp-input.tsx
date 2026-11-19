@@ -28,15 +28,13 @@ export interface OtpInputProps {
 }
 
 /**
- * 六格数字验证码输入（设计画板 06）。
+ * 六格数字验证码输入。
  *
- * · 每格都有 `aria-label="第 n 位输入框"`，读屏能逐位读出当前进度；
- * · 整串粘贴 / 移动端一次性验证码自动填充会从当前格起逐位落座；
- * · 退格：本格有值就删本格并左移焦点，本格为空则回退删上一格；
+ * · 每格提供 `aria-label="第 n 位输入框"`，读屏能逐位读出当前进度；
+ * · 整串粘贴与移动端一次性验证码自动填充会从当前格起逐位落座；
+ * · 退格删除本格或回退删上一格，Delete 删除本格；
  * · ArrowLeft / ArrowRight / Home / End 在组内移动，Enter 交给外层表单提交；
  * · 输满第 6 位（键入或粘贴）通过 `onComplete` 通知父级自动提交。
- *
- * 组件受控：取值、提交与错误文案都由登录表单持有，这里只处理事件与渲染。
  */
 export function OtpInput({
   value,
@@ -60,7 +58,7 @@ export function OtpInput({
   const focusCell = useCallback(
     (index: number) => {
       const clamped = Math.max(0, Math.min(length - 1, index))
-      // 受控值要等这一帧提交后再聚焦；直接 focus 会落在旧节点上。
+      // 受控值需等这一帧提交后再聚焦，避免选中旧值。
       requestAnimationFrame(() => {
         const cell = cellsRef.current[clamped]
         cell?.focus()
@@ -73,7 +71,7 @@ export function OtpInput({
   useEffect(() => {
     if (!autoFocus) return
     focusCell(activeOtpIndex(digits, length))
-    // 只在挂载时定位一次；后续焦点由用户操作驱动。
+    // 仅在挂载时定位一次；后续焦点由用户交互驱动。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoFocus])
 
@@ -97,7 +95,6 @@ export function OtpInput({
     if (disabled) return
     const chunk = sanitizeOtpChunk(raw, length)
     if (chunk.length > 1) {
-      // 自动填充 / 移动端一次性验证码把整串塞进单格：从当前格起逐位落座。
       commit(mergeOtpChunk(digits, chunk, index, length), Math.min(index + chunk.length, length - 1))
       return
     }
@@ -118,11 +115,16 @@ export function OtpInput({
     if (event.key === 'Backspace') {
       event.preventDefault()
       if (digits[index]) {
-        // 删本格并停在本格，方便直接重输这一位。
         commit(removeOtpDigit(digits, index, length), index)
       } else if (index > 0) {
-        // 空格子：回退并删掉上一格。
         commit(removeOtpDigit(digits, index - 1, length), index - 1)
+      }
+      return
+    }
+    if (event.key === 'Delete') {
+      event.preventDefault()
+      if (digits[index]) {
+        commit(removeOtpDigit(digits, index, length), index)
       }
       return
     }
@@ -166,8 +168,8 @@ export function OtpInput({
 
   return (
     <fieldset className="m-0 flex min-w-0 flex-col border-0 p-0">
-      {label ? <legend className="mb-2 text-ui font-medium text-foreground">{label}</legend> : null}
-      <div className="grid grid-cols-6 gap-2.5">
+      {label ? <legend className="mb-2 text-sm font-medium text-foreground">{label}</legend> : null}
+      <div className={cn('grid grid-cols-6 gap-2 sm:gap-2.5', invalid && 'motion-shake')}>
         {Array.from({ length }, (_, index) => {
           const isActive = index === activeIndex
           const hasValue = Boolean(digits[index])
@@ -193,12 +195,12 @@ export function OtpInput({
               onPaste={(event) => handlePaste(index, event)}
               onFocus={(event) => event.target.select()}
               className={cn(
-                'h-[var(--control-xl)] min-w-0 rounded-card border bg-canvas text-center font-mono text-subtitle font-medium tabular-nums text-foreground transition-all outline-none',
-                'focus-visible:border-accent focus-visible:bg-surface focus-visible:ring-2 focus-visible:ring-accent-soft',
+                'h-12 min-w-0 rounded-control border bg-surface text-center font-mono text-subtitle font-medium tabular-nums text-foreground transition-[border-color,background-color,box-shadow,transform] duration-[var(--motion-spring-snappy)] ease-spring-snappy outline-none',
+                'focus-visible:border-border-focus focus-visible:bg-surface focus-visible:ring-2 focus-visible:ring-accent-soft',
                 invalid
                   ? 'border-danger bg-danger-soft text-danger focus-visible:border-danger focus-visible:ring-danger/20'
                   : isActive && !disabled
-                    ? 'border-accent bg-surface shadow-soft ring-2 ring-accent-soft'
+                    ? 'scale-[1.02] border-border-focus bg-surface shadow-soft ring-2 ring-accent-soft'
                     : hasValue
                       ? 'border-border-strong bg-surface'
                       : 'border-border-control hover:border-border-strong',

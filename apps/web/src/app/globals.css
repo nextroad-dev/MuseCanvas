@@ -7,41 +7,24 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * 设计 token 唯一真源。`static` 是有意选择的：JS（motion.ts / 对话滚动锁 /
- * 灯箱遮罩）会在运行时用 getComputedStyle 读取 token，所以即使某个 token
- * 暂时没有组件使用，也必须真实存在于 :root 上。
- *
- * 命名规则：颜色 `--color-*` → `bg-*` / `text-*` / `border-*`；
- * 字号 `--text-*` → `text-*`（行高/字距/字重随 token 一起生效）；
- * 圆角 `--radius-*` → `rounded-*`；阴影 `--shadow-*` → `shadow-*`；
- * 缓动 `--ease-*` → `ease-*`；其余（control/icon/layout/motion/z-index/
- * opacity/space/container）通过 `var()` 或任意值消费。
+ * 设计 token 唯一真源（Cool Gray-White Studio）。
+ * `static` 是有意选择的：JS（motion.ts 等）会在运行时用 getComputedStyle 读取 token，
+ * 因此所有声明的 token 都必须真实存在于 :root 上。
  */
 @theme static {
-  /* --- 断点：按内容定义，不跟随 Tailwind 默认 --- */
+  /* --- 断点：按内容定义 --- */
   --breakpoint-sm: 640px;
   --breakpoint-md: 960px;
   --breakpoint-lg: 1280px;
   --breakpoint-xl: 1536px;
-  --breakpoint-2xl: 1920px;
 
   /* --- 字体 --- */
   --font-sans: "Google Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-display: "Google Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-art: "Playfair Display", "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "STKaiti", Georgia, serif;
+  --font-art: "Playfair Display", "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
 
-  /*
-   * --- 字号阶梯 ---
-   * 行高 / 字距 / 字重随尺寸 token 一起输出，标题层级来自尺寸和留白而不是粗体。
-   * 落地页 96/48/28 与正文 19/17 走 hero/headline/statement/lead/copy token，
-   * 工作台与后台的 15/13 走 compact/ui，禁止 `text-[96px]` 这类任意值。
-   */
-  --text-display: clamp(36px, 4vw, 60px);
-  --text-display--line-height: 1.05;
-  --text-display--letter-spacing: -0.0175em;
-  --text-display--font-weight: 400;
-
+  /* --- 字号阶梯（行高 / 字距 / 字重随 token 一并输出） --- */
   --text-hero: clamp(38px, 6.8vw, 96px);
   --text-hero--line-height: 1.06;
   --text-hero--letter-spacing: -0.02em;
@@ -59,7 +42,8 @@
 
   --text-title: clamp(24px, 2.4vw, 32px);
   --text-title--line-height: 1.25;
-  --text-title--font-weight: 400;
+  --text-title--letter-spacing: -0.015em;
+  --text-title--font-weight: 600;
 
   --text-statement: clamp(22px, 2.2vw, 28px);
   --text-statement--line-height: 1.35;
@@ -73,11 +57,12 @@
 
   --text-section: 24px;
   --text-section--line-height: 1.35;
-  --text-section--font-weight: 400;
+  --text-section--letter-spacing: -0.01em;
+  --text-section--font-weight: 600;
 
   --text-subtitle: 20px;
   --text-subtitle--line-height: 1.4;
-  --text-subtitle--font-weight: 400;
+  --text-subtitle--font-weight: 500;
 
   --text-lead: 19px;
   --text-lead--line-height: 1.6;
@@ -100,7 +85,7 @@
   --text-overline--letter-spacing: 0.05em;
   --text-overline--font-weight: 500;
 
-  /* 11px 元信息 / 角标 / 脚注；新代码一律 text-caption，禁止 text-[11px]。 */
+  /* 11px 元信息 / 角标 / 脚注；禁止手写 text-[11px]。 */
   --text-caption: 11px;
   --text-caption--line-height: 1.5;
 
@@ -112,34 +97,24 @@
   /* --- 圆角：一个语义一个值 --- */
   --radius-checkbox: 50%;
   --radius-control: 10px;
-  --radius-popover: 14px;
-  --radius-card: 16px;
-  --radius-panel: 20px;
+  --radius-popover: 12px;
+  --radius-card: 14px;
+  --radius-panel: 18px;
   --radius-pill: 9999px;
 
   /* --- 阴影：高度阶梯（深色档位在 .dark 中加深 alpha） --- */
-  --shadow-soft: 0 4px 20px rgb(0 0 0 / 0.04);
-  --shadow-floating: 0 12px 32px rgb(0 0 0 / 0.06);
-  --shadow-dropdown: 0 8px 24px rgb(0 0 0 / 0.08);
-  --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.1);
-  --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.12);
-  --shadow-drawer: -4px 0 24px rgb(0 0 0 / 0.06);
-  --shadow-command: 0 16px 48px rgb(0 0 0 / 0.14);
+  --shadow-soft: 0 2px 12px rgb(17 19 24 / 0.04);
+  --shadow-floating: 0 10px 28px rgb(17 19 24 / 0.07);
+  --shadow-dropdown: 0 8px 24px rgb(17 19 24 / 0.09);
+  --shadow-toast: 0 8px 24px rgb(17 19 24 / 0.11);
+  --shadow-modal: 0 16px 48px rgb(17 19 24 / 0.14);
+  --shadow-drawer: -4px 0 24px rgb(17 19 24 / 0.08);
 
-  /*
-   * --- 控件高度 ---
-   * xs/sm/md/lg/xl 是 TOKENS.md 的基础阶梯（24/32/40/48/56，md 为默认）；
-   * 新设计还用 36/44/52，补齐为 compact（工作台工具栏）/ touch（触控目标）/
-   * cta（落地页主按钮）。尺寸只用这些 token，不写任意 px。
-   */
-  --control-xs: 24px;
+  /* --- 统一 4 档控件高度（xs 28 / sm 32 / md 36 默认 / lg 44 触控与主 CTA） --- */
+  --control-xs: 28px;
   --control-sm: 32px;
-  --control-md: 40px;
-  --control-lg: 48px;
-  --control-xl: 56px;
-  --control-compact: 36px;
-  --control-touch: 44px;
-  --control-cta: 52px;
+  --control-md: 36px;
+  --control-lg: 44px;
 
   /* --- 图标尺寸（12 / 16 / 20 / 24 / 32 / 48） --- */
   --icon-xs: 12px;
@@ -151,149 +126,105 @@
 
   /* --- 布局框架 --- */
   --layout-header: 56px;
-  --layout-public-header: clamp(56px, 4.5vw, 64px);
-  --layout-sidebar: 260px;
+  --layout-public-header: 60px;
+  --layout-sidebar: 256px;
   --layout-sidebar-collapsed: 64px;
-  --layout-widget-min: 280px;
-  --layout-gutter: 16px;
-  --layout-gutter-sm: 24px;
-  --layout-gutter-md: 32px;
-
-  /*
-   * --- 间距：4px 基数 ---
-   * 故意不叫 `--spacing-*`（那会覆盖 Tailwind 的 `p-4`/`gap-4` 数字工具类）；
-   * 需要时用 `p-[var(--space-4)]` 这样的任意值消费。
-   */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-7: 28px;
-  --space-8: 32px;
-  --space-9: 36px;
-  --space-10: 40px;
-  --space-11: 44px;
-  --space-12: 48px;
 
   /* --- 内容宽度 --- */
-  --container-content: 1440px;
-  --container-form: 640px;
+  --container-content: 1280px;
+  --container-workspace: 1120px;
+  --container-form: 600px;
   --container-reading: 72ch;
-  --container-sidebar: 260px;
-  --container-sidebar-collapsed: 64px;
-  --container-settings-nav: 240px;
-  --container-dialog-narrow: 420px;
+  --container-dialog-narrow: 440px;
   --container-dialog-wide: 720px;
 
-  /* 页面正文宽度别名：窄=表单/单栏阅读，中=双栏工作区，宽=完整内容框 */
-  --content-narrow: var(--container-form);
-  --content-medium: 960px;
-  --content-wide: var(--container-content);
-
-  /*
-   * --- 动效：三档时长 ---
-   * fast 120ms   悬停、按压、颜色、工具提示，以及所有退出
-   * base 180ms   菜单、列表入场、重排
-   * slow 240ms   遮罩、弹窗、抽屉、Toast、页面入场、出图淡入
-   * 其余时长名是三档的别名；循环周期（shimmer/spin/progress/pulse）单独定义。
-   */
+  /* --- 动效：三档时长 + 两档弹簧 --- */
   --motion-fast: 120ms;
   --motion-base: 180ms;
   --motion-slow: 240ms;
-  --motion-press: var(--motion-fast);
+  --motion-spring-snappy: 240ms;
+  --motion-spring-gentle: 300ms;
   --motion-exit: var(--motion-fast);
-  --motion-overlay: var(--motion-slow);
-  --motion-emphasis: var(--motion-slow);
   --motion-page: var(--motion-slow);
   --motion-shimmer: 1.5s;
   --motion-spin: 600ms;
   --motion-progress: 1.2s;
   --motion-pulse: 1s;
   --stagger-step: 50ms;
-  --stagger-step-page: 100ms;
 
-  /* --- 动效：两档缓动（--ease-out/in/in-out 为别名） --- */
+  /* --- 动效：标准缓动 + 阻尼谐振子 linear() 弹簧曲线 --- */
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0, 0, 0.2, 1);
   --ease-out: var(--ease-emphasized);
   --ease-in: var(--ease-standard);
   --ease-in-out: var(--ease-standard);
+  --ease-spring-snappy: linear(
+    0, 0.0902, 0.2807, 0.4894, 0.6732, 0.8153, 0.9143, 0.9763,
+    1.0102, 1.0251, 1.0283, 1.0253, 1.0198, 1.0139, 1.0088, 1.0049, 1
+  );
+  --ease-spring-gentle: linear(
+    0, 0.061, 0.1928, 0.3446, 0.4895, 0.6153, 0.7182, 0.7987,
+    0.8596, 0.9045, 0.9366, 0.959, 0.9744, 0.9846, 0.9912, 0.9954, 1
+  );
 
-  /*
-   * 裸 `transition-*` 的默认时长/缓动指向 token（Tailwind 默认 150ms 不在体系内）。
-   * 这样 `transition-colors` 天然踩在 fast + standard 上，调用方不必手写 duration。
-   */
+  /* 裸 `transition-*` 默认踩在 fast + standard 上 */
   --default-transition-duration: var(--motion-fast);
   --default-transition-timing-function: var(--ease-standard);
 
-  /* --- 层级阶梯：sticky < dropdown < overlay < modal < toast < tooltip < command --- */
+  /* --- 层级阶梯：sticky < dropdown < overlay < modal < toast < tooltip --- */
   --z-index-sticky: 10;
   --z-index-dropdown: 20;
   --z-index-overlay: 30;
   --z-index-modal: 40;
   --z-index-toast: 50;
   --z-index-tooltip: 60;
-  --z-index-command: 70;
 
-  /* --- 透明度 --- */
+  /* --- 透明度与缩放 --- */
   --opacity-disabled: 0.45;
   --opacity-muted: 0.65;
   --opacity-overlay: 0.4;
-  --opacity-ghost-hover: 0.06;
-  --opacity-ghost-active: 0.1;
-  --pop-from: 0.95;
+  --pop-from: 0.96;
 
-  /* ---------------------------------------------------------------- 颜色（浅色） */
+  /* ---------------------------------------------------------------- 颜色（浅色：Cool Gray-White） */
   --color-canvas: #f8f9fb;
   --color-surface: #ffffff;
   --color-surface-hover: #f3f5f8;
   --color-tonal: #eef1f6;
   --color-tonal-hover: #e5e9f0;
   --color-tonal-active: #dce1ea;
-  --color-tonal-selected: #e4ece7;
+  --color-tonal-selected: #e6f2eb;
 
   --color-foreground: #111318;
   --color-muted-foreground: #5b6170;
-  /* 装饰用低对比色，禁止承载信息。 */
   --color-decorative-muted: #9399a6;
   --color-foreground-inverse: #f8f9fb;
   --color-on-primary: #ffffff;
   --color-on-danger: #ffffff;
-  --color-on-warning: #ffffff;
-  --color-on-success: #ffffff;
-  --color-on-info: #ffffff;
   --color-on-media: #ffffff;
   --color-media-track: rgb(255 255 255 / 0.25);
 
-  --color-border: #e3e6ee;
-  --color-border-control: #8b92a1;
+  /* 细腻柔和边框阶梯 */
+  --color-border: #e4e7ee;
+  --color-border-control: #cfd5e1;
+  --color-border-strong: #9ca4b4;
   --color-border-focus: #15803d;
-  --color-border-strong: #464c59;
 
-  /* 主操作：深墨色实底；品牌强调色为 studio emerald green（与品牌图标一致）。 */
+  /* 主色（深墨）与品牌强调色（Studio Emerald） */
   --color-primary: #111318;
   --color-primary-hover: #252932;
   --color-primary-active: #111318;
-  --color-primary-soft: #eef1f6;
 
   --color-accent: #15803d;
   --color-accent-strong: #166534;
   --color-accent-soft: #eaf7ef;
-  --color-accent-hover: #166534;
-  --color-accent-contrast: #ffffff;
 
+  /* 状态语义色 */
   --color-success: #166534;
   --color-success-soft: #f0fdf4;
-  --color-success-hover: #15803d;
-  --color-success-active: #166534;
   --color-success-border: #bbf7d0;
 
   --color-warning: #854d0e;
   --color-warning-soft: #fefce8;
-  --color-warning-hover: #a16207;
-  --color-warning-active: #854d0e;
   --color-warning-border: #fde68a;
 
   --color-danger: #b91c1c;
@@ -304,27 +235,22 @@
 
   --color-info: #1e40af;
   --color-info-soft: #eff6ff;
-  --color-info-hover: #1d4ed8;
-  --color-info-active: #1e3a8a;
   --color-info-border: #bfdbfe;
 
-  --color-neutral-status: #57534e;
-  --color-neutral-soft: #e9e9e1;
-  --color-positive: #166534;
-  --color-negative: #b91c1c;
+  --color-neutral-status: #525866;
+  --color-neutral-soft: #eef1f6;
 
-  /* 数据可视化：成功柱用中性墨色，失败柱用保留珊瑚色，不暗示 UI 语义。 */
-  --color-chart-positive: #1a1a18;
-  --color-chart-negative: #e06c53;
+  /* 数据可视化 */
+  --color-chart-positive: #15803d;
+  --color-chart-negative: #dc2626;
 
-  /* 遮罩底色，配合 --opacity-overlay 使用。 */
-  --color-overlay: #1a1a18;
+  /* 遮罩底色 */
+  --color-overlay: #111318;
 }
 
 /*
- * 深色主题：每个浅色 token 都有对应深色变体，状态色翻成深底亮字，
- * 阴影加深 alpha 以保持高度感。放在 @theme 之后（且不在 @layer 内），
- * 保证覆盖层叠优先于 theme 层。
+ * 深色主题：Cool Slate 反转色板，状态色转为深底亮字，阴影加深 alpha。
+ * 放在 @theme 之后且不在 @layer 内，保证层叠优先于默认主题。
  */
 .dark {
   color-scheme: dark;
@@ -335,81 +261,64 @@
   --color-tonal: #232832;
   --color-tonal-hover: #2c323e;
   --color-tonal-active: #353c4a;
-  --color-tonal-selected: #21312a;
+  --color-tonal-selected: #1b2e25;
 
   --color-foreground: #eef0f4;
   --color-muted-foreground: #9ca3b2;
   --color-decorative-muted: #5d6473;
   --color-foreground-inverse: #101216;
   --color-on-primary: #101216;
-  --color-on-danger: #101216;
-  --color-on-warning: #101216;
-  --color-on-success: #101216;
-  --color-on-info: #101216;
+  --color-on-danger: #ffffff;
   --color-on-media: #ffffff;
   --color-media-track: rgb(255 255 255 / 0.25);
 
-  --color-border: #2a2f3a;
-  --color-border-control: #5d6473;
-  --color-border-focus: #6ee7b7;
-  --color-border-strong: #7b8394;
+  --color-border: #282d38;
+  --color-border-control: #3e4555;
+  --color-border-strong: #636c80;
+  --color-border-focus: #34d399;
 
   --color-primary: #eef0f4;
   --color-primary-hover: #ffffff;
   --color-primary-active: #d9dde6;
-  --color-primary-soft: #232832;
 
   --color-accent: #34d399;
   --color-accent-strong: #6ee7b7;
   --color-accent-soft: #112a20;
-  --color-accent-hover: #6ee7b7;
-  --color-accent-contrast: #062117;
 
   --color-success: #4ade80;
   --color-success-soft: #052e16;
-  --color-success-hover: #22c55e;
-  --color-success-active: #4ade80;
   --color-success-border: #166534;
 
   --color-warning: #fbbf24;
   --color-warning-soft: #451a03;
-  --color-warning-hover: #f59e0b;
-  --color-warning-active: #fbbf24;
   --color-warning-border: #854d0e;
 
   --color-danger: #f87171;
   --color-danger-soft: #450a0a;
   --color-danger-hover: #ef4444;
-  --color-danger-active: #fca5a5;
-  --color-danger-border: #b91c1c;
+  --color-danger-active: #dc2626;
+  --color-danger-border: #991b1b;
 
   --color-info: #60a5fa;
   --color-info-soft: #172554;
-  --color-info-hover: #3b82f6;
-  --color-info-active: #93c5fd;
   --color-info-border: #1e40af;
 
-  --color-neutral-status: #d6d6cf;
-  --color-neutral-soft: #2e2e2a;
-  --color-positive: #4ade80;
-  --color-negative: #f87171;
+  --color-neutral-status: #c5cad6;
+  --color-neutral-soft: #262b35;
 
-  --color-chart-positive: #e5e5dd;
-  --color-chart-negative: #ff8a70;
+  --color-chart-positive: #4ade80;
+  --color-chart-negative: #f87171;
 
-  --color-overlay: #0c0c0b;
+  --color-overlay: #090b0f;
 
-  --shadow-soft: 0 4px 20px rgb(0 0 0 / 0.15);
-  --shadow-floating: 0 12px 32px rgb(0 0 0 / 0.2);
-  --shadow-dropdown: 0 8px 24px rgb(0 0 0 / 0.25);
-  --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.3);
-  --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.35);
-  --shadow-drawer: -4px 0 24px rgb(0 0 0 / 0.2);
-  --shadow-command: 0 16px 48px rgb(0 0 0 / 0.4);
+  --shadow-soft: 0 2px 12px rgb(0 0 0 / 0.2);
+  --shadow-floating: 0 10px 28px rgb(0 0 0 / 0.28);
+  --shadow-dropdown: 0 8px 24px rgb(0 0 0 / 0.32);
+  --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.36);
+  --shadow-modal: 0 16px 48px rgb(0 0 0 / 0.44);
+  --shadow-drawer: -4px 0 24px rgb(0 0 0 / 0.32);
 
   --opacity-overlay: 0.55;
-  --opacity-ghost-hover: 0.08;
-  --opacity-ghost-active: 0.14;
 }
 
 :root {
@@ -430,7 +339,6 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* canvas + foreground 放在 body：任何没包页面的路由也不会闪浏览器默认白底。 */
   body {
     background-color: var(--color-canvas);
     color: var(--color-foreground);
@@ -451,14 +359,13 @@
     outline: none;
   }
 
-  /* 标题不靠字重分层级：默认 400，显式工具类仍可覆盖。 */
   h1,
   h2,
   h3,
   h4,
   h5,
   h6 {
-    font-weight: 400;
+    font-weight: 500;
     text-wrap: balance;
   }
 
@@ -471,7 +378,6 @@
     opacity: 1;
   }
 
-  /* 媒体元素的基础表现：不溢出容器、不因固有尺寸撑破卡片。 */
   img,
   video,
   canvas {
@@ -487,7 +393,6 @@
     width: 100%;
   }
 
-  /* 滚动条：细、半透明轨道、token 描边（Firefox + WebKit 各一套）。 */
   html {
     scrollbar-width: thin;
     scrollbar-color: var(--color-border-control) transparent;
@@ -508,16 +413,11 @@
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background-color: var(--color-muted-foreground);
+    background-color: var(--color-border-strong);
   }
 }
 
-/*
- * 减少动效：所有动画/过渡归零。保留 0.01ms 而不是 0，
- * 让 animationend 仍会触发，依赖它的卸载逻辑不至于卡住。
- * 动画延迟一并归零：`.motion-stagger` 用 animation-delay 错峰，
- * 否则长列表最后一项在“没有动画”的情况下仍会空等几百毫秒。
- */
+/* 减少动效：时长归为 0.01ms 以保持 animationend 卸载契约。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -531,15 +431,7 @@
   }
 }
 
-/*
- * 关键帧：一律顶层（不放进 @layer，避免层级顺序变化时被隐藏）。
- *
- * 可见性硬规则（fail-visible）：动画元素的**基础声明必须是最终可见态**，
- * 关键帧只负责临时不可见的起点。全局 reduced-motion 已把时长归零，
- * 若基础态写成 opacity:0 再靠动画显示，减少动效用户会永久看不到内容。
- * 因此入场用 animation-fill-mode: backwards；退出用 forwards，且卸载
- * 同时由 animationend 与计时器双保险（见 useDialog）。
- */
+/* ---------------------------------------------------------------- 关键帧（顶层 fail-visible） */
 @keyframes mc-fade-in {
   from {
     opacity: 0;
@@ -560,7 +452,6 @@
   }
 }
 
-/* 卡片 / 弹窗 / 下拉入场；缩略起点由 --pop-from 控制。 */
 @keyframes mc-pop-in {
   from {
     opacity: 0;
@@ -665,7 +556,6 @@
   }
 }
 
-/* 不确定进度：填充条在轨道内循环，绝不伪造百分比。 */
 @keyframes mc-progress-indeterminate {
   0% {
     transform: translateX(-100%);
@@ -694,26 +584,85 @@
   }
 }
 
-/* ---------------------------------------------------------------- 动效工具类 */
+@keyframes mc-check-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes mc-icon-swap {
+  from {
+    opacity: 0;
+    transform: scale(0.8) rotate(-24deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes mc-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  65% {
+    transform: translateX(-2px);
+  }
+  85% {
+    transform: translateX(2px);
+  }
+}
+
+@keyframes mc-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes mc-panel-out {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(12px) scale(0.985);
+  }
+}
+
+/* ---------------------------------------------------------------- 动效与辅助工具类 */
 @layer utilities {
-  /* 保留共享键盘焦点环，兼容使用 outline-none 的旧控件。 */
   .outline-none:focus-visible {
     outline: 2px solid var(--color-border-focus);
     outline-offset: 2px;
   }
 
-  /* 唯一禁用态：调用方不再自行发明透明度。 */
   .is-disabled {
     opacity: var(--opacity-disabled);
     cursor: not-allowed;
   }
 
-  /* 次要、非信息性图形。 */
   .is-muted {
     opacity: var(--opacity-muted);
   }
 
-  /* 图片/视频上的文字可读性渐变。 */
   .media-scrim {
     background-image: linear-gradient(
       to top,
@@ -723,7 +672,6 @@
     );
   }
 
-  /* 媒体卡片操作簇：触屏常显，可悬停设备上悬停/聚焦才显示。 */
   .media-tile-actions {
     transition: opacity var(--motion-fast) var(--ease-standard);
   }
@@ -740,10 +688,6 @@
     }
   }
 
-  /*
-   * 入场工具类。animation 用长写属性：简写会重置 animation-delay，
-   * 悄悄让 `.motion-stagger` 失效。入场用 emphasized 缓动，退出用 standard。
-   */
   .motion-fade-in {
     animation-name: mc-fade-in;
     animation-duration: var(--motion-base);
@@ -751,7 +695,6 @@
     animation-fill-mode: backwards;
   }
 
-  /* 生成结果落入预留框：slow + emphasized，只在出图时使用。 */
   .motion-fade-in-slow {
     animation-name: mc-fade-in;
     animation-duration: var(--motion-slow);
@@ -766,7 +709,6 @@
     animation-fill-mode: backwards;
   }
 
-  /* 页面 / 区块入场：8px 上移 + 淡入。 */
   .motion-page {
     animation-name: mc-reveal-up;
     animation-duration: var(--motion-page);
@@ -785,45 +727,41 @@
 
   .motion-pop {
     animation-name: mc-pop-in;
-    animation-duration: var(--motion-overlay);
-    animation-timing-function: var(--ease-out);
+    animation-duration: var(--motion-spring-snappy);
+    animation-timing-function: var(--ease-spring-snappy);
     animation-fill-mode: backwards;
   }
 
   .motion-menu {
     animation-name: mc-pop-in;
-    --pop-from: 0.95;
-    animation-duration: var(--motion-base);
-    animation-timing-function: var(--ease-out);
+    --pop-from: 0.96;
+    animation-duration: var(--motion-spring-snappy);
+    animation-timing-function: var(--ease-spring-snappy);
     animation-fill-mode: backwards;
   }
 
-  /*
-   * 按压反馈：0.98 缩进 + 颜色过渡写在同一条 transition 里。
-   * 不要与 `transition-*` 并用，否则 transition-property 会被后者覆盖。
-   */
   .motion-press {
-    transition-property: color, background-color, border-color, transform;
-    transition-duration: var(--motion-fast), var(--motion-fast), var(--motion-fast), var(--motion-press);
-    transition-timing-function: var(--ease-standard), var(--ease-standard), var(--ease-standard), var(--ease-in);
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-duration: var(--motion-fast), var(--motion-fast), var(--motion-fast), var(--motion-fast), var(--motion-fast), var(--motion-spring-snappy);
+    transition-timing-function: var(--ease-standard), var(--ease-standard), var(--ease-standard), var(--ease-standard), var(--ease-standard), var(--ease-spring-snappy);
   }
 
   .motion-press:active {
-    transform: scale(0.98);
+    transform: scale(0.975);
+    transition-duration: var(--motion-fast);
+    transition-timing-function: var(--ease-standard);
   }
 
-  /* 纯透明度反馈：媒体 tile / 行 hover，配合 group-hover:opacity-100。 */
   .motion-hover-fade {
     transition-property: opacity, transform;
     transition-duration: var(--motion-fast);
     transition-timing-function: var(--ease-standard);
   }
 
-  /* Toast 生命周期。 */
   .motion-toast-in {
     animation-name: mc-slide-in-down;
-    animation-duration: var(--motion-overlay);
-    animation-timing-function: var(--ease-out);
+    animation-duration: var(--motion-spring-snappy);
+    animation-timing-function: var(--ease-spring-snappy);
     animation-fill-mode: backwards;
   }
 
@@ -834,18 +772,17 @@
     animation-fill-mode: forwards;
   }
 
-  /* 方向感知的抽屉入场 / 退出。 */
   .motion-drawer-in {
     animation-name: mc-slide-in-right;
-    animation-duration: var(--motion-overlay);
-    animation-timing-function: var(--ease-out);
+    animation-duration: var(--motion-spring-gentle);
+    animation-timing-function: var(--ease-spring-gentle);
     animation-fill-mode: backwards;
   }
 
   .motion-drawer-in-left {
     animation-name: mc-slide-in-left;
-    animation-duration: var(--motion-overlay);
-    animation-timing-function: var(--ease-out);
+    animation-duration: var(--motion-spring-gentle);
+    animation-timing-function: var(--ease-spring-gentle);
     animation-fill-mode: backwards;
   }
 
@@ -863,7 +800,20 @@
     animation-fill-mode: forwards;
   }
 
-  /* 骨架屏：基础态是静态可见的 tonal 块，动画只移动高光。 */
+  .motion-panel-in {
+    animation-name: mc-panel-in;
+    animation-duration: var(--motion-spring-gentle);
+    animation-timing-function: var(--ease-spring-gentle);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-panel-out {
+    animation-name: mc-panel-out;
+    animation-duration: var(--motion-exit);
+    animation-timing-function: var(--ease-in);
+    animation-fill-mode: forwards;
+  }
+
   .motion-shimmer {
     background-color: var(--color-tonal);
     background-image: linear-gradient(
@@ -880,7 +830,6 @@
     animation-iteration-count: infinite;
   }
 
-  /* loading 指示：600ms 线性，只在真正等待时挂载。 */
   .motion-spin {
     animation-name: mc-spin;
     animation-duration: var(--motion-spin);
@@ -888,7 +837,6 @@
     animation-iteration-count: infinite;
   }
 
-  /* 不确定进度条填充。 */
   .motion-progress-indeterminate {
     animation-name: mc-progress-indeterminate;
     animation-duration: var(--motion-progress);
@@ -896,7 +844,6 @@
     animation-iteration-count: infinite;
   }
 
-  /* 拖拽悬停中的投放区。 */
   .motion-dropzone {
     animation-name: mc-dropzone-pulse;
     animation-duration: var(--motion-pulse);
@@ -904,11 +851,10 @@
     animation-iteration-count: infinite;
   }
 
-  /* 弹窗：fade 系列给遮罩，dialog 系列给面板。 */
   .motion-dialog-in {
     animation-name: mc-pop-in;
-    animation-duration: var(--motion-overlay);
-    animation-timing-function: var(--ease-out);
+    animation-duration: var(--motion-spring-snappy);
+    animation-timing-function: var(--ease-spring-snappy);
     animation-fill-mode: backwards;
   }
 
@@ -926,12 +872,50 @@
     animation-fill-mode: forwards;
   }
 
-  /* 错峰入场：调用方设置无单位的 --stagger-index（0 起），最多 8 步。 */
+  .motion-accordion {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition-property: grid-template-rows, opacity;
+    transition-duration: var(--motion-spring-gentle), var(--motion-base);
+    transition-timing-function: var(--ease-spring-gentle), var(--ease-out);
+  }
+
+  .motion-accordion[data-open='true'] {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+
+  .motion-accordion-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .motion-check-pop {
+    animation-name: mc-check-pop;
+    animation-duration: var(--motion-spring-snappy);
+    animation-timing-function: var(--ease-spring-snappy);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-icon-swap {
+    animation-name: mc-icon-swap;
+    animation-duration: var(--motion-spring-snappy);
+    animation-timing-function: var(--ease-spring-snappy);
+    animation-fill-mode: backwards;
+  }
+
+  .motion-shake {
+    animation-name: mc-shake;
+    animation-duration: var(--motion-slow);
+    animation-timing-function: var(--ease-standard);
+    animation-fill-mode: backwards;
+  }
+
   .motion-stagger {
     animation-delay: calc(min(var(--stagger-index, 0), 8) * var(--stagger-step));
   }
 
-  /* 滚动联动区块入场：同时要求允许动效 + 支持 view() 时间线，否则静态可见。 */
   @media (prefers-reduced-motion: no-preference) {
     @supports (animation-timeline: view()) {
       .motion-scroll-reveal {
@@ -945,17 +929,12 @@
     }
   }
 
-  /* 分段控件选中底块 / tab 指示条的滑动。 */
   .motion-position {
     transition-property: transform, width, left, top;
-    transition-duration: var(--motion-base);
-    transition-timing-function: var(--ease-standard);
+    transition-duration: var(--motion-spring-snappy);
+    transition-timing-function: var(--ease-spring-snappy);
   }
 
-  /*
-   * 阅读进度条：默认不渲染；仅在支持 scroll() 时间线且允许动效时显示。
-   * 其余情况页面本身就是完整的（fail-visible），不需要进度条也能读。
-   */
   .motion-reading-progress {
     display: none;
   }
@@ -969,7 +948,7 @@
         right: 0;
         left: 0;
         height: 2px;
-        background-color: var(--color-primary);
+        background-color: var(--color-accent);
         transform-origin: 0 50%;
         z-index: var(--z-index-sticky);
         animation-name: mc-reading-progress;
@@ -981,7 +960,6 @@
     }
   }
 
-  /* 减少动效下骨架 / 脉冲回到静态可见块，避免高光带滞留。 */
   @media (prefers-reduced-motion: reduce) {
     .motion-shimmer {
       animation: none;
@@ -991,5 +969,14 @@
     .motion-dropzone {
       animation: none;
     }
+  }
+}
+
+/* 主题切换 View Transition 柔和交叉淡入 */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: var(--motion-base);
+    animation-timing-function: var(--ease-standard);
   }
 }

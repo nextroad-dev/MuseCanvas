@@ -1,10 +1,12 @@
 'use client'
 
-import { useId, useRef } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { cn } from '@/shared/lib/cn'
 import { colourTransition } from './interaction'
 import { controlMinHeight, iconSlot, touchTarget } from './size'
+
+const useSafeLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 export interface TabItem {
   id: string
@@ -17,21 +19,13 @@ export interface TabItem {
 
 export interface TabsProps {
   tabs: TabItem[]
-  /** Controlled selection — pair with local state or a store. */
   value: string
   onChange: (id: string) => void
-  /** `segment` (default) is the board-08 partition switcher; `underline` is the denser inline nav. */
   variant?: 'segment' | 'underline'
-  /**
-   * `automatic`（默认）方向键即选中；面板打开才发请求时用 `manual`，避免遍历触发
-   * 一连串请求。
-   */
   activation?: 'automatic' | 'manual'
-  /** Keep only the active panel mounted. */
   lazy?: boolean
   className?: string
   listClassName?: string
-  /** Accessible name for the tab list, e.g. `资源分区`. */
   'aria-label'?: string
 }
 
@@ -43,10 +37,7 @@ const TAB_BASE = [
 ].join(' ')
 
 /**
- * 可访问 Tabs，完整 APG 语义：`tablist` / `tab` / `tabpanel`、`aria-selected`、
- * `aria-controls` ↔ `aria-labelledby` 双向、单一 Tab 停靠点、方向键/Home/End 漫游。
- * 视觉沿用设计系统的分段样式：弱色轨道 + 白色抬起选中项；滑动指示块属于
- * `SegmentedControl`，这里刻意不做。
+ * 可访问 Tabs（APG 语义）：`tablist` / `tab` / `tabpanel`，支持水平滚动收容与方向键/Home/End 漫游。
  */
 export function Tabs({
   tabs,
@@ -60,7 +51,9 @@ export function Tabs({
   'aria-label': ariaLabel,
 }: TabsProps) {
   const uid = useId()
+  const listRef = useRef<HTMLDivElement | null>(null)
   const tabRefs = useRef(new Map<string, HTMLButtonElement | null>())
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
 
   const tabId = (id: string) => `${uid}-tab-${id}`
   const panelId = (id: string) => `${uid}-panel-${id}`
@@ -68,6 +61,39 @@ export function Tabs({
   const enabled = tabs.filter((tab) => !tab.disabled)
   const activeIndex = Math.max(0, enabled.findIndex((tab) => tab.id === value))
   const rovingId = enabled[activeIndex]?.id ?? value
+
+  const measure = useCallback(() => {
+    const node = tabRefs.current.get(value)
+    if (
+      !node ||
+      typeof node.offsetLeft !== 'number' ||
+      typeof node.offsetWidth !== 'number' ||
+      node.offsetWidth <= 0
+    ) {
+      setIndicator(null)
+      return
+    }
+    setIndicator({ left: node.offsetLeft, width: node.offsetWidth })
+  }, [value])
+
+  useSafeLayoutEffect(() => {
+    measure()
+  }, [measure])
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => window.removeEventListener('resize', measure)
+    }
+    const observer = new ResizeObserver(() => measure())
+    observer.observe(list)
+    for (const node of tabRefs.current.values()) {
+      if (node instanceof Element) observer.observe(node)
+    }
+    return () => observer.disconnect()
+  }, [measure, tabs.length])
 
   function moveFocus(from: number, delta: number) {
     if (enabled.length === 0) return
@@ -112,14 +138,29 @@ export function Tabs({
   return (
     <div className={cn('flex min-w-0 flex-col', className)}>
       <div
+        ref={listRef}
         role="tablist"
         aria-label={ariaLabel}
         className={cn(
           'relative flex min-w-0 max-w-full items-center overflow-x-auto',
-          variant === 'segment' ? 'gap-1 self-start rounded-control bg-tonal p-1' : 'gap-1 border-b border-border',
+          variant === 'segment'
+            ? 'gap-1 self-start rounded-control border border-border/70 bg-tonal p-1'
+            : 'gap-1 border-b border-border',
           listClassName,
         )}
       >
+        {indicator ? (
+          <span
+            aria-hidden="true"
+            className={cn(
+              'motion-position pointer-events-none absolute left-0',
+              variant === 'segment'
+                ? 'inset-y-1 rounded-control bg-surface shadow-soft'
+                : 'bottom-0 h-0.5 rounded-pill bg-primary',
+            )}
+            style={{ transform: `translateX(${indicator.left}px)`, width: indicator.width }}
+          />
+        ) : null}
         {tabs.map((tab) => {
           const selected = tab.id === value
           const enabledIndex = enabled.findIndex((candidate) => candidate.id === tab.id)
@@ -141,15 +182,20 @@ export function Tabs({
               onKeyDown={(event) => onKeyDown(event, enabledIndex < 0 ? 0 : enabledIndex)}
               className={cn(
                 TAB_BASE,
-                controlMinHeight.md,
+                'z-1',
+                variant === 'segment' ? controlMinHeight.sm : controlMinHeight.md,
                 touchTarget,
-                variant === 'segment' ? 'px-3.5' : 'rounded-none px-3',
+                variant === 'segment' ? 'px-3.5 text-ui' : 'rounded-none px-3',
                 variant === 'segment'
                   ? selected
-                    ? 'bg-surface text-foreground shadow-soft'
+                    ? indicator
+                      ? 'text-foreground'
+                      : 'bg-surface text-foreground shadow-soft'
                     : 'text-muted-foreground not-disabled:hover:text-foreground'
                   : selected
-                    ? 'border-b-2 border-primary text-foreground'
+                    ? indicator
+                      ? 'border-b-2 border-transparent text-foreground'
+                      : 'border-b-2 border-primary text-foreground'
                     : 'border-b-2 border-transparent text-muted-foreground not-disabled:hover:text-foreground',
                 tab.disabled && 'is-disabled',
               )}

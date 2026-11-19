@@ -1,9 +1,8 @@
 /**
- * 图标尺寸与方形控件的 token → 工具类映射。
+ * 图标尺寸与控件尺寸的 token → 工具类映射。
  *
- * 用 `size-[var(--icon-*)]` 而不是手写 `h-[…] w-[…]`：一个类同时输出宽高，避免两个
- * 类写歪；token 检查规则 D 也会拦下手写尺寸对。只需要高度下限的行用
- * `controlMinHeight`，固定方形热区用 `controlSquare`。
+ * 统一使用 `iconSize` / `controlSquare` 单类映射输出宽高，
+ * 避免手写宽高对。控件高度统一收敛为 4 档：xs(28) / sm(32) / md(36) / lg(44)。
  */
 
 /** 图标容器，对应 `--icon-*`（12 / 16 / 20 / 24 / 32 / 48）。 */
@@ -26,7 +25,7 @@ export const iconSlot = {
   '2xl': '[&>svg]:size-[var(--icon-2xl)]',
 } as const
 
-/** 方形控件（checkbox / radio / 图标按钮 / 头像槽）：边长等于控件高度。 */
+/** 方形控件（图标按钮 / 头像槽 / 复选框热区）：边长等于控件高度（28 / 32 / 36 / 44）。 */
 export const controlSquare = {
   xs: 'size-[var(--control-xs)]',
   sm: 'size-[var(--control-sm)]',
@@ -34,7 +33,7 @@ export const controlSquare = {
   lg: 'size-[var(--control-lg)]',
 } as const
 
-/** 控件行最小高度（按钮、标签页、分段项、复选框标签）。用 min-h 而非 h，避免裁切。 */
+/** 控件行最小高度（按钮 / 输入框 / 标签页 / 分段项）：用 min-h 避免裁切。 */
 export const controlMinHeight = {
   xs: 'min-h-[var(--control-xs)]',
   sm: 'min-h-[var(--control-sm)]',
@@ -46,8 +45,8 @@ export type IconSize = keyof typeof iconSize
 export type ControlSquareSize = keyof typeof controlSquare
 export type ControlMinHeightSize = keyof typeof controlMinHeight
 
-/** 移动端触控目标下限（44px）：桌面尺寸偏小的控件在 <640px 时补足。 */
-export const touchTarget = 'max-sm:min-h-11'
+/** 移动端触控目标下限（44px = `--control-lg`）：桌面紧凑控件在 <640px 自动补足。 */
+export const touchTarget = 'max-sm:min-h-[var(--control-lg)]'
 
-/** 图标按钮的移动端方形触控下限（44×44px）。 */
-export const touchTargetSquare = 'max-sm:size-11'
+/** 图标按钮的移动端方形触控下限（44×44px = `--control-lg`）。 */
+export const touchTargetSquare = 'max-sm:size-[var(--control-lg)]'

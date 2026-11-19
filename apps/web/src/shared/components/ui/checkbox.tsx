@@ -25,8 +25,7 @@ export interface CheckboxProps {
 
 /**
  * 圆形复选框（`--radius-checkbox`）：16px 描边，选中实心，部分选中显示横杠。
- * 可见形状由视觉隐藏的原生 `peer` 输入驱动：Space 可切换、焦点真实、键盘环用
- * `focusRingPeer` 转移到圆上；标签行保持 40px 热区。
+ * 原生隐藏 `peer` 输入保证真实焦点与 Space 切换，键盘环由 `focusRingPeer` 映射到视觉圆。
  */
 export function Checkbox({
   checked,
@@ -61,9 +60,9 @@ export function Checkbox({
       )}
     >
       {indeterminate ? (
-        <Minus weight="bold" aria-hidden="true" className={cn(iconSize.xs)} />
+        <Minus weight="bold" aria-hidden="true" className={cn(iconSize.xs, 'motion-check-pop')} />
       ) : checked ? (
-        <Check weight="bold" aria-hidden="true" className={cn(iconSize.xs)} />
+        <Check weight="bold" aria-hidden="true" className={cn(iconSize.xs, 'motion-check-pop')} />
       ) : null}
     </span>
   )

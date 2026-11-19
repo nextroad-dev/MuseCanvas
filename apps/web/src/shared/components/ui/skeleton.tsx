@@ -2,13 +2,6 @@ import type { CSSProperties } from 'react'
 import { cn } from '@/shared/lib/cn'
 import { controlMinHeight } from './size'
 
-/**
- * 加载占位块。
- *
- * `.motion-shimmer` 已同时包含弱色底与扫光，占位块只需再给尺寸——再叠 `bg-tonal`
- * 会重复上色。占位块是 `aria-hidden`：忙碌区域由所有者播报，盒子本身不朗读。
- */
-
 export interface SkeletonProps {
   /** Size the block close to the content it replaces so layout does not jump. */
   className?: string
@@ -61,7 +54,7 @@ export interface SkeletonRowProps {
   className?: string
 }
 
-/** List / table row placeholder at the 40px control height. */
+/** List / table row placeholder at the standard control height. */
 export function SkeletonRow({ cells = 1, cellWidth, className }: SkeletonRowProps) {
   const total = Math.max(1, Math.floor(cells))
   const style: CSSProperties | undefined = cellWidth === undefined ? undefined : { flexBasis: cellWidth }

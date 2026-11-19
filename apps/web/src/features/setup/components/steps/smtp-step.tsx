@@ -4,8 +4,9 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { SetupConfigDto, SmtpTlsMode } from '@musecanvas/contracts'
-import { clientApi } from '@/shared/services/client-api'
+
 import { Alert, Badge, Button, Field, Input, Select, Switch } from '@/shared/components/ui'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupSessionError } from '../../lib/setup-errors'
 import {
   SMTP_TLS_OPTIONS,
@@ -51,6 +52,14 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
 
   function patch(patchValue: Partial<SmtpDraft>) {
     setDraft((previous) => ({ ...previous, ...patchValue }))
+    setErrors((previous) => {
+      const next = { ...previous }
+      if ('host' in patchValue) next.host = undefined
+      if ('port' in patchValue) next.port = undefined
+      if ('fromAddress' in patchValue) next.fromAddress = undefined
+      if ('password' in patchValue || 'clearPassword' in patchValue) next.password = undefined
+      return next
+    })
     setNotice(null)
   }
 
@@ -71,7 +80,11 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
       headingId="setup-smtp-title"
       title="SMTP 邮件"
       description="创建管理员时验证码通过邮件发送，所以先验证 SMTP 连接。验证会真实连接发信服务器，但不会发送邮件。"
-      status={<Badge tone={complete ? 'success' : status === 'error' ? 'danger' : 'neutral'}>{complete ? '已验证' : connectionStatusLabel(status)}</Badge>}
+      status={
+        <Badge tone={complete ? 'success' : status === 'error' ? 'danger' : 'neutral'}>
+          {complete ? '已验证' : connectionStatusLabel(status)}
+        </Badge>
+      }
     >
       {notice ? (
         <Alert tone="danger" role="alert" title="SMTP 验证未通过">
@@ -89,6 +102,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           <Field id="setup-smtp-host" label="服务器地址" required error={errors.host} hint="例如 smtp.example.com。">
             <Input
+              size="md"
               value={draft.host}
               disabled={verify.isPending}
               placeholder="smtp.example.com"
@@ -101,6 +115,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
           <Field id="setup-smtp-port" label="端口" required error={errors.port} hint="STARTTLS 通常 587，隐式 TLS 通常 465。">
             <Input
               type="number"
+              size="md"
               inputMode="numeric"
               min={1}
               max={65535}
@@ -114,6 +129,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
 
         <Field id="setup-smtp-tls" label="加密方式" required>
           <Select
+            size="md"
             value={draft.tlsMode}
             disabled={verify.isPending}
             onChange={(event) => patch({ tlsMode: event.target.value as SmtpTlsMode })}
@@ -129,6 +145,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           <Field id="setup-smtp-username" label="用户名" hint="留空表示不需要认证。">
             <Input
+              size="md"
               value={draft.username}
               disabled={verify.isPending}
               autoComplete="off"
@@ -149,6 +166,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
           >
             <Input
               type="password"
+              size="md"
               value={draft.password}
               disabled={verify.isPending || draft.clearPassword}
               autoComplete="new-password"
@@ -159,7 +177,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
         </div>
 
         {config.smtp.hasSecret ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-control bg-tonal p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-border/70 bg-tonal p-4">
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-foreground">清除已保存的密码</span>
               <span className="text-xs text-muted-foreground">
@@ -184,6 +202,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
           >
             <Input
               type="email"
+              size="md"
               inputMode="email"
               value={draft.fromAddress}
               disabled={verify.isPending}
@@ -194,6 +213,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
 
           <Field id="setup-smtp-from-name" label="发件人名称" hint="可选，例如 MuseCanvas。">
             <Input
+              size="md"
               value={draft.fromName}
               disabled={verify.isPending}
               placeholder="MuseCanvas"
@@ -203,7 +223,7 @@ export function SmtpStep({ config, complete, onDone, onSessionLost }: SmtpStepPr
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" loading={verify.isPending}>
+          <Button type="submit" size="md" loading={verify.isPending}>
             验证连接并保存
           </Button>
           <span className="text-xs text-muted-foreground">

@@ -7,12 +7,17 @@ export interface LandingFrameProps {
 }
 
 /**
- * 落地页内容栏：设计稿 1280px + 16/24/40px 递进边距。
- * 各 section 的全宽底色 / 边框放在 section 上，内容统一收敛到这里。
+ * 落地页内容栏：与 `PublicShell` / `PublicHeader` 共享 `--container-content`（1280px）
+ * 及 16/24/40px 响应式水平内边距。各分节的全宽底色与分隔线放在 `<section>` 上。
  */
 export function LandingFrame({ children, className }: LandingFrameProps) {
   return (
-    <div className={cn('mx-auto box-border w-full max-w-[80rem] px-4 sm:px-6 md:px-10', className)}>
+    <div
+      className={cn(
+        'mx-auto box-border w-full max-w-[var(--container-content)] px-4 sm:px-6 md:px-10',
+        className,
+      )}
+    >
       {children}
     </div>
   )

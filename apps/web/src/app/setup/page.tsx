@@ -1,11 +1,12 @@
 import type { Metadata } from 'next'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
-import type { SetupConfigDto, SetupStatusResponse } from '@musecanvas/contracts'
+import type { SetupConfigDto } from '@musecanvas/contracts'
 
 import { SetupCompleteView } from '@/features/setup/components/setup-complete-view'
 import { SetupWizard } from '@/features/setup/components/setup-wizard'
 import { parseSetupStepId } from '@/features/setup/lib/setup-steps'
 import { Alert, buttonVariants } from '@/shared/components/ui'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
 import { ApiError, getSetupStatus, serverApiFetch } from '@/shared/services/server-api'
 
 /**
@@ -14,7 +15,7 @@ import { ApiError, getSetupStatus, serverApiFetch } from '@/shared/services/serv
  * · 已完成 → 只显示完成页（去登录 / 去首页），不再渲染向导；
  * · 未完成 → 尝试带当前 Cookie 读 `/setup/config`：读成功说明初始化访问已开放
  *   （领取会话 / 管理员会话 / claim-optional 开放模式），把首屏配置直接交给客户端，
- *   避免先闪一个空表单。401 属正常「尚未领取」，由客户端在领取后自行读取。
+ *   避免先闪一个空表单。401/403 属正常「尚未领取」，由客户端在领取后自行读取。
  */
 
 export const dynamic = 'force-dynamic'
@@ -33,22 +34,20 @@ function firstValue(value: string | string[] | undefined): string | null {
 
 function SetupUnavailable() {
   return (
-    <main className="flex flex-1 items-center justify-center px-4 py-16 md:px-8">
-      <div className="w-full max-w-[var(--container-dialog-narrow)]">
-        <Alert
-          tone="danger"
-          role="alert"
-          title="无法读取安装状态"
-          action={
-            <a href="/setup" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
-              重新加载
-            </a>
-          }
-        >
-          无法连接 API 服务，或服务尚未启动完成。请确认后端已运行后重新加载本页。
-        </Alert>
-      </div>
-    </main>
+    <div className="mx-auto w-full max-w-[var(--container-dialog-narrow)]">
+      <Alert
+        tone="danger"
+        role="alert"
+        title="无法读取安装状态"
+        action={
+          <a href={APP_ROUTES.setup} className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+            重新加载
+          </a>
+        }
+      >
+        无法连接 API 服务，或服务尚未启动完成。请确认后端已运行后重新加载本页。
+      </Alert>
+    </div>
   )
 }
 
@@ -56,12 +55,7 @@ export default async function SetupPage({ searchParams }: { searchParams: SetupS
   const params = await searchParams
   const initialStep = parseSetupStepId(firstValue(params.step))
 
-  let status: SetupStatusResponse | null = null
-  try {
-    status = await getSetupStatus()
-  } catch {
-    status = null
-  }
+  const status = await getSetupStatus().catch(() => null)
 
   if (!status) return <SetupUnavailable />
   if (status.setupComplete) return <SetupCompleteView completedAt={status.completedAt} />

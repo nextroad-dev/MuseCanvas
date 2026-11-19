@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { CheckIcon as Check } from '@phosphor-icons/react'
-import { clientApi } from '@/shared/services/client-api'
+import { CheckIcon } from '@phosphor-icons/react'
+
 import { Alert, Badge, Button, Field, Input, iconSize } from '@/shared/components/ui'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupAlreadyComplete, isSetupSessionError } from '../../lib/setup-errors'
 import { isPlausibleEmail } from '../../lib/setup-forms'
 import { SetupOtpInput } from '../setup-otp-input'
@@ -33,7 +34,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
   const [sentTo, setSentTo] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [otpError, setOtpError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null)
   const [cooldown, setCooldown] = useState(0)
   const codeFirstCell = useRef<HTMLInputElement | null>(null)
 
@@ -52,7 +53,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
       setCode('')
       setOtpError(null)
       setCooldown(RESEND_COOLDOWN_SECONDS)
-      setNotice(`验证码已发送至 ${target}，10 分钟内有效。`)
+      setNotice({ tone: 'success', text: `验证码已发送至 ${target}，10 分钟内有效。` })
     },
     onError: (error: unknown) => {
       if (isSetupSessionError(error)) {
@@ -64,7 +65,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
         void onDone()
         return
       }
-      setNotice(describeSetupError(error, '发送验证码失败，请稍后重试。'))
+      setNotice({ tone: 'danger', text: describeSetupError(error, '发送验证码失败，请稍后重试。') })
     },
   })
 
@@ -99,7 +100,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
         title="创建管理员"
         description="首个管理员账号用于登录后台完成后续配置。"
         status={
-          <Badge tone="success" icon={<Check weight="bold" aria-hidden="true" />}>
+          <Badge tone="success" icon={<CheckIcon weight="bold" aria-hidden="true" />}>
             已创建
           </Badge>
         }
@@ -138,8 +139,8 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
       ) : null}
 
       {notice && !otpError ? (
-        <Alert tone="success" role="status">
-          {notice}
+        <Alert tone={notice.tone} role={notice.tone === 'danger' ? 'alert' : 'status'}>
+          {notice.text}
         </Alert>
       ) : null}
 
@@ -153,6 +154,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
         >
           <Input
             type="email"
+            size="md"
             inputMode="email"
             autoComplete="email"
             spellCheck={false}
@@ -168,7 +170,8 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
         <div className="flex flex-wrap items-center gap-3">
           <Button
             type="submit"
-            variant={sentTo ? 'secondary' : 'primary'}
+            size="md"
+            variant={sentTo ? 'outline' : 'primary'}
             loading={send.isPending}
             disabled={!smtpReady || cooldown > 0 || send.isPending}
           >
@@ -178,7 +181,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
       </form>
 
       {sentTo ? (
-        <div className="flex flex-col gap-4 rounded-control bg-tonal p-4">
+        <div className="flex flex-col gap-4 rounded-control border border-border/70 bg-tonal p-4">
           <p className="text-sm text-foreground [overflow-wrap:anywhere]">
             验证码已发送至 <span className="font-mono text-foreground">{sentTo}</span>。输入 {OTP_LENGTH}{' '}
             位验证码后会自动创建管理员。
@@ -208,6 +211,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
           <div>
             <Button
               type="button"
+              size="md"
               loading={verify.isPending}
               disabled={code.length !== OTP_LENGTH || verify.isPending}
               onClick={() => verify.mutate(code)}
@@ -219,7 +223,7 @@ export function AdminStep({ complete, smtpReady, onDone, onSessionLost }: AdminS
       ) : null}
 
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Check weight="bold" aria-hidden="true" className={iconSize.xs} />
+        <CheckIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
         验证码校验通过后，浏览器会同时获得管理员登录会话。
       </p>
     </SetupStepShell>

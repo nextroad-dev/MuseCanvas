@@ -66,7 +66,7 @@ export function LegalShell({ title, updatedAt, current, children }: LegalShellPr
             <div className="mt-8 flex justify-end">
               <a
                 href="#main"
-                className="motion-press inline-flex min-h-[var(--control-touch)] items-center gap-2 rounded-pill border border-border bg-surface px-4 text-sm font-medium text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+                className="motion-press inline-flex min-h-[var(--control-lg)] items-center gap-2 rounded-control border border-border bg-surface px-4 text-sm font-medium text-muted-foreground hover:border-border-strong hover:text-foreground"
               >
                 回到顶部
                 <ArrowUpIcon weight="bold" aria-hidden="true" className={iconSize.sm} />

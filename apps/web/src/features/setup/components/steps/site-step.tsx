@@ -4,8 +4,9 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { SetupConfigDto } from '@musecanvas/contracts'
-import { clientApi } from '@/shared/services/client-api'
+
 import { Alert, Badge, Button, Field, Input } from '@/shared/components/ui'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupSessionError } from '../../lib/setup-errors'
 import { siteDraftFromDto, toSiteInput, validateSiteDraft } from '../../lib/setup-forms'
 import type { SiteDraft } from '../../lib/setup-forms'
@@ -74,6 +75,7 @@ export function SiteStep({ config, complete, onDone, onSessionLost }: SiteStepPr
           hint="显示在浏览器标题与邮件里，最多 120 个字符。"
         >
           <Input
+            size="md"
             value={draft.siteName}
             disabled={save.isPending}
             placeholder="MuseCanvas"
@@ -93,6 +95,7 @@ export function SiteStep({ config, complete, onDone, onSessionLost }: SiteStepPr
         >
           <Input
             type="url"
+            size="md"
             inputMode="url"
             autoComplete="url"
             spellCheck={false}
@@ -108,7 +111,7 @@ export function SiteStep({ config, complete, onDone, onSessionLost }: SiteStepPr
         </Field>
 
         <div>
-          <Button type="submit" loading={save.isPending}>
+          <Button type="submit" size="md" loading={save.isPending}>
             保存并继续
           </Button>
         </div>

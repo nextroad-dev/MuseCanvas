@@ -4,8 +4,9 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { SetupConfigDto } from '@musecanvas/contracts'
-import { clientApi } from '@/shared/services/client-api'
+
 import { Alert, Badge, Button, Field, Input } from '@/shared/components/ui'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupSessionError } from '../../lib/setup-errors'
 import {
   RUNTIME_FIELD_SPECS,
@@ -81,6 +82,7 @@ export function RuntimeStep({ config, complete, onDone, onSessionLost }: Runtime
             >
               <Input
                 type="number"
+                size="md"
                 inputMode="numeric"
                 min={spec.min}
                 max={spec.max}
@@ -98,7 +100,7 @@ export function RuntimeStep({ config, complete, onDone, onSessionLost }: Runtime
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" loading={save.isPending}>
+          <Button type="submit" size="md" loading={save.isPending}>
             保存并继续
           </Button>
           <span className="text-xs text-muted-foreground">不确定时保留默认值即可，之后可在后台设置中调整。</span>

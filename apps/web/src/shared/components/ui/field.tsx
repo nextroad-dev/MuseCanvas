@@ -68,7 +68,7 @@ export function Field({
   return (
     <FieldContext.Provider value={{ id: controlId, describedBy, invalid: showError, required }}>
       <div ref={ref} className={cn('flex flex-col', className)} {...rest}>
-        <label htmlFor={controlId} className="mb-2 text-sm font-medium text-foreground">
+        <label htmlFor={controlId} className="mb-1.5 text-sm font-medium text-foreground">
           {label}
           {required ? (
             <>
@@ -84,14 +84,14 @@ export function Field({
         {children}
 
         {showError ? (
-          <p id={errorId} className="mt-1 flex items-start gap-1 text-xs text-danger">
+          <p id={errorId} className="mt-1.5 flex items-start gap-1 text-xs text-danger">
             <CircleAlert weight="fill" aria-hidden="true" className={cn('mt-0.5 shrink-0', iconSize.xs)} />
             <span>{error}</span>
           </p>
         ) : null}
 
         {showHint ? (
-          <p id={hintId} className="mt-1 text-xs text-muted-foreground">
+          <p id={hintId} className="mt-1.5 text-xs text-muted-foreground">
             {hint}
           </p>
         ) : null}
@@ -105,7 +105,7 @@ export const FormField = Field
 
 export type FieldGroupProps = HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> }
 
-/** Stack of fields; the 24px gap is the spec's field rhythm. */
+/** Stack of fields with clean vertical rhythm. */
 export function FieldGroup({ className, ref, ...rest }: FieldGroupProps) {
-  return <div ref={ref} className={cn('flex flex-col gap-6', className)} {...rest} />
+  return <div ref={ref} className={cn('flex flex-col gap-5', className)} {...rest} />
 }

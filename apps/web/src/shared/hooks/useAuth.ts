@@ -5,7 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { clientApi } from '@/shared/services/client-api'
-import type { OAuthProvider, OAuthProviderInfo, OtpRequestResult, SessionDto } from '@/shared/types'
+import type { AuthSessionResult, OAuthProvider, OAuthProviderInfo, OtpRequestResult } from '@/shared/types'
 import { queryKeys } from './query-keys'
 
 export function useAuth() {
@@ -19,8 +19,8 @@ export function useAuth() {
   const verifyOtpMutation = useMutation({
     mutationFn: (input: { email: string; code: string }) =>
       clientApi.auth.verifyOtp(input.email, input.code),
-    onSuccess: (session: SessionDto) => {
-      queryClient.setQueryData(queryKeys.session, session)
+    onSuccess: ({ user }) => {
+      queryClient.setQueryData(queryKeys.session, { user })
       void queryClient.invalidateQueries({ queryKey: queryKeys.models })
     },
   })
@@ -36,7 +36,7 @@ export function useAuth() {
   return {
     requestOtp: (email: string, invitationCode?: string): Promise<OtpRequestResult> =>
       requestOtpMutation.mutateAsync({ email, ...(invitationCode ? { invitationCode } : {}) }),
-    verifyOtp: (email: string, code: string): Promise<SessionDto> =>
+    verifyOtp: (email: string, code: string): Promise<AuthSessionResult> =>
       verifyOtpMutation.mutateAsync({ email, code }),
     logout: (): Promise<{ loggedOut: boolean }> => logoutMutation.mutateAsync(),
     requestOtpMutation,

@@ -9,10 +9,10 @@ import { cn } from '@/shared/lib/cn'
 import { ghostIconButtonVariants } from './button-variants'
 import { iconSize } from './size'
 
-/** `--container-dialog-*` (420 / 720px). */
+/** `--container-dialog-*` (440 / 720px). */
 const SIZE_CLASS = {
-  narrow: 'max-w-dialog-narrow',
-  wide: 'max-w-dialog-wide',
+  narrow: 'max-w-[var(--container-dialog-narrow)]',
+  wide: 'max-w-[var(--container-dialog-wide)]',
 } as const
 
 export type DialogSize = keyof typeof SIZE_CLASS
@@ -32,20 +32,14 @@ export interface DialogProps {
   panelClassName?: string
   /** Accessible name of the icon-only close control. */
   closeLabel?: string
-  /**
-   * 打开时焦点落点：`close`（默认）最稳；`first-input` 送到第一个可用控件；
-   * `none` 不移动焦点。
-   */
+  /** 打开时焦点落点：`close`（默认）/ `first-input` / `none`。 */
   initialFocus?: 'close' | 'first-input' | 'none'
   children: ReactNode
 }
 
 /**
- * 标准模态壳，跑在 `useDialog` 之上：portal、遮罩点击、焦点陷阱、初始焦点、Esc、
- * 焦点归还与进出场动效都在 hook 里，背景 inert 也一样。调用方只负责内容。
- *
- * 表面：`z-modal` + `shadow-modal` + `rounded-panel`，`bg-surface` 不带描边——
- * 对话框不允许边框，分区只用留白。主体是滚动区，长表单不会把标题/操作顶出视口。
+ * 标准模态对话框，构建于 `useDialog` 之上：portal、遮罩点击、焦点陷阱、初始焦点、
+ * Esc、焦点归还与进出场动效统一由 hook 管理。
  */
 export function Dialog({
   open,
@@ -72,19 +66,17 @@ export function Dialog({
 
   return createPortal(
     <div {...rootProps} className="fixed inset-0 z-modal flex items-end justify-center p-4 sm:items-center">
-      {/* 遮罩 = `--color-overlay` × `--opacity-overlay`；用 color-mix 写是因为淡出
-          动画操作的是 opacity，直接写 token 透明度会打架。 */}
       <div
         aria-hidden="true"
         onClick={onClose}
         style={{ backgroundColor: 'color-mix(in srgb, var(--color-overlay) calc(var(--opacity-overlay) * 100%), transparent)' }}
-        className={cn('absolute inset-0', closing ? 'motion-fade-out' : 'motion-fade-in')}
+        className={cn('absolute inset-0 backdrop-blur-xs', closing ? 'motion-fade-out' : 'motion-fade-in')}
       />
       <div
         {...dialogProps}
         aria-describedby={description ? descriptionId : undefined}
         className={cn(
-          'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-panel bg-surface shadow-modal',
+          'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-panel border border-border bg-surface shadow-modal',
           closing ? 'pointer-events-none motion-dialog-out' : 'motion-dialog-in',
           SIZE_CLASS[size],
           panelClassName,
@@ -106,7 +98,7 @@ export function Dialog({
             ref={closeButtonRef}
             onClick={onClose}
             aria-label={closeLabel}
-            className={cn(ghostIconButtonVariants({ size: 'sm' }), '-mr-2')}
+            className={cn(ghostIconButtonVariants({ size: 'sm' }), '-mr-1')}
           >
             <X weight="bold" aria-hidden="true" className={iconSize.sm} />
           </button>
@@ -114,7 +106,11 @@ export function Dialog({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">{children}</div>
 
-        {footer ? <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-6 pb-6">{footer}</div> : null}
+        {footer ? (
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-6 pb-6 pt-2">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>,
     portalTarget,

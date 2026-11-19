@@ -3,9 +3,11 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { clientApi } from '@/shared/services/client-api'
-import { Alert, Badge, Button, Field, Input, buttonVariants } from '@/shared/components/ui'
 import type { BootstrapDiagnostics } from '@musecanvas/contracts'
+
+import { Alert, Badge, Button, Field, Input, buttonVariants } from '@/shared/components/ui'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { clientApi } from '@/shared/services/client-api'
 import {
   describeSetupError,
   isSetupAlreadyComplete,
@@ -29,12 +31,14 @@ export interface ClaimStepProps {
  */
 export function ClaimStep({ hasAccess, bootstrap, onClaimed }: ClaimStepProps) {
   const [code, setCode] = useState('')
+  const [fieldError, setFieldError] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
 
   const claim = useMutation({
     mutationFn: () => clientApi.setup.claim({ code: code.trim() }),
     onSuccess: async () => {
       setError(null)
+      setFieldError(undefined)
       setCode('')
       await onClaimed()
     },
@@ -73,9 +77,11 @@ export function ClaimStep({ hasAccess, bootstrap, onClaimed }: ClaimStepProps) {
     event.preventDefault()
     if (claim.isPending) return
     if (!code.trim()) {
-      setError('请输入领取码。')
+      setFieldError('请输入领取码。')
+      setError(null)
       return
     }
+    setFieldError(undefined)
     setError(null)
     claim.mutate()
   }
@@ -98,7 +104,7 @@ export function ClaimStep({ hasAccess, bootstrap, onClaimed }: ClaimStepProps) {
           role="status"
           title="启动环境检查未全部通过"
           action={
-            <a href="/setup" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+            <a href={APP_ROUTES.setup} className={buttonVariants({ variant: 'outline', size: 'sm' })}>
               重新检测
             </a>
           }
@@ -128,10 +134,12 @@ export function ClaimStep({ hasAccess, bootstrap, onClaimed }: ClaimStepProps) {
           id="setup-claim-code"
           label="领取码"
           required
+          error={fieldError}
           hint="原样粘贴即可，首尾空格会被忽略。"
         >
           <Input
             type="password"
+            size="md"
             autoComplete="off"
             autoCapitalize="off"
             autoCorrect="off"
@@ -141,19 +149,20 @@ export function ClaimStep({ hasAccess, bootstrap, onClaimed }: ClaimStepProps) {
             disabled={claim.isPending}
             onChange={(event) => {
               setCode(event.target.value)
+              if (fieldError) setFieldError(undefined)
               if (error) setError(null)
             }}
           />
         </Field>
         <div>
-          <Button type="submit" loading={claim.isPending}>
+          <Button type="submit" size="md" loading={claim.isPending}>
             领取并开始
           </Button>
         </div>
       </form>
 
-      <div className="flex flex-col gap-2 rounded-control bg-tonal p-4">
-        <h3 className="text-sm font-medium text-foreground">领取码在哪里找</h3>
+      <div className="flex flex-col gap-2 rounded-control border border-border/70 bg-tonal p-4">
+        <h2 className="text-sm font-medium text-foreground">领取码在哪里找</h2>
         <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-sm text-muted-foreground marker:text-muted-foreground">
           <li>
             查看 API 服务启动日志中以 <code className="font-mono text-foreground">[MUSECANVAS SETUP CLAIM]</code>{' '}

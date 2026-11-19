@@ -13,7 +13,6 @@ import {
   parseGenerationParams,
   parseSize,
   reduceRatio,
-  toGenerationRequest,
 } from './generation-params.ts'
 
 test('reduceRatio 约分宽高比', () => {
@@ -96,28 +95,6 @@ test('normalizeParameters 丢弃空值与非标量', () => {
     c: true,
   })
   assert.equal(normalizeParameters({}), undefined)
-})
-
-test('toGenerationRequest 构造合法请求体', () => {
-  const request = toGenerationRequest({
-    modelId: 'model-1',
-    prompt: '  江边小镇  ',
-    parameters: { size: '3:4', count: 2, empty: null },
-    inputs: [{ uploadId: 'u1' }],
-    idempotencyKey: 'key-1',
-  })
-  assert.equal(request.prompt, '江边小镇')
-  assert.equal(request.modelId, 'model-1')
-  assert.deepEqual(request.parameters, { size: '3:4', count: 2 })
-  assert.deepEqual(request.inputs, [{ uploadId: 'u1', role: 'reference_image', position: 0 }])
-  assert.equal(request.idempotencyKey, 'key-1')
-})
-
-test('toGenerationRequest 无参数/无输入时不带空字段', () => {
-  const request = toGenerationRequest({ modelId: 'm', prompt: 'p' })
-  assert.deepEqual(request.parameters, {})
-  assert.equal('inputs' in request, false)
-  assert.equal('idempotencyKey' in request, false)
 })
 
 test('newIdempotencyKey 产出唯一键', () => {

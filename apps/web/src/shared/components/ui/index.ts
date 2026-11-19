@@ -118,11 +118,8 @@ export type {
   TableStateRowProps,
 } from './table'
 
-export { Stepper } from './stepper'
-export type { StepperProps, StepperStep } from './stepper'
-
 // --- Shared size maps / interaction classes ----------------------------------
-export { controlMinHeight, controlSquare, iconSize, iconSlot } from './size'
+export { controlMinHeight, controlSquare, iconSize, iconSlot, touchTarget, touchTargetSquare } from './size'
 export type { ControlMinHeightSize, ControlSquareSize, IconSize } from './size'
 
 export {
@@ -137,6 +134,4 @@ export {
 } from './interaction'
 
 // --- Theme -------------------------------------------------------------------
-// Owned by the foundation slice; re-exported so `@/shared/components/ui` stays the
-// single path a screen needs.
 export * from './theme-toggle'

@@ -2,15 +2,17 @@
 
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import type { SetupStatusResponse } from '@musecanvas/contracts'
-import { clientApi } from '@/shared/services/client-api'
+import type { OnboardingSectionKey, SetupStatusResponse } from '@musecanvas/contracts'
+
 import { Alert, Badge, Button } from '@/shared/components/ui'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupAlreadyComplete, isSetupSessionError } from '../../lib/setup-errors'
 import {
   buildCompletionChecklist,
   canCompleteSetup,
   incompleteChecklistLabels,
 } from '../../lib/setup-steps'
+import type { SetupStepId } from '../../lib/setup-steps'
 import { SetupStepShell } from '../setup-step-shell'
 
 export interface CompleteStepProps {
@@ -18,13 +20,24 @@ export interface CompleteStepProps {
   /** 完成成功：向导会重新读取 status 并切到「安装已完成」视图。 */
   onCompleted: () => void | Promise<void>
   onSessionLost: (message: string) => void
+  /** 点击未完成项时跳转到对应配置步骤。 */
+  onSelectStep?: (stepId: SetupStepId) => void
+}
+
+const SECTION_TO_STEP: Partial<Record<OnboardingSectionKey, SetupStepId>> = {
+  bootstrap: 'bootstrap',
+  site: 'site',
+  smtp: 'smtp',
+  admin: 'admin',
+  storage: 'storage',
+  runtime: 'runtime',
 }
 
 /**
  * 最后一步：检查清单（六个必填段）+ `POST /setup/complete`。
  * 服务端在同一事务里再次校验必填段与管理员，缺段返回 `SETUP_INCOMPLETE`。
  */
-export function CompleteStep({ status, onCompleted, onSessionLost }: CompleteStepProps) {
+export function CompleteStep({ status, onCompleted, onSessionLost, onSelectStep }: CompleteStepProps) {
   const [error, setError] = useState<string | null>(null)
   const checklist = buildCompletionChecklist(status.sections)
   const ready = canCompleteSetup(checklist)
@@ -64,22 +77,41 @@ export function CompleteStep({ status, onCompleted, onSessionLost }: CompleteSte
       ) : null}
 
       <section aria-labelledby="setup-checklist-title" className="flex flex-col gap-3">
-        <h3 id="setup-checklist-title" className="text-sm font-medium text-foreground">
+        <h2 id="setup-checklist-title" className="text-sm font-medium text-foreground">
           必填步骤检查清单
-        </h3>
-        <ul className="flex flex-col divide-y divide-border rounded-control bg-tonal px-4">
-          {checklist.map((item) => (
-            <li key={item.key} className="flex flex-wrap items-center justify-between gap-3 py-3">
-              <span className="text-sm text-foreground">{item.label}</span>
-              <Badge tone={item.complete ? 'success' : 'warning'}>{item.complete ? '已完成' : '待完成'}</Badge>
-            </li>
-          ))}
+        </h2>
+        <ul className="flex flex-col divide-y divide-border rounded-control border border-border/70 bg-tonal px-4">
+          {checklist.map((item) => {
+            const targetStep = SECTION_TO_STEP[item.key]
+            return (
+              <li key={item.key} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <span className="text-sm text-foreground">{item.label}</span>
+                <div className="flex items-center gap-2">
+                  {!item.complete && targetStep && onSelectStep ? (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => onSelectStep(targetStep)}
+                    >
+                      去配置
+                    </Button>
+                  ) : null}
+                  <Badge tone={item.complete ? 'success' : 'warning'}>{item.complete ? '已完成' : '待完成'}</Badge>
+                </div>
+              </li>
+            )
+          })}
         </ul>
       </section>
 
       <div className="flex flex-col gap-2">
         <div>
-          <Button loading={finish.isPending} disabled={!ready || finish.isPending} onClick={() => finish.mutate()}>
+          <Button
+            size="md"
+            loading={finish.isPending}
+            disabled={!ready || finish.isPending}
+            onClick={() => finish.mutate()}
+          >
             完成初始化
           </Button>
         </div>

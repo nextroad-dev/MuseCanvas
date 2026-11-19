@@ -6,24 +6,21 @@ import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { controlSquare, iconSize } from './size'
 
-/**
- * 尺寸阶梯 xs 24 / sm 32 / md 40 / lg 48 / xl 64；前四档直接复用控件阶梯。
- */
+/** 尺寸阶梯：xs 28 / sm 32 / md 36 / lg 44 / xl 64，前四档直接复用 4 档控件阶梯。 */
 const SIZE_CLASS = {
   xs: `${controlSquare.xs} text-xs`,
-  sm: `${controlSquare.sm} text-sm`,
+  sm: `${controlSquare.sm} text-ui`,
   md: `${controlSquare.md} text-sm`,
   lg: `${controlSquare.lg} text-base`,
   xl: 'size-16 text-lg',
 } as const
 
-/** Presence dot: a quarter of the diameter, kept inside the circle. */
 const DOT_CLASS = {
   xs: 'size-1.5 right-[3px] bottom-[3px]',
   sm: 'size-2 right-1 bottom-1',
-  md: 'size-2.5 right-[5px] bottom-[5px]',
-  lg: 'size-3 right-1.5 bottom-1.5',
-  xl: 'size-4 right-2 bottom-2',
+  md: 'size-2 right-1 bottom-1',
+  lg: 'size-2.5 right-1.5 bottom-1.5',
+  xl: 'size-3.5 right-2 bottom-2',
 } as const
 
 const DOT_TONE = {
@@ -68,8 +65,7 @@ export type AvatarProps = AvatarSharedProps &
   )
 
 /**
- * 头像：圆形，按 图片 → 首字母 → 图标 降级；图片加载失败运行时回退，不留破图。
- * 类型层强制“有图片必须有 alt”。
+ * 头像：圆形，按 图片 → 首字母 → 图标 降级；图片加载失败时自动回退，不留破图。
  */
 export function Avatar({
   src,
@@ -101,7 +97,6 @@ export function Avatar({
         <img
           src={src}
           alt={alt}
-          // 不懒加载：首屏小头像懒加载会先闪一帧占位。
           className="size-full object-cover"
           onError={() => setFailedSrc(src ?? null)}
         />

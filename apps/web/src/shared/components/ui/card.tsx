@@ -6,25 +6,22 @@ export type CardDensity = 'comfortable' | 'compact' | 'none'
 
 /**
  * 卡片表面：
- *  · surface 标准内容卡：`bg-surface` + `shadow-soft` + 14 圆角；
- *  · tonal   安静分组块（`bg-tonal`），用在卡片内部；
- *  · panel   创作台等大浮层：18 圆角 + `shadow-floating`；
- *  · outline 带发丝描边的扁平表面，无阴影（后台密集行）。
- *
- * 密度只负责内边距与内部间距；设计规范要求卡片分区用留白而不是分割线，
- * 所以 `<CardBody>` 只按 gap 堆叠。
+ *  - `surface`（默认）：1px `border-border` + 白底 + `shadow-soft` + 14px 圆角；
+ *  - `tonal`：安静分组块（`bg-tonal` + 柔和发丝描边）；
+ *  - `panel`：浮层大容器（18px 圆角 + `border-border` + `shadow-floating`）；
+ *  - `outline`：无阴影扁平描边表面。
  */
 const VARIANT_CLASS: Record<CardVariant, string> = {
-  surface: 'bg-surface shadow-soft',
-  tonal: 'bg-tonal',
-  panel: 'bg-surface shadow-floating',
-  outline: 'border border-border bg-surface',
+  surface: 'rounded-card border border-border bg-surface shadow-soft',
+  tonal: 'rounded-card border border-border/70 bg-tonal',
+  panel: 'rounded-panel border border-border bg-surface shadow-floating',
+  outline: 'rounded-card border border-border bg-surface',
 }
 
-const DENSITY_SPEC: Record<CardDensity, { card: string; block: string; radius: string }> = {
-  comfortable: { card: 'gap-4 p-6', block: 'gap-4', radius: 'rounded-card' },
-  compact: { card: 'gap-3 p-4', block: 'gap-3', radius: 'rounded-card' },
-  none: { card: 'gap-0 p-0', block: 'gap-0', radius: 'rounded-card' },
+const DENSITY_CLASS: Record<CardDensity, string> = {
+  comfortable: 'gap-4 p-5 sm:p-6',
+  compact: 'gap-3 p-4',
+  none: 'gap-0 p-0',
 }
 
 export interface CardProps extends HTMLAttributes<HTMLDivElement> {
@@ -41,17 +38,13 @@ export function Card({
   children,
   ...rest
 }: CardProps) {
-  const spec = DENSITY_SPEC[density]
   return (
     <div
       ref={ref}
       className={cn(
-        // 颜色只在这里设一次：字号 token 与 text-<color> 在同一元素上会被 tailwind-merge
-        // 归入同一组而互相删除。
         'flex flex-col text-foreground',
-        variant === 'panel' ? 'rounded-panel' : spec.radius,
         VARIANT_CLASS[variant],
-        spec.card,
+        DENSITY_CLASS[density],
         className,
       )}
       {...rest}
@@ -95,11 +88,9 @@ export function CardBody({ className, ref, ...rest }: CardBodyProps) {
 
 export type CardFooterProps = HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> }
 
-/** Footer actions; separated from the body by space, never a rule. */
 export function CardFooter({ className, ref, ...rest }: CardFooterProps) {
   return <div ref={ref} className={cn('flex flex-wrap items-center justify-between gap-2', className)} {...rest} />
 }
 
-/** Convenience alias for a card that is really a plain section surface. */
 export type CardContentProps = CardBodyProps
 export const CardContent = CardBody

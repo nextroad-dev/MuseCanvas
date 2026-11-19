@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     default: 'MuseCanvas',
     template: '%s · MuseCanvas',
   },
-  description: '可以装在自己服务器上的 AI 画图工具：把构想写成一段文字，AI 即刻生成画面，作品自动保存至图库。',
+  description: '可以装在自己服务器上的 AI 画图与视频创作工作室：把构想写成一段文字，即刻生成画面并沉淀到个人图库。',
   applicationName: 'MuseCanvas',
   icons: { icon: '/favicon.png', apple: '/favicon.png' },
   formatDetection: { telephone: false },
@@ -37,7 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <ThemeBootScript />
       </head>
-      <body className="bg-canvas text-foreground font-sans antialiased">
+      <body className="min-h-dvh bg-canvas font-sans text-foreground antialiased">
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

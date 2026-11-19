@@ -1,7 +1,7 @@
+import type { CSSProperties } from 'react'
 import Link from 'next/link'
 import { ArrowRightIcon, ImagesIcon, SparkleIcon } from '@phosphor-icons/react/ssr'
-import { buttonVariants } from '@/shared/components/ui/button-variants'
-import { iconSize } from '@/shared/components/ui/size'
+import { Badge, Button, Card, iconSize } from '@/shared/components/ui'
 import { APP_ROUTES } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
 import { SHOWCASE_ITEMS } from '@/shared/lib/showcase'
@@ -10,25 +10,24 @@ import { ShowcaseFrame } from './showcase-frame'
 
 const HERO_FILE = 'ratio-3x4.webp'
 
-/** 画板 04 的横向作品条：3 件作品，宽度 170 / 220 / 170、高 220。 */
-const MOBILE_STRIP: { file: string; label: string; widthClass: string }[] = [
-  { file: 'ratio-3x4.webp', label: '3:4', widthClass: 'w-[170px]' },
-  { file: 'ratio-16x9.webp', label: '16:9', widthClass: 'w-[220px]' },
-  { file: 'ratio-1x1.webp', label: '1:1', widthClass: 'w-[170px]' },
+/** 窄屏横向作品条：3 件不同画幅作品，容器内横向滚动不撑破视口。 */
+const MOBILE_STRIP: { file: string; widthClass: string }[] = [
+  { file: 'ratio-3x4.webp', widthClass: 'w-44' },
+  { file: 'ratio-16x9.webp', widthClass: 'w-56' },
+  { file: 'ratio-1x1.webp', widthClass: 'w-44' },
 ]
 
-const ctaPrimary = cn(
-  buttonVariants({ variant: 'primary' }),
-  'min-h-[var(--control-cta)] w-full justify-center gap-2.5 rounded-pill px-7 text-base shadow-soft max-sm:min-h-[var(--control-cta)] sm:w-auto',
-)
-const ctaSecondary = cn(
-  buttonVariants({ variant: 'outline' }),
-  'min-h-[var(--control-cta)] w-full justify-center gap-2 rounded-pill bg-surface px-6 text-base max-sm:min-h-[var(--control-lg)] sm:w-auto',
-)
+const STUDIO_HIGHLIGHTS = [
+  { label: '多模型切换', detail: '图像与视频统一调度' },
+  { label: '图库自动归档', detail: '原图查看、下载与批量管理' },
+  { label: '完全自托管', detail: '部署在自己的服务器与存储上' },
+]
 
 /**
- * 首屏（Google Sans AI Studio 风格）：左侧 studio badge + 大标题 + 副标题 + 双 pill CTA，
- * 右侧 3:4 作品画框。<640px 换成纵向按钮 + 横向滚动作品条；首屏不做滚动揭示。
+ * 落地页首屏（Cool Gray-White Studio）：
+ * 左侧编辑式标题、简介、主/次 `size="lg"` `rounded-control` CTA 与三项工作室注脚；
+ * 右侧 `Card` panel 承载 3:4 作品画框（`StaticImage` 高优先级加载）。
+ * 首屏直接入场（`motion-page-enter` + `motion-stagger`），不做滚动揭示延迟。
  */
 export function Hero() {
   const heroImage = SHOWCASE_ITEMS.find((item) => item.file === HERO_FILE)
@@ -41,41 +40,75 @@ export function Hero() {
     <section aria-labelledby="hero-title" className="bg-canvas">
       <LandingFrame className="grid grid-cols-1 items-center gap-10 pb-0 pt-10 sm:gap-16 sm:pb-24 sm:pt-16 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col items-start gap-7">
-          <span className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-pill bg-accent-soft px-3.5 py-1.5 text-ui font-medium text-accent">
-            <SparkleIcon weight="duotone" aria-hidden="true" className={cn(iconSize.sm, 'shrink-0')} />
-            AI 创意工作室 · 自托管图像与视频生成
-          </span>
+          <div style={{ '--stagger-index': 0 } as CSSProperties} className="motion-page-enter motion-stagger">
+            <Badge
+              tone="accent"
+              variant="soft"
+              icon={<SparkleIcon weight="duotone" />}
+              className="gap-1.5 px-3 py-1 text-ui"
+            >
+              AI 创意工作室 · 自托管图像与视频生成
+            </Badge>
+          </div>
 
-          <h1 id="hero-title" className="font-display text-hero break-words text-foreground">
+          <h1
+            id="hero-title"
+            style={{ '--stagger-index': 1 } as CSSProperties}
+            className="motion-page-enter motion-stagger font-display text-hero break-words text-foreground"
+          >
             让创意
             <br />
             快速落地
           </h1>
 
-          <p className="max-w-xl text-copy text-muted-foreground sm:text-lead">
+          <p
+            style={{ '--stagger-index': 2 } as CSSProperties}
+            className="motion-page-enter motion-stagger max-w-xl text-copy text-muted-foreground sm:text-lead"
+          >
             把构想写成一段文字，AI 即刻生成画面，作品自动保存至个人图库。
           </p>
 
-          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
-            <Link href={APP_ROUTES.generate} className={ctaPrimary}>
-              开始创作
-              <ArrowRightIcon weight="bold" aria-hidden="true" className={iconSize.sm} />
-            </Link>
+          <div
+            style={{ '--stagger-index': 3 } as CSSProperties}
+            className="motion-page-enter motion-stagger flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center"
+          >
+            <Button asChild variant="primary" size="lg" className="w-full px-6 text-base shadow-soft sm:w-auto">
+              <Link href={APP_ROUTES.generate}>
+                开始创作
+                <ArrowRightIcon weight="bold" aria-hidden="true" className={iconSize.sm} />
+              </Link>
+            </Button>
 
-            <Link href="#works" className={ctaSecondary}>
-              <ImagesIcon weight="duotone" aria-hidden="true" className={iconSize.sm} />
-              先看看作品
-            </Link>
+            <Button asChild variant="outline" size="lg" className="w-full px-6 text-base sm:w-auto">
+              <Link href="#works">
+                <ImagesIcon weight="duotone" aria-hidden="true" className={iconSize.sm} />
+                先看看作品
+              </Link>
+            </Button>
           </div>
+
+          <dl
+            style={{ '--stagger-index': 4 } as CSSProperties}
+            className="motion-page-enter motion-stagger m-0 grid w-full max-w-xl grid-cols-1 gap-4 border-t border-border pt-6 sm:grid-cols-3"
+          >
+            {STUDIO_HIGHLIGHTS.map((item) => (
+              <div key={item.label} className="flex flex-col gap-1">
+                <dt className="text-ui font-medium text-foreground">{item.label}</dt>
+                <dd className="m-0 text-xs text-muted-foreground">{item.detail}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
 
-        <figure className="m-0 hidden min-w-0 flex-col sm:flex">
-          <div className="rounded-panel border border-border bg-surface p-2.5 shadow-floating">
+        <figure
+          style={{ '--stagger-index': 2 } as CSSProperties}
+          className="motion-page-enter motion-stagger m-0 hidden min-w-0 flex-col sm:flex"
+        >
+          <Card variant="panel" density="none" className="p-2.5">
             {heroImage ? (
               <ShowcaseFrame
                 file={heroImage.file}
                 label={heroImage.label}
-                sizes="(min-width: 1024px) 50vw, 100vw"
                 priority
                 className="aspect-[3/4] max-h-[600px] w-full rounded-card"
               >
@@ -89,11 +122,11 @@ export function Hero() {
             ) : (
               <div className="aspect-[3/4] max-h-[600px] w-full rounded-card bg-tonal" aria-hidden="true" />
             )}
-          </div>
+          </Card>
         </figure>
       </LandingFrame>
 
-      {/* 窄屏用横向作品条替代右侧大图，容器自身横向滚动，页面不溢出。 */}
+      {/* 窄屏横向作品条：容器自身横向滚动，页面零横向溢出。 */}
       <div className="mt-8 overflow-x-auto px-4 pb-10 sm:hidden">
         <ul className="m-0 flex w-max list-none gap-3 p-0">
           {strip.map((entry) =>
@@ -102,8 +135,7 @@ export function Hero() {
                 <ShowcaseFrame
                   file={entry.item.file}
                   label={entry.item.label}
-                  sizes={entry.widthClass === 'w-[220px]' ? '220px' : '170px'}
-                  className="h-[220px] w-full rounded-card border border-border"
+                  className="h-56 w-full rounded-card border border-border shadow-soft"
                 />
                 <span className="truncate text-center text-sm text-muted-foreground">{entry.item.prompt}</span>
               </li>

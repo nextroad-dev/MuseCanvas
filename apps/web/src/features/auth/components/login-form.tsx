@@ -1,8 +1,8 @@
 'use client'
 
-// 登录页的客户端岛：邮箱 → 6 位验证码两步状态机 + 第三方整页跳转。
-// 服务端预检（已登录 307）在 `app/(auth)/login/page.tsx`；这里只做交互与提交。
-// 易失 UI 态（step / email / 是否需要邀请码）放 Zustand，服务端状态走 TanStack Query。
+// 登录页客户端岛：邮箱 → 6 位验证码两步状态机 + 邀请码校验 + 第三方 OAuth 跳转。
+// 服务端预检（已登录重定向）在 `app/(auth)/login/page.tsx`；这里只处理交互与提交。
+// 易失 UI 态（step / email / requiresInvitation）托管于 Zustand，服务端会话走 TanStack Query。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -10,28 +10,31 @@ import { useRouter } from 'next/navigation'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeftIcon as ArrowLeft,
+  ArrowLeftIcon,
   EnvelopeSimpleIcon,
   KeyIcon,
   SparkleIcon,
 } from '@phosphor-icons/react'
+
 import { clientApi } from '@/shared/services/client-api'
 import { useAuth, useOAuthProviders, oauthLoginUrl } from '@/shared/hooks/useAuth'
 import { queryKeys } from '@/shared/hooks/query-keys'
 import { useAuthUiStore } from '@/shared/stores/auth-ui-store'
-import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { APP_ROUTES, safeRedirectPath } from '@/shared/lib/app-routes'
 import {
   Alert,
+  Badge,
   Button,
+  Card,
   Divider,
   Field,
   Input,
   Skeleton,
-  buttonVariants,
+  controlSquare,
   iconSize,
 } from '@/shared/components/ui'
 import { cn } from '@/shared/lib/cn'
-import type { OAuthProvider } from '@/shared/types'
+import type { OAuthProvider, OAuthProviderInfo } from '@/shared/types'
 import { OtpInput } from './otp-input'
 import { GithubIcon, GoogleIcon } from './brand-icons'
 import {
@@ -46,34 +49,36 @@ import { OTP_LENGTH, sanitizeOtpChunk } from '../lib/otp'
 /** 前端冷却纯样式：服务端只有限流（10 分钟窗口），没有可查询的冷却状态。 */
 const RESEND_COOLDOWN_SECONDS = 60
 
-/** 第三方按钮的展示顺序与图标；label 后端会返回，缺失时用这里的兜底。 */
+/** 第三方按钮的展示顺序与图标；label 由后端返回，缺失时使用兜底文案。 */
 const OAUTH_PROVIDERS: Record<OAuthProvider, { label: string; Icon: typeof GithubIcon }> = {
   github: { label: 'GitHub', Icon: GithubIcon },
   google: { label: 'Google', Icon: GoogleIcon },
 }
 
 export interface LoginFormProps {
-  /** 登录成功后的白名单内部路径（RSC 已用 `safeRedirectPath` 归一化）。 */
+  /** 登录成功后的白名单内部路径（RSC 已通过 `safeRedirectPath` 收敛）。 */
   nextPath: string
-  /** RSC 预检发现后端不可用：仍渲染表单，但先说明「提交可能失败」。 */
+  /** RSC 预检发现后端不可用：仍渲染表单，先给出可预期提示。 */
   backendUnavailable?: boolean
   /** OAuth 回调失败码（`?error=`）。 */
   oauthError?: string | null
-  /** 邀请制 OAuth 新用户：先补邀请码再完成注册。 */
+  /** 邀请制 OAuth 新用户：先补邀请码再完成注册（`?oauth_challenge=` / `?challenge=`）。 */
   oauthChallenge?: string | null
   oauthEmail?: string | null
   oauthProvider?: string | null
   /** `GET /registration` 的注册模式；true 时邮箱步直接展示邀请码输入。 */
   requiresInvitation?: boolean
+  /** RSC 预取的 OAuth 供应商列表；传入后首屏即呈现，避免骨架闪烁。 */
+  initialProviders?: OAuthProviderInfo[]
 }
 
 type FieldKey = 'email' | 'invitation'
 type FieldErrors = Partial<Record<FieldKey, string>>
 
 /**
- * 登录表单。步骤：
+ * 登录表单卡片。步骤：
  * 1. `email`：邮箱（邀请制时同时出现邀请码）→ `POST /auth/otp/request`；
- * 2. `code`：6 位验证码 → `POST /auth/otp/verify`，成功后写会话并跳转；
+ * 2. `code`：6 位验证码 → `POST /auth/otp/verify`，成功后写入会话并跳转；
  * 3. `oauth-invitation`：第三方回调要求邀请码时 → `POST /auth/oauth/invitation`。
  */
 export function LoginForm({
@@ -84,6 +89,7 @@ export function LoginForm({
   oauthEmail,
   oauthProvider,
   requiresInvitation = false,
+  initialProviders,
 }: LoginFormProps) {
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -111,28 +117,33 @@ export function LoginForm({
   const otpFirstRef = useRef<HTMLInputElement | null>(null)
   const inFlightRef = useRef(false)
 
+  const destination = safeRedirectPath(nextPath)
+
   // 两种邀请语义分开：
-  // · `invitationRequired` = 后端已明确「这个邮箱未注册且站点邀请制」，提交时必须填；
+  // · `invitationRequired` = 后端明确该邮箱未注册且站点为邀请制，提交时必填；
   // · `requiresInvitation`（RSC 读 GET /registration）= 站点邀请制，首次登录需要邀请码，
-  //   但已有账号可以直接登录，所以只显示输入框、不强制（后端 nextStep 会兜底）。
+  //   已有账号可直接登录，因此先展示输入框但不强制（由后端 nextStep 兜底）。
   const invitationRequired = storedRequiresInvitation
   const invitationVisible = invitationRequired || requiresInvitation
   const oauthChallengeActive = Boolean(oauthChallenge)
   const oauthCallbackError = describeOAuthError(oauthError)
-  const enabledProviders = (providersQuery.data ?? []).filter((provider) => provider.enabled)
 
-  // 验证码步缺少邮箱（例如刷新后 store 仍有旧 step）时退回第一步。
+  const providers = providersQuery.data ?? initialProviders ?? []
+  const enabledProviders = providers.filter((provider) => provider.enabled)
+  const providersLoading = initialProviders === undefined && providersQuery.isPending
+
+  // 验证码步缺少邮箱（例如刷新后 store 残留旧 step）时退回邮箱步。
   useEffect(() => {
     if (step === 'code' && !email) setStep('email')
   }, [step, email, setStep])
 
-  // 邮箱步把焦点交给邮箱输入框（从验证码步返回时也回到这里）；验证码步由 OtpInput 自己聚焦。
+  // 邮箱步聚焦邮箱输入框；验证码步由 OtpInput 自身处理聚焦。
   useEffect(() => {
     if (oauthChallengeActive || step !== 'email') return
     emailInputRef.current?.focus()
   }, [step, oauthChallengeActive])
 
-  // 进入验证码步开始前端冷却倒计时（纯样式，到零即允许重发）。
+  // 进入验证码步启动冷却倒计时。
   useEffect(() => {
     if (step !== 'code' || resendIn <= 0) return
     const timer = window.setTimeout(() => setResendIn((left) => Math.max(0, left - 1)), 1000)
@@ -206,7 +217,6 @@ export function LoginForm({
       if (result.accepted) {
         enterCodeStep()
       } else if (result.nextStep === 'invitation') {
-        // 后端判定该邮箱首次注册且站点为邀请制：补齐邀请码后再发一次。
         setRequiresInvitation(true)
         setFormError('该邮箱尚未注册，本站为邀请制。请填写邀请码后继续；已有账号可留空。')
         invitationInputRef.current?.focus()
@@ -236,12 +246,11 @@ export function LoginForm({
     setFormError(null)
     if (!beginRequest()) return
     try {
-      await verifyOtp(normalizeEmail(email), normalized)
-      // verify 已把 session 写入缓存；再失效一次，让其它页面拿到服务端权威态。
-      // 成功后直接离开：不在这里 resetAuthUi，避免导航完成前闪回邮箱表单；
-      // 退出登录时账户页会重置登录 UI 态。
+      const { setupRequired } = await verifyOtp(normalizeEmail(email), normalized)
+      // verify 已写入 session 缓存；失效一次确保其它页面同步服务端权威态。
+      // 成功后直接离开：不在导航前 resetAuthUi，避免离开前闪回邮箱步。
       await queryClient.invalidateQueries({ queryKey: queryKeys.session })
-      router.replace(nextPath)
+      router.replace(setupRequired ? APP_ROUTES.setup : destination)
       router.refresh()
     } catch (error) {
       setFormError(describeAuthError(error, '验证码校验失败，请确认后重试。'))
@@ -293,10 +302,13 @@ export function LoginForm({
     if (oauthSubmitting) return
     setOauthSubmitting(true)
     try {
-      const session = await clientApi.auth.completeOAuthInvitation(oauthChallenge, invitationCode.trim())
-      queryClient.setQueryData(queryKeys.session, session)
+      const { user, setupRequired } = await clientApi.auth.completeOAuthInvitation(
+        oauthChallenge,
+        invitationCode.trim(),
+      )
+      queryClient.setQueryData(queryKeys.session, { user })
       await queryClient.invalidateQueries({ queryKey: queryKeys.session })
-      router.replace(nextPath)
+      router.replace(setupRequired ? APP_ROUTES.setup : destination)
       router.refresh()
     } catch (error) {
       setFormError(describeAuthError(error, '邀请码注册未完成，请稍后重试。'))
@@ -310,15 +322,20 @@ export function LoginForm({
     : '第三方'
 
   return (
-    <div className="flex flex-col gap-6">
+    <Card density="none" className="w-full gap-6 p-6 sm:p-8">
       {oauthChallengeActive ? (
-        <section aria-label="完成邀请码注册" className="flex flex-col gap-6">
+        <section key="oauth-invitation" aria-label="完成邀请码注册" className="motion-reveal flex flex-col gap-6">
           <header className="flex flex-col gap-2.5">
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-card bg-accent-soft text-accent">
+            <div
+              className={cn(
+                'inline-flex items-center justify-center rounded-card border border-border bg-accent-soft text-accent',
+                controlSquare.lg,
+              )}
+            >
               <KeyIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
             </div>
-            <h1 className="text-title font-medium tracking-tight text-foreground">完成邀请码注册</h1>
-            <p className="text-compact text-muted-foreground [text-wrap:pretty]">
+            <h1 className="text-title text-foreground">完成邀请码注册</h1>
+            <p className="text-sm text-muted-foreground">
               {oauthProviderLabel} 账号
               {oauthEmail ? (
                 <>
@@ -353,12 +370,11 @@ export function LoginForm({
                 }}
                 autoComplete="off"
                 size="lg"
-                className="px-3.5 text-compact"
                 disabled={oauthSubmitting}
                 placeholder="请填写邀请码"
               />
             </Field>
-            <Button type="submit" size="lg" fullWidth loading={oauthSubmitting} className="text-compact">
+            <Button type="submit" size="lg" fullWidth loading={oauthSubmitting}>
               完成注册并登录
             </Button>
           </form>
@@ -366,7 +382,7 @@ export function LoginForm({
           <Button
             variant="ghost"
             size="sm"
-            className="self-center px-3 text-compact"
+            className="self-center text-muted-foreground"
             onClick={() => {
               resetAuthUi()
               router.replace(APP_ROUTES.login)
@@ -376,25 +392,30 @@ export function LoginForm({
           </Button>
         </section>
       ) : step === 'code' ? (
-        <section aria-label="输入验证码" className="flex flex-col gap-6">
+        <section key="code" aria-label="输入验证码" className="motion-reveal flex flex-col gap-6">
           <header className="flex flex-col gap-2.5">
             <Button
               variant="ghost"
               size="sm"
-              icon={<ArrowLeft weight="bold" aria-hidden="true" />}
+              leadingIcon={<ArrowLeftIcon weight="bold" aria-hidden="true" />}
               onClick={backToEmail}
               disabled={submitting}
-              className="-ml-2 self-start px-2.5 text-compact text-muted-foreground"
+              className="-ml-2.5 self-start text-muted-foreground"
             >
               修改邮箱
             </Button>
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-card bg-accent-soft text-accent">
+            <div
+              className={cn(
+                'inline-flex items-center justify-center rounded-card border border-border bg-accent-soft text-accent',
+                controlSquare.lg,
+              )}
+            >
               <EnvelopeSimpleIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
             </div>
-            <h1 className="text-title font-medium tracking-tight text-foreground">输入验证码</h1>
-            <p className="text-compact text-muted-foreground [overflow-wrap:anywhere]">
+            <h1 className="text-title text-foreground">输入验证码</h1>
+            <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
               6 位验证码已发送到{' '}
-              <span className="inline-flex items-center rounded-pill bg-tonal px-2 py-0.5 font-medium text-foreground">
+              <span className="inline-flex items-center rounded-pill border border-border bg-tonal px-2 py-0.5 font-medium text-foreground">
                 {email}
               </span>
             </p>
@@ -422,6 +443,7 @@ export function LoginForm({
               onComplete={(value) => {
                 void verifyCode(value)
               }}
+              onEscape={backToEmail}
               disabled={submitting}
               autoFocus
               length={OTP_LENGTH}
@@ -436,32 +458,37 @@ export function LoginForm({
               </p>
             )}
 
-            <Button type="submit" size="lg" fullWidth loading={submitting} className="text-compact">
+            <Button type="submit" size="lg" fullWidth loading={submitting}>
               验证并登录
             </Button>
 
             <div className="flex items-center justify-between gap-3 border-t border-border pt-4 text-ui">
-              <span className="text-muted-foreground">没收到？检查垃圾邮件</span>
-              <button
+              <span className="text-muted-foreground">没收到？请检查垃圾邮件</span>
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 onClick={() => void handleResend()}
                 disabled={submitting || resendIn > 0}
-                className="inline-flex min-h-[var(--control-sm)] items-center rounded-pill px-3 font-mono tabular-nums text-foreground transition-colors disabled:text-muted-foreground not-disabled:bg-tonal not-disabled:hover:bg-tonal-hover"
+                className="font-mono tabular-nums"
               >
                 {resendIn > 0 ? `重新发送 · ${formatCountdown(resendIn)}` : '重新发送'}
-              </button>
+              </Button>
             </div>
           </form>
         </section>
       ) : (
-        <section aria-label="邮箱登录" className="flex flex-col gap-6">
+        <section key="email" aria-label="邮箱登录" className="motion-reveal flex flex-col gap-6">
           <header className="flex flex-col gap-2.5">
-            <div className="inline-flex items-center gap-1.5 self-start rounded-pill bg-accent-soft px-2.5 py-1 text-caption font-medium text-accent">
-              <SparkleIcon weight="fill" aria-hidden="true" className="h-3 w-3" />
-              <span>AI Studio 创作入口</span>
-            </div>
-            <h1 className="text-title font-medium tracking-tight text-foreground">登录 MuseCanvas</h1>
-            <p className="text-compact text-muted-foreground">输入邮箱验证码或使用第三方账号开始创作</p>
+            <Badge
+              tone="accent"
+              icon={<SparkleIcon weight="fill" aria-hidden="true" />}
+              className="self-start"
+            >
+              AI Studio 创作入口
+            </Badge>
+            <h1 className="text-title text-foreground">登录 MuseCanvas</h1>
+            <p className="text-sm text-muted-foreground">输入邮箱验证码或使用第三方账号开始创作</p>
           </header>
 
           {backendUnavailable ? (
@@ -488,7 +515,7 @@ export function LoginForm({
               label="邮箱地址"
               required
               error={fieldErrors.email}
-              hint="邮箱只用于登录与作品找回。"
+              hint="邮箱仅用于登录与作品找回。"
             >
               <Input
                 ref={emailInputRef}
@@ -503,7 +530,6 @@ export function LoginForm({
                   if (formError) setFormError(null)
                 }}
                 placeholder="name@example.com"
-                className="px-3.5 text-compact"
                 disabled={submitting}
               />
             </Field>
@@ -530,14 +556,13 @@ export function LoginForm({
                   }}
                   autoComplete="off"
                   size="lg"
-                  className="px-3.5 text-compact"
                   disabled={submitting}
                   placeholder="请填写邀请码"
                 />
               </Field>
             ) : null}
 
-            <Button type="submit" size="lg" fullWidth loading={submitting} className="text-compact">
+            <Button type="submit" size="lg" fullWidth loading={submitting}>
               {invitationRequired ? '确认并发送验证码' : '发送验证码'}
             </Button>
           </form>
@@ -545,41 +570,41 @@ export function LoginForm({
           {enabledProviders.length > 0 ? (
             <section aria-label="第三方账号登录" className="flex flex-col gap-4">
               <Divider label="或使用第三方账号" labelClassName="bg-surface" />
-              <div className="grid grid-cols-2 gap-2.5">
+              <div
+                className={cn(
+                  'grid gap-2.5',
+                  enabledProviders.length === 1 ? 'grid-cols-1' : 'grid-cols-2',
+                )}
+              >
                 {enabledProviders.map((provider) => {
                   const meta = OAUTH_PROVIDERS[provider.provider]
                   if (!meta) return null
                   const Icon = meta.Icon
                   return (
-                    <a
-                      key={provider.provider}
-                      href={oauthLoginUrl(provider.provider)}
-                      className={cn(
-                        buttonVariants({ variant: 'secondary' }),
-                        'min-h-[var(--control-touch)] gap-2.5 rounded-control border border-border bg-canvas/60 text-compact font-medium hover:bg-surface-hover',
-                      )}
-                    >
-                      <Icon className={cn('shrink-0', iconSize.md)} />
-                      <span>{provider.label || meta.label}</span>
-                    </a>
+                    <Button key={provider.provider} variant="outline" size="lg" asChild>
+                      <a href={oauthLoginUrl(provider.provider)}>
+                        <Icon className={cn('shrink-0', iconSize.md)} />
+                        <span>{provider.label || meta.label}</span>
+                      </a>
+                    </Button>
                   )
                 })}
               </div>
             </section>
-          ) : providersQuery.isPending ? (
+          ) : providersLoading ? (
             <div className="flex flex-col gap-4" aria-busy="true">
               <span className="sr-only">正在读取可用的第三方登录方式</span>
               <Skeleton className="h-px w-full rounded-none" />
               <div className="grid grid-cols-2 gap-2.5" aria-hidden="true">
-                <Skeleton className="h-[var(--control-touch)] rounded-control" />
-                <Skeleton className="h-[var(--control-touch)] rounded-control" />
+                <Skeleton className="h-[var(--control-lg)] rounded-control" />
+                <Skeleton className="h-[var(--control-lg)] rounded-control" />
               </div>
             </div>
           ) : null}
         </section>
       )}
 
-      <p className="border-t border-border pt-4 text-center text-xs text-muted-foreground [text-wrap:pretty]">
+      <p className="border-t border-border pt-4 text-center text-xs text-muted-foreground">
         登录即代表你已阅读并同意{' '}
         <Link
           href={APP_ROUTES.terms}
@@ -596,6 +621,6 @@ export function LoginForm({
         </Link>
         。
       </p>
-    </div>
+    </Card>
   )
 }

@@ -4,29 +4,8 @@ import { Children, Fragment, cloneElement, isValidElement, useCallback, useEffec
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode } from 'react'
 import { cn } from '@/shared/lib/cn'
 import { exitDurationMs } from '@/shared/lib/motion'
-import { iconSlot, touchTarget } from './size'
+import { controlMinHeight, iconSlot, touchTarget } from './size'
 
-/**
- * DropdownMenu：应用的操作菜单。
- *
- * 用法（trigger 必须是单个元素，并且自带可访问名——通常直接用 `<Button>`）：
- *
- * ```tsx
- * <DropdownMenu
- *   trigger={<Button size="icon" aria-label="账户菜单" icon={<UserIcon />} />}
- *   align="end"
- *   items={[
- *     { id: 'account', label: '账户设置', onSelect: () => router.push('/account') },
- *     { id: 'logout', label: '退出登录', danger: true, separator: true, onSelect: logout },
- *   ]}
- * />
- * ```
- *
- * 行为：trigger 上有 `aria-haspopup="menu"` / `aria-expanded`，面板 `role="menu"`、
- * 项 `role="menuitem"`；上下/Home/End 漫游、Enter/Space 激活、Esc 与外部
- * `pointerdown` 关闭并把焦点还给 trigger。表面 `rounded-popover` +
- * `shadow-dropdown` + `z-dropdown`；入场 `.motion-menu`，退场 `.motion-fade-out`。
- */
 export interface DropdownMenuItem {
   /** Stable key. Defaults to the array index. */
   id?: string
@@ -54,9 +33,9 @@ export interface DropdownMenuProps {
   side?: 'bottom' | 'top'
   /** Free node above the items (the signed-in address, a summary line…). */
   header?: ReactNode
-  /** Accessible name of the `role="menu"` panel. Falls back to no name. */
+  /** Accessible name of the `role="menu"` panel. */
   menuLabel?: string
-  /** Item hit targets: 40px (default) or 32px dense. */
+  /** Item hit targets: 36px (default) or 32px dense. */
   size?: 'sm' | 'md'
   /** Class for the positioning wrapper. */
   className?: string
@@ -77,13 +56,13 @@ const ITEM_BASE = [
 ].join(' ')
 
 const ITEM_TONE = {
-  default: 'not-disabled:hover:bg-tonal-hover not-disabled:active:bg-tonal-active',
+  default: 'not-disabled:hover:bg-tonal not-disabled:active:bg-tonal-active',
   danger: 'text-danger not-disabled:hover:bg-danger-soft',
 } as const
 
 const ITEM_SIZE = {
-  sm: `min-h-[var(--control-sm)] ${touchTarget}`,
-  md: `min-h-[var(--control-md)] ${touchTarget}`,
+  sm: `${controlMinHeight.sm} ${touchTarget}`,
+  md: `${controlMinHeight.md} ${touchTarget}`,
 } as const
 
 export function DropdownMenu({
@@ -108,7 +87,6 @@ export function DropdownMenu({
   const hoverCloseTimerRef = useRef<number | null>(null)
   const [internalOpen, setInternalOpen] = useState(false)
   const isOpen = open ?? internalOpen
-  // `mounted` 比 `isOpen` 多停留一个退场动画；计时器是 `animationend` 没触发时的兜底。
   const [mounted, setMounted] = useState(isOpen)
   const [closing, setClosing] = useState(false)
 
@@ -163,16 +141,13 @@ export function DropdownMenu({
 
   useEffect(() => clearHoverCloseTimer, [clearHoverCloseTimer])
 
-  // 打开后聚焦第一个可用项，键盘用户不必自己找入口（hover 模式下不抢占焦点）。
   useEffect(() => {
     if (!isOpen || !mounted || closing || triggerMode === 'hover') return
     const firstIndex = items.findIndex((item) => !item.disabled)
     if (firstIndex >= 0) itemRefs.current.get(firstIndex)?.focus()
-    // 刻意不依赖 `items`：打开期间的普通重渲染不能把焦点拽回第一项。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, mounted, closing, triggerMode])
 
-  // 点击/触摸外部关闭。用 document 监听，而不是铺一层全屏接球层。
   useEffect(() => {
     if (!isOpen) return
     function onPointerDown(event: PointerEvent) {
@@ -228,7 +203,6 @@ export function DropdownMenu({
         break
       case 'Escape':
       case 'Tab':
-        // Tab 不在菜单里漫游：直接离开并把焦点还给 trigger。
         event.preventDefault()
         close(true)
         break
@@ -244,7 +218,6 @@ export function DropdownMenu({
       return
     }
     if (isOpen || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return
-    // 方向键打开菜单并落到首项，是 APG 的既有交互。
     event.preventDefault()
     setOpen(true)
   }
@@ -304,6 +277,13 @@ export function DropdownMenu({
             'absolute z-dropdown flex w-56 flex-col gap-0.5 rounded-popover border border-border bg-surface p-1.5 shadow-dropdown',
             side === 'top' ? 'bottom-full mb-2' : 'top-full mt-2',
             align === 'end' ? 'right-0' : 'left-0',
+            side === 'top'
+              ? align === 'end'
+                ? 'origin-bottom-right'
+                : 'origin-bottom-left'
+              : align === 'end'
+                ? 'origin-top-right'
+                : 'origin-top-left',
             closing ? 'pointer-events-none motion-fade-out' : 'motion-menu',
             menuClassName,
           )}

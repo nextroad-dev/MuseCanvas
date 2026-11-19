@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowClockwiseIcon as Refresh } from '@phosphor-icons/react'
+import { ArrowClockwiseIcon } from '@phosphor-icons/react'
 import type { BootstrapCheckKey, SetupStatusResponse } from '@musecanvas/contracts'
-import { clientApi } from '@/shared/services/client-api'
+
 import { Alert, Badge, Button, iconSize } from '@/shared/components/ui'
 import { formatDateTime } from '@/shared/lib/format'
-import { setupQueryKeys } from '../../lib/setup-queries'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupSessionError } from '../../lib/setup-errors'
 import { maskConnectionValue } from '../../lib/setup-forms'
+import { setupQueryKeys } from '../../lib/setup-queries'
 import { SetupStepShell } from '../setup-step-shell'
 
 export interface BootstrapStepProps {
@@ -128,8 +129,8 @@ export function BootstrapStep({ status, onRefresh, onSessionLost }: BootstrapSte
       ) : null}
 
       {bootstrap ? (
-        <div className="flex flex-col gap-3">
-          <ul className="flex flex-col divide-y divide-border rounded-control bg-tonal px-4">
+        <div className="flex flex-col gap-2.5">
+          <ul className="flex flex-col divide-y divide-border rounded-control border border-border/70 bg-tonal px-4">
             {bootstrap.checks.map((check) => {
               const meta = CHECK_META[check.key]
               const badge = CHECK_BADGE[check.status]
@@ -162,9 +163,9 @@ export function BootstrapStep({ status, onRefresh, onSessionLost }: BootstrapSte
         </Alert>
       )}
 
-      <div className="flex flex-col gap-3 rounded-control bg-tonal p-4">
+      <div className="flex flex-col gap-3 rounded-control border border-border/70 bg-tonal p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-medium text-foreground">数据库连接</h3>
+          <h2 className="text-sm font-medium text-foreground">数据库连接</h2>
           {database ? (
             <Badge tone={database.reachable ? 'success' : 'danger'}>
               {database.reachable ? '可连接' : '不可连接'}
@@ -200,9 +201,9 @@ export function BootstrapStep({ status, onRefresh, onSessionLost }: BootstrapSte
 
         <div className="flex flex-wrap items-center gap-2">
           <Button
-            variant="secondary"
-            size="sm"
-            icon={<Refresh weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            variant="outline"
+            size="md"
+            leadingIcon={<ArrowClockwiseIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
             loading={refreshing}
             disabled={testDatabase.isPending}
             onClick={() => void refreshAll()}
@@ -210,8 +211,8 @@ export function BootstrapStep({ status, onRefresh, onSessionLost }: BootstrapSte
             重新检测
           </Button>
           <Button
-            variant="secondary"
-            size="sm"
+            variant="outline"
+            size="md"
             loading={testDatabase.isPending}
             disabled={refreshing}
             onClick={() => {

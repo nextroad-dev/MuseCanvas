@@ -3,7 +3,6 @@ import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { cn } from '@/shared/lib/cn'
 import { iconSize } from './size'
 
-/** Icon sizes from `--icon-*`: the spinner never invents a size. */
 const sizeClass = {
   xs: iconSize.xs,
   sm: iconSize.sm,
@@ -12,22 +11,16 @@ const sizeClass = {
 } as const
 
 export interface SpinnerProps {
-  /** `sm` (16px) sits inside a 40px control; `lg` is for page-level loading. */
+  /** `sm` (16px) sits inside standard controls; `lg` is for page-level loading. */
   size?: keyof typeof sizeClass
-  /**
-   * 给读屏的文字（`加载中`）。图形永远是装饰，忙碌状态靠这段文字或所属控件的
-   * `aria-busy` 播报。
-   */
+  /** 给读屏的文字（如 `加载中`）。图形本身为装饰。 */
   label?: string
   /** Swap the glyph without changing the behaviour contract. */
   icon?: PhosphorIcon
   className?: string
 }
 
-/**
- * 忙碌指示器。旋转来自 `.motion-spin`（globals.css 里的 token 时长），不用 Tailwind
- * 的 `animate-spin`；reduced-motion 下变成静止图形，状态仍然可读。
- */
+/** 忙碌指示器：旋转走 `.motion-spin` token，不使用 Tailwind `animate-spin`。 */
 export function Spinner({ size = 'sm', label, icon: Icon = Loader2, className }: SpinnerProps) {
   return (
     <>

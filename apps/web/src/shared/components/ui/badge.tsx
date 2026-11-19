@@ -6,9 +6,7 @@ export type BadgeTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 
 export type BadgeVariant = 'soft' | 'solid' | 'outline'
 
 /**
- * 徽标 / 状态胶囊（画板 02/03/07/08）：胶囊形、12px/500，状态色只在局部且始终
- * 伴随文字。默认 `soft`；实心仅用于操作按钮与一次性的“默认”标签，静态徽标不伪装
- * 成按钮。
+ * 徽标 / 状态胶囊：胶囊形、12px/500，状态色始终伴随文字。
  */
 const badgeClasses: Record<BadgeVariant, Record<BadgeTone, string>> = {
   soft: {
@@ -20,17 +18,15 @@ const badgeClasses: Record<BadgeVariant, Record<BadgeTone, string>> = {
     accent: 'bg-accent-soft text-accent-strong',
   },
   solid: {
-    // `on-*` 是实心色块经过对比度校验的前景配对。
-    // 中性实心 = “默认”/计数标签：主色底 + 反色文字。
     neutral: 'bg-primary text-on-primary',
-    success: 'bg-success text-on-success',
-    warning: 'bg-warning text-on-warning',
+    success: 'bg-success text-on-primary',
+    warning: 'bg-warning text-on-primary',
     danger: 'bg-danger text-on-danger',
-    info: 'bg-info text-on-info',
-    accent: 'bg-accent text-accent-strong',
+    info: 'bg-info text-on-primary',
+    accent: 'bg-accent text-on-primary',
   },
   outline: {
-    neutral: 'border border-border-strong text-foreground',
+    neutral: 'border border-border-control text-foreground',
     success: 'border border-success-border text-success',
     warning: 'border border-warning-border text-warning',
     danger: 'border border-danger-border text-danger',
@@ -58,7 +54,16 @@ export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   ref?: Ref<HTMLSpanElement>
 }
 
-export function Badge({ tone = 'neutral', variant = 'soft', icon, dot, className, ref, children, ...rest }: BadgeProps) {
+export function Badge({
+  tone = 'neutral',
+  variant = 'soft',
+  icon,
+  dot,
+  className,
+  ref,
+  children,
+  ...rest
+}: BadgeProps) {
   return (
     <span
       ref={ref}

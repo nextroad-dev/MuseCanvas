@@ -133,3 +133,37 @@ test('mobile nav backdrop closes explicitly while panel clicks retain overlay ta
   harness.render()
   assert.equal(dialogOptions.open, false)
 })
+
+test('Capabilities renders CSS grid accordion with accessible open state toggles', () => {
+  const harness = componentHarness(
+    new URL('../../../features/landing/components/capabilities.tsx', import.meta.url),
+    'Capabilities',
+    {
+      '@/shared/components/reveal': { Reveal: ({ children }) => children },
+      '@/features/landing/components/landing-frame': { LandingFrame: ({ children }) => children },
+      './landing-frame': { LandingFrame: ({ children }) => children },
+    },
+  )
+  let tree = harness.render()
+  const buttons = nodes(tree, (node) => node.type === 'button' && 'aria-expanded' in node.props)
+  assert.equal(buttons.length, 6)
+  assert.equal(buttons[0].props['aria-expanded'], true)
+  assert.equal(buttons[1].props['aria-expanded'], false)
+
+  const accordions = nodes(tree, (node) => node.props.className?.includes('motion-accordion') && !node.props.className?.includes('motion-accordion-inner'))
+  assert.equal(accordions.length, 6)
+  assert.equal(accordions[0].props['data-open'], 'true')
+  assert.equal(accordions[1].props['data-open'], 'false')
+
+  buttons[1].props.onClick()
+  tree = harness.render()
+  const updated = nodes(tree, (node) => node.props.className?.includes('motion-accordion') && !node.props.className?.includes('motion-accordion-inner'))
+  assert.equal(updated[0].props['data-open'], 'false')
+  assert.equal(updated[1].props['data-open'], 'true')
+})
+
+test('interaction pressable never overrides motion-press transform transition with transition-colors', async () => {
+  const { pressable, motionPress } = await import('./interaction.ts')
+  assert.equal(pressable, motionPress)
+  assert.doesNotMatch(pressable, /\btransition-colors\b/)
+})

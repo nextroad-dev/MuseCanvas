@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ArrowUpIcon, FlowArrowIcon } from '@phosphor-icons/react/ssr'
 import { Reveal } from '@/shared/components/reveal'
-import { iconSize } from '@/shared/components/ui/size'
+import { Badge, Card, SectionHeader, controlSquare, iconSize } from '@/shared/components/ui'
 import { SHOWCASE_ITEMS } from '@/shared/lib/showcase'
 import { cn } from '@/shared/lib/cn'
 import { LandingFrame } from './landing-frame'
@@ -10,17 +10,14 @@ import { ShowcaseFrame } from './showcase-frame'
 const INPUT_IMAGE = SHOWCASE_ITEMS.find((item) => item.file === 'ratio-3x4.webp')
 const RESULT_IMAGES = SHOWCASE_ITEMS.slice(0, 5)
 
-/** 参数 mock 里的小标签（11px 大写字距）。 */
 const mockLabel = 'text-overline text-muted-foreground'
-
-/** 参数 mock 里的胶囊选项。 */
 const mockChip = 'rounded-pill bg-tonal px-2.5 py-0.5 text-foreground'
 const mockChipActive = 'rounded-pill bg-accent-soft px-2.5 py-0.5 font-medium text-accent'
 
-/** 步骤一：输入框 + 参考图 + 发送按钮的示意。 */
+/** 步骤一：输入框 + 参考图 + 发送按钮示意。 */
 function PromptMock() {
   return (
-    <div className="flex flex-col gap-3.5 rounded-card border border-border bg-surface p-4 shadow-soft">
+    <Card variant="surface" density="compact" className="gap-3.5">
       <p className="m-0 text-sm leading-relaxed text-foreground">
         清晨的江南水乡，薄雾笼罩水面，一艘乌篷船停在青石台阶旁，柔和逆光，胶片质感
       </p>
@@ -31,33 +28,37 @@ function PromptMock() {
               file={INPUT_IMAGE.file}
               label={INPUT_IMAGE.label}
               decorative
-              sizes="32px"
-              className="size-8 shrink-0 rounded-control"
+              className={cn(controlSquare.sm, 'shrink-0 rounded-control')}
             />
           ) : (
-            <span aria-hidden="true" className="size-8 shrink-0 rounded-control bg-tonal" />
+            <span aria-hidden="true" className={cn(controlSquare.sm, 'shrink-0 rounded-control bg-tonal')} />
           )}
           <span className="text-xs text-muted-foreground">参考图 1/4</span>
         </div>
-        <span className="inline-flex size-8 items-center justify-center rounded-pill bg-primary text-on-primary">
-          <ArrowUpIcon weight="bold" aria-hidden="true" className="size-3.5" />
+        <span
+          className={cn(
+            'inline-flex items-center justify-center rounded-control bg-primary text-on-primary',
+            controlSquare.sm,
+          )}
+        >
+          <ArrowUpIcon weight="bold" aria-hidden="true" className={iconSize.sm} />
         </span>
       </div>
-    </div>
+    </Card>
   )
 }
 
-/** 步骤二：模型 / 画幅 / 张数参数面板的示意。 */
+/** 步骤二：模型 / 画幅 / 张数参数面板示意。 */
 function ParamsMock() {
   return (
-    <div className="flex flex-col gap-3.5 rounded-card border border-border bg-surface p-4 shadow-soft">
+    <Card variant="surface" density="compact" className="gap-3.5">
       <div className="flex flex-col gap-1.5">
         <span className={mockLabel}>模型</span>
-        <div className="flex gap-1 rounded-pill bg-tonal p-1 text-xs">
-          <span className="flex-1 rounded-pill bg-surface px-2 py-1 text-center font-medium shadow-soft">
+        <div className="flex gap-1 rounded-control bg-tonal p-1 text-xs">
+          <span className="flex-1 rounded-control bg-surface px-2 py-1 text-center font-medium shadow-soft">
             图像 · 默认模型
           </span>
-          <span className="flex-1 rounded-pill px-2 py-1 text-center text-muted-foreground">视频</span>
+          <span className="flex-1 rounded-control px-2 py-1 text-center text-muted-foreground">视频</span>
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
@@ -78,11 +79,11 @@ function ParamsMock() {
           <span className={mockChip}>4</span>
         </div>
       </div>
-    </div>
+    </Card>
   )
 }
 
-/** 步骤三：六宫格结果 + 一张生成中的示意。 */
+/** 步骤三：六宫格结果 + 一张生成中占位示意。 */
 function ResultsMock() {
   return (
     <div className="grid h-full grid-cols-3 grid-rows-2 gap-2">
@@ -92,8 +93,10 @@ function ResultsMock() {
           file={item.file}
           label={item.label}
           decorative
-          sizes="(min-width: 960px) 120px, 30vw"
-          className={cn('size-full rounded-control', index === 2 && 'ring-2 ring-accent ring-offset-2 ring-offset-canvas')}
+          className={cn(
+            'size-full rounded-control border border-border',
+            index === 2 && 'ring-2 ring-accent ring-offset-2 ring-offset-canvas',
+          )}
         />
       ))}
       <span className="flex items-center justify-center rounded-control border border-dashed border-border-control bg-surface font-mono text-overline text-muted-foreground">
@@ -117,46 +120,51 @@ const STEPS: WorkflowStep[] = [
 ]
 
 /**
- * 流程区：白底 section，三步编号卡片 + 上方示意块。
- * 示意块是纯展示，整块 aria-hidden，读屏只读步骤编号、标题与说明。
+ * 流程区：白底 section，三步编号卡片 + 上方纯展示示意块。
+ * 示意块设置 `aria-hidden`，辅助技术仅朗读步骤编号、标题与说明。
  */
 export function Workflow() {
   return (
     <Reveal>
       <section id="workflow" aria-labelledby="flow-title" className="scroll-mt-20 border-t border-border bg-surface">
         <LandingFrame className="flex flex-col gap-12 py-20 md:py-28">
-          <div className="flex flex-wrap items-end justify-between gap-6">
-            <div className="flex flex-col items-start gap-3">
-              <span className="inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-3 py-1 text-caption font-medium text-accent">
-                <FlowArrowIcon weight="duotone" aria-hidden="true" className={iconSize.sm} />
+          <div className="flex flex-col gap-4">
+            <div>
+              <Badge
+                tone="accent"
+                variant="soft"
+                icon={<FlowArrowIcon weight="duotone" />}
+                className="gap-1.5 px-3 py-1 text-caption"
+              >
                 工作流程
-              </span>
-              <h2 id="flow-title" className="font-display text-headline text-foreground">
-                流程
-              </h2>
-              <p className="text-subtitle text-muted-foreground">三步，出图</p>
+              </Badge>
             </div>
-            <p className="m-0 max-w-[380px] text-copy text-muted-foreground">
-              任务提交后自动排队生成，进度可随时查看。
-            </p>
+            <SectionHeader
+              id="flow-title"
+              title={<span className="block font-display text-headline text-foreground">流程</span>}
+              description="三步，出图。任务提交后自动排队生成，进度可随时查看。"
+            />
           </div>
 
           <ol className="m-0 grid list-none grid-cols-1 gap-6 p-0 sm:grid-cols-2 lg:grid-cols-3">
             {STEPS.map((step) => (
-              <li
-                key={step.title}
-                className="flex flex-col gap-6 rounded-panel border border-border bg-canvas p-5"
-              >
-                <div aria-hidden="true" className="flex h-[240px] flex-col justify-center">
-                  {step.mock}
-                </div>
-                <div className="flex flex-col items-start gap-2.5 px-1">
-                  <span className="rounded-pill bg-accent-soft px-2.5 py-0.5 font-mono text-caption font-medium text-accent">
-                    STEP {step.step}
-                  </span>
-                  <h3 className="font-display text-statement text-foreground">{step.title}</h3>
-                  <p className="text-sm leading-relaxed text-muted-foreground">{step.description}</p>
-                </div>
+              <li key={step.title} className="flex">
+                <Card
+                  variant="outline"
+                  density="none"
+                  className="w-full gap-6 rounded-panel bg-canvas p-5 transition-[transform,box-shadow] duration-[var(--motion-base)] ease-out hover:-translate-y-0.5 hover:shadow-soft"
+                >
+                  <div aria-hidden="true" className="flex h-60 flex-col justify-center">
+                    {step.mock}
+                  </div>
+                  <div className="flex flex-col items-start gap-2.5 px-1">
+                    <Badge tone="accent" variant="soft" className="font-mono text-caption">
+                      STEP {step.step}
+                    </Badge>
+                    <h3 className="m-0 font-display text-statement text-foreground">{step.title}</h3>
+                    <p className="m-0 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
+                  </div>
+                </Card>
               </li>
             ))}
           </ol>

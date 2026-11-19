@@ -13,7 +13,13 @@ export const MOTION_FALLBACK_MS = {
   fast: 120,
   base: 180,
   slow: 240,
+  springSnappy: 240,
+  springGentle: 300,
 } as const
+
+/** 兜底缓动与 `--ease-spring-gentle` 一致。 */
+export const MOTION_SPRING_GENTLE_FALLBACK =
+  'linear(0, 0.061, 0.1928, 0.3446, 0.4895, 0.6153, 0.7182, 0.7987, 0.8596, 0.9045, 0.9366, 0.959, 0.9744, 0.9846, 0.9912, 0.9954, 1)'
 
 /** 退出计时器的兜底值（`--motion-exit` 的等价时间）。 */
 export const MODAL_EXIT_MS = MOTION_FALLBACK_MS.fast
@@ -56,6 +62,16 @@ export function readMotionEasing(token: string, fallback: string): string {
     return raw || fallback
   } catch {
     return fallback
+  }
+}
+
+/** 用户是否要求减少动效；SSR 安全（默认 false）。 */
+export function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return false
   }
 }
 

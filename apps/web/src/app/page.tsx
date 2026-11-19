@@ -1,5 +1,4 @@
-import { PublicHeader } from '@/shared/components/public-header'
-import { SiteFooter } from '@/shared/components/site-footer'
+import { PublicShell } from '@/shared/components/shells'
 import { Capabilities, CtaSection, FeaturesStrip, Hero, Workflow, WorksGallery } from '@/features/landing'
 
 export const dynamic = 'force-static'
@@ -11,24 +10,18 @@ export const metadata = {
 }
 
 /**
- * 落地页（画板 01）：顶栏 → 首屏 → 作品 → 平台特性 → 能力 → 流程 → 深色收尾 → 页脚。
- *
- * 整页 `force-static`，全部内容在服务端输出：没有 cookies()/headers()，
- * 唯一的 client island 是能力手风琴与移动端菜单，无 JS 时其余内容照样可见。
+ * 落地页（/）：严格 `force-static` SSG，无 cookies()/headers()。
+ * 由 `PublicShell`（`width="full"`）承接统一顶栏与页脚，各营销分节自带通栏背景与内部容器。
  */
 export default function HomePage() {
   return (
-    <div className="flex min-h-screen flex-col bg-canvas text-foreground">
-      <PublicHeader />
-      <main id="main" className="flex-1">
-        <Hero />
-        <WorksGallery />
-        <FeaturesStrip />
-        <Capabilities />
-        <Workflow />
-        <CtaSection />
-      </main>
-      <SiteFooter />
-    </div>
+    <PublicShell current="home" width="full">
+      <Hero />
+      <WorksGallery />
+      <FeaturesStrip />
+      <Capabilities />
+      <Workflow />
+      <CtaSection />
+    </PublicShell>
   )
 }

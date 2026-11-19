@@ -7,8 +7,6 @@
 import { cookies } from 'next/headers'
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import type {
-  CanvasDto,
-  CanvasListPageDto,
   PublicModelDto,
   SetupStatusResponse,
 } from '@musecanvas/contracts'
@@ -173,23 +171,6 @@ export async function getJobs(): Promise<GenerationJobListDto> {
 export async function getJob(id: string): Promise<GenerationJobDto | null> {
   try {
     return await serverApiFetch<GenerationJobDto>(API_ENDPOINTS.jobs.detail(id))
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) return null
-    throw error
-  }
-}
-
-export async function getCanvases(params?: {
-  limit?: number
-  cursor?: string
-}): Promise<CanvasListPageDto> {
-  return serverApiFetch<CanvasListPageDto>(API_ENDPOINTS.canvases.list, { params })
-}
-
-/** 画布详情；不存在返回 `null`（RSC 页面据此 `notFound()`）。 */
-export async function getCanvas(id: string): Promise<CanvasDto | null> {
-  try {
-    return await serverApiFetch<CanvasDto>(API_ENDPOINTS.canvases.detail(id))
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) return null
     throw error

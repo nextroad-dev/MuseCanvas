@@ -1,49 +1,52 @@
 'use client'
 
-// 账户页客户端岛：账户信息（RSC 已守卫并给出首屏数据）+ 第三方绑定管理 + 退出登录。
-// 服务端状态全部走 TanStack Query（useAccount / useOAuthProviders），这里只持有
-// 「待确认解绑的 provider」这类易失 UI 态。
+// 账户设置页客户端岛：个人身份（RSC 已守卫并给出首屏数据）+ 第三方账号绑定 + 会话与安全。
+// 服务端状态全部走 TanStack Query（useAccount / useOAuthProviders），这里仅持有
+// 「待确认解绑的 provider」与「退出中」这类易失 UI 态。
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeftIcon,
-  CalendarIcon as Calendar,
+  ArrowUpRightIcon,
+  CalendarIcon,
+  CheckCircleIcon,
   EnvelopeSimpleIcon,
-  LinkSimpleBreakIcon as Unlink,
-  LinkSimpleIcon as LinkIcon,
+  LinkSimpleBreakIcon,
+  LinkSimpleIcon,
+  ProhibitIcon,
   ShieldCheckIcon,
-  SignOutIcon as SignOut,
-  UserCircleIcon,
+  SignOutIcon,
 } from '@phosphor-icons/react'
 
-import { clientApi } from '@/shared/services/client-api'
-import { useAccount } from '@/shared/hooks/useAccount'
-import { oauthLinkUrl, useAuth, useOAuthProviders } from '@/shared/hooks/useAuth'
-import { queryKeys } from '@/shared/hooks/query-keys'
-import { APP_ROUTES } from '@/shared/lib/app-routes'
-import { cn } from '@/shared/lib/cn'
-import { formatDate, formatDateTime } from '@/shared/lib/format'
-import { useAuthUiStore } from '@/shared/stores/auth-ui-store'
-import type { AccountDto, OAuthProvider } from '@/shared/types'
+import { GithubIcon, GoogleIcon } from '@/features/auth/components/brand-icons'
 import {
   Alert,
+  Avatar,
   Badge,
   Button,
   Card,
   CardBody,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
   Dialog,
   PageHeader,
-  buttonVariants,
+  controlSquare,
   iconSize,
   useToast,
 } from '@/shared/components/ui'
-import { GithubIcon, GoogleIcon } from '@/features/auth/components/brand-icons'
+import { queryKeys } from '@/shared/hooks/query-keys'
+import { useAccount } from '@/shared/hooks/useAccount'
+import { oauthLinkUrl, useAuth, useOAuthProviders } from '@/shared/hooks/useAuth'
+import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { cn } from '@/shared/lib/cn'
+import { formatDate, formatDateTime } from '@/shared/lib/format'
+import { clientApi } from '@/shared/services/client-api'
+import { useAuthUiStore } from '@/shared/stores/auth-ui-store'
+import type { AccountDto, OAuthProvider } from '@/shared/types'
 import { describeAccountCallback } from '../lib/account-callback'
 
 /** 展示顺序固定，避免后端返回顺序变化时按钮跳位。 */
@@ -134,35 +137,15 @@ export function AccountView({ initialAccount, callback }: AccountViewProps) {
   const providersUnavailable = providersQuery.isError && visibleProviders.length === 0
 
   const user = account.user
+  const isAdmin = user.role === 'admin'
+  const isActive = user.status === 'active'
+  const StatusIcon = isActive ? CheckCircleIcon : ProhibitIcon
 
   return (
-    <div className="mx-auto flex w-full max-w-[var(--content-narrow)] flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
-        meta={
-          <nav aria-label="面包屑" className="mb-1 flex items-center gap-1.5 text-ui text-muted-foreground">
-            <Link
-              href={APP_ROUTES.generate}
-              className="inline-flex items-center gap-1 rounded-control transition-colors hover:text-foreground"
-            >
-              <ArrowLeftIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
-              <span>返回操作台</span>
-            </Link>
-            <span aria-hidden="true">/</span>
-            <span className="text-foreground">账户设置</span>
-          </nav>
-        }
-        title="账户"
-        description="查看登录身份、管理第三方账号关联与安全会话。"
-        actions={
-          <Button
-            variant="outline"
-            icon={<SignOut weight="bold" aria-hidden="true" />}
-            loading={loggingOut}
-            onClick={() => void handleLogout()}
-          >
-            退出登录
-          </Button>
-        }
+        title="账户设置"
+        description="管理登录身份、第三方账号关联与当前会话安全。"
       />
 
       {accountQuery.isError ? (
@@ -179,167 +162,225 @@ export function AccountView({ initialAccount, callback }: AccountViewProps) {
         </Alert>
       ) : null}
 
-      <Card className="rounded-panel border border-border shadow-soft">
-        <CardHeader className="border-b border-border/70 pb-5">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex min-w-0 items-center gap-3.5">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-card bg-accent-soft text-accent">
-                <UserCircleIcon weight="duotone" aria-hidden="true" className={iconSize.lg} />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <Card className="lg:col-span-7">
+          <CardHeader className="border-b border-border/70 pb-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3.5">
+                <Avatar
+                  size="lg"
+                  initial={user.email}
+                  decorative
+                  className="bg-tonal-selected text-accent-strong"
+                />
+                <div className="min-w-0">
+                  <CardTitle level={2}>个人身份</CardTitle>
+                  <CardDescription className="break-words [overflow-wrap:anywhere]">
+                    {user.email || '未设置邮箱'}
+                  </CardDescription>
+                </div>
               </div>
-              <div className="min-w-0">
-                <CardTitle level={2}>账户信息</CardTitle>
-                <CardDescription>登录身份与注册信息，此处仅供查看。</CardDescription>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone={isAdmin ? 'info' : 'neutral'}>
+                  {isAdmin ? '管理员' : '普通用户'}
+                </Badge>
+                <Badge dot tone={isActive ? 'success' : 'danger'}>
+                  {isActive ? '正常' : '已停用'}
+                </Badge>
               </div>
             </div>
-            <Badge tone={user.role === 'admin' ? 'info' : 'neutral'}>
-              {user.role === 'admin' ? '管理员' : '普通用户'}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardBody>
-          <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="flex min-w-0 flex-col gap-1.5 rounded-card border border-border bg-canvas/60 p-4 sm:col-span-2">
-              <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <EnvelopeSimpleIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
-                <span>登录邮箱</span>
-              </dt>
-              <dd className="break-words text-compact font-medium text-foreground [overflow-wrap:anywhere]">
-                {user.email || '—'}
-              </dd>
-            </div>
-            <div className="flex flex-col gap-1.5 rounded-card border border-border bg-canvas/60 p-4">
-              <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <ShieldCheckIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
-                <span>账户角色</span>
-              </dt>
-              <dd className="text-sm font-medium text-foreground">
-                {user.role === 'admin' ? '站点管理员' : '标准创作者'}
-              </dd>
-            </div>
-            <div className="flex flex-col gap-1.5 rounded-card border border-border bg-canvas/60 p-4">
-              <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Calendar weight="bold" aria-hidden="true" className={iconSize.xs} />
-                <span>注册时间</span>
-              </dt>
-              <dd className="font-mono text-sm tabular-nums text-foreground">
-                {formatDateTime(user.createdAt)}
-              </dd>
-            </div>
-          </dl>
-        </CardBody>
-      </Card>
+          </CardHeader>
 
-      <Card className="rounded-panel border border-border shadow-soft">
-        <CardHeader className="border-b border-border/70 pb-5">
-          <CardTitle level={2}>第三方账号</CardTitle>
-          <CardDescription>
-            绑定后可直接用第三方账号登录 MuseCanvas。解绑需要二次确认，之后可用邮箱验证码继续登录。
-          </CardDescription>
-        </CardHeader>
-        <CardBody className="flex flex-col gap-3">
-          {providersLoading ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              正在读取可绑定的第三方登录方式…
-            </p>
+          <CardBody>
+            <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex min-w-0 flex-col gap-1.5 rounded-control border border-border/70 bg-canvas/60 px-3.5 py-3">
+                <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <EnvelopeSimpleIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
+                  <span>登录邮箱</span>
+                </dt>
+                <dd className="break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">
+                  {user.email || '—'}
+                </dd>
+              </div>
+
+              <div className="flex min-w-0 flex-col gap-1.5 rounded-control border border-border/70 bg-canvas/60 px-3.5 py-3">
+                <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <ShieldCheckIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
+                  <span>账户角色</span>
+                </dt>
+                <dd className="text-sm font-medium text-foreground">
+                  {isAdmin ? '管理员' : '普通用户'}
+                </dd>
+              </div>
+
+              <div className="flex min-w-0 flex-col gap-1.5 rounded-control border border-border/70 bg-canvas/60 px-3.5 py-3">
+                <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <StatusIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
+                  <span>账户状态</span>
+                </dt>
+                <dd className="text-sm font-medium text-foreground">
+                  {isActive ? '正常' : '已停用'}
+                </dd>
+              </div>
+
+              <div className="flex min-w-0 flex-col gap-1.5 rounded-control border border-border/70 bg-canvas/60 px-3.5 py-3">
+                <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <CalendarIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
+                  <span>注册时间</span>
+                </dt>
+                <dd className="font-mono text-sm tabular-nums text-foreground">
+                  {formatDateTime(user.createdAt)}
+                </dd>
+              </div>
+            </dl>
+          </CardBody>
+
+          {isAdmin ? (
+            <CardFooter className="border-t border-border/70 pt-4">
+              <p className="text-ui text-muted-foreground">
+                你拥有站点管理权限，可前往后台管理模型、用户与系统配置。
+              </p>
+              <Button asChild variant="outline" size="sm">
+                <Link href={APP_ROUTES.admin}>
+                  <ShieldCheckIcon weight="bold" aria-hidden="true" />
+                  <span>前往管理后台</span>
+                  <ArrowUpRightIcon weight="bold" aria-hidden="true" />
+                </Link>
+              </Button>
+            </CardFooter>
           ) : null}
+        </Card>
 
-          {providersUnavailable ? (
-            <Alert
-              tone="warning"
-              title="暂时无法读取第三方登录配置"
-              action={
-                <Button variant="secondary" size="sm" onClick={() => void providersQuery.refetch()}>
-                  重试
-                </Button>
-              }
-            >
-              邮箱登录不受影响。稍后重试即可管理第三方绑定。
-            </Alert>
-          ) : null}
+        <Card className="lg:col-span-5">
+          <CardHeader className="border-b border-border/70 pb-4">
+            <CardTitle level={2}>第三方账号绑定</CardTitle>
+            <CardDescription>
+              绑定后可直接用第三方账号登录 MuseCanvas。解绑需要二次确认，之后仍可用邮箱验证码继续登录。
+            </CardDescription>
+          </CardHeader>
 
-          {!providersLoading && !providersUnavailable && visibleProviders.length === 0 ? (
-            <p className="rounded-card border border-border bg-canvas/60 p-4 text-sm text-muted-foreground">
-              当前没有启用第三方登录方式。需要时请让站点管理员在后台开启 GitHub 或 Google 登录。
-            </p>
-          ) : null}
+          <CardBody className="gap-3">
+            {providersLoading ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                正在读取可绑定的第三方登录方式…
+              </p>
+            ) : null}
 
-          {visibleProviders.map((provider) => {
-            const meta = PROVIDERS[provider]
-            const identity = identityOf(provider)
-            const Icon = meta.Icon
-            const linkedAt = identity?.linkedAt ? formatDate(identity.linkedAt) : null
-            return (
-              <div
-                key={provider}
-                className="flex flex-wrap items-center justify-between gap-4 rounded-card border border-border bg-canvas/60 p-4 transition-colors hover:bg-surface-hover"
+            {providersUnavailable ? (
+              <Alert
+                tone="warning"
+                title="暂时无法读取第三方登录配置"
+                action={
+                  <Button variant="secondary" size="sm" onClick={() => void providersQuery.refetch()}>
+                    重试
+                  </Button>
+                }
               >
-                <div className="flex min-w-0 flex-1 basis-48 items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-control border border-border bg-surface text-foreground">
-                    <Icon className={cn('shrink-0', iconSize.md)} />
-                  </div>
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-medium text-foreground">{meta.label}</p>
-                      {identity ? <Badge tone="success">已绑定</Badge> : <Badge tone="neutral">未绑定</Badge>}
+                邮箱登录不受影响。稍后重试即可管理第三方绑定。
+              </Alert>
+            ) : null}
+
+            {!providersLoading && !providersUnavailable && visibleProviders.length === 0 ? (
+              <p className="py-1 text-sm text-muted-foreground">
+                当前没有启用第三方登录方式。需要时请让站点管理员在后台开启 GitHub 或 Google 登录。
+              </p>
+            ) : null}
+
+            {visibleProviders.length > 0 ? (
+              <div className="divide-y divide-border/70">
+                {visibleProviders.map((provider) => {
+                  const meta = PROVIDERS[provider]
+                  const identity = identityOf(provider)
+                  const Icon = meta.Icon
+                  const linkedAt = identity?.linkedAt ? formatDate(identity.linkedAt) : null
+                  return (
+                    <div
+                      key={provider}
+                      className="flex flex-wrap items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
+                    >
+                      <div className="flex min-w-0 flex-1 basis-44 items-start gap-3">
+                        <div
+                          className={cn(
+                            'flex shrink-0 items-center justify-center rounded-control border border-border bg-canvas text-foreground',
+                            controlSquare.md,
+                          )}
+                        >
+                          <Icon className={cn('shrink-0', iconSize.md)} />
+                        </div>
+                        <div className="flex min-w-0 flex-1 flex-col gap-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-medium text-foreground">{meta.label}</p>
+                            {identity ? <Badge tone="success">已绑定</Badge> : <Badge tone="neutral">未绑定</Badge>}
+                          </div>
+                          {identity ? (
+                            <p className="break-words text-ui text-muted-foreground [overflow-wrap:anywhere]">
+                              {identity.email || identity.displayName || '已授权'}
+                              {linkedAt ? ` · 绑定于 ${linkedAt}` : ''}
+                            </p>
+                          ) : (
+                            <p className="text-ui text-muted-foreground">绑定后可直接用它登录。</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-2">
+                        {identity ? (
+                          <Button
+                            variant="danger-ghost"
+                            size="sm"
+                            leadingIcon={<LinkSimpleBreakIcon weight="bold" aria-hidden="true" />}
+                            onClick={() => setPendingUnlink(provider)}
+                          >
+                            解除绑定
+                          </Button>
+                        ) : (
+                          <Button asChild variant="outline" size="sm">
+                            <a href={oauthLinkUrl(provider)}>
+                              <LinkSimpleIcon weight="bold" aria-hidden="true" />
+                              <span>绑定账号</span>
+                            </a>
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    {identity ? (
-                      <p className="break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">
-                        {identity.email || identity.displayName || '已授权'}
-                        {linkedAt ? ` · 绑定于 ${linkedAt}` : ''}
-                      </p>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">绑定后可直接用它登录。</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-2">
-                  {identity ? (
-                    <Button
-                      variant="danger-ghost"
-                      size="md"
-                      icon={<Unlink weight="bold" aria-hidden="true" />}
-                      onClick={() => setPendingUnlink(provider)}
-                    >
-                      解绑
-                    </Button>
-                  ) : (
-                    <a
-                      href={oauthLinkUrl(provider)}
-                      className={cn(buttonVariants({ variant: 'secondary', size: 'md' }), 'gap-2')}
-                    >
-                      <LinkIcon weight="bold" aria-hidden="true" className={iconSize.sm} />
-                      绑定账号
-                    </a>
-                  )}
-                </div>
+                  )
+                })}
               </div>
-            )
-          })}
-        </CardBody>
-      </Card>
+            ) : null}
+          </CardBody>
+        </Card>
 
-      <Card className="rounded-panel border border-border shadow-soft">
-        <CardHeader className="border-b border-border/70 pb-5">
-          <CardTitle level={2}>会话与安全</CardTitle>
-          <CardDescription>
-            当前设备通过加密会话凭证保持登录状态。退出后将清除本机登录态并返回登录页。
-          </CardDescription>
-        </CardHeader>
-        <CardBody className="flex flex-wrap items-center justify-between gap-4">
-          <p className="text-sm text-muted-foreground">
-            如需切换账号或在公共设备上结束使用，请安全退出登录。
-          </p>
-          <Button
-            variant="outline"
-            icon={<SignOut weight="bold" aria-hidden="true" />}
-            loading={loggingOut}
-            onClick={() => void handleLogout()}
-          >
-            退出当前会话
-          </Button>
-        </CardBody>
-      </Card>
+        <Card className="lg:col-span-12">
+          <CardHeader className="border-b border-border/70 pb-4">
+            <CardTitle level={2}>会话与安全</CardTitle>
+            <CardDescription>
+              当前设备通过加密会话凭证保持登录状态。退出后将清除本机登录态并返回登录页。
+            </CardDescription>
+          </CardHeader>
+
+          <CardBody>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 flex-col gap-1">
+                <p className="text-sm font-medium text-foreground">退出当前设备</p>
+                <p className="text-ui text-muted-foreground">
+                  如需切换账号或在公共设备上结束使用，请安全退出当前会话。
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                leadingIcon={<SignOutIcon weight="bold" aria-hidden="true" />}
+                loading={loggingOut}
+                onClick={() => void handleLogout()}
+                className="self-start sm:self-auto"
+              >
+                退出当前会话
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+
       <Dialog
         open={pendingUnlink !== null}
         onClose={() => {

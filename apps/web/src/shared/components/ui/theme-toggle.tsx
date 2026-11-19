@@ -1,15 +1,18 @@
 'use client'
 
-import { Monitor, Moon, Sun } from '@phosphor-icons/react'
+import { MonitorIcon, MoonIcon, SunIcon } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
+import { flushSync } from 'react-dom'
 
 import { cn } from '@/shared/lib/cn'
+import { prefersReducedMotion } from '@/shared/lib/motion'
 import { IconButton } from './button'
+import { iconSize } from './size'
 
 /** 三态主题：浅色 → 深色 → 跟随系统（循环）。 */
 export type ThemeMode = 'light' | 'dark' | 'system'
 
-/** 与 `shared/components/theme-boot-script.tsx` 的内联脚本共用同一个键。 */
+/** 与 `shared/components/theme-boot-script.tsx` 共用同一持久化键。 */
 const STORAGE_KEY = 'musecanvas-theme'
 
 const MODES: readonly ThemeMode[] = ['light', 'dark', 'system']
@@ -21,9 +24,9 @@ const MODE_LABEL: Record<ThemeMode, string> = {
 }
 
 const MODE_ICON = {
-  light: Sun,
-  dark: Moon,
-  system: Monitor,
+  light: SunIcon,
+  dark: MoonIcon,
+  system: MonitorIcon,
 } as const
 
 function readStoredMode(): ThemeMode {
@@ -32,7 +35,7 @@ function readStoredMode(): ThemeMode {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (raw === 'light' || raw === 'dark' || raw === 'system') return raw
   } catch {
-    /* localStorage 被禁用（隐私模式 / 沙箱 iframe）时按 system 处理 */
+    /* 隐私模式或禁用 localStorage 时按 system 处理 */
   }
   return 'system'
 }
@@ -42,10 +45,6 @@ function systemPrefersDark(): boolean {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
 }
 
-/**
- * 把主题模式落到 `<html>`：`dark` class 驱动 CSS token，`data-theme` 供 QA/e2e
- * 读取，`color-scheme` 让滚动条等原生控件同帧切换。规则与首帧启动脚本一致。
- */
 function applyMode(mode: ThemeMode) {
   const resolved: ThemeMode = mode === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : mode
   const root = document.documentElement
@@ -55,11 +54,7 @@ function applyMode(mode: ThemeMode) {
 }
 
 /**
- * 主题切换按钮：36×36（`--control-compact`）、`rounded-control`、ghost 反馈。
- *
- * hydration 策略：首帧一律渲染 `system` 图标（与启动脚本的默认值一致，SSR 与
- * 首次 CSR 输出相同），挂载后再读取 localStorage 并把图标换成真实状态；`system`
- * 模式下监听系统外观变化，保持与操作系统同步。
+ * 主题切换按钮：36×36（`size="icon"` = `--control-md`）、`rounded-control`、ghost 反馈。
  */
 export function ThemeToggle({ className }: { className?: string }) {
   const [mode, setMode] = useState<ThemeMode>('system')
@@ -83,13 +78,26 @@ export function ThemeToggle({ className }: { className?: string }) {
 
   const cycle = () => {
     const next = MODES[(MODES.indexOf(mode) + 1) % MODES.length]
-    setMode(next)
     try {
       window.localStorage.setItem(STORAGE_KEY, next)
     } catch {
-      /* 存储失败只影响下次进入，当前会话仍然即时生效 */
+      /* 存储失败只影响下次进入 */
     }
-    applyMode(next)
+    const commit = () => {
+      setMode(next)
+      applyMode(next)
+    }
+    const doc =
+      typeof document !== 'undefined'
+        ? (document as Document & { startViewTransition?: (cb: () => void) => unknown })
+        : null
+    if (doc && typeof doc.startViewTransition === 'function' && !prefersReducedMotion()) {
+      doc.startViewTransition(() => {
+        flushSync(commit)
+      })
+      return
+    }
+    commit()
   }
 
   const Icon = MODE_ICON[mode]
@@ -100,9 +108,10 @@ export function ThemeToggle({ className }: { className?: string }) {
       aria-label="切换主题"
       title={title}
       variant="ghost"
-      icon={<Icon size={18} aria-hidden="true" />}
+      size="icon"
+      icon={<Icon key={mode} weight="regular" aria-hidden="true" className={cn(iconSize.sm, 'motion-icon-swap')} />}
       onClick={cycle}
-      className={cn('size-[var(--control-compact)]', className)}
+      className={cn('text-muted-foreground hover:text-foreground', className)}
     />
   )
 }

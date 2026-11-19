@@ -4,7 +4,7 @@
 // 分工：本文件负责「画幅/张数/时长等参数值 → 规范化请求体」，
 // 不复制后端 descriptor 校验规则（合法性由 contracts 校验器与 API 共同保证）。
 
-import type { CreateGenerationRequest, GenerationInputItem } from '@musecanvas/contracts'
+import type { GenerationInputItem } from '@musecanvas/contracts'
 
 export const DEFAULT_GENERATION_COUNT = 1
 /** generation_jobs.max_count 的历史 CHECK 上限（1..10）。 */
@@ -175,29 +175,6 @@ export function normalizeParameters(
     }
   }
   return Object.keys(output).length > 0 ? output : undefined
-}
-
-export interface GenerationRequestInput {
-  modelId: string
-  prompt: string
-  parameters?: Record<string, unknown> | null
-  inputs?: Array<{ uploadId?: string | null; assetId?: string | null; role?: string | null }> | null
-  idempotencyKey?: string
-  inputLanguage?: string
-}
-
-/** 构造 `POST /api/generations` 请求体（prompt 去首尾空白，输入按序重排）。 */
-export function toGenerationRequest(input: GenerationRequestInput): CreateGenerationRequest {
-  const parameters = normalizeParameters(input.parameters) ?? {}
-  const inputs = buildGenerationInputs(input.inputs)
-  return {
-    modelId: input.modelId,
-    prompt: input.prompt.trim(),
-    parameters,
-    ...(inputs.length > 0 ? { inputs } : {}),
-    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    ...(input.inputLanguage ? { inputLanguage: input.inputLanguage } : {}),
-  }
 }
 
 /** 新请求的幂等键：优先 crypto.randomUUID，环境不支持时退化为时间戳随机串。 */

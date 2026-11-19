@@ -4,9 +4,10 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { SetupConfigDto } from '@musecanvas/contracts'
-import { clientApi } from '@/shared/services/client-api'
+
 import { Alert, Badge, Button, Field, Textarea } from '@/shared/components/ui'
 import { formatDateTime } from '@/shared/lib/format'
+import { clientApi } from '@/shared/services/client-api'
 import { describeSetupError, isSetupSessionError } from '../../lib/setup-errors'
 import { parseTemplateImportText } from '../../lib/setup-forms'
 import { SetupStepShell } from '../setup-step-shell'
@@ -58,7 +59,11 @@ export function TemplatesStep({ config, complete, onDone, onSkip, onSessionLost 
         return
       }
       // 本地解析错误用 Error 携带；服务端错误仍按错误码翻译。
-      setError(cause instanceof Error && !('code' in cause) ? cause.message : describeSetupError(cause, '导入模板失败，请稍后重试。'))
+      setError(
+        cause instanceof Error && !('code' in cause)
+          ? cause.message
+          : describeSetupError(cause, '导入模板失败，请稍后重试。'),
+      )
     },
   })
 
@@ -76,7 +81,7 @@ export function TemplatesStep({ config, complete, onDone, onSkip, onSessionLost 
     <SetupStepShell
       headingId="setup-templates-title"
       title="提示词模板"
-      description="可选的最后一步：导入一组提示词模板并设为激活集。也可以完成安装后在后台“提示词模板”里管理。"
+      description="可选步骤：导入一组提示词模板并设为激活集。也可以完成安装后在后台“提示词模板”里管理。"
       status={<Badge tone={complete ? 'success' : 'neutral'}>{complete ? '已导入' : '可跳过'}</Badge>}
     >
       {active ? (
@@ -94,10 +99,10 @@ export function TemplatesStep({ config, complete, onDone, onSkip, onSessionLost 
         </Alert>
       ) : null}
 
-      <div className="flex flex-col gap-2 rounded-control bg-tonal p-4">
-        <h3 className="text-sm font-medium text-foreground">
+      <div className="flex flex-col gap-2 rounded-control border border-border/70 bg-tonal p-4">
+        <h2 className="text-sm font-medium text-foreground">
           服务端内置模板索引{entries.length > 0 ? `（${entries.length} 条）` : ''}
-        </h3>
+        </h2>
         {entries.length > 0 ? (
           <ul className="flex flex-col divide-y divide-border">
             {entries.map((entry) => (
@@ -137,11 +142,11 @@ export function TemplatesStep({ config, complete, onDone, onSkip, onSessionLost 
           />
         </Field>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" loading={importTemplates.isPending} disabled={!json.trim()}>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Button type="submit" size="md" loading={importTemplates.isPending} disabled={!json.trim()}>
             导入并继续
           </Button>
-          <Button type="button" variant="secondary" disabled={importTemplates.isPending} onClick={onSkip}>
+          <Button type="button" variant="outline" size="md" disabled={importTemplates.isPending} onClick={onSkip}>
             跳过此步
           </Button>
         </div>

@@ -16,15 +16,10 @@ import type {
   AgentSessionsPageDTO,
   AgentToolSummaryDTO,
   AgentTurnDTO,
-  CanvasDto,
-  CanvasListItemDto,
-  CanvasListPageDto,
   CreateAgentMessageRequest,
   CreateAgentSessionRequest,
-  CreateCanvasRequest,
   JsonObject,
   ResolveAgentApprovalRequest,
-  UpdateCanvasRequest,
 } from '@musecanvas/contracts'
 import { ApiError } from './api'
 import { mockSampleAsset } from './mock-workspace-data'
@@ -33,7 +28,6 @@ import { SHOWCASE_ITEMS } from '../lib/showcase'
 export const MOCK_AGENT_STORAGE_KEY = 'musecanvas:agent-preview:v1'
 export const MOCK_AGENT_OWNER_ID = '00000000-0000-4000-8000-000000000101'
 export const MOCK_AGENT_DEFINITION_ID = '00000000-0000-4000-8000-000000000201'
-export const MOCK_CANVAS_DEFAULT_ID = '00000000-0000-4000-8000-000000000301'
 export const MOCK_SEED_SESSION_ID = '00000000-0000-4000-8000-000000000401'
 export const MOCK_AGENT_PLAN_MS = 600
 export const MOCK_AGENT_EXECUTE_MS = 1_200
@@ -68,7 +62,6 @@ interface StoredState {
   nextCounter: number
   sessionReceipts: Record<string, { digest: string; sessionId: string }>
   sessions: Record<string, StoredSessionRecord>
-  canvases: Record<string, CanvasDto>
 }
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
@@ -128,7 +121,7 @@ function createInitialState(): StoredState {
   const seedCreatedAt = '2026-01-05T12:00:00.000Z'
   const seedUpdatedAt = '2026-01-05T12:00:05.000Z'
   const sample = SHOWCASE_ITEMS[0]!
-  const sampleAsset = mockSampleAsset('mock-sample-1', 0, sample.prompt, seedUpdatedAt)
+  const sampleAsset = mockSampleAsset('00000000-0000-4000-8000-000000000901', 0, sample.prompt, seedUpdatedAt)
   const seedTurnId = '00000000-0000-4000-8000-000000000501'
   const seedToolId = '00000000-0000-4000-8000-000000000601'
   const seedApprovalId = '00000000-0000-4000-8000-000000000701'
@@ -268,7 +261,7 @@ function createInitialState(): StoredState {
     ownerId: MOCK_AGENT_OWNER_ID,
     agentDefinitionId: MOCK_AGENT_DEFINITION_ID,
     definitionVersion: 1,
-    defaultCanvasId: MOCK_CANVAS_DEFAULT_ID,
+    defaultCanvasId: null,
     activeTurnId: null,
     inputRevision: '1',
     nextItemSequence: '8',
@@ -276,38 +269,6 @@ function createInitialState(): StoredState {
     createdAt: seedCreatedAt,
     updatedAt: seedUpdatedAt,
     archivedAt: null,
-  }
-
-  const seedCanvas: CanvasDto = {
-    id: MOCK_CANVAS_DEFAULT_ID,
-    title: '水乡晨雾灵感画布（本地演示）',
-    revision: 1,
-    coverAssetId: sampleAsset.id,
-    createdAt: seedCreatedAt,
-    updatedAt: seedUpdatedAt,
-    scene: {
-      nodes: [
-        {
-          id: 'node-prompt-1',
-          type: 'prompt',
-          position: { x: 80, y: 120 },
-          size: { width: 260, height: 140 },
-          data: { prompt: sample.prompt },
-        },
-        {
-          id: 'node-image-1',
-          type: 'image',
-          position: { x: 420, y: 100 },
-          size: { width: 240, height: 320 },
-          data: {
-            assetId: sampleAsset.id,
-            sourceNodeId: 'node-prompt-1',
-            prompt: sampleAsset.prompt,
-          },
-        },
-      ],
-      edges: [{ id: 'edge-1', source: 'node-prompt-1', target: 'node-image-1' }],
-    },
   }
 
   return {
@@ -349,9 +310,6 @@ function createInitialState(): StoredState {
         messageReceipts: {},
       },
     },
-    canvases: {
-      [MOCK_CANVAS_DEFAULT_ID]: seedCanvas,
-    },
   }
 }
 
@@ -380,13 +338,11 @@ function isStoredStateValid(value: unknown): value is StoredState {
     typeof s.sessions === 'object' &&
     s.sessions !== null &&
     typeof s.sessionReceipts === 'object' &&
-    s.sessionReceipts !== null &&
-    typeof s.canvases === 'object' &&
-    s.canvases !== null
+    s.sessionReceipts !== null
   )
 }
 
-/** 构造隔离的本地 Mock Agent Core + Canvas 引擎，支持注入时钟与存储以便确定性单测。 */
+/** 构造隔离的本地 Mock Agent Core 引擎，支持注入时钟与存储以便确定性单测。 */
 export function createMockAgentApi({ now = Date.now, storage }: MockAgentOptions = {}) {
   let state: StoredState = createInitialState()
   try {
@@ -656,7 +612,7 @@ export function createMockAgentApi({ now = Date.now, storage }: MockAgentOptions
         turn.id,
         'assistant_message',
         {
-          content: `已完成「${turn.prompt.slice(0, 48)}」的本地样片生成与参考归档，可直接在上方画布或作品图库中查看与复用。`,
+          content: `已完成「${turn.prompt.slice(0, 48)}」的本地样片生成与参考归档，可直接在右侧产物面板或作品图库中查看与复用。`,
         },
         null,
         doneIso,
@@ -728,7 +684,6 @@ export function createMockAgentApi({ now = Date.now, storage }: MockAgentOptions
         JSON.stringify({
           agentDefinitionId: body.agentDefinitionId,
           definitionVersion: body.definitionVersion,
-          defaultCanvasId: body.defaultCanvasId ?? null,
         }),
       )
       const existingReceipt = state.sessionReceipts[body.clientRequestId]
@@ -746,7 +701,7 @@ export function createMockAgentApi({ now = Date.now, storage }: MockAgentOptions
         ownerId: MOCK_AGENT_OWNER_ID,
         agentDefinitionId: body.agentDefinitionId,
         definitionVersion: body.definitionVersion,
-        defaultCanvasId: body.defaultCanvasId ?? MOCK_CANVAS_DEFAULT_ID,
+        defaultCanvasId: null,
         activeTurnId: null,
         inputRevision: '0',
         nextItemSequence: '1',
@@ -1124,89 +1079,11 @@ export function createMockAgentApi({ now = Date.now, storage }: MockAgentOptions
     },
   }
 
-  const canvases = {
-    list: async (params?: { limit?: number; cursor?: string }): Promise<CanvasListPageDto> => {
-      const limit = assertLimit(params?.limit, 20)
-      const ordered: CanvasListItemDto[] = Object.values(state.canvases)
-        .map(({ id, title, revision, coverAssetId, createdAt, updatedAt }) => ({
-          id,
-          title,
-          revision,
-          coverAssetId,
-          createdAt,
-          updatedAt,
-        }))
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))
-      let start = 0
-      if (params?.cursor) {
-        const idx = ordered.findIndex((c) => c.id === params.cursor)
-        if (idx < 0) fail(404, 'CANVAS_NOT_FOUND', '画布分页游标不存在。')
-        start = idx + 1
-      }
-      const items = ordered.slice(start, start + limit)
-      const hasMore = start + items.length < ordered.length
-      return copy({ items, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null })
-    },
-
-    create: async (body: CreateCanvasRequest = {}): Promise<CanvasDto> => {
-      const ts = new Date(now()).toISOString()
-      const id = nextId('3000')
-      const canvas: CanvasDto = {
-        id,
-        title: body.title?.trim() || '未命名画布',
-        revision: 1,
-        coverAssetId: body.coverAssetId ?? null,
-        createdAt: ts,
-        updatedAt: ts,
-        scene: body.scene ? copy(body.scene) : { nodes: [], edges: [] },
-      }
-      state.canvases[id] = canvas
-      save()
-      return copy(canvas)
-    },
-
-    detail: async (id: string): Promise<CanvasDto> => {
-      const canvas = state.canvases[id]
-      if (!canvas) fail(404, 'CANVAS_NOT_FOUND', '演示画布不存在。')
-      return copy(canvas)
-    },
-
-    update: async (id: string, body: UpdateCanvasRequest): Promise<CanvasDto> => {
-      const canvas = state.canvases[id]
-      if (!canvas) fail(404, 'CANVAS_NOT_FOUND', '演示画布不存在。')
-      if (body.baseRevision !== canvas.revision) {
-        fail(409, 'CANVAS_REVISION_CONFLICT', '画布版本冲突，请刷新后重试。')
-      }
-      const next: CanvasDto = {
-        ...canvas,
-        ...(body.title !== undefined ? { title: body.title } : {}),
-        ...(body.scene !== undefined ? { scene: copy(body.scene) } : {}),
-        ...(body.coverAssetId !== undefined ? { coverAssetId: body.coverAssetId } : {}),
-        revision: canvas.revision + 1,
-        updatedAt: new Date(now()).toISOString(),
-      }
-      state.canvases[id] = next
-      save()
-      return copy(next)
-    },
-
-    remove: async (id: string): Promise<{ id: string }> => {
-      if (!state.canvases[id]) fail(404, 'CANVAS_NOT_FOUND', '演示画布不存在。')
-      delete state.canvases[id]
-      save()
-      return { id }
-    },
-  }
-
-  return {
-    ...agent,
-    canvases,
-  }
+  return agent
 }
 
 export type MockAgentApiInstance = ReturnType<typeof createMockAgentApi>
-export type MockAgentApi = Omit<MockAgentApiInstance, 'canvases'>
-export type MockCanvasesApi = MockAgentApiInstance['canvases']
+export type MockAgentApi = MockAgentApiInstance
 
 let browserInstance: MockAgentApiInstance | undefined
 
@@ -1241,12 +1118,4 @@ export const mockAgentApi: MockAgentApi = {
   subscribe: (sessionId, listener) => browserMock().subscribe(sessionId, listener),
   deleteSession: (sessionId) => browserMock().deleteSession(sessionId),
   clearSessions: () => browserMock().clearSessions(),
-}
-
-export const mockCanvasesApi: MockCanvasesApi = {
-  list: (params) => browserMock().canvases.list(params),
-  create: (body) => browserMock().canvases.create(body),
-  detail: (id) => browserMock().canvases.detail(id),
-  update: (id, body) => browserMock().canvases.update(id, body),
-  remove: (id) => browserMock().canvases.remove(id),
 }

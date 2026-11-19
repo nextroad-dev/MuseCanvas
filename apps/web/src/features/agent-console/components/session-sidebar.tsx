@@ -30,6 +30,7 @@ import { BrandMark } from '@/shared/components/brand-mark'
 import {
   Avatar,
   Button,
+  Dialog,
   DropdownMenu,
   EmptyState,
   SkeletonRow,
@@ -123,6 +124,7 @@ export function SessionSidebar({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [sessionFilter, setSessionFilter] = useState('')
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false)
 
   const rawSessions = sessions ?? agentConsole?.sessions ?? []
   const pinnedSet = new Set(pinnedSessionIds ?? [])
@@ -201,7 +203,7 @@ export function SessionSidebar({
             size="sm"
             variant="secondary"
             fullWidth
-            className="justify-start rounded-control border border-border/80 bg-surface text-foreground shadow-xs hover:bg-tonal-hover"
+            className="justify-start rounded-control"
             icon={<PlusIcon className={iconSize.sm} aria-hidden="true" />}
           >
             <Link href={APP_ROUTES.generate} prefetch onClick={() => onCloseMobile?.()}>
@@ -211,7 +213,7 @@ export function SessionSidebar({
           </Button>
         )}
 
-        <nav aria-label="工作区导航" className="grid grid-cols-2 gap-1.5">
+        <nav aria-label="工作区导航" className="grid grid-cols-2 gap-1 rounded-control bg-tonal/55 p-1">
           <Link
             href={APP_ROUTES.generate}
             prefetch
@@ -221,10 +223,10 @@ export function SessionSidebar({
               onCloseMobile?.()
             }}
             className={cn(
-              'motion-press inline-flex min-h-[var(--control-sm)] min-w-0 items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-ui font-medium transition-colors',
+              'motion-press inline-flex min-h-[var(--control-sm)] min-w-0 items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-ui font-medium',
               currentRoute === 'generate'
-                ? 'border border-border/70 bg-surface font-medium text-foreground shadow-xs'
-                : 'border border-transparent text-muted-foreground hover:bg-surface/60 hover:text-foreground',
+                ? 'bg-surface font-medium text-foreground shadow-xs'
+                : 'text-muted-foreground hover:bg-surface/60 hover:text-foreground',
             )}
           >
             <SparkleIcon
@@ -244,10 +246,10 @@ export function SessionSidebar({
               onCloseMobile?.()
             }}
             className={cn(
-              'motion-press inline-flex min-h-[var(--control-sm)] min-w-0 items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-ui font-medium transition-colors',
+              'motion-press inline-flex min-h-[var(--control-sm)] min-w-0 items-center justify-center gap-1.5 rounded-control px-2.5 py-1.5 text-ui font-medium',
               currentRoute === 'library'
-                ? 'border border-border/70 bg-surface font-medium text-foreground shadow-xs'
-                : 'border border-transparent text-muted-foreground hover:bg-surface/60 hover:text-foreground',
+                ? 'bg-surface font-medium text-foreground shadow-xs'
+                : 'text-muted-foreground hover:bg-surface/60 hover:text-foreground',
             )}
           >
             <ImagesIcon
@@ -277,11 +279,11 @@ export function SessionSidebar({
               {sortedSessions.length > 0 && onClearSessions ? (
                 <button
                   type="button"
-                  aria-label="清空全部对话"
-                  onClick={onClearSessions}
+                  aria-label="清空此设备上的对话"
+                  onClick={() => setConfirmClearOpen(true)}
                   className="rounded-control px-1.5 py-0.5 text-caption text-muted-foreground transition-colors hover:bg-danger-soft hover:text-danger"
                 >
-                  清空
+                  清空本机
                 </button>
               ) : null}
             </div>
@@ -296,6 +298,7 @@ export function SessionSidebar({
                   type="text"
                   role="searchbox"
                   aria-label="搜索历史对话"
+                  data-session-search="true"
                   placeholder="搜索历史对话…"
                   value={sessionFilter}
                   onChange={(event) => setSessionFilter(event.target.value)}
@@ -330,7 +333,7 @@ export function SessionSidebar({
                 agentConsole.serviceStatus === 'disabled_404'
                   ? 'Agent Core 未启用'
                   : agentConsole.serviceStatus === 'admission_closed_503'
-                    ? '执行准入暂未就绪'
+                    ? 'Agent 服务暂不可用'
                     : agentConsole.serviceStatus === 'error'
                       ? '会话列表加载失败'
                       : '暂无 Agent 会话'
@@ -339,7 +342,7 @@ export function SessionSidebar({
                 agentConsole.serviceStatus === 'disabled_404'
                   ? '后端配置关闭了 Agent Core V1（404），暂时无法列出或创建会话。'
                   : agentConsole.serviceStatus === 'admission_closed_503'
-                    ? '后端异步准入通道暂不可用（503），请稍后重试检查。'
+                    ? '服务暂时不可用或配置尚未就绪（503），请稍后重试；如持续出现，请联系管理员检查配置。'
                     : agentConsole.serviceStatus === 'error'
                       ? agentConsole.error?.message ?? '请检查网络连接后重试。'
                       : '点击上方「新建对话」按钮，立即开启多轮对话。'
@@ -459,7 +462,7 @@ export function SessionSidebar({
                             onSelectSession?.(session.id)
                             onCloseMobile?.()
                           }}
-                          className="motion-press flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 pr-18 text-left"
+                          className="motion-press flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 text-left group-hover:pr-20 group-focus-within:pr-20"
                         >
                           <div className="flex min-w-0 items-center gap-1.5">
                             {isRunning ? (
@@ -493,14 +496,7 @@ export function SessionSidebar({
                           </div>
                         </button>
 
-                        <div
-                          className={cn(
-                            'absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-control bg-surface/90 p-0.5 backdrop-blur-xs transition-opacity',
-                            selected
-                              ? 'opacity-100'
-                              : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
-                          )}
-                        >
+                        <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-control bg-surface/90 p-0.5 opacity-0 backdrop-blur-xs transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                           {onTogglePinSession ? (
                             <button
                               type="button"
@@ -538,7 +534,8 @@ export function SessionSidebar({
                           {onDeleteSession ? (
                             <button
                               type="button"
-                              aria-label="删除对话"
+                              aria-label="在此设备隐藏对话"
+                              title="仅在此设备隐藏，不删除服务端记录"
                               onClick={(event) => {
                                 event.stopPropagation()
                                 onDeleteSession(session.id)
@@ -614,13 +611,13 @@ export function SessionSidebar({
                       })
                       onCloseMobile?.()
                     }}
-                    className="group relative aspect-square overflow-hidden rounded-control border border-border/70 bg-tonal transition-transform hover:scale-[1.02]"
+                    className="group relative aspect-square overflow-hidden rounded-control border border-border/70 bg-tonal"
                   >
                     <img
                       src={url}
                       alt={label}
                       loading="lazy"
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-cover transition-transform duration-[var(--motion-spring-gentle)] ease-spring-gentle group-hover:scale-[1.03] motion-reduce:transition-none"
                     />
                     <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-overlay/55 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                       <ImageIcon className={cn(iconSize.sm, 'text-on-media')} aria-hidden="true" />
@@ -635,7 +632,7 @@ export function SessionSidebar({
         ) : null}
       </div>
 
-      <div className="mt-auto shrink-0 space-y-2 border-t border-border/50 p-3">
+      <div className="mt-auto shrink-0 space-y-2 border-t border-border/60 px-3 py-2.5">
         {shellState.logoutError ? (
           <div
             role="alert"
@@ -665,7 +662,7 @@ export function SessionSidebar({
                 <button
                   type="button"
                   aria-label="账户菜单"
-                  className="motion-press flex min-h-[var(--control-sm)] w-full min-w-0 items-center gap-2 rounded-control bg-surface/80 px-2 py-1.5 text-left transition-colors hover:bg-surface"
+                  className="motion-press flex min-h-[var(--control-sm)] w-full min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left hover:bg-tonal/60"
                 >
                   <Avatar
                     size="sm"
@@ -727,7 +724,7 @@ export function SessionSidebar({
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-control bg-surface/80 px-2 py-1.5">
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5">
               <Avatar
                 size="sm"
                 initial={shellState.mode === 'mock' ? 'M' : '?'}
@@ -747,6 +744,32 @@ export function SessionSidebar({
           </div>
         )}
       </div>
+
+      <Dialog
+        open={confirmClearOpen}
+        onClose={() => setConfirmClearOpen(false)}
+        title="清空此设备上的对话"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmClearOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                onClearSessions?.()
+                setConfirmClearOpen(false)
+              }}
+            >
+              确认清空本机
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted-foreground [text-wrap:pretty]">
+          只会清除此设备上的会话显示，不会删除服务端对话记录，也不会影响其他设备。清除后，这些会话将不再出现在当前设备的列表中。
+        </p>
+      </Dialog>
     </div>
   )
 }

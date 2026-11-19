@@ -2,8 +2,6 @@
 // 失效（invalidate）按域根 key 精确刷新；跨域级联在 mutation 里显式声明。
 
 export const JOB_POLL_MS = 2500
-/** Agent turn 恢复轮询间隔（仅断线恢复时使用，正常走 SSE）。 */
-export const CANVAS_AGENT_POLL_MS = 2000
 
 export const queryKeys = {
   session: ['session'] as const,
@@ -22,21 +20,12 @@ export const queryKeys = {
     detail: (id: string) => ['library', 'detail', id] as const,
   },
 
-  canvases: {
-    root: ['canvases'] as const,
-    list: () => ['canvases', 'list'] as const,
-    detail: (id: string) => ['canvases', 'detail', id] as const,
-  },
-
-  canvasAgent: {
-    root: ['canvas-agent'] as const,
-    status: ['canvas-agent', 'status'] as const,
-    history: (canvasId: string) => ['canvas-agent', 'history', canvasId] as const,
-    turn: (canvasId: string, turnId: string) => ['canvas-agent', 'turn', canvasId, turnId] as const,
-  },
-
   agent: {
     root: ['agent'] as const,
+    artifacts: (actorId: string, sessionId: string) => ['agent', 'artifacts', actorId, sessionId] as const,
+    artifact: (actorId: string, sessionId: string, artifactId: string) => ['agent', 'artifact', actorId, sessionId, artifactId] as const,
+    artifactThreads: (actorId: string, sessionId: string, artifactId: string) => ['agent', 'artifact-threads', actorId, sessionId, artifactId] as const,
+    artifactAsset: (actorId: string, sessionId: string, assetId: string) => ['agent', 'artifact-asset', actorId, sessionId, assetId] as const,
     sessions: (actorId = '') => ['agent', 'sessions', actorId] as const,
     snapshot: (actorId: string, sessionId: string) => ['agent', 'snapshot', actorId, sessionId] as const,
     items: (actorId: string, sessionId: string) => ['agent', 'items', actorId, sessionId] as const,
@@ -61,11 +50,12 @@ export const queryKeys = {
     providerCredentials: ['admin', 'provider-credentials'] as const,
     providerTemplates: ['admin', 'provider-templates'] as const,
     plugins: ['admin', 'plugins'] as const,
+    pluginDocs: (id: string) => ['admin', 'plugin-docs', id] as const,
     oauthProviders: ['admin', 'oauth-providers'] as const,
     promptTemplates: ['admin', 'prompt-templates'] as const,
     promptTemplateSets: ['admin', 'prompt-template-sets'] as const,
+    promptTemplateSet: (id: string) => ['admin', 'prompt-template-set', id] as const,
     promptOptimizationSettings: ['admin', 'prompt-optimization-settings'] as const,
-    canvasAgentSettings: ['admin', 'canvas-agent-settings'] as const,
     mediaModelDefaults: ['admin', 'media-model-defaults'] as const,
     registration: ['admin', 'registration'] as const,
   },

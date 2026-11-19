@@ -27,42 +27,21 @@ function makeAgentMockRecorder(calls, rejectGroup = null, error = new Error('moc
   )
 }
 
-function makeCanvasMockRecorder(calls) {
-  return Object.fromEntries(
-    ['list', 'create', 'detail', 'update', 'remove'].map((method) => [
-      method,
-      async (...args) => {
-        calls.push(['canvases', method, args])
-        return { demo: true }
-      },
-    ]),
-  )
-}
-
 test('client API redirects only workspace methods and never falls through on mock rejection', async () => {
   const live = []
   const mocked = []
   const error = Error('unsupported demo input')
   const workspace = Object.fromEntries(Object.entries({
-    models: ['list'], generations: ['create'], jobs: ['list', 'detail', 'cancel', 'retry', 'remove'], library: ['list', 'download', 'remove'],
+    models: ['list'], jobs: ['list', 'detail', 'cancel', 'retry', 'remove'], library: ['list', 'download', 'remove'],
   }).map(([group, names]) => [group, Object.fromEntries(names.map((method) => [method, async (...args) => {
     mocked.push([group, method, args])
-    if (group === 'generations') throw error
     return { demo: true }
   }]))]))
   const endpoints = {
     session: '/session',
     models: '/models',
-    generations: '/generations',
     media: { object: '/media/object', upload: '/media/upload' },
     generationUploads: { create: '/uploads' },
-    canvases: {
-      list: '/api/canvases',
-      create: '/api/canvases',
-      detail: (id) => `/api/canvases/${id}`,
-      update: (id) => `/api/canvases/${id}`,
-      remove: (id) => `/api/canvases/${id}`,
-    },
     agent: {
       sessions: '/api/agent/sessions',
       session: (id) => `/api/agent/sessions/${id}`,
@@ -82,15 +61,13 @@ test('client API redirects only workspace methods and never falls through on moc
     './mock-workspace-api': { mockWorkspaceApi: workspace },
     './mock-agent-api': {
       mockAgentApi: makeAgentMockRecorder(mocked),
-      mockCanvasesApi: makeCanvasMockRecorder(mocked),
     },
   }
   const { clientApi } = loadTs(new URL('./client-api.ts', import.meta.url), imports)
   await clientApi.models.list()
-  await assert.rejects(clientApi.generations.create({ modelId: 'video' }), error)
   for (const method of ['list', 'detail', 'cancel', 'retry', 'remove']) await clientApi.jobs[method]('id')
   for (const method of ['list', 'download', 'remove']) await clientApi.library[method]('id')
-  assert.equal(mocked.length, 10)
+  assert.equal(mocked.length, 9)
   assert.equal(live.length, 0)
   await clientApi.session.get()
   await clientApi.generationUploads.create({ mimeType: 'image/png', sizeBytes: 10 })
@@ -98,7 +75,7 @@ test('client API redirects only workspace methods and never falls through on moc
   assert.equal(live[0][0], '/session')
   assert.equal(live[1][0], '/uploads')
 
-  // Verify clientApi.agent.* and clientApi.canvases.* route cleanly to mock in WORKSPACE_MODE === 'mock'
+  // Verify clientApi.agent.* routes cleanly to mock in WORKSPACE_MODE === 'mock'
   await clientApi.agent.listSessions({ limit: 10 })
   await clientApi.agent.createSession({ clientRequestId: 'r1', agentDefinitionId: 'd1', definitionVersion: 1 })
   await clientApi.agent.getSnapshot('s1', { limit: 20 })
@@ -108,12 +85,7 @@ test('client API redirects only workspace methods and never falls through on moc
   await clientApi.agent.getTurn('t1')
   await clientApi.agent.cancelTurn('t1')
   await clientApi.agent.resolveApproval('a1', { decision: 'approved', expectedArgumentsHash: 'a'.repeat(64) })
-  await clientApi.canvases.list({ limit: 10 })
-  await clientApi.canvases.create({ title: 'c' })
-  await clientApi.canvases.detail('c1')
-  await clientApi.canvases.update('c1', { baseRevision: 1, title: 'c2' })
-  await clientApi.canvases.remove('c1')
-  assert.equal(mocked.length, 24)
+  assert.equal(mocked.length, 18)
   assert.equal(live.length, 2)
 
   // Verify mock rejection never falls through to live apiFetch for agent methods
@@ -121,7 +93,6 @@ test('client API redirects only workspace methods and never falls through on moc
     ...imports,
     './mock-agent-api': {
       mockAgentApi: makeAgentMockRecorder(mocked, 'agent', error),
-      mockCanvasesApi: makeCanvasMockRecorder(mocked),
     },
   }
   const failingMockClient = loadTs(new URL('./client-api.ts', import.meta.url), failingImports).clientApi
@@ -132,9 +103,8 @@ test('client API redirects only workspace methods and never falls through on moc
     ...imports, '../lib/workspace-mode': { WORKSPACE_MODE: 'live' },
   }).clientApi
   await liveClient.models.list()
-  await liveClient.generations.create({ modelId: 'real' })
-  assert.equal(mocked.length, 25)
-  assert.equal(live.length, 4)
+  assert.equal(mocked.length, 19)
+  assert.equal(live.length, 3)
 
   // Verify live mode routing & exact backend body constraints for clientApi.agent.*
   await liveClient.agent.listSessions({ limit: 20, cursor: 's0' })
@@ -146,16 +116,14 @@ test('client API redirects only workspace methods and never falls through on moc
   await liveClient.agent.getTurn('t1')
   await liveClient.agent.cancelTurn('t1')
   await liveClient.agent.resolveApproval('a1', { decision: 'approved', expectedArgumentsHash: 'b'.repeat(64) })
-  await liveClient.canvases.list({ limit: 20 })
-  await liveClient.canvases.detail('c1')
 
-  assert.equal(live.length, 15)
-  const createCall = live[5]
+  assert.equal(live.length, 12)
+  const createCall = live[4]
   assert.equal(createCall[0], '/api/agent/sessions')
   assert.equal(createCall[1].method, 'POST')
   assert.equal(createCall[1].headers, undefined)
 
-  const cancelCall = live[11]
+  const cancelCall = live[10]
   assert.equal(cancelCall[0], '/api/agent/turns/t1/cancel')
   assert.equal(cancelCall[1].method, 'POST')
   assert.deepEqual(cancelCall[1].body, {})
@@ -274,15 +242,4 @@ test('mockAgentApi executes seeded + full approval lifecycle locally without net
   const cancelled = await restored.cancelTurn(cancelAccepted.turn.id)
   assert.equal(cancelled.status, 'cancelled')
   assert.equal((await restored.getSnapshot(created.id)).activeTurn, null)
-
-  // Mock canvases CRUD + revision CAS
-  const canvasList = await restored.canvases.list()
-  assert.equal(canvasList.items.length, 1)
-  const createdCanvas = await restored.canvases.create({ title: '新画布' })
-  const updatedCanvas = await restored.canvases.update(createdCanvas.id, { baseRevision: 1, title: '已更新画布' })
-  assert.equal(updatedCanvas.revision, 2)
-  await assert.rejects(
-    restored.canvases.update(createdCanvas.id, { baseRevision: 1, title: '旧版本冲突' }),
-    { code: 'CANVAS_REVISION_CONFLICT' },
-  )
 })

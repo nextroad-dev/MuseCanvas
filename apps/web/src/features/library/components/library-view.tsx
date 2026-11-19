@@ -1,136 +1,276 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownIcon,
-  ArrowRightIcon,
+  CheckIcon,
+  CopyIcon,
   ImageIcon,
   ImagesIcon,
   MagnifyingGlassIcon,
-  SidebarSimpleIcon,
   SparkleIcon,
   TrashIcon,
   XIcon,
 } from '@phosphor-icons/react'
-import { SessionSidebar } from '@/features/agent-console/components/session-sidebar'
-import { useAgentConsoleStore } from '@/features/agent-console/stores/agent-console-store'
-import { Alert, Button, Checkbox, Dialog, EmptyState, Skeleton, iconSize, useToast } from '@/shared/components/ui'
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Dialog,
+  EmptyState,
+  Input,
+  PageHeader,
+  SegmentedControl,
+  Skeleton,
+  SkeletonTile,
+  controlSquare,
+  iconSize,
+  touchTargetSquare,
+  useToast,
+  type SegmentedControlItem,
+} from '@/shared/components/ui'
 import { queryKeys } from '@/shared/hooks/query-keys'
-import { libraryItems, useAssetDownloadUrl, useBatchDeleteAssets, useDeleteAsset, useLibrary } from '@/shared/hooks/useLibrary'
-import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { useFlipList } from '@/shared/hooks/useFlipList'
+import {
+  libraryItems,
+  useAssetDetail,
+  useAssetDownloadUrl,
+  useDeleteAsset,
+  useLibrary,
+} from '@/shared/hooks/useLibrary'
+import { APP_ROUTES, assetIdFromSearch } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
-import { formatBytes, formatDate, formatDateTime } from '@/shared/lib/format'
+import {
+  formatBytes,
+  formatCount,
+  formatDate,
+  formatDateTime,
+  formatDuration,
+} from '@/shared/lib/format'
+import { isReferenceEligibleAsset } from '@/shared/lib/reference-upload'
 import type { WorkspaceMode } from '@/shared/lib/workspace-mode'
-import { useLibraryUiStore } from '@/shared/stores/library-ui-store'
+import { useLibraryUiStore, type LibraryTab } from '@/shared/stores/library-ui-store'
 import type { AssetDto } from '@/shared/types'
 import {
   downloadableUrl,
   generationSearch,
   imageReuseSearch,
-  previewSource,
   reusablePrompt,
-  visibleSelection,
 } from '../lib/library-actions'
 import { AssetMedia } from './asset-media'
 
-export interface LibraryViewProps { mode: WorkspaceMode }
-
-const gridClasses = {
-  2: 'grid-cols-1 sm:grid-cols-2 gap-5',
-  3: 'grid-cols-2 sm:grid-cols-3 gap-4',
-  4: 'grid-cols-2 sm:grid-cols-4 gap-3.5',
-  6: 'grid-cols-2 sm:grid-cols-5 md:grid-cols-6 gap-2.5',
-} as const
-
-const TYPE_FILTERS = [
-  ['all', '全部作品'],
-  ['image', '图片'],
-  ['video', '视频'],
-] as const
-
-const QUICK_FILTERS = [
-  ['all', '全部'],
-  ['image', '图片'],
-  ['video', '视频'],
-] as const
-
-const DENSITY_OPTIONS = [
-  [2, '宽松'],
-  [3, '舒适'],
-  [4, '紧凑'],
-  [6, '密集'],
-] as const
-
-function isDesktopLeftInline(): boolean {
-  if (typeof window === 'undefined') return true
-  return window.matchMedia?.('(min-width: 960px)')?.matches ?? true
+export interface LibraryViewProps {
+  mode: WorkspaceMode
+  /** 服务端从 `?asset=<uuid>` 解析的初始深链资产 ID。 */
+  initialAssetId?: string | null
 }
 
-export function LibraryView({ mode }: LibraryViewProps) {
-  const { filters, selectedIds, columns, setColumns, setTab, setQuery, toggleSelect, selectMany, clearSelection } = useLibraryUiStore()
-  const leftSidebarOpen = useAgentConsoleStore((state) => state.leftSidebarOpen)
-  const setLeftSidebarOpen = useAgentConsoleStore((state) => state.setLeftSidebarOpen)
-  const toggleLeftSidebar = useAgentConsoleStore((state) => state.toggleLeftSidebar)
+type ColumnValue = '2' | '3' | '4' | '6'
 
-  const library = useLibrary({ ...(filters.tab === 'all' ? {} : { kind: filters.tab }), q: filters.q.trim() })
+const GRID_CLASSES = {
+  2: 'grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5',
+  3: 'grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4',
+  4: 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-3.5',
+  6: 'grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2.5 sm:gap-3',
+} as const
+
+const KIND_ITEMS: SegmentedControlItem<LibraryTab>[] = [
+  { value: 'all', label: '全部' },
+  { value: 'image', label: '图片' },
+  { value: 'video', label: '视频' },
+]
+
+const COLUMN_ITEMS: SegmentedControlItem<ColumnValue>[] = [
+  { value: '2', label: <span className="font-mono tabular-nums">2</span>, title: '2 列 · 宽松' },
+  { value: '3', label: <span className="font-mono tabular-nums">3</span>, title: '3 列 · 舒适' },
+  { value: '4', label: <span className="font-mono tabular-nums">4</span>, title: '4 列 · 紧凑' },
+  { value: '6', label: <span className="font-mono tabular-nums">6</span>, title: '6 列 · 密集' },
+]
+
+const DOWNLOAD_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'image/svg+xml': 'svg',
+}
+
+function syncAssetQueryParam(assetId: string | null): void {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  if (url.pathname !== APP_ROUTES.library) return
+  if (assetId) {
+    url.searchParams.set('asset', assetId)
+  } else {
+    url.searchParams.delete('asset')
+  }
+  const nextHref = `${url.pathname}${url.search}${url.hash}`
+  const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  if (nextHref !== currentHref) {
+    window.history.replaceState(window.history.state, '', nextHref)
+  }
+}
+
+export function LibraryView({ mode, initialAssetId }: LibraryViewProps) {
+  const { filters, columns, setColumns, setTab, setQuery } = useLibraryUiStore()
+  const [debouncedQuery, setDebouncedQuery] = useState(filters.q.trim())
+
+  const library = useLibrary({
+    ...(filters.tab === 'all' ? {} : { kind: filters.tab }),
+    q: debouncedQuery,
+  })
   const items = libraryItems(library.data)
-  const selected = visibleSelection(selectedIds, items)
-  const [activeId, setActiveId] = useState<string | null>(null)
+
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
+  const gridOrderKey = `${columns}:${items.map((asset) => asset.id).join(',')}`
+  useFlipList(gridRef, gridOrderKey)
+
+  const [activeId, setActiveId] = useState<string | null>(initialAssetId ?? null)
   const [pendingDelete, setPendingDelete] = useState<string[]>([])
   const [actionError, setActionError] = useState('')
-  const remove = useDeleteAsset()
-  const batchRemove = useBatchDeleteAssets()
-  const download = useAssetDownloadUrl()
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [copiedPrompt, setCopiedPrompt] = useState(false)
+
+  const remove = useDeleteAsset()
+  const download = useAssetDownloadUrl()
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const active = items.find((asset) => asset.id === activeId)
-  const busy = remove.isPending || batchRemove.isPending
+
+  const listActive = activeId ? (items.find((asset) => asset.id === activeId) ?? null) : null
+  const detailQuery = useAssetDetail(activeId && !listActive ? activeId : null)
+  const active = listActive ?? detailQuery.data ?? null
+  const activeReferenceEligible = active ? isReferenceEligibleAsset(active) : false
+  const activePrompt = active ? reusablePrompt(active) : ''
+
+  const busy = remove.isPending
   const filtered = Boolean(filters.q.trim() || filters.tab !== 'all')
   const total = library.data?.pages[0]?.total ?? 0
+  const resultsRefreshing =
+    filters.q.trim() !== debouncedQuery ||
+    library.isPlaceholderData ||
+    (library.isFetching && !library.isPending && !library.isFetchingNextPage)
 
-  useEffect(() => { clearSelection(); setActiveId(null) }, [filters.q, filters.tab, clearSelection])
+  const openAsset = useCallback((assetId: string) => {
+    setActiveId(assetId)
+    syncAssetQueryParam(assetId)
+  }, [])
 
-  // 窄视口首屏折叠为抽屉，避免打开页面时直接遮挡图库画布。
-  const viewportInitializedRef = useRef(false)
+  const closeAsset = useCallback(() => {
+    setActiveId(null)
+    syncAssetQueryParam(null)
+  }, [])
+
+  // 同步外部路由传入的 `?asset=<uuid>` 变化（如从其他页面点击深链跳转过来）。
+  const prevInitialAssetIdRef = useRef<string | null | undefined>(initialAssetId)
   useEffect(() => {
-    if (viewportInitializedRef.current || typeof window === 'undefined') return
-    viewportInitializedRef.current = true
-    if (!isDesktopLeftInline()) {
-      setLeftSidebarOpen(false)
+    if (prevInitialAssetIdRef.current === initialAssetId) return
+    prevInitialAssetIdRef.current = initialAssetId
+    setActiveId(initialAssetId ?? null)
+  }, [initialAssetId])
+
+  // 客户端兜底读取 `?asset=<uuid>`，并响应浏览器前进/后退。
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (initialAssetId === undefined) {
+      const fromUrl = assetIdFromSearch(window.location.search)
+      if (fromUrl) setActiveId(fromUrl)
     }
-  }, [setLeftSidebarOpen])
+    const onPopState = () => {
+      setActiveId(assetIdFromSearch(window.location.search))
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [initialAssetId])
+
+  // 筛选条件改变时收起已打开的灯箱（不干扰首屏 `?asset=` 深链）。
+  const prevFilterKeyRef = useRef(`${filters.tab}:${filters.q}`)
+  useEffect(() => {
+    const nextFilterKey = `${filters.tab}:${filters.q}`
+    if (prevFilterKeyRef.current === nextFilterKey) return
+    prevFilterKeyRef.current = nextFilterKey
+    closeAsset()
+  }, [filters.q, filters.tab, closeAsset])
+
+  // 搜索输入 300ms 防抖。
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQuery(filters.q.trim()), 300)
+    return () => window.clearTimeout(timeout)
+  }, [filters.q])
+
+  // 切换资产时重置复制反馈状态。
+  useEffect(() => {
+    setCopiedPrompt(false)
+  }, [activeId])
 
   useEffect(() => {
-    if (!leftSidebarOpen || typeof window === 'undefined') return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !event.defaultPrevented && !isDesktopLeftInline()) {
-        setLeftSidebarOpen(false)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [leftSidebarOpen, setLeftSidebarOpen])
+    if (!copiedPrompt) return
+    const timer = window.setTimeout(() => setCopiedPrompt(false), 1800)
+    return () => window.clearTimeout(timer)
+  }, [copiedPrompt])
 
-  function resetFilters() { setQuery(''); setTab('all') }
+  const { hasNextPage, isFetchingNextPage, isError: isLibraryError, fetchNextPage } = library
+
+  // 触底自动加载下一页，同时保留手动「加载更多」按钮。
+  useEffect(() => {
+    const sentinel = loadMoreRef.current
+    if (!sentinel || !hasNextPage || isFetchingNextPage || isLibraryError) return
+    if (typeof IntersectionObserver === 'undefined') return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void fetchNextPage()
+        }
+      },
+      { rootMargin: '240px 0px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasNextPage, isFetchingNextPage, isLibraryError, fetchNextPage])
+
+  function updateQuery(query: string) {
+    setQuery(query)
+    if (!query.trim()) setDebouncedQuery('')
+  }
+
+  function resetFilters() {
+    updateQuery('')
+    setTab('all')
+  }
+
+  function handleColumnsChange(next: ColumnValue) {
+    setColumns(Number(next) as 2 | 3 | 4 | 6)
+  }
+
+  async function handleCopyPrompt(promptText: string) {
+    if (!promptText) return
+    try {
+      await navigator.clipboard.writeText(promptText)
+      setCopiedPrompt(true)
+      toast.success('已复制提示词')
+    } catch {
+      toast.error('复制失败', '请手动选中提示词文本进行复制。')
+    }
+  }
 
   async function handleDelete() {
     if (busy || !pendingDelete.length) return
     setActionError('')
     try {
-      if (pendingDelete.length === 1) await remove.mutateAsync(pendingDelete[0])
-      else await batchRemove.mutateAsync(pendingDelete)
-      if (activeId && pendingDelete.includes(activeId)) setActiveId(null)
+      await remove.mutateAsync(pendingDelete[0])
+      if (activeId && pendingDelete.includes(activeId)) {
+        closeAsset()
+      }
       setPendingDelete([])
-      clearSelection()
       toast.success('作品已删除')
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '未能完成删除，请刷新列表后重试。')
-      // A batch may partially succeed. Do not leave successfully deleted assets in cache.
       setPendingDelete([])
-      clearSelection()
     } finally {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.library.root }),
@@ -151,8 +291,7 @@ export function LibraryView({ mode }: LibraryViewProps) {
       const objectUrl = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = objectUrl
-      const extensions: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'image/svg+xml': 'svg' }
-      anchor.download = `musecanvas-${asset.id.replace(/[^a-zA-Z0-9_-]/g, '')}.${extensions[signed.mimeType] || 'bin'}`
+      anchor.download = `musecanvas-${asset.id.replace(/[^a-zA-Z0-9_-]/g, '')}.${DOWNLOAD_EXTENSIONS[signed.mimeType] || 'bin'}`
       document.body.append(anchor)
       anchor.click()
       anchor.remove()
@@ -162,416 +301,283 @@ export function LibraryView({ mode }: LibraryViewProps) {
       const message = error instanceof Error ? error.message : '下载失败，请稍后重试。'
       setActionError(message)
       toast.error('无法下载作品', message)
-    } finally { setDownloadingId(null) }
+    } finally {
+      setDownloadingId(null)
+    }
   }
 
+  const statusText = library.isPending
+    ? '加载中…'
+    : resultsRefreshing
+      ? '更新中…'
+      : `${filtered ? '找到' : '共'} ${formatCount(total)} 件`
+
   return (
-    <div
-      data-workspace-mode={mode}
-      className="relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-canvas"
-    >
-      {leftSidebarOpen ? (
-        <div
-          aria-hidden="true"
-          onClick={() => setLeftSidebarOpen(false)}
-          className="motion-fade-in absolute inset-0 z-sticky bg-overlay/35 backdrop-blur-xs md:hidden"
-        />
-      ) : null}
+    <div data-workspace-mode={mode} className="flex w-full flex-col gap-6">
+      <PageHeader
+        title="作品图库"
+        description="浏览、检索与管理你在创作台生成的图片与视频资产。"
+        actions={
+          <Button asChild icon={<SparkleIcon weight="bold" aria-hidden="true" />}>
+            <Link href={APP_ROUTES.generate} prefetch>
+              前往创作台
+            </Link>
+          </Button>
+        }
+      />
 
-      <aside
-        aria-label="作品图库侧栏"
-        className={cn(
-          'max-md:motion-drawer-in-left absolute inset-y-0 left-0 z-sticky w-72 max-w-[85vw] border-r border-border/70 bg-surface/95 backdrop-blur-md shadow-drawer',
-          'md:static md:inset-y-auto md:z-auto md:h-full md:w-64 md:max-w-none md:shrink-0 md:bg-surface/60 md:backdrop-blur-none md:shadow-none lg:w-72',
-          !leftSidebarOpen && 'hidden',
-        )}
-      >
-        <SessionSidebar
-          activeRoute="library"
-          onToggleSidebar={toggleLeftSidebar}
-          onCloseMobile={() => {
-            if (!isDesktopLeftInline()) setLeftSidebarOpen(false)
-          }}
-        >
-          <div className="space-y-5">
-            <div>
-              <div className="flex items-center justify-between px-1 pb-1.5">
-                <span className="text-caption font-medium text-muted-foreground">作品类型</span>
-                <span role="status" className="text-caption tabular-nums text-muted-foreground">
-                  {library.isPending ? '加载中…' : `${filtered ? '找到' : '共'} ${total} 件`}
-                </span>
-              </div>
-              <div role="group" aria-label="作品类型" className="space-y-1">
-                {TYPE_FILTERS.map(([tab, label]) => {
-                  const activeTab = filters.tab === tab
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      aria-pressed={activeTab}
-                      onClick={() => setTab(tab)}
-                      className={cn(
-                        'motion-press flex w-full items-center justify-between rounded-control border px-3 py-2 text-left text-ui transition-colors',
-                        activeTab
-                          ? 'border-border/70 bg-surface font-medium text-foreground shadow-soft'
-                          : 'border-transparent text-muted-foreground hover:bg-surface/60 hover:text-foreground',
-                      )}
-                    >
-                      <span>{label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div>
-              <div className="px-1 pb-1.5 text-caption font-medium text-muted-foreground">网格密度</div>
-              <div role="group" aria-label="图库网格列数" className="grid grid-cols-2 gap-1.5">
-                {DENSITY_OPTIONS.map(([col, label]) => {
-                  const activeCol = columns === col
-                  return (
-                    <button
-                      key={col}
-                      type="button"
-                      aria-pressed={activeCol}
-                      onClick={() => setColumns(col)}
-                      className={cn(
-                        'motion-press rounded-control border px-3 py-2 text-center text-ui transition-colors',
-                        activeCol
-                          ? 'border-border/70 bg-surface font-medium text-foreground shadow-soft'
-                          : 'border-transparent bg-tonal/50 text-muted-foreground hover:bg-surface/60 hover:text-foreground',
-                      )}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {items.length > 0 ? (
-              <div className="space-y-2.5 border-t border-border/50 pt-4">
-                <div className="px-1 text-caption font-medium text-muted-foreground">批量选择</div>
-                <div
-                  className={cn(
-                    'rounded-control border px-3 py-1 transition-colors',
-                    selected.length > 0
-                      ? 'border-accent/35 bg-accent-soft/50'
-                      : 'border-border/70 bg-surface/75 hover:bg-surface',
-                  )}
-                >
-                  <Checkbox
-                    checked={selected.length === items.length}
-                    indeterminate={selected.length > 0 && selected.length < items.length}
-                    label="全选当前作品"
-                    className="w-full"
-                    onCheckedChange={(checked) =>
-                      checked ? selectMany(items.map((asset) => asset.id)) : clearSelection()
-                    }
-                    disabled={busy}
-                  />
-                </div>
-                {selected.length > 0 ? (
-                  <div className="space-y-1.5 pt-1">
-                    <p className="px-1 text-caption font-medium text-accent">已选 {selected.length} 件</p>
-                    <Button
-                      size="sm"
-                      variant="danger-ghost"
-                      fullWidth
-                      className="rounded-control"
-                      disabled={busy}
-                      onClick={() => {
-                        setActionError('')
-                        setPendingDelete(selected)
-                      }}
-                      icon={<TrashIcon className={iconSize.sm} aria-hidden="true" />}
-                    >
-                      删除所选
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      fullWidth
-                      className="rounded-control"
-                      onClick={clearSelection}
-                    >
-                      取消选择
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </SessionSidebar>
-      </aside>
-
-      <section aria-label="作品图库画布" className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-sticky flex items-start justify-between gap-2 p-3 sm:px-5 sm:pt-3.5">
-          <div
-            className={cn(
-              'pointer-events-auto flex items-center gap-1 rounded-pill border border-border/60 bg-surface/85 p-1 shadow-soft backdrop-blur-md',
-              leftSidebarOpen && 'md:hidden',
-            )}
-          >
-            <Button
-              size="icon"
-              variant="ghost"
-              className="rounded-pill sm:size-8"
-              aria-label={leftSidebarOpen ? '收起图库侧栏' : '展开图库侧栏'}
-              aria-expanded={leftSidebarOpen}
-              onClick={toggleLeftSidebar}
-              icon={<SidebarSimpleIcon className={iconSize.md} aria-hidden="true" />}
+      <Card variant="surface" density="compact" className="gap-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="relative min-w-0 flex-1 md:max-w-sm">
+            <MagnifyingGlassIcon
+              weight="bold"
+              aria-hidden="true"
+              className={cn(iconSize.sm, 'pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground')}
             />
-            <div className="hidden items-center gap-0.5 pr-1 sm:inline-flex" role="group" aria-label="快速筛选">
-              {QUICK_FILTERS.map(([tab, label]) => {
-                const activeTab = filters.tab === tab
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    aria-pressed={activeTab}
-                    onClick={() => setTab(tab)}
-                    className={cn(
-                      'motion-press rounded-pill px-2.5 py-1 text-caption font-medium transition-colors',
-                      activeTab
-                        ? 'bg-tonal text-foreground'
-                        : 'text-muted-foreground hover:bg-tonal/50 hover:text-foreground',
-                    )}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="pointer-events-auto ml-auto flex h-10 items-center gap-2 rounded-pill border border-border/60 bg-surface/85 px-3.5 shadow-soft backdrop-blur-md transition-[border-color,background-color,box-shadow] focus-within:border-border-focus focus-within:bg-surface focus-within:shadow-floating">
-            <MagnifyingGlassIcon className={cn(iconSize.sm, 'shrink-0 text-muted-foreground')} aria-hidden="true" />
-            <input
-              type="text"
+            <Input
+              type="search"
               role="searchbox"
+              size="md"
               aria-label="搜索作品提示词"
-              placeholder="搜索提示词…"
+              placeholder="搜索提示词关键词…"
               value={filters.q}
-              onChange={(event) => setQuery(event.target.value)}
-              className="w-32 bg-transparent text-ui text-foreground placeholder:text-muted-foreground focus:outline-none sm:w-56"
+              onChange={(event) => updateQuery(event.target.value)}
+              className={cn('pl-9', filters.q && 'pr-9')}
             />
             {filters.q ? (
               <button
                 type="button"
                 aria-label="清除搜索"
-                onClick={() => setQuery('')}
-                className="inline-flex size-6 shrink-0 items-center justify-center rounded-pill text-muted-foreground transition-colors hover:bg-tonal hover:text-foreground"
+                onClick={() => updateQuery('')}
+                className={cn(
+                  'absolute right-1.5 top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded-pill text-muted-foreground transition-colors hover:bg-tonal hover:text-foreground',
+                  controlSquare.xs,
+                )}
               >
-                <XIcon className={iconSize.xs} aria-hidden="true" />
+                <XIcon weight="bold" className={iconSize.xs} aria-hidden="true" />
               </button>
             ) : null}
-            <span className="hidden border-l border-border/60 pl-2.5 text-caption tabular-nums text-muted-foreground sm:inline">
-              {total} 件
-            </span>
           </div>
-        </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-20 pb-20 sm:px-6 sm:pt-16">
-          <div className="space-y-5">
-            {actionError ? (
-              <Alert tone="danger" title="操作未完成" onDismiss={() => setActionError('')}>
-                {actionError}
-              </Alert>
-            ) : null}
-            {mode === 'mock' && filters.tab === 'video' ? (
-              <Alert title="本地演示暂不提供视频样片">
-                视频筛选可用，但本地演示不生成或模拟可播放的视频。切换到图片查看本地样片。
-              </Alert>
-            ) : null}
-            {library.isError ? (
-              <Alert
-                tone="danger"
-                title="作品加载失败"
-                action={
-                  <Button size="sm" variant="secondary" onClick={() => void library.refetch()}>
-                    重新加载
-                  </Button>
-                }
-              >
-                {library.error instanceof Error ? library.error.message : '请检查网络连接后重试。'}
-              </Alert>
-            ) : null}
-
-            {library.isPending ? (
-              <div aria-label="正在加载作品" aria-busy="true" className={cn('grid', gridClasses[columns])}>
-                {Array.from({ length: 8 }, (_, index) => (
-                  <Skeleton key={index} className="aspect-[4/5] h-auto w-full rounded-card" />
-                ))}
-              </div>
-            ) : !items.length && !library.isError ? (
-              <div className="py-12">
-                <EmptyState
-                  icon={ImagesIcon}
-                  title={filtered ? '没有找到匹配的作品' : '你的灵感，即将在这里相遇'}
-                  description={
-                    filtered
-                      ? '试试其他关键词，或清除筛选查看全部作品。'
-                      : '前往创作台完成第一次生成，作品会自动收录到这里。'
-                  }
-                  action={
-                    filtered ? (
-                      <Button variant="secondary" className="rounded-pill" onClick={resetFilters}>
-                        清除筛选
-                      </Button>
-                    ) : (
-                      <Button asChild className="rounded-pill">
-                        <Link href={APP_ROUTES.generate} prefetch>创作第一件作品</Link>
-                      </Button>
-                    )
-                  }
-                />
-              </div>
-            ) : (
-              <div className={cn('grid', gridClasses[columns])}>
-                {items.map((asset) => {
-                  const isSelected = selected.includes(asset.id)
-                  const promptLabel = reusablePrompt(asset) || '未命名作品'
-                  return (
-                    <article
-                      key={asset.id}
-                      className={cn(
-                        'group relative aspect-[4/5] min-w-0 overflow-hidden rounded-card bg-tonal shadow-soft transition-all hover:shadow-floating',
-                        isSelected && 'ring-2 ring-accent ring-offset-2 ring-offset-canvas',
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setActiveId(asset.id)}
-                        aria-label={`查看作品：${asset.prompt || '未命名作品'}`}
-                        className="block h-full w-full overflow-hidden text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus"
-                      >
-                        <AssetMedia key={`${asset.id}-${asset.url}`} asset={asset} />
-                      </button>
-
-                      <div
-                        className={cn(
-                          'absolute left-2.5 top-2.5 z-sticky rounded-pill bg-surface/90 shadow-soft backdrop-blur-sm transition-opacity',
-                          isSelected || selected.length > 0
-                            ? 'opacity-100'
-                            : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
-                        )}
-                      >
-                        <Checkbox
-                          aria-label={`选择作品：${asset.prompt || asset.id}`}
-                          checked={isSelected}
-                          onCheckedChange={() => toggleSelect(asset.id)}
-                          disabled={busy}
-                          className="size-8 min-h-0 min-w-0 rounded-pill"
-                        />
-                      </div>
-
-                      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col justify-end gap-2 bg-gradient-to-t from-overlay/85 via-overlay/45 to-transparent p-3.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                        <p className="line-clamp-2 break-words text-ui font-medium text-on-media">
-                          {promptLabel}
-                        </p>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-caption text-on-media/80">
-                            {formatDate(asset.createdAt)}
-                          </span>
-                          <div className="pointer-events-auto flex items-center gap-1 rounded-pill border border-border/60 bg-surface/95 p-1 shadow-floating backdrop-blur-sm">
-                            {previewSource(asset) ? (
-                              <Link
-                                href={`${APP_ROUTES.generate}?${imageReuseSearch(asset)}`}
-                                prefetch
-                                aria-label="作为参考图复用"
-                                onClick={() =>
-                                  toast.success('已添加参考图到输入框', '可在操作台继续编辑指令或叠加更多参考图')
-                                }
-                                className="inline-flex size-8 items-center justify-center rounded-pill text-foreground transition-colors hover:bg-tonal-hover"
-                              >
-                                <ImageIcon className={iconSize.sm} aria-hidden="true" />
-                              </Link>
-                            ) : null}
-                            <Link
-                              href={`${APP_ROUTES.generate}?${generationSearch(asset)}`}
-                              prefetch
-                              aria-label="在创作台复用提示词"
-                              onClick={() =>
-                                toast.info('已填入提示词草稿', '可在下方输入区编辑后发送')
-                              }
-                              className="inline-flex size-8 items-center justify-center rounded-pill text-foreground transition-colors hover:bg-tonal-hover"
-                            >
-                              <SparkleIcon className={iconSize.sm} aria-hidden="true" />
-                            </Link>
-                            <button
-                              type="button"
-                              aria-label="下载作品"
-                              disabled={Boolean(downloadingId)}
-                              onClick={() => void handleDownload(asset)}
-                              className="inline-flex size-8 items-center justify-center rounded-pill text-foreground transition-colors hover:bg-tonal-hover disabled:opacity-50"
-                            >
-                              <ArrowDownIcon className={iconSize.sm} aria-hidden="true" />
-                            </button>
-                            <button
-                              type="button"
-                              aria-label="删除作品"
-                              disabled={busy}
-                              onClick={() => {
-                                setActionError('')
-                                setPendingDelete([asset.id])
-                              }}
-                              className="inline-flex size-8 items-center justify-center rounded-pill text-danger transition-colors hover:bg-danger-soft disabled:opacity-50"
-                            >
-                              <TrashIcon className={iconSize.sm} aria-hidden="true" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </article>
-                  )
-                })}
-              </div>
-            )}
-
-            {library.hasNextPage ? (
-              <div className="flex justify-center pt-2">
-                <Button
-                  variant="secondary"
-                  className="rounded-pill"
-                  loading={library.isFetchingNextPage}
-                  onClick={() => void library.fetchNextPage()}
-                >
-                  加载更多作品
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {selected.length > 0 ? (
-          <div className="motion-fade-in pointer-events-auto absolute bottom-5 left-1/2 z-sticky flex -translate-x-1/2 items-center gap-2.5 rounded-pill border border-border/70 bg-surface/95 px-4 py-2 shadow-floating backdrop-blur-md">
-            <span role="status" className="whitespace-nowrap text-ui font-medium text-foreground">
-              已选 {selected.length} 件
-            </span>
-            <Button
+          <div className="flex flex-wrap items-center gap-2.5 sm:justify-end">
+            <SegmentedControl
+              label="作品类型筛选"
               size="sm"
-              variant="danger"
-              className="rounded-pill"
-              disabled={busy}
-              onClick={() => {
-                setActionError('')
-                setPendingDelete(selected)
-              }}
-              icon={<TrashIcon className={iconSize.sm} aria-hidden="true" />}
-            >
-              删除所选
-            </Button>
-            <Button size="sm" variant="ghost" className="rounded-pill" onClick={clearSelection}>
-              取消选择
-            </Button>
+              items={KIND_ITEMS}
+              value={filters.tab}
+              onChange={setTab}
+            />
+            <SegmentedControl
+              label="网格列数"
+              size="sm"
+              items={COLUMN_ITEMS}
+              value={String(columns) as ColumnValue}
+              onChange={handleColumnsChange}
+            />
           </div>
-        ) : null}
-      </section>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5">
+          <div role="status" className="inline-flex items-center gap-2 text-caption text-muted-foreground">
+            {resultsRefreshing ? (
+              <span aria-hidden="true" className="size-1.5 animate-pulse rounded-pill bg-accent" />
+            ) : null}
+            <span className="font-mono tabular-nums">{statusText}</span>
+          </div>
+          {filtered ? (
+            <Button variant="ghost" size="xs" onClick={resetFilters}>
+              清除筛选
+            </Button>
+          ) : null}
+        </div>
+      </Card>
+
+      {actionError ? (
+        <Alert tone="danger" role="alert" title="操作未完成" onDismiss={() => setActionError('')}>
+          {actionError}
+        </Alert>
+      ) : null}
+
+      {mode === 'mock' && filters.tab === 'video' ? (
+        <Alert tone="info" title="本地演示暂不提供视频样片">
+          视频筛选可用，但本地演示不生成或模拟可播放的视频。切换到「图片」即可查看本地样片。
+        </Alert>
+      ) : null}
+
+      {library.isError ? (
+        <Alert
+          tone="danger"
+          role="alert"
+          title="作品加载失败"
+          action={
+            <Button size="sm" variant="secondary" onClick={() => void library.refetch()}>
+              重新加载
+            </Button>
+          }
+        >
+          {library.error instanceof Error ? library.error.message : '请检查网络连接后重试。'}
+        </Alert>
+      ) : null}
+
+      {library.isPending ? (
+        <div
+          aria-label="正在加载作品"
+          aria-busy="true"
+          className={cn('grid', GRID_CLASSES[columns])}
+        >
+          {Array.from({ length: 8 }, (_, index) => (
+            <SkeletonTile key={index} className="aspect-[4/5] rounded-card" />
+          ))}
+        </div>
+      ) : !items.length && !library.isError ? (
+        <Card variant="surface">
+          <EmptyState
+            icon={ImagesIcon}
+            title={filtered ? '没有找到匹配的作品' : '图库暂无作品'}
+            description={
+              filtered
+                ? '试试其他关键词，或清除筛选查看全部作品。'
+                : '前往创作台完成第一次生成，图片与视频会自动收录到这里。'
+            }
+            action={
+              filtered ? (
+                <Button variant="secondary" onClick={resetFilters}>
+                  清除筛选
+                </Button>
+              ) : (
+                <Button asChild icon={<SparkleIcon weight="bold" aria-hidden="true" />}>
+                  <Link href={APP_ROUTES.generate} prefetch>
+                    创作第一件作品
+                  </Link>
+                </Button>
+              )
+            }
+          />
+        </Card>
+      ) : (
+        <div
+          ref={gridRef}
+          aria-busy={resultsRefreshing || undefined}
+          className={cn('grid', GRID_CLASSES[columns])}
+        >
+          {items.map((asset) => {
+            const promptLabel = reusablePrompt(asset) || '未命名作品'
+            const referenceEligible = isReferenceEligibleAsset(asset)
+            return (
+              <article key={asset.id} data-flip-key={asset.id} className="min-w-0">
+                <Card
+                  density="none"
+                  variant="surface"
+                  className="group relative aspect-[4/5] w-full overflow-hidden transition-[border-color,box-shadow,transform] duration-[var(--motion-base)] ease-out hover:-translate-y-0.5 hover:border-border-control hover:shadow-floating"
+                >
+                  <button
+                    type="button"
+                    onClick={() => openAsset(asset.id)}
+                    aria-label={`查看作品：${promptLabel}`}
+                    className="block h-full w-full overflow-hidden text-left"
+                  >
+                    <AssetMedia key={`${asset.id}-${asset.url}`} asset={asset} />
+                  </button>
+
+                  <div className="media-tile-actions media-scrim pointer-events-none absolute inset-x-0 bottom-0 flex flex-col justify-end gap-2 p-2.5 sm:p-3.5">
+                    <p className="line-clamp-2 break-words text-ui font-medium text-on-media">
+                      {promptLabel}
+                    </p>
+                    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                      <span className="mr-auto font-mono text-caption tabular-nums text-on-media/85">
+                        {formatDate(asset.createdAt)}
+                      </span>
+                      <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-end gap-1 rounded-pill border border-border/70 bg-surface/95 p-1 shadow-floating backdrop-blur-sm">
+                        {referenceEligible ? (
+                          <Link
+                            href={`${APP_ROUTES.generate}?${imageReuseSearch(asset)}`}
+                            prefetch
+                            aria-label="以此为参考图创作"
+                            title="以此为参考图创作"
+                            onClick={() =>
+                              toast.success('已添加参考图到输入框', '可在创作台继续编辑指令或叠加更多参考图')
+                            }
+                            className={cn(
+                              'inline-flex shrink-0 items-center justify-center rounded-pill text-foreground transition-colors hover:bg-tonal-hover',
+                              controlSquare.sm,
+                              touchTargetSquare,
+                            )}
+                          >
+                            <ImageIcon weight="regular" className={iconSize.sm} aria-hidden="true" />
+                          </Link>
+                        ) : null}
+                        <Link
+                          href={`${APP_ROUTES.generate}?${generationSearch(asset)}`}
+                          prefetch
+                          aria-label="复用提示词"
+                          title="复用提示词"
+                          onClick={() =>
+                            toast.info('已填入提示词草稿', '可在创作台输入区编辑后发送')
+                          }
+                          className={cn(
+                            'inline-flex shrink-0 items-center justify-center rounded-pill text-foreground transition-colors hover:bg-tonal-hover',
+                            controlSquare.sm,
+                            touchTargetSquare,
+                          )}
+                        >
+                          <SparkleIcon weight="regular" className={iconSize.sm} aria-hidden="true" />
+                        </Link>
+                        <button
+                          type="button"
+                          aria-label="下载作品"
+                          title="下载作品"
+                          disabled={Boolean(downloadingId)}
+                          onClick={() => void handleDownload(asset)}
+                          className={cn(
+                            'inline-flex shrink-0 items-center justify-center rounded-pill text-foreground transition-colors hover:bg-tonal-hover disabled:is-disabled',
+                            controlSquare.sm,
+                            touchTargetSquare,
+                          )}
+                        >
+                          <ArrowDownIcon weight="regular" className={iconSize.sm} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="删除作品"
+                          title="删除作品"
+                          disabled={busy}
+                          onClick={() => {
+                            setActionError('')
+                            setPendingDelete([asset.id])
+                          }}
+                          className={cn(
+                            'inline-flex shrink-0 items-center justify-center rounded-pill text-danger transition-colors hover:bg-danger-soft disabled:is-disabled',
+                            controlSquare.sm,
+                            touchTargetSquare,
+                          )}
+                        >
+                          <TrashIcon weight="regular" className={iconSize.sm} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              </article>
+            )
+          })}
+        </div>
+      )}
+
+      {library.hasNextPage ? (
+        <div ref={loadMoreRef} className="flex justify-center pt-2">
+          <Button
+            variant="secondary"
+            loading={library.isFetchingNextPage}
+            onClick={() => void library.fetchNextPage()}
+          >
+            加载更多作品
+          </Button>
+        </div>
+      ) : null}
 
       <Dialog
-        open={Boolean(active)}
-        onClose={() => setActiveId(null)}
+        open={Boolean(activeId)}
+        onClose={closeAsset}
         title="作品详情"
         description="查看原始作品、提示词与文件信息。"
         size="wide"
@@ -597,30 +603,30 @@ export function LibraryView({ mode }: LibraryViewProps) {
               >
                 下载原文件
               </Button>
-              {previewSource(active) ? (
+              {activeReferenceEligible ? (
                 <Button asChild variant="secondary" icon={<ImageIcon aria-hidden="true" />}>
                   <Link
                     href={`${APP_ROUTES.generate}?${imageReuseSearch(active)}`}
                     prefetch
                     onClick={() => {
-                      setActiveId(null)
-                      toast.success('已添加参考图到输入框', '可在操作台继续编辑指令或叠加更多参考图')
+                      closeAsset()
+                      toast.success('已添加参考图到输入框', '可在创作台继续编辑指令或叠加更多参考图')
                     }}
                   >
-                    作为参考图
+                    以此为参考图创作
                   </Link>
                 </Button>
               ) : null}
-              <Button asChild icon={<ArrowRightIcon aria-hidden="true" />}>
+              <Button asChild icon={<SparkleIcon aria-hidden="true" />}>
                 <Link
-                  href={`${APP_ROUTES.generate}?${imageReuseSearch(active, { includePrompt: true })}`}
+                  href={`${APP_ROUTES.generate}?${generationSearch(active)}`}
                   prefetch
                   onClick={() => {
-                    setActiveId(null)
-                    toast.success('已复用图片与提示词', '已在操作台预填参考图与提示词草稿')
+                    closeAsset()
+                    toast.info('已填入提示词草稿', '可在创作台输入区编辑后发送')
                   }}
                 >
-                  复用图片与提示词
+                  复用提示词
                 </Link>
               </Button>
             </>
@@ -630,29 +636,73 @@ export function LibraryView({ mode }: LibraryViewProps) {
         {active ? (
           <div className="min-w-0 space-y-5">
             <AssetMedia key={active.id} asset={active} detail />
-            <section className="space-y-2 rounded-card border border-border bg-tonal/40 p-4">
-              <h3 className="text-ui font-medium text-foreground">提示词</h3>
+
+            <section className="space-y-2 border-t border-border/70 pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-ui font-medium text-foreground">提示词</h3>
+                  <Badge tone={active.mediaKind === 'video' ? 'info' : 'neutral'}>
+                    {active.mediaKind === 'video' ? '视频' : '图片'}
+                  </Badge>
+                </div>
+                {activePrompt ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleCopyPrompt(activePrompt)}
+                    icon={
+                      copiedPrompt ? (
+                        <CheckIcon weight="bold" aria-hidden="true" />
+                      ) : (
+                        <CopyIcon aria-hidden="true" />
+                      )
+                    }
+                  >
+                    {copiedPrompt ? '已复制' : '复制提示词'}
+                  </Button>
+                ) : null}
+              </div>
               <p className="whitespace-pre-wrap break-words text-ui leading-relaxed text-muted-foreground">
-                {reusablePrompt(active) || '未提供提示词'}
+                {activePrompt || '未提供提示词'}
               </p>
             </section>
-            <dl className="grid grid-cols-2 gap-4 rounded-card border border-border bg-surface p-4 text-ui sm:grid-cols-4">
+
+            <dl className="grid grid-cols-2 gap-4 border-t border-border/70 pt-4 sm:grid-cols-4">
               <Metadata label="创建时间" value={formatDateTime(active.createdAt)} />
-              <Metadata label="文件类型" value={active.mimeType} />
+              <Metadata label="文件类型" value={active.mimeType || '—'} />
               <Metadata
                 label="分辨率"
                 value={active.width && active.height ? `${active.width} × ${active.height}` : '—'}
               />
               <Metadata label="文件大小" value={formatBytes(active.sizeBytes)} />
               {active.mediaKind === 'video' ? (
-                <Metadata
-                  label="时长"
-                  value={active.durationSeconds === undefined ? '—' : `${active.durationSeconds} 秒`}
-                />
+                <Metadata label="时长" value={formatDuration(active.durationSeconds)} />
               ) : null}
             </dl>
           </div>
-        ) : null}
+        ) : detailQuery.isError ? (
+          <Alert
+            tone="danger"
+            role="alert"
+            title="无法加载该作品"
+            action={
+              <Button size="sm" variant="secondary" onClick={() => void detailQuery.refetch()}>
+                重试
+              </Button>
+            }
+          >
+            {detailQuery.error instanceof Error ? detailQuery.error.message : '作品可能已被删除或暂不可访问。'}
+          </Alert>
+        ) : (
+          <div aria-label="正在加载作品详情" aria-busy="true" className="space-y-4">
+            <SkeletonTile className="aspect-video w-full rounded-card" />
+            <div className="space-y-2 pt-2">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+            </div>
+          </div>
+        )}
       </Dialog>
 
       <Dialog
@@ -683,7 +733,7 @@ function Metadata({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-caption text-muted-foreground">{label}</dt>
-      <dd className="mt-1 break-words font-mono text-caption text-foreground">{value}</dd>
+      <dd className="mt-1 break-words font-mono text-caption tabular-nums text-foreground">{value}</dd>
     </div>
   )
 }

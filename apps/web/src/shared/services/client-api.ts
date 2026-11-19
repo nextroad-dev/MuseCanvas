@@ -7,25 +7,24 @@ import { API_ENDPOINTS } from '@musecanvas/contracts'
 import type {
   AdminPluginDocsDto,
   AgentApprovalSummaryDTO,
+  AgentArtifactDTO,
+  AgentArtifactPageDTO,
+  AgentArtifactThreadsPageDTO,
+  AgentArtifactThreadDTO,
+  CreateAgentArtifactThreadRequest,
+  CreateAgentArtifactReplyRequest,
+  ResolveAgentArtifactThreadRequest,
   AgentDecimal,
   AgentItemsPageDTO,
   AgentMessageAcceptedDTO,
+  AgentEditPreparationDTO,
+  PrepareAgentImageEditRequest,
   AgentSessionDTO,
   AgentSessionSnapshotDTO,
   AgentSessionsPageDTO,
   AgentTurnDTO,
-  CanvasAgentApplyResultDto,
-  CanvasAgentConfirmResultDto,
-  CanvasAgentHistoryDto,
-  CanvasAgentSettingsDto,
-  CanvasAgentStatusDto,
-  CanvasAgentTurnRecoveryDto,
-  CanvasDto,
-  CanvasListPageDto,
   CreateAgentMessageRequest,
   CreateAgentSessionRequest,
-  CreateCanvasRequest,
-  CreateGenerationRequest,
   CreatePromptTemplateEntryInput,
   EditSelection,
   ImportPromptTemplateSetInput,
@@ -51,15 +50,13 @@ import type {
   StorageSettingsInput,
   RuntimeSettingsDto,
   RuntimeSettingsInput,
-  UpdateCanvasAgentSettingsRequest,
-  UpdateCanvasRequest,
   UpdateMediaModelDefaultsRequest,
   UpdatePromptTemplateEntryInput,
   BuiltinProviderTemplate,
 } from '@musecanvas/contracts'
 import { ApiError, apiFetch, resolveApiUrl } from './api'
 import { WORKSPACE_MODE } from '../lib/workspace-mode'
-import { mockAgentApi, mockCanvasesApi } from './mock-agent-api'
+import { mockAgentApi } from './mock-agent-api'
 import { mockWorkspaceApi } from './mock-workspace-api'
 import type {
   AccountDto,
@@ -76,6 +73,7 @@ import type {
   AssetDownloadDto,
   AssetDto,
   AssetListDto,
+  AuthSessionResult,
   GenerationJobDto,
   GenerationJobListDto,
   InvitationDto,
@@ -134,7 +132,7 @@ export const authApi = {
       ...(invitationCode ? { invitationCode } : {}),
     }),
   verifyOtp: (email: string, code: string) =>
-    post<SessionDto>(API_ENDPOINTS.auth.otpVerify, { email, code }),
+    post<AuthSessionResult>(API_ENDPOINTS.auth.otpVerify, { email, code }),
   logout: () => post<{ loggedOut: boolean }>(API_ENDPOINTS.auth.logout),
   /** OAuth 登录/绑定的浏览器跳转地址（后端 302 到供应商）。 */
   oauthStartUrl: (provider: OAuthProvider) => resolveApiUrl(API_ENDPOINTS.auth.oauthStart(provider)),
@@ -144,7 +142,7 @@ export const authApi = {
   },
   /** 邀请制下 OAuth 新用户补邀请码（challengeId 来自 /login 回调 query）。 */
   completeOAuthInvitation: (challengeId: string, invitationCode: string) =>
-    post<SessionDto>(API_ENDPOINTS.auth.oauthInvitation, { challengeId, invitationCode }),
+    post<AuthSessionResult>(API_ENDPOINTS.auth.oauthInvitation, { challengeId, invitationCode }),
 }
 
 export const accountApi = {
@@ -162,22 +160,47 @@ export const accountApi = {
 }
 
 // ---------------------------------------------------------------------------
-// models / generations
+// models
 // ---------------------------------------------------------------------------
 
 export const modelsApi = {
   list: () => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.models.list() : get<PublicModelDto[]>(API_ENDPOINTS.models),
 }
 
-export const generationsApi = {
-  create: (body: CreateGenerationRequest) => WORKSPACE_MODE === 'mock' ? mockWorkspaceApi.generations.create(body) : post<GenerationJobDto>(API_ENDPOINTS.generations, body),
-}
-
 // ---------------------------------------------------------------------------
 // agent core v1
 // ---------------------------------------------------------------------------
 
+// Mock workspace has no durable Artifact projection; never fall through to live IO.
+function mockArtifactUnavailable<T>(): Promise<T> {
+  return Promise.reject(new Error('本地演示暂无持久化 Artifact，请使用真实会话。'))
+}
+
 export const agentApi = {
+  listArtifacts: (sessionId: string, params?: { limit?: number; cursor?: string }): Promise<AgentArtifactPageDTO> =>
+    WORKSPACE_MODE === 'mock'
+      ? Promise.resolve({ items: [], nextCursor: null })
+      : get<AgentArtifactPageDTO>(API_ENDPOINTS.agent.artifacts(sessionId), params),
+  getArtifact: (sessionId: string, artifactId: string): Promise<AgentArtifactDTO> =>
+    WORKSPACE_MODE === 'mock'
+      ? mockArtifactUnavailable()
+      : get<AgentArtifactDTO>(API_ENDPOINTS.agent.artifact(sessionId, artifactId)),
+  listArtifactThreads: (sessionId: string, artifactId: string, params?: { limit?: number; cursor?: string }): Promise<AgentArtifactThreadsPageDTO> =>
+    WORKSPACE_MODE === 'mock'
+      ? Promise.resolve({ items: [], nextCursor: null })
+      : get<AgentArtifactThreadsPageDTO>(API_ENDPOINTS.agent.artifactThreads(sessionId, artifactId), params),
+  createArtifactThread: (sessionId: string, artifactId: string, body: CreateAgentArtifactThreadRequest): Promise<AgentArtifactThreadDTO> =>
+    WORKSPACE_MODE === 'mock'
+      ? mockArtifactUnavailable()
+      : post<AgentArtifactThreadDTO>(API_ENDPOINTS.agent.artifactThreads(sessionId, artifactId), body),
+  resolveArtifactThread: (sessionId: string, artifactId: string, threadId: string, body: ResolveAgentArtifactThreadRequest): Promise<AgentArtifactThreadDTO> =>
+    WORKSPACE_MODE === 'mock'
+      ? mockArtifactUnavailable()
+      : patch<AgentArtifactThreadDTO>(API_ENDPOINTS.agent.artifactThread(sessionId, artifactId, threadId), body),
+  replyArtifactThread: (sessionId: string, artifactId: string, threadId: string, body: CreateAgentArtifactReplyRequest): Promise<AgentArtifactThreadDTO> =>
+    WORKSPACE_MODE === 'mock'
+      ? mockArtifactUnavailable()
+      : post<AgentArtifactThreadDTO>(API_ENDPOINTS.agent.artifactThreadReplies(sessionId, artifactId, threadId), body),
   listSessions: (params?: { limit?: number; cursor?: string }) =>
     WORKSPACE_MODE === 'mock'
       ? mockAgentApi.listSessions(params)
@@ -214,50 +237,30 @@ export const agentApi = {
     WORKSPACE_MODE === 'mock'
       ? mockAgentApi.resolveApproval(approvalId, body)
       : post<AgentApprovalSummaryDTO>(API_ENDPOINTS.agent.resolveApproval(approvalId), body),
-}
-
-// ---------------------------------------------------------------------------
-// canvases + canvas agent
-// ---------------------------------------------------------------------------
-
-export const canvasesApi = {
-  list: (params?: { limit?: number; cursor?: string }) =>
-    WORKSPACE_MODE === 'mock'
-      ? mockCanvasesApi.list(params)
-      : get<CanvasListPageDto>(API_ENDPOINTS.canvases.list, params),
-  create: (body: CreateCanvasRequest = {}) =>
-    WORKSPACE_MODE === 'mock'
-      ? mockCanvasesApi.create(body)
-      : post<CanvasDto>(API_ENDPOINTS.canvases.create, body),
-  detail: (id: string) =>
-    WORKSPACE_MODE === 'mock'
-      ? mockCanvasesApi.detail(id)
-      : get<CanvasDto>(API_ENDPOINTS.canvases.detail(id)),
-  update: (id: string, body: UpdateCanvasRequest) =>
-    WORKSPACE_MODE === 'mock'
-      ? mockCanvasesApi.update(id, body)
-      : patch<CanvasDto>(API_ENDPOINTS.canvases.update(id), body),
-  remove: (id: string) =>
-    WORKSPACE_MODE === 'mock'
-      ? mockCanvasesApi.remove(id)
-      : del<{ id: string }>(API_ENDPOINTS.canvases.remove(id)),
-}
-
-/** 历史倒序分页：首页用 `beforeSeq = LATEST_HISTORY_SEQ`。 */
-export const LATEST_HISTORY_SEQ = 2_147_483_647
-
-export const canvasAgentApi = {
-  getStatus: () => get<CanvasAgentStatusDto>(API_ENDPOINTS.canvasAgent.status),
-  getHistory: (
-    canvasId: string,
-    params?: { afterSeq?: number; beforeSeq?: number; limit?: number },
-  ) => get<CanvasAgentHistoryDto>(API_ENDPOINTS.canvases.agent.history(canvasId), params),
-  getTurn: (canvasId: string, turnId: string) =>
-    get<CanvasAgentTurnRecoveryDto>(API_ENDPOINTS.canvases.agent.turn(canvasId, turnId)),
-  confirm: (canvasId: string, pendingId: string, approve: boolean) =>
-    post<CanvasAgentConfirmResultDto>(API_ENDPOINTS.canvases.agent.confirm(canvasId), { pendingId, approve }),
-  apply: (canvasId: string, turnId: string) =>
-    post<CanvasAgentApplyResultDto>(API_ENDPOINTS.canvases.agent.apply(canvasId), { turnId }),
+  prepareImageEdit: (input: Omit<PrepareAgentImageEditRequest, 'region' | 'idempotencyKey'> & {
+    image?: File
+    selection?: EditSelection
+    mask?: File
+    idempotencyKey: string
+  }) => {
+    if (Boolean(input.assetId) === Boolean(input.image)) {
+      throw new Error('局部修改必须且只能提供一个图库资产或源图片。')
+    }
+    if (Boolean(input.selection) === Boolean(input.mask)) {
+      throw new Error('局部修改必须且只能提供一个选区或蒙版。')
+    }
+    if (input.turnId && !input.sessionId) throw new Error('已受理轮次必须同时提供所属会话。')
+    const form = new FormData()
+    form.append('modelId', input.modelId)
+    if (input.sessionId) form.append('sessionId', input.sessionId)
+    if (input.turnId) form.append('turnId', input.turnId)
+    if (input.assetId) form.append('assetId', input.assetId)
+    if (input.image) form.append('image', input.image, input.image.name)
+    if (input.selection) form.append('region', JSON.stringify(input.selection))
+    if (input.mask) form.append('mask', input.mask, input.mask.name)
+    form.append('idempotencyKey', input.idempotencyKey)
+    return apiFetch<AgentEditPreparationDTO>(API_ENDPOINTS.images.prepareEdit, { method: 'POST', body: form })
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -344,55 +347,6 @@ export const mediaApi = {
   objectPath: API_ENDPOINTS.media.object,
   uploadPath: API_ENDPOINTS.media.upload,
   upload: uploadToPresigned,
-}
-
-// ---------------------------------------------------------------------------
-// 局部修改（multipart）
-// ---------------------------------------------------------------------------
-
-export interface ImageEditRequest {
-  modelId: string
-  /** 用户原话，服务端负责包裹「尊重遮罩」指令。 */
-  prompt: string
-  /** 图库资产来源；与 `image` 文件二选一。 */
-  assetId?: string
-  /** 源图字节（无 assetId 时）。 */
-  image?: File
-  /** 源图像素坐标选区。 */
-  selection?: EditSelection
-  /** 外部生成的遮罩 PNG（有 alpha）。 */
-  mask?: File
-  quality?: string
-  parameters?: Record<string, unknown>
-  idempotencyKey?: string
-}
-
-export const imagesApi = {
-  edit: (request: ImageEditRequest, signal?: AbortSignal) => {
-    const form = new FormData()
-    form.append('modelId', request.modelId)
-    form.append('prompt', request.prompt)
-    if (request.assetId) form.append('assetId', request.assetId)
-    if (request.image) form.append('image', request.image, request.image.name)
-    if (request.mask) form.append('mask', request.mask, request.mask.name)
-    if (request.quality) form.append('quality', request.quality)
-    if (request.parameters && Object.keys(request.parameters).length > 0) {
-      form.append('parameters', JSON.stringify(request.parameters))
-    }
-    if (request.idempotencyKey) form.append('idempotencyKey', request.idempotencyKey)
-    if (request.selection) {
-      form.append(
-        'region',
-        JSON.stringify({
-          x: request.selection.x,
-          y: request.selection.y,
-          width: request.selection.width,
-          height: request.selection.height,
-        }),
-      )
-    }
-    return apiFetch<GenerationJobDto>(API_ENDPOINTS.images.edit, { method: 'POST', body: form, signal })
-  },
 }
 
 // ---------------------------------------------------------------------------
@@ -562,9 +516,6 @@ export const adminApi = {
     get<PromptOptimizationSettingsDto>(API_ENDPOINTS.admin.promptOptimizationSettings),
   updatePromptOptimizationSettings: (input: PromptOptimizationSettingsInput) =>
     patch<PromptOptimizationSettingsDto>(API_ENDPOINTS.admin.promptOptimizationSettings, input),
-  getCanvasAgentSettings: () => get<CanvasAgentSettingsDto>(API_ENDPOINTS.admin.canvasAgentSettings),
-  updateCanvasAgentSettings: (input: UpdateCanvasAgentSettingsRequest) =>
-    patch<CanvasAgentSettingsDto>(API_ENDPOINTS.admin.canvasAgentSettings, input),
   getMediaModelDefaults: () => get<MediaModelDefaultsDto>(API_ENDPOINTS.admin.mediaModelDefaults),
   updateMediaModelDefaults: (input: UpdateMediaModelDefaultsRequest) =>
     patch<MediaModelDefaultsDto>(API_ENDPOINTS.admin.mediaModelDefaults, input),
@@ -577,14 +528,10 @@ export const clientApi = {
   auth: authApi,
   account: accountApi,
   models: modelsApi,
-  generations: generationsApi,
-  canvases: canvasesApi,
-  canvasAgent: canvasAgentApi,
   jobs: jobsApi,
   library: libraryApi,
   generationUploads: generationUploadsApi,
   media: mediaApi,
-  images: imagesApi,
   setup: setupApi,
   admin: adminApi,
 } as const

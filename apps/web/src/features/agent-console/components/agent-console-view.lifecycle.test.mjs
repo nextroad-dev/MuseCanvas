@@ -62,6 +62,7 @@ function setup({
   turnActive = false,
   activeTurn = null,
   pendingApprovals = [],
+  models = [],
   viewportWidth,
 } = {}) {
   const hasPreviousWindow = Object.prototype.hasOwnProperty.call(globalThis, 'window')
@@ -79,6 +80,7 @@ function setup({
   let currentTurnActive = turnActive
   let currentActiveTurn = activeTurn
   let currentPendingApprovals = pendingApprovals
+  let currentModels = models
   let effects = []
   let pending = []
   let effectIndex = 0
@@ -118,6 +120,7 @@ function setup({
           },
         ]
       },
+      useMemo: (factory) => factory(),
       useRef: (initial) => {
         const idx = refCursor++
         if (!(idx in refSlots)) {
@@ -199,7 +202,7 @@ function setup({
               ownerId: 'owner',
               agentDefinitionId: input.agentDefinitionId,
               definitionVersion: input.definitionVersion,
-              defaultCanvasId: null,
+              defaultCanvasId: input.defaultCanvasId ?? null,
               activeTurnId: null,
               inputRevision: '0',
               nextItemSequence: '0',
@@ -223,6 +226,16 @@ function setup({
         }
       },
     },
+    // 局部修改入口只在存在声明了 mask 输入的图片模型时可用；默认空目录即不可用。
+    '@/shared/hooks/useModels': { useModels: () => ({ data: currentModels, isLoading: false }) },
+    '@/shared/hooks/useAnimatedPresence': {
+      useAnimatedPresence: (open) => ({
+        mounted: open,
+        phase: open ? 'idle' : 'exit',
+        closing: false,
+        onAnimationEnd: () => {},
+      }),
+    },
     '@/features/workspace/components/workspace-shell-context': {
       useWorkspaceShell: () => null,
     },
@@ -242,6 +255,7 @@ function setup({
     '../stores/agent-console-store': { useAgentConsoleStore },
     './agent-composer': { AgentComposer: 'AgentComposer' },
     './execution-timeline': { ExecutionTimeline: 'ExecutionTimeline' },
+    './inspector-panel': { InspectorPanel: 'InspectorPanel' },
     './session-sidebar': { SessionSidebar: 'SessionSidebar' },
   })
 
@@ -891,8 +905,8 @@ test('SessionSidebar supports deleting, clearing, pinning, and inline renaming r
   assert.equal(items[1].props['data-flip-key'], s1.id)
   assert.ok(textContent(items[1]).includes('晨雾水乡乌篷船写意参考样片'))
 
-  // 2. Click delete, pin, and clear buttons
-  const deleteButtons = findAll(tree, (el) => el.props?.['aria-label'] === '删除对话')
+  // 2. Click hide, pin, and device-local clear buttons
+  const deleteButtons = findAll(tree, (el) => el.props?.['aria-label'] === '在此设备隐藏对话')
   assert.equal(deleteButtons.length, 2)
   deleteButtons[1].props.onClick({ stopPropagation() {} })
   assert.deepEqual(deleted, [s1.id])
@@ -902,9 +916,25 @@ test('SessionSidebar supports deleting, clearing, pinning, and inline renaming r
   unpinBtn.props.onClick({ stopPropagation() {} })
   assert.deepEqual(pinned, [s2.id])
 
-  const clearBtn = find(tree, (el) => el.props?.['aria-label'] === '清空全部对话')
+  const clearBtn = find(tree, (el) => el.props?.['aria-label'] === '清空此设备上的对话')
   assert.ok(clearBtn)
   clearBtn.props.onClick()
+  assert.equal(cleared, 0)
+
+  tree = sidebar.render({
+    activeSessionId: s1.id,
+    pinnedSessionIds: [s2.id],
+    sessionTitles: {},
+    onDeleteSession: (id) => deleted.push(id),
+    onClearSessions: () => { cleared += 1 },
+    onTogglePinSession: (id) => pinned.push(id),
+    onRenameSession: (id, title) => renamed.push([id, title]),
+  })
+  const confirmDialog = find(tree, (el) => el.type === 'Dialog' && el.props?.open === true && el.props?.title === '清空此设备上的对话')
+  assert.ok(confirmDialog)
+  const confirmClearBtn = find(confirmDialog.props.footer, (el) => el.type === 'Button' && textContent(el).includes('确认清空'))
+  assert.ok(confirmClearBtn)
+  confirmClearBtn.props.onClick()
   assert.equal(cleared, 1)
 
   // 3. Inline rename flow
@@ -932,4 +962,161 @@ test('SessionSidebar supports deleting, clearing, pinning, and inline renaming r
   assert.ok(saveBtn)
   saveBtn.props.onClick()
   assert.deepEqual(renamed, [[s2.id, '江南煙雨专题构图']])
+})
+
+test('right inspector panel toggles, shows pending approval badge when closed, and closes via Escape/backdrop on <1280px', () => {
+  const app = setup({
+    mode: 'live',
+    viewportWidth: 1090,
+    sessions: [
+      {
+        id: 'session-1',
+        ownerId: 'owner',
+        agentDefinitionId: 'def-1',
+        definitionVersion: 1,
+        defaultCanvasId: null,
+        activeTurnId: null,
+        inputRevision: '0',
+        nextItemSequence: '0',
+        nextEventCursor: '0',
+        createdAt: '2026-01-05T00:00:00.000Z',
+        updatedAt: '2026-01-05T00:00:00.000Z',
+        archivedAt: null,
+      },
+    ],
+    pendingApprovals: [{ id: 'approval-1', toolCallId: 'tool-1', status: 'pending', argumentsHash: 'hash' }],
+  })
+  try {
+    app.store.getState().setActiveSessionId('session-1')
+    let tree = app.render()
+
+    const toggleBtn = find(tree, (el) => el.props?.['aria-label'] === '展开检查器')
+    assert.ok(toggleBtn)
+    assert.equal(toggleBtn.props['aria-expanded'], false)
+    const badge = find(tree, (el) => el.props?.['aria-label'] === '有 1 条待审批工具')
+    assert.ok(badge)
+    assert.equal(textContent(badge), '1')
+    assert.equal(find(tree, (el) => el.type === 'InspectorPanel'), null)
+
+    toggleBtn.props.onClick()
+    assert.equal(app.store.getState().rightPanelOpen, true)
+
+    tree = app.render()
+    assert.equal(find(tree, (el) => el.props?.['aria-label'] === '展开检查器'), null)
+    assert.equal(find(tree, (el) => el.props?.['aria-label'] === '有 1 条待审批工具'), null)
+
+    const inspectorAside = find(tree, (el) => el.props?.['aria-label'] === 'Agent 检查器面板')
+    assert.ok(inspectorAside)
+    const inspector = find(inspectorAside, (el) => el.type === 'InspectorPanel')
+    assert.ok(inspector)
+    assert.equal(typeof inspector.props.onClose, 'function')
+
+    let prevented = false
+    globalThis.window.dispatchEvent({
+      type: 'keydown',
+      key: 'Escape',
+      defaultPrevented: false,
+      preventDefault() {
+        prevented = true
+      },
+    })
+    assert.equal(prevented, false)
+    assert.equal(app.store.getState().rightPanelOpen, false)
+
+    // Reopen and close via floating card backdrop click
+    app.store.getState().setRightPanelOpen(true)
+    tree = app.render()
+    const rightBackdrop = find(
+      tree,
+      (el) => el.type === 'div' && el.props['data-inspector-backdrop'] === 'true',
+    )
+    assert.ok(rightBackdrop)
+    rightBackdrop.props.onClick()
+    assert.equal(app.store.getState().rightPanelOpen, false)
+  } finally {
+    app.unmount()
+  }
+})
+
+test('empty composer renders inspiration starters and clicking fills draftPrompt, while Ctrl/Cmd+K opens left sidebar', () => {
+  const app = setup({
+    mode: 'live',
+    viewportWidth: 1360,
+    sessions: [
+      {
+        id: 'session-empty',
+        ownerId: 'owner',
+        agentDefinitionId: 'def-1',
+        definitionVersion: 1,
+        defaultCanvasId: null,
+        activeTurnId: null,
+        inputRevision: '0',
+        nextItemSequence: '0',
+        nextEventCursor: '0',
+        createdAt: '2026-01-05T00:00:00.000Z',
+        updatedAt: '2026-01-05T00:00:00.000Z',
+        archivedAt: null,
+      },
+    ],
+  })
+  try {
+    app.store.getState().setActiveSessionId('session-empty')
+    app.store.getState().setLeftSidebarOpen(false)
+    const tree = app.render()
+
+    const starterBtn = find(tree, (el) => el.type === 'button' && textContent(el) === '东方水墨意境')
+    assert.ok(starterBtn)
+    starterBtn.props.onClick()
+    assert.equal(
+      app.store.getState().draftPrompt,
+      '晨雾笼罩的江南水乡古镇，一叶乌篷船缓缓划过平静水面，东方水墨写意风格，留白构图',
+    )
+
+    let prevented = false
+    globalThis.window.dispatchEvent({
+      type: 'keydown',
+      key: 'k',
+      ctrlKey: true,
+      metaKey: false,
+      defaultPrevented: false,
+      preventDefault() {
+        prevented = true
+      },
+    })
+    assert.equal(prevented, true)
+    assert.equal(app.store.getState().leftSidebarOpen, true)
+  } finally {
+    app.unmount()
+  }
+})
+
+test('chat opens a scoped Artifact request, preserves local drafts while closed, and drops requests across sessions', () => {
+  const app = setup({ mode: 'live', actorId: 'owner-a' })
+  try {
+    app.store.getState().setActiveSessionId('session-a')
+    let tree = app.render()
+    const timeline = find(tree, (el) => el.type === 'ExecutionTimeline')
+    assert.equal(typeof timeline.props.onOpenArtifact, 'function')
+    timeline.props.onOpenArtifact({ artifactId: 'text:item-a' })
+    tree = app.render()
+    let inspector = find(tree, (el) => el.type === 'InspectorPanel')
+    assert.equal(inspector.props.artifactRequest.artifactId, 'text:item-a')
+    const drafts = inspector.props.artifactDrafts
+    drafts.set('owner-a:session-a:text:item-a', { body: 'private draft', anchor: { kind: 'whole' } })
+    inspector.props.onClose()
+    app.render()
+    app.store.getState().setRightPanelOpen(true)
+    tree = app.render()
+    inspector = find(tree, (el) => el.type === 'InspectorPanel')
+    assert.equal(inspector.props.artifactDrafts, drafts)
+    assert.equal(inspector.props.artifactDrafts.get('owner-a:session-a:text:item-a').body, 'private draft')
+    app.store.getState().setActiveSessionId('session-b')
+    tree = app.render()
+    assert.equal(find(tree, (el) => el.type === 'InspectorPanel').props.artifactRequest, undefined)
+    app.setActorId('owner-b')
+    app.render()
+    assert.equal(drafts.size, 0)
+  } finally {
+    app.unmount()
+  }
 })

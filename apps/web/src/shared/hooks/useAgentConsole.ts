@@ -21,6 +21,7 @@ import type {
   AgentItemDTO,
   AgentMessageAcceptedDTO,
   AgentSessionDTO,
+  AgentMessageAttachment,
   AgentSessionSnapshotDTO,
   AgentSessionsPageDTO,
   AgentToolSummaryDTO,
@@ -58,19 +59,20 @@ export interface CreateAgentSessionInput {
   clientRequestId?: string
   agentDefinitionId: string
   definitionVersion: number
-  defaultCanvasId?: string
 }
 
 export interface SendAgentMessageInput {
   sessionId?: string
   content: string
   clientMessageId?: string
+  attachments?: AgentMessageAttachment[]
 }
 
 export interface SteerAgentTurnInput {
   turnId: string
   content: string
   clientMessageId?: string
+  attachments?: AgentMessageAttachment[]
 }
 
 export interface ResolveAgentApprovalInput extends ResolveAgentApprovalRequest {
@@ -85,6 +87,7 @@ interface ConsoleScopeState {
 
 const SESSION_PAGE_SIZE = 30
 const SNAPSHOT_ITEMS_LIMIT = 50
+
 const MOCK_POLL_INTERVAL_MS = 250
 const MAX_SSE_RETRIES = 6
 const MAX_SSE_RESYNCS = 3
@@ -175,12 +178,12 @@ export interface AgentConsoleController {
     sendMessage: UseMutationResult<
       AgentMessageAcceptedDTO,
       Error,
-      { targetSessionId: string; payload: { clientMessageId: string; content: string }; scope: ConsoleScopeState }
+      { targetSessionId: string; payload: { clientMessageId: string; content: string; attachments?: AgentMessageAttachment[] }; scope: ConsoleScopeState }
     >
     steerTurn: UseMutationResult<
       AgentMessageAcceptedDTO,
       Error,
-      { turnId: string; payload: { clientMessageId: string; content: string }; scope: ConsoleScopeState }
+      { turnId: string; payload: { clientMessageId: string; content: string; attachments?: AgentMessageAttachment[] }; scope: ConsoleScopeState }
     >
     cancelTurn: UseMutationResult<AgentTurnDTO, Error, { turnId: string; scope: ConsoleScopeState }>
     resolveApproval: UseMutationResult<
@@ -383,12 +386,32 @@ export function useAgentConsole(
 
   // 同步并刷新指定会话快照的内部辅助（用于 resync 与 mock 订阅）。
   const syncSnapshot = useCallback(
-    async (scope: ConsoleScopeState) => {
+    async (scope: ConsoleScopeState, drainOlderItems = false) => {
       if (!scope.sessionId) return null
-      const fresh = await clientApi.agent.getSnapshot(scope.sessionId, { limit: SNAPSHOT_ITEMS_LIMIT })
+      const targetSessionId = scope.sessionId
+      const fresh = await clientApi.agent.getSnapshot(targetSessionId, { limit: SNAPSHOT_ITEMS_LIMIT })
       if (!isCurrentScope(scope)) return null
-      queryClient.setQueryData(queryKeys.agent.snapshot(scope.actorId, scope.sessionId), fresh)
+      queryClient.setQueryData(queryKeys.agent.snapshot(scope.actorId, targetSessionId), fresh)
       updateTimeline((prev) => applyAgentSnapshot(prev, fresh))
+      if (!drainOlderItems) return fresh
+
+      const seenCursors = new Set<string>()
+      let cursor = fresh.nextItemsCursor
+      let hasMore = fresh.itemsHasMore
+      while (hasMore) {
+        if (seenCursors.has(cursor)) {
+          throw new Error('会话记录分页游标未推进，请稍后重试。')
+        }
+        seenCursors.add(cursor)
+        const page = await clientApi.agent.listItems(targetSessionId, {
+          cursor,
+          limit: SNAPSHOT_ITEMS_LIMIT,
+        })
+        if (!isCurrentScope(scope)) return null
+        updateTimeline((prev) => prependOlderAgentItems(prev, page))
+        cursor = page.nextCursor
+        hasMore = page.hasMore
+      }
       return fresh
     },
     [isCurrentScope, queryClient, updateTimeline],
@@ -421,15 +444,13 @@ export function useAgentConsole(
     const handleEvent = (event: AgentEventEnvelope) => {
       if (ac.signal.aborted || !isCurrentScope(scope)) return
       const nextState = updateTimeline((prev) => applyAgentEvent(prev, event))
+      if (event.type === 'item.created' || event.type === 'turn.updated') {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.agent.artifacts(scope.actorId, targetSessionId) })
+      }
       if (event.type === 'turn.updated' && !isTurnActive(event.payload.turn)) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.agent.sessions(scope.actorId) })
-        if (nextState.items.some((item) => item.type === 'artifact_reference')) {
+        if (nextState.items.some((item) => item.type === 'tool_result')) {
           void queryClient.invalidateQueries({ queryKey: queryKeys.library.root })
-        }
-        if (nextState.session?.defaultCanvasId) {
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.canvases.detail(nextState.session.defaultCanvasId),
-          })
         }
       }
     }
@@ -464,7 +485,7 @@ export function useAgentConsole(
               break
             }
             setConnectionState('resyncing')
-            await syncSnapshot(scope)
+            await syncSnapshot(scope, true)
             if (ac.signal.aborted || !isCurrentScope(scope)) break
             attempt = 0
             continue
@@ -496,7 +517,7 @@ export function useAgentConsole(
                 resyncCount += 1
                 setConnectionState('resyncing')
                 try {
-                  await syncSnapshot(scope)
+                  await syncSnapshot(scope, true)
                   attempt = 0
                   continue
                 } catch (syncErr) {
@@ -617,7 +638,7 @@ export function useAgentConsole(
     if (!scope.sessionId) return
     setConnectionState('resyncing')
     try {
-      await syncSnapshot(scope)
+      await syncSnapshot(scope, true)
       if (isCurrentScope(scope)) {
         setSseError(null)
         setAdmissionError(null)
@@ -777,7 +798,6 @@ export function useAgentConsole(
           clientRequestId: input.clientRequestId ?? createRequestUuid(),
           agentDefinitionId: input.agentDefinitionId,
           definitionVersion: input.definitionVersion,
-          ...(input.defaultCanvasId ? { defaultCanvasId: input.defaultCanvasId } : {}),
         },
       })
     },
@@ -795,6 +815,7 @@ export function useAgentConsole(
         payload: {
           clientMessageId: input.clientMessageId ?? createRequestUuid(),
           content: input.content,
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         },
       })
     },
@@ -810,6 +831,7 @@ export function useAgentConsole(
         payload: {
           clientMessageId: input.clientMessageId ?? createRequestUuid(),
           content: input.content,
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         },
       })
     },

@@ -47,6 +47,7 @@ import {
   isSafeDisplayUrl,
 } from '../lib/agent-status'
 import type { ReferenceImageAttachment } from '../stores/agent-console-store'
+import type { ArtifactOpenRequest } from './artifact-pane'
 
 const STATUS_TEXT_TONE: Record<BadgeTone, string> = {
   neutral: 'text-muted-foreground',
@@ -59,6 +60,7 @@ const STATUS_TEXT_TONE: Record<BadgeTone, string> = {
 
 export interface ExecutionTimelineProps {
   console: AgentConsoleController
+  onOpenArtifact?: (request: Omit<ArtifactOpenRequest, 'nonce'>) => void
   onCreateSession: () => void
   creatingSession?: boolean
   onReusePrompt: (prompt: string) => void
@@ -108,23 +110,36 @@ function ApprovalCard({
         : `有效期至 ${formatDateTime(approval.expiresAt)}`
     : formatRelativeTime(createdAt)
 
+  if (!isPending) {
+    return (
+      <article aria-label="工具执行审批" className="w-full py-0.5">
+        <div className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-pill border border-border/60 bg-surface/60 px-3 py-1 text-caption">
+          <ShieldWarningIcon
+            className={cn(iconSize.xs, 'shrink-0 text-muted-foreground')}
+            aria-hidden="true"
+          />
+          <span className="font-medium text-foreground">
+            {toolName ? `审批 · ${toolName}` : '工具执行审批'}
+          </span>
+          <span className={cn('font-medium', STATUS_TEXT_TONE[statusMeta.tone])}>
+            {statusMeta.label}
+          </span>
+          <span className="text-muted-foreground">{timeMeta}</span>
+          {summaryText ? (
+            <span className="max-w-72 truncate text-muted-foreground">· {summaryText}</span>
+          ) : null}
+        </div>
+      </article>
+    )
+  }
+
   return (
     <article
       aria-label="工具执行审批"
-      className={cn(
-        'w-full rounded-panel border p-4',
-        isPending
-          ? 'motion-pop border-warning-border bg-warning-soft/45 sm:p-5'
-          : 'border-border/75 bg-surface/80',
-      )}
+      className="motion-pop w-full rounded-panel border border-warning-border bg-warning-soft/45 p-4 sm:p-5"
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <span
-          className={cn(
-            'inline-flex size-7 shrink-0 items-center justify-center rounded-control',
-            isPending ? 'bg-warning-soft text-warning' : 'bg-tonal text-muted-foreground',
-          )}
-        >
+        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-control bg-warning-soft text-warning">
           <ShieldWarningIcon className={iconSize.sm} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
@@ -148,7 +163,7 @@ function ApprovalCard({
       ) : null}
 
       {promptText && promptText !== summaryText ? (
-        <div className="mt-2.5 rounded-card border border-border/70 bg-canvas/80 px-3 py-2 text-caption text-muted-foreground">
+        <div className="mt-2.5 border-l-2 border-border/70 pl-3 text-caption text-muted-foreground">
           <span className="font-medium text-foreground">调用参数：</span>
           <span className="break-words">{promptText}</span>
         </div>
@@ -160,7 +175,7 @@ function ApprovalCard({
         </Alert>
       ) : null}
 
-      {isPending && approval ? (
+      {approval ? (
         <div className="mt-3.5 flex flex-wrap items-center justify-end gap-2 border-t border-warning-border/60 pt-3">
           <Button
             size="sm"
@@ -192,9 +207,12 @@ function ApprovalCard({
 
 function AssistantMessageCard({
   item,
+  onOpenArtifact,
 }: {
   item: AgentItemDTO
+  onOpenArtifact?: () => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
   const text = extractItemText(item)
 
@@ -210,7 +228,7 @@ function AssistantMessageCard({
   }
 
   return (
-    <article className="group w-full">
+    <article id={`agent-item-${item.id}`} tabIndex={-1} className="motion-reveal group w-full">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5 text-caption">
           <SparkleIcon
@@ -243,8 +261,12 @@ function AssistantMessageCard({
         ) : null}
       </div>
       <p className="mt-1.5 whitespace-pre-wrap break-words text-compact leading-relaxed text-foreground">
-        {text || '（无文本正文）'}
+        {text ? (!expanded && onOpenArtifact && text.length > 500 ? `${text.slice(0, 500)}…` : text) : '（无文本正文）'}
       </p>
+      <div className="mt-1 flex flex-wrap gap-2">
+        {onOpenArtifact && text ? <Button size="sm" variant="secondary" onClick={onOpenArtifact}>在 Artifact 中查看与评论</Button> : null}
+        {onOpenArtifact && text.length > 500 ? <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => setExpanded((previous) => !previous)}>{expanded ? '收起正文' : '展开正文'}</Button> : null}
+      </div>
     </article>
   )
 }
@@ -289,9 +311,9 @@ function ArtifactReferenceCard({
   return (
     <article
       className={cn(
-        'w-full',
+        'motion-reveal w-full',
         safeImageUrl
-          ? 'space-y-2.5'
+          ? 'max-w-md space-y-2'
           : 'space-y-2 rounded-card border border-border/70 bg-surface/75 px-4 py-3',
       )}
     >
@@ -300,7 +322,7 @@ function ArtifactReferenceCard({
           type="button"
           aria-label={`放大查看产物：${preview.label || preview.prompt || '生成产物'}`}
           onClick={() => setLightboxOpen(true)}
-          className="group relative inline-flex max-w-full overflow-hidden rounded-card border border-border/80 bg-tonal text-left shadow-soft transition-shadow duration-(--motion-base) hover:shadow-floating"
+          className="group relative inline-flex max-w-full overflow-hidden rounded-card border border-border/80 bg-tonal text-left shadow-soft transition-[box-shadow,transform] duration-[var(--motion-base)] ease-out hover:-translate-y-0.5 hover:shadow-floating"
         >
           <img
             src={safeImageUrl}
@@ -321,20 +343,20 @@ function ArtifactReferenceCard({
         </div>
       ) : null}
 
-      <div className="space-y-1">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted-foreground">
-            {!safeImageUrl ? (
-              <ImageIcon className={cn(iconSize.sm, 'shrink-0 text-accent')} aria-hidden="true" />
-            ) : null}
-            <span className="font-medium text-foreground">{captionTitle}</span>
-            {preview.width && preview.height ? (
-              <span>· {preview.width}×{preview.height}</span>
-            ) : null}
-            <span>· {formatRelativeTime(item.createdAt)}</span>
-          </div>
+      <div className="space-y-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted-foreground">
+          {!safeImageUrl ? (
+            <ImageIcon className={cn(iconSize.sm, 'shrink-0 text-accent')} aria-hidden="true" />
+          ) : null}
+          <span className="font-medium text-foreground">{captionTitle}</span>
+          {preview.width && preview.height ? (
+            <span>· {preview.width}×{preview.height}</span>
+          ) : null}
+          <span>· {formatRelativeTime(item.createdAt)}</span>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-1">
+        {safeImageUrl || preview.prompt ? (
+          <div className="-ml-2 flex flex-wrap items-center gap-1">
             {safeImageUrl && onReuseImage ? (
               <Button
                 size="sm"
@@ -376,7 +398,7 @@ function ArtifactReferenceCard({
               </Button>
             ) : null}
           </div>
-        </div>
+        ) : null}
 
         {preview.prompt ? (
           <p className="break-words text-caption leading-relaxed text-muted-foreground">
@@ -429,7 +451,7 @@ function ArtifactReferenceCard({
       >
         {safeImageUrl ? (
           <div className="space-y-4">
-            <div className="flex justify-center overflow-hidden rounded-card border border-border bg-tonal p-2">
+            <div className="flex justify-center overflow-hidden">
               <img
                 src={safeImageUrl}
                 alt={preview.prompt || preview.label || '产物大图'}
@@ -437,7 +459,7 @@ function ArtifactReferenceCard({
               />
             </div>
             {preview.prompt ? (
-              <p className="rounded-card border border-border bg-tonal/40 p-3 text-ui text-muted-foreground">
+              <p className="border-t border-border/60 pt-3 text-ui leading-relaxed text-muted-foreground">
                 {preview.prompt}
               </p>
             ) : null}
@@ -467,79 +489,71 @@ function ToolTraceCard({
   const Icon = isResult ? TerminalWindowIcon : WrenchIcon
 
   return (
-    <article
-      className="w-full rounded-card border border-border/70 bg-surface/75 px-3.5 py-2.5 transition-colors hover:bg-surface"
-    >
+    <article className="w-full py-0.5">
       <button
         type="button"
         aria-expanded={expanded}
         aria-controls={payloadId}
         onClick={() => setExpanded((prev) => !prev)}
-        className="motion-press flex w-full min-w-0 items-center justify-between gap-3 rounded-control text-left"
+        className="motion-press inline-flex max-w-full items-center gap-2 rounded-pill border border-border/60 bg-surface/70 px-3 py-1 text-left text-caption hover:border-border hover:bg-surface"
       >
-        <span className="flex min-w-0 flex-1 items-center gap-2">
-          <Icon className={cn(iconSize.sm, 'shrink-0 text-muted-foreground')} aria-hidden="true" />
-          <span className="max-w-32 shrink-0 truncate text-ui font-medium text-foreground sm:max-w-none">
-            {toolName}
-          </span>
-          {!expanded && detailText ? (
-            <span className="min-w-0 truncate text-caption text-muted-foreground">
-              {detailText}
-            </span>
-          ) : null}
+        <Icon className={cn(iconSize.xs, 'shrink-0 text-muted-foreground')} aria-hidden="true" />
+        <span className="shrink-0 font-medium text-foreground">{toolName}</span>
+        {!expanded && detailText ? (
+          <span className="max-w-64 truncate text-muted-foreground">{detailText}</span>
+        ) : null}
+        <span className={cn('shrink-0 font-medium', STATUS_TEXT_TONE[statusMeta.tone])}>
+          {statusMeta.label}
         </span>
-
-        <span className="flex shrink-0 items-center gap-2">
-          <span className={cn('text-caption font-medium', STATUS_TEXT_TONE[statusMeta.tone])}>
-            {statusMeta.label}
-          </span>
-          <span className="hidden text-caption text-muted-foreground sm:inline">
-            {formatRelativeTime(item.createdAt)}
-          </span>
-          <CaretDownIcon
-            className={cn(
-              iconSize.xs,
-              'shrink-0 text-muted-foreground transition-transform duration-(--motion-fast) motion-reduce:transition-none',
-              expanded && 'rotate-180',
-            )}
-            aria-hidden="true"
-          />
+        <span className="hidden shrink-0 text-muted-foreground sm:inline">
+          {formatRelativeTime(item.createdAt)}
         </span>
+        <CaretDownIcon
+          className={cn(
+            iconSize.xs,
+            'shrink-0 text-muted-foreground transition-transform duration-[var(--motion-spring-snappy)] ease-spring-snappy motion-reduce:transition-none',
+            expanded && 'rotate-180',
+          )}
+          aria-hidden="true"
+        />
       </button>
 
-      {expanded ? (
-        <div id={payloadId} className="motion-reveal mt-2.5 space-y-2 border-t border-border/60 pt-2.5">
-          {detailText ? (
-            <p className="break-words text-caption leading-relaxed text-muted-foreground">
-              {detailText}
-            </p>
-          ) : null}
-          <dl className="grid grid-cols-1 gap-2 rounded-control border border-border/70 bg-canvas p-3 text-caption sm:grid-cols-2">
-            <div>
-              <dt className="text-muted-foreground">调用工具</dt>
-              <dd className="mt-0.5 font-mono text-foreground">{toolName}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">执行状态</dt>
-              <dd className={cn('mt-0.5 font-medium', STATUS_TEXT_TONE[statusMeta.tone])}>
-                {statusMeta.label} · {formatRelativeTime(item.createdAt)}
-              </dd>
-            </div>
-            {payloadInfo.prompt ? (
-              <div className="sm:col-span-2">
-                <dt className="text-muted-foreground">创作提示词</dt>
-                <dd className="mt-0.5 break-words text-foreground">{payloadInfo.prompt}</dd>
-              </div>
+      <div
+        id={payloadId}
+        className="motion-accordion"
+        data-open={expanded ? 'true' : 'false'}
+        aria-hidden={!expanded}
+        inert={!expanded}
+      >
+        <div className="motion-accordion-inner">
+          <div className="ml-3 mt-1.5 max-w-xl space-y-2 border-l-2 border-border/60 py-1 pl-3.5">
+            {detailText ? (
+              <p className="break-words text-caption leading-relaxed text-muted-foreground">
+                {detailText}
+              </p>
             ) : null}
-            {payloadInfo.size ? (
-              <div>
-                <dt className="text-muted-foreground">画幅参数</dt>
-                <dd className="mt-0.5 font-mono text-foreground">{payloadInfo.size}</dd>
-              </div>
+            {payloadInfo.prompt || payloadInfo.size ? (
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-caption sm:grid-cols-2">
+                {payloadInfo.prompt ? (
+                  <div className="sm:col-span-2">
+                    <dt className="text-muted-foreground">创作提示词</dt>
+                    <dd className="mt-0.5 break-words text-foreground">{payloadInfo.prompt}</dd>
+                  </div>
+                ) : null}
+                {payloadInfo.size ? (
+                  <div>
+                    <dt className="text-muted-foreground">画幅参数</dt>
+                    <dd className="mt-0.5 font-mono text-foreground">{payloadInfo.size}</dd>
+                  </div>
+                ) : null}
+              </dl>
             ) : null}
-          </dl>
+            {!detailText && !payloadInfo.prompt && !payloadInfo.size ? (
+              <p className="text-caption text-muted-foreground">已记录调用，无附加参数明细。</p>
+            ) : null}
+          </div>
         </div>
-      ) : null}
+      </div>
     </article>
   )
 }
@@ -558,6 +572,7 @@ export function ExecutionTimeline({
   onResolveApproval,
   resolvingApproval,
   approvalErrors,
+  onOpenArtifact,
 }: ExecutionTimelineProps) {
   const {
     serviceStatus,
@@ -642,7 +657,7 @@ export function ExecutionTimeline({
         {serviceStatus === 'admission_closed_503' ? (
           <Alert
             tone="warning"
-            title="执行队列准入暂未就绪（503）"
+            title="Agent 服务暂不可用（503）"
             className="motion-fade-in"
             action={
               <Button size="sm" variant="secondary" onClick={reconnect}>
@@ -650,7 +665,7 @@ export function ExecutionTimeline({
               </Button>
             }
           >
-            后端控制面检测到异步执行通道未就绪（<code>AGENT_CORE_ADMISSION_READY=false</code>），请等待管理员启用或稍后重试。
+            服务暂时不可用或相关配置尚未就绪，请稍后重试；如持续出现，请联系管理员检查 Agent Core 与异步执行通道配置。
           </Alert>
         ) : null}
 
@@ -723,14 +738,14 @@ export function ExecutionTimeline({
                   return (
                     <article
                       key={item.id}
-                      className="ml-auto max-w-[82%] space-y-2 rounded-panel rounded-br-control bg-tonal px-4 py-2.5 text-compact leading-relaxed text-foreground sm:max-w-[75%]"
+                      className="motion-reveal ml-auto max-w-[82%] space-y-2 rounded-panel rounded-br-control bg-tonal px-4 py-2.5 text-compact leading-relaxed text-foreground sm:max-w-[75%]"
                     >
                       {attached.length > 0 ? (
                         <div className="flex flex-wrap gap-2 pb-1">
                           {attached.map((att) => (
                             <div
                               key={att.id}
-                              className="flex items-center gap-2 rounded-card border border-border/70 bg-surface/90 p-1.5 pr-2.5"
+                              className="flex items-center gap-2 rounded-control bg-canvas/70 p-1 pr-2.5"
                             >
                               <img
                                 src={att.url}
@@ -762,6 +777,7 @@ export function ExecutionTimeline({
                     <AssistantMessageCard
                       key={item.id}
                       item={item}
+                      onOpenArtifact={agentConsole.mode === 'live' && onOpenArtifact ? () => onOpenArtifact({ artifactId: `text:${item.id}` }) : undefined}
                     />
                   )
                 }
@@ -771,11 +787,10 @@ export function ExecutionTimeline({
                     ? timeline.tools[item.toolCallId]
                     : undefined
                   return (
-                    <ToolTraceCard
-                      key={item.id}
-                      item={item}
-                      toolSummary={matchedTool}
-                    />
+                    <div key={item.id} id={`agent-item-${item.id}`} tabIndex={-1} className="space-y-1">
+                      <ToolTraceCard item={item} toolSummary={matchedTool} />
+                      {item.type === 'tool_result' && agentConsole.mode === 'live' && onOpenArtifact ? <Button size="sm" variant="ghost" onClick={() => onOpenArtifact({ sourceItemId: item.id })}>查看关联 Artifact 与评论</Button> : null}
+                    </div>
                   )
                 }
 

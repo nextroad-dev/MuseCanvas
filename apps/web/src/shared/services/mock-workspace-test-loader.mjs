@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { runInThisContext } from 'node:vm'
 import ts from 'typescript'
 
@@ -8,7 +9,9 @@ export function loadTs(url, imports = {}, globals = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   })
   const exports = {}
-  runInThisContext(`(function(require, exports, process) { ${outputText}\n})`)((name) => {
+  runInThisContext(`(function(require, exports, process) { ${outputText}\n})`, {
+    filename: url instanceof URL ? fileURLToPath(url) : String(url),
+  })((name) => {
     if (name in imports) return imports[name]
     throw new Error(`Unexpected runtime import: ${name}`)
   }, exports, globals.process ?? process)

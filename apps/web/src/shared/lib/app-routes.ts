@@ -8,8 +8,14 @@ export const APP_ROUTES = {
   library: '/library',
   account: '/account',
   admin: '/admin',
-  adminOAuth: '/admin/oauth',
+  adminUsers: '/admin/users',
+  adminInvitations: '/admin/invitations',
+  adminModels: '/admin/models',
+  adminProviders: '/admin/providers',
+  adminPlugins: '/admin/plugins',
   adminPromptTemplates: '/admin/prompt-templates',
+  adminJobs: '/admin/jobs',
+  adminOAuth: '/admin/oauth',
   adminSettings: '/admin/settings',
   terms: '/terms',
   privacy: '/privacy',
@@ -71,4 +77,10 @@ export function safeRedirectPath(from: string | null | undefined): string {
     return GENERATE_ROUTE
   }
   return from
+}
+
+/** 登录跳转链接：传入 `nextPath` 时自动校验同源并拼 `?next=`，省略则返回 `/login`。 */
+export function loginHref(nextPath?: string): string {
+  if (!nextPath) return APP_ROUTES.login
+  return `${APP_ROUTES.login}?next=${encodeURIComponent(safeRedirectPath(nextPath))}`
 }

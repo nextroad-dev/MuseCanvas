@@ -24,6 +24,18 @@ export interface ReferenceImageAttachment {
   sizeBytes?: number
   source: 'upload' | 'library' | 'artifact'
   assetId?: string
+  uploadId?: string
+  checksum?: string
+  /** 局部修改准备身份：同一条附件携带源图与可信蒙版，提交时展开为一对引用。 */
+  preparation?: {
+    maskUploadId: string
+    maskChecksum: string
+    sourceKind: 'asset' | 'upload'
+    sourceId: string
+    sourceChecksum: string
+    expiresAt: string
+    selection: { x: number; y: number; width: number; height: number }
+  }
   prompt?: string
 }
 

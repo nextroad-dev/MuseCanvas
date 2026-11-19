@@ -39,13 +39,19 @@ function collectAdminPageRoutes(dir, prefix = APP_ROUTES.admin) {
   return routes
 }
 
-test('ADMIN_NAV_GROUPS 的每个 href 都对应真实的 app/admin/**/page.tsx 且覆盖全部 4 个路由', () => {
+test('ADMIN_NAV_GROUPS 的每个 href 都对应真实的 app/admin/**/page.tsx 且覆盖全部 10 个路由', () => {
   const items = adminNavItems()
   const hrefs = items.map((item) => item.href)
 
   assert.deepEqual(hrefs, [
     APP_ROUTES.admin,
+    APP_ROUTES.adminUsers,
+    APP_ROUTES.adminInvitations,
+    APP_ROUTES.adminModels,
+    APP_ROUTES.adminProviders,
+    APP_ROUTES.adminPlugins,
     APP_ROUTES.adminPromptTemplates,
+    APP_ROUTES.adminJobs,
     APP_ROUTES.adminOAuth,
     APP_ROUTES.adminSettings,
   ])
@@ -64,16 +70,18 @@ test('ADMIN_NAV_GROUPS 的每个 href 都对应真实的 app/admin/**/page.tsx �
 
   const diskRoutes = collectAdminPageRoutes(ADMIN_APP_DIR).sort()
   assert.deepEqual([...hrefs].sort(), diskRoutes)
-
-  for (const removed of ['/admin/users', '/admin/media-models', '/admin/language-models', '/admin/jobs']) {
-    assert.equal(hrefs.includes(removed), false, `已移除路由不应出现在导航中: ${removed}`)
-  }
 })
 
-test('isAdminNavActive 对 4 个有效路由及边界路径判定准确', () => {
+test('isAdminNavActive 对全部 10 个有效路由及边界路径判定准确', () => {
   const validRoutes = [
     APP_ROUTES.admin,
+    APP_ROUTES.adminUsers,
+    APP_ROUTES.adminInvitations,
+    APP_ROUTES.adminModels,
+    APP_ROUTES.adminProviders,
+    APP_ROUTES.adminPlugins,
     APP_ROUTES.adminPromptTemplates,
+    APP_ROUTES.adminJobs,
     APP_ROUTES.adminOAuth,
     APP_ROUTES.adminSettings,
   ]
@@ -87,9 +95,9 @@ test('isAdminNavActive 对 4 个有效路由及边界路径判定准确', () => 
   }
 
   // /admin 必须精确匹配，不能高亮子路由
-  assert.equal(isAdminNavActive(APP_ROUTES.adminPromptTemplates, APP_ROUTES.admin), false)
-  assert.equal(isAdminNavActive(APP_ROUTES.adminOAuth, APP_ROUTES.admin), false)
-  assert.equal(isAdminNavActive(APP_ROUTES.adminSettings, APP_ROUTES.admin), false)
+  for (const route of validRoutes.slice(1)) {
+    assert.equal(isAdminNavActive(route, APP_ROUTES.admin), false)
+  }
 
   // 非概览路由允许嵌套子路径高亮，但不误命中同前缀兄弟路径
   assert.equal(isAdminNavActive(`${APP_ROUTES.adminPromptTemplates}/v2`, APP_ROUTES.adminPromptTemplates), true)
@@ -99,45 +107,73 @@ test('isAdminNavActive 对 4 个有效路由及边界路径判定准确', () => 
   assert.equal(isAdminNavActive('/admin/settings-extra', APP_ROUTES.adminSettings), false)
 })
 
-test('adminBreadcrumb 与 adminNavMatch 正确映射 4 个有效路由并对无效路径返回 null', () => {
+test('adminBreadcrumb 与 adminNavMatch 正确映射全部 10 个有效路由并对无效路径返回 null', () => {
   assert.deepEqual(adminBreadcrumb(APP_ROUTES.admin), {
     label: '概览',
     group: null,
     href: APP_ROUTES.admin,
+  })
+  assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminUsers), {
+    label: '用户管理',
+    group: '用户与访问',
+    href: APP_ROUTES.adminUsers,
+  })
+  assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminInvitations), {
+    label: '邀请码',
+    group: '用户与访问',
+    href: APP_ROUTES.adminInvitations,
+  })
+  assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminModels), {
+    label: '模型配置',
+    group: '生成资源',
+    href: APP_ROUTES.adminModels,
+  })
+  assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminProviders), {
+    label: '供应商凭据',
+    group: '生成资源',
+    href: APP_ROUTES.adminProviders,
+  })
+  assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminPlugins), {
+    label: '插件管理',
+    group: '生成资源',
+    href: APP_ROUTES.adminPlugins,
   })
   assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminPromptTemplates), {
     label: '提示词模板',
     group: '生成资源',
     href: APP_ROUTES.adminPromptTemplates,
   })
+  assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminJobs), {
+    label: '任务日志',
+    group: '监控与系统',
+    href: APP_ROUTES.adminJobs,
+  })
   assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminOAuth), {
-    label: 'OAuth',
-    group: '系统设置',
+    label: 'OAuth 登录',
+    group: '监控与系统',
     href: APP_ROUTES.adminOAuth,
   })
   assert.deepEqual(adminBreadcrumb(APP_ROUTES.adminSettings), {
     label: '系统配置',
-    group: '系统设置',
+    group: '监控与系统',
     href: APP_ROUTES.adminSettings,
   })
   assert.deepEqual(adminBreadcrumb(`${APP_ROUTES.adminSettings}/runtime?section=1`), {
     label: '系统配置',
-    group: '系统设置',
+    group: '监控与系统',
     href: APP_ROUTES.adminSettings,
   })
 
   const match = adminNavMatch(APP_ROUTES.adminOAuth)
-  assert.equal(match?.group.title, '系统设置')
+  assert.equal(match?.group.title, '监控与系统')
   assert.equal(match?.item.icon, 'oauth')
 
   for (const invalid of [
     null,
     undefined,
     '',
-    '/admin/users',
     '/admin/media-models',
     '/admin/language-models',
-    '/admin/jobs',
     '/admin/unknown',
   ]) {
     assert.equal(adminBreadcrumb(invalid), null)

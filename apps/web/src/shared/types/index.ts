@@ -48,38 +48,6 @@ export type {
   TextParameterDescriptor,
   MediaModelDefaultsDto,
   UpdateMediaModelDefaultsRequest,
-  // 画布与 Agent
-  AgentMessageDto,
-  AgentStreamEvent,
-  CanvasAgentApplyRequest,
-  CanvasAgentApplyResultDto,
-  CanvasAgentConfirmRequest,
-  CanvasAgentConfirmResultDto,
-  CanvasAgentEditMetadata,
-  CanvasAgentEditSelection,
-  CanvasAgentHistoryDto,
-  CanvasAgentMessageRequest,
-  CanvasAgentPendingJobDto,
-  CanvasAgentPendingStatus,
-  CanvasAgentSceneCommitMode,
-  CanvasAgentSettingsDto,
-  CanvasAgentStatusDto,
-  CanvasAgentStructuredContext,
-  CanvasAgentStructuredEditSource,
-  CanvasAgentStructuredInputItem,
-  CanvasAgentToolCallDto,
-  CanvasAgentTurnRecoveryDto,
-  CanvasAgentUsageDto,
-  CanvasDto,
-  CanvasListItemDto,
-  CanvasListPageDto,
-  CanvasNode,
-  CanvasNodeType,
-  CanvasOp,
-  CanvasScene,
-  CreateCanvasRequest,
-  UpdateCanvasRequest,
-  UpdateCanvasAgentSettingsRequest,
   // 局部修改
   DisplayRect,
   EditRegion,
@@ -183,9 +151,6 @@ export type {
 export {
   AGENT_BUDGET_QUOTAS,
   ALLOWED_PROMPT_TEMPLATE_VARS,
-  CANVAS_AGENT_SETTINGS_DEFAULTS,
-  CANVAS_DEFAULT_TITLE,
-  CanvasErrorCode,
   GenerationErrorCode,
   MediaModelErrorCode,
   MASK_INPUT_ROLE,
@@ -194,24 +159,19 @@ export {
   RUNTIME_SETTINGS_DEFAULTS,
   SETUP_DATABASE_DRIVERS,
   SetupErrorCode,
-  applyCanvasOps,
   clampEditSelection,
   displaySelectionToImageSelection,
   editSelectionIsUsable,
   imageContentBox,
   imageSelectionToDisplaySelection,
-  isCanvasUuid,
-  parseCanvasAgentMessageRequest,
-  parseCanvasOps,
-  parseCanvasScene,
   parseRectangleRegion,
 } from '@musecanvas/contracts'
 
 import type {
   AdminPluginDto,
+  AdminPluginPackageFile,
+  AdminPluginPackageMeta,
   AdminPluginScanFinding,
-  CanvasDto,
-  CanvasListItemDto,
   GenerationOutput,
   ImportPromptTemplateItem,
   JobStatus,
@@ -219,6 +179,7 @@ import type {
   MediaKind,
   ModelKind,
   PluginKind,
+  PluginPackageFormat,
   PublicModelDto,
   SmtpSettingsDto,
   StorageSettingsDto,
@@ -275,6 +236,11 @@ export interface OtpRequestResult {
   nextStep: 'otp' | 'invitation'
 }
 
+/** OTP 校验和 OAuth 邀请注册完成后返回的会话。 */
+export interface AuthSessionResult extends SessionDto {
+  setupRequired?: boolean
+}
+
 // ---------------------------------------------------------------------------
 // 模型
 // ---------------------------------------------------------------------------
@@ -319,6 +285,9 @@ export type AdminModelInput = {
   sortOrder?: number
   enabled?: boolean
   watermark?: boolean
+  languageProtocol?: LanguageProtocol
+  maxOutputTokens?: number
+  temperature?: number
   reasoningEffort?: ReasoningEffort
 }
 
@@ -452,11 +421,6 @@ export interface AssetDto {
   hasAudio?: boolean
   sizeBytes?: number
   createdAt: string
-  /**
-   * 灯箱「同一对话里的作品」所需关联。后端 library 查询尚未投影该字段
-   * （见 apps/api/src/modules/library/dto.ts），contracts 补齐前保持可选。
-   */
-  canvasId?: string
 }
 
 export interface AssetListDto {
@@ -500,6 +464,7 @@ export interface UploadCompleteDto {
   width: number
   height: number
   sizeBytes: number
+  checksum: string
 }
 
 export type StagedUploadStatus = 'pending' | 'uploading' | 'processing' | 'ready' | 'error'
@@ -529,26 +494,22 @@ export type ParameterValue = string | number | boolean
 export type ParameterState = Record<string, ParameterValue>
 
 // ---------------------------------------------------------------------------
-// 画布（契约已定义，再导出常用别名）
-// ---------------------------------------------------------------------------
-
-export type CanvasDetailDto = CanvasDto
-export type CanvasSummaryDto = CanvasListItemDto
-
-// ---------------------------------------------------------------------------
 // 管理后台
 // ---------------------------------------------------------------------------
+
+export interface AdminDashboardDayDto {
+  date: string
+  total: number
+  succeeded: number
+  failed: number
+}
 
 export interface AdminDashboardDto {
   totalUsers: number
   totalJobs: number
   failedJobs7d: number
   successRate7d: number
-  /**
-   * 设计 07 需要「近 7 天每日成功/失败」堆叠柱状图，当前后端未返回。
-   * 契约补齐（plan B1）后启用；缺失时页面降级为单指标卡片。
-   */
-  daily?: Array<{ date: string; succeeded: number; failed: number }>
+  days: AdminDashboardDayDto[]
 }
 
 export type AdminUserDto = SessionUserDto
@@ -632,7 +593,7 @@ export interface ProviderCredentialInput {
   pluginVersion?: string
   schemaId?: string
   schemaVersion?: number
-  baseUrl?: string
+  baseUrl?: string | null
   /** 只写密钥：明文 key 或 JSON 对象。 */
   secret?: string | Record<string, unknown>
   enabled?: boolean
@@ -666,7 +627,7 @@ export interface AdminPluginRejected {
   findings: AdminPluginScanFinding[]
 }
 
-export interface AdminPluginValidateResult {
+export interface AdminPluginValidateOk {
   ok: true
   pluginId: string
   pluginVersion: string
@@ -676,8 +637,15 @@ export interface AdminPluginValidateResult {
   allowedHosts: string[]
   artifactDigest: string
   artifactSizeBytes: number
+  packageFormat: PluginPackageFormat
+  packageDigest: string | null
+  packageFiles: AdminPluginPackageFile[]
+  packageMeta: AdminPluginPackageMeta
+  hasIcon: boolean
   warnings: AdminPluginScanFinding[]
 }
+
+export type AdminPluginValidateResult = AdminPluginValidateOk | AdminPluginRejected
 
 export type AdminPluginUploadResult =
   | { installed: true; plugin: AdminPluginDto; warnings: AdminPluginScanFinding[] }

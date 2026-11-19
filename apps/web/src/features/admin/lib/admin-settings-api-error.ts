@@ -18,8 +18,8 @@ const CODE_MESSAGES: Record<string, string> = {
   CREDENTIAL_ENCRYPT_FAILED: '凭据加密失败，请检查服务端加密配置。',
   LANGUAGE_MODEL_CONFIG_INVALID: '请选择已启用且凭据完整的语言模型。',
   PROMPT_MODEL_NOT_CONFIGURED: '启用前请先选择语言模型。',
-  CANVAS_AGENT_MODEL_NOT_CONFIGURED: '启用创作助手前请先选择语言模型。',
-  CANVAS_AGENT_MODEL_UNSUPPORTED: '当前语言模型不支持创作助手所需的工具调用。',
+  DEFAULT_MODEL_INVALID: '请选择已启用、未删除且类型匹配的媒体模型。',
+  SETTINGS_UPDATE_FAILED: '设置保存失败，请稍后重试；若持续失败，请检查服务端日志。',
 
   SMTP_TEST_FAILED: 'SMTP 连接测试失败，请检查服务器地址、端口与认证信息。',
   STORAGE_TEST_FAILED: '对象存储连接测试失败，请检查端点、桶名与密钥。',

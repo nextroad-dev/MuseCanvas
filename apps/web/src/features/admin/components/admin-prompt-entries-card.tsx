@@ -5,15 +5,21 @@ import {
   CaretDownIcon,
   CaretUpIcon,
   EyeIcon,
+  ListBulletsIcon,
   PlusIcon,
   TrashIcon,
 } from '@phosphor-icons/react'
 import type { PromptTemplateEntryDto, PromptTemplateSetDetailDto } from '@musecanvas/contracts'
-import { Alert } from '@/shared/components/ui/alert'
-import { Badge } from '@/shared/components/ui/badge'
-import { Button } from '@/shared/components/ui/button'
-import { Card, CardBody, CardDescription, CardFooter, CardHeader, CardTitle } from '@/shared/components/ui/card'
 import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
   Table,
   TableBody,
   TableCell,
@@ -21,8 +27,10 @@ import {
   TableHeader,
   TableRow,
   TableStateRow,
-} from '@/shared/components/ui/table'
-import { iconSize } from '@/shared/components/ui/size'
+  controlSquare,
+  iconSize,
+} from '@/shared/components/ui'
+import { cn } from '@/shared/lib/cn'
 import { formatDateTime } from '@/shared/lib/format'
 import {
   sortPromptEntries,
@@ -63,25 +71,38 @@ export function AdminPromptEntriesCard({
   return (
     <Card aria-labelledby="admin-prompt-entries-title">
       <CardHeader>
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle id="admin-prompt-entries-title" level={2}>
-            条目
-          </CardTitle>
-          {set ? (
-            <>
-              <Badge tone="neutral" dot>
-                {set.name} · v{set.version}
-              </Badge>
-              <Badge tone={editable ? 'success' : 'neutral'}>{editable ? '可编辑' : '只读'}</Badge>
-              <Badge tone="neutral">{entries.length} 条</Badge>
-            </>
-          ) : (
-            <Badge tone="neutral">未选择模板集</Badge>
-          )}
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            aria-hidden="true"
+            className={cn(
+              'inline-flex shrink-0 items-center justify-center rounded-control bg-tonal text-foreground',
+              controlSquare.md,
+            )}
+          >
+            <ListBulletsIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle id="admin-prompt-entries-title" level={2}>
+                条目
+              </CardTitle>
+              {set ? (
+                <>
+                  <Badge tone="neutral" dot>
+                    {set.name} · v{set.version}
+                  </Badge>
+                  <Badge tone={editable ? 'success' : 'neutral'}>{editable ? '可编辑' : '只读'}</Badge>
+                  <Badge tone="neutral">{entries.length} 条</Badge>
+                </>
+              ) : (
+                <Badge tone="neutral">未选择模板集</Badge>
+              )}
+            </div>
+            <CardDescription>
+              每条模板是一段带 {'{{变量}}'} 占位符的指令；生成时按变量渲染成最终提示词。展示的是当前选中版本。
+            </CardDescription>
+          </div>
         </div>
-        <CardDescription>
-          每条模板是一段带 {'{{变量}}'} 占位符的指令；生成时按变量渲染成最终提示词。展示的是当前选中版本。
-        </CardDescription>
       </CardHeader>
 
       <CardBody>
@@ -96,7 +117,7 @@ export function AdminPromptEntriesCard({
         ) : null}
 
         {set ? (
-          <Table caption={`模板集 ${set.name} 的条目列表`} columns={6}>
+          <Table caption={`模板集 ${set.name} 的条目列表`} columns={6} cardClassName="shadow-none">
             <TableHeader>
               <TableHeadCell>名称</TableHeadCell>
               <TableHeadCell>变量</TableHeadCell>
@@ -149,7 +170,7 @@ export function AdminPromptEntriesCard({
                               aria-label={`上移 ${entry.name}`}
                               disabled={!editable || index === 0 || busy}
                               onClick={() => onMove(entry, -1)}
-                              className="rounded-[4px] text-muted-foreground transition-colors hover:bg-tonal-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                              className="rounded-xs p-0.5 text-muted-foreground transition-colors hover:bg-tonal-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                             >
                               <CaretUpIcon className={iconSize.xs} />
                             </button>
@@ -158,7 +179,7 @@ export function AdminPromptEntriesCard({
                               aria-label={`下移 ${entry.name}`}
                               disabled={!editable || index === entries.length - 1 || busy}
                               onClick={() => onMove(entry, 1)}
-                              className="rounded-[4px] text-muted-foreground transition-colors hover:bg-tonal-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                              className="rounded-xs p-0.5 text-muted-foreground transition-colors hover:bg-tonal-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                             >
                               <CaretDownIcon className={iconSize.xs} />
                             </button>
@@ -170,7 +191,7 @@ export function AdminPromptEntriesCard({
                           {templateInstructionSummary(entry.instruction)}
                         </span>
                       </TableCell>
-                      <TableCell className="hidden whitespace-nowrap lg:table-cell" mono>
+                      <TableCell className="hidden whitespace-nowrap lg:table-cell" mono tabular>
                         {formatDateTime(entry.createdAt)}
                       </TableCell>
                       <TableCell align="right">
@@ -179,7 +200,7 @@ export function AdminPromptEntriesCard({
                             variant="ghost"
                             size="sm"
                             onClick={() => onPreview(entry)}
-                            icon={<EyeIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
+                            leadingIcon={<EyeIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
                           >
                             预览
                           </Button>
@@ -192,7 +213,7 @@ export function AdminPromptEntriesCard({
                             disabled={!editable || busy}
                             aria-label={`删除条目 ${entry.name}`}
                             onClick={() => onDelete(entry)}
-                            icon={<TrashIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
+                            leadingIcon={<TrashIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
                           >
                             删除
                           </Button>
@@ -214,7 +235,7 @@ export function AdminPromptEntriesCard({
             size="sm"
             onClick={onAdd}
             disabled={!editable}
-            icon={<PlusIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            leadingIcon={<PlusIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
           >
             新增条目
           </Button>
@@ -223,7 +244,7 @@ export function AdminPromptEntriesCard({
             size="sm"
             onClick={onExport}
             disabled={!set}
-            icon={<Open weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            leadingIcon={<Open weight="bold" aria-hidden="true" className={iconSize.sm} />}
           >
             导出当前版本
           </Button>

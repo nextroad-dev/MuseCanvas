@@ -3,12 +3,17 @@
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 import {
-  ArrowClockwiseIcon as RefreshCw,
-  ChartBarIcon as ChartBar,
-  CpuIcon as Cpu,
-  ImagesIcon as Images,
-  PulseIcon as Pulse,
-  UsersIcon as Users,
+  ArrowClockwiseIcon,
+  ArrowRightIcon,
+  ChartBarIcon,
+  CpuIcon,
+  GearSixIcon,
+  ImagesIcon,
+  ListChecksIcon,
+  PulseIcon,
+  PuzzlePieceIcon,
+  UsersIcon,
+  WarningCircleIcon,
 } from '@phosphor-icons/react'
 
 import {
@@ -16,9 +21,12 @@ import {
   Badge,
   Button,
   Card,
+  CardBody,
+  CardDescription,
+  CardHeader,
+  CardTitle,
   EmptyState,
   PageHeader,
-  SectionHeader,
   Skeleton,
   Table,
   TableBody,
@@ -28,56 +36,68 @@ import {
   TableRow,
   TableSkeletonRow,
   TableStateRow,
+  controlSquare,
   iconSize,
 } from '@/shared/components/ui'
-import { useModels } from '@/shared/hooks/useModels'
+import { useAdminDashboard, useAdminJobs } from '@/shared/hooks/useAdmin'
 import { APP_ROUTES } from '@/shared/lib/app-routes'
 import { cn } from '@/shared/lib/cn'
-import { formatCount, formatDateTime } from '@/shared/lib/format'
+import { formatCount, formatDateTime, formatMonthDay } from '@/shared/lib/format'
 import { jobStatusLabel, jobStatusTone } from '@/shared/lib/job-status'
-import type { AdminJobDto } from '@/shared/types'
-import {
-  buildChartDays,
-  buildChartLabel,
-  formatUpdatedTime,
-  jobMediaKindLabel,
-  normalizeDashboardDays,
-  summarizeDashboard,
-  summarizeDefaultModels,
-  truncateJobId,
-  useAdminDashboard,
-  useAdminMediaModelDefaults,
-  useAdminRecentJobs,
-} from '../lib/admin-query'
-import type { AdminDefaultModelEntry } from '../lib/admin-query'
+import type { AdminDashboardDayDto, AdminJobDto } from '@/shared/types'
+import { AdminMediaModelDefaultsCard } from './admin-media-model-defaults'
 
+const RECENT_JOBS_LIMIT = 6
 const RECENT_JOBS_COLUMNS = 5
-const RECENT_JOBS_CAPTION = '最近 10 条生成任务'
-const RECENT_JOBS_ANCHOR = '#admin-recent-jobs'
+const BAR_MAX_HEIGHT_PX = 128
 
-type MetricTone = 'accent' | 'info' | 'neutral' | 'success'
+type MetricTone = 'accent' | 'info' | 'success' | 'danger' | 'neutral'
 
 const METRIC_TONE_CLASS: Record<MetricTone, string> = {
   accent: 'bg-accent-soft text-accent',
   info: 'bg-info-soft text-info',
-  neutral: 'bg-tonal text-foreground',
   success: 'bg-success-soft text-success',
+  danger: 'bg-danger-soft text-danger',
+  neutral: 'bg-tonal text-foreground',
 }
 
-/** 指标卡：Phosphor duotone 图标徽章 + 标签 + 等宽数值。 */
-function MetricCard({
+function formatSuccessRate(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const rounded = Math.round(value * 10) / 10
+  return `${rounded}%`
+}
+
+function truncateId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id
+}
+
+function mediaKindLabel(kind: string): string {
+  if (kind === 'image') return '图像'
+  if (kind === 'video') return '视频'
+  return kind || '—'
+}
+
+function formatDurationMs(durationMs?: number): string {
+  if (durationMs === undefined || durationMs === null || !Number.isFinite(durationMs) || durationMs < 0) {
+    return '—'
+  }
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`
+  return `${(durationMs / 1000).toFixed(1)} s`
+}
+
+function KpiCard({
   label,
   value,
-  icon,
-  tone = 'accent',
   hint,
+  icon,
+  tone,
   loading,
 }: {
   label: string
   value: string
-  icon: ReactNode
-  tone?: MetricTone
   hint?: ReactNode
+  icon: ReactNode
+  tone: MetricTone
   loading: boolean
 }) {
   return (
@@ -86,16 +106,20 @@ function MetricCard({
         <p className="text-ui font-medium text-muted-foreground">{label}</p>
         <span
           aria-hidden="true"
-          className={cn('inline-flex size-9 shrink-0 items-center justify-center rounded-control', METRIC_TONE_CLASS[tone])}
+          className={cn(
+            'inline-flex shrink-0 items-center justify-center rounded-control',
+            controlSquare.md,
+            METRIC_TONE_CLASS[tone],
+          )}
         >
           {icon}
         </span>
       </div>
       {loading ? (
-        <Skeleton className="h-9 w-24" />
+        <Skeleton className="h-9 w-28" />
       ) : (
         <div className="flex items-baseline justify-between gap-2">
-          <p className="font-mono text-title font-normal tabular-nums text-foreground">{value}</p>
+          <p className="font-mono text-title font-semibold tabular-nums text-foreground">{value}</p>
           {hint ? <div className="text-xs text-muted-foreground">{hint}</div> : null}
         </div>
       )}
@@ -103,337 +127,435 @@ function MetricCard({
   )
 }
 
-/** 默认模型摘要条里的一项：模型名 / 未设置（warning）/ 已不可用。 */
-function DefaultModelItem({ label, entry }: { label: string; entry: AdminDefaultModelEntry }) {
+function SevenDayStackedChart({
+  days,
+  loading,
+  error,
+}: {
+  days: AdminDashboardDayDto[]
+  loading: boolean
+  error: boolean
+}) {
+  const total7d = days.reduce((sum, day) => sum + (day.total || 0), 0)
+  const succeeded7d = days.reduce((sum, day) => sum + (day.succeeded || 0), 0)
+  const failed7d = days.reduce((sum, day) => sum + (day.failed || 0), 0)
+  const maxDayTotal = Math.max(1, ...days.map((day) => day.total || 0))
+  const allZero = days.length === 0 || total7d === 0
+
   return (
-    <div className="flex items-baseline gap-2.5">
-      <dt className="text-sm text-muted-foreground">{label}</dt>
-      <dd>
-        {entry.state === 'ready' ? (
-          <span className="text-sm font-medium text-foreground">{entry.name}</span>
-        ) : entry.state === 'unset' ? (
-          <Badge tone="warning">未设置</Badge>
+    <Card className="border border-border">
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span
+              aria-hidden="true"
+              className={cn(
+                'inline-flex shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent',
+                controlSquare.md,
+              )}
+            >
+              <ChartBarIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+            </span>
+            <div className="flex flex-col gap-0.5">
+              <CardTitle level={2}>近 7 天任务趋势</CardTitle>
+              <CardDescription>
+                按自然日堆叠展示生成任务分布（总计{' '}
+                <span className="font-mono tabular-nums text-foreground">{formatCount(total7d)}</span>，成功{' '}
+                <span className="font-mono tabular-nums text-foreground">{formatCount(succeeded7d)}</span>，失败{' '}
+                <span className="font-mono tabular-nums text-foreground">{formatCount(failed7d)}</span>）。
+              </CardDescription>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <span aria-hidden="true" className="size-2.5 rounded-xs bg-chart-positive" />
+              <span>成功</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span aria-hidden="true" className="size-2.5 rounded-xs bg-chart-negative" />
+              <span>失败</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span aria-hidden="true" className="size-2.5 rounded-xs border border-border bg-tonal" />
+              <span>进行中 / 其他</span>
+            </span>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardBody>
+        {loading ? (
+          <Skeleton className="h-44 w-full" />
+        ) : error ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            近 7 天趋势数据暂时不可用，请点击右上角刷新重试。
+          </p>
+        ) : allZero ? (
+          <EmptyState
+            density="compact"
+            title="近 7 天暂无生成任务"
+            description="当用户提交图像或视频生成任务后，此处将按日展示成功与失败堆叠柱状图。"
+          />
         ) : (
-          <span className="text-sm text-muted-foreground">模型已不可用</span>
+          <div className="overflow-x-auto">
+            <div
+              role="img"
+              aria-label={`近 7 天每日生成任务趋势：共 ${total7d} 个任务，成功 ${succeeded7d} 个，失败 ${failed7d} 个`}
+              className="grid min-w-[320px] grid-cols-7 items-end gap-2 pt-2 sm:gap-4"
+            >
+              {days.map((day) => {
+                const total = Math.max(0, day.total || 0)
+                const succeeded = Math.max(0, day.succeeded || 0)
+                const failed = Math.max(0, day.failed || 0)
+                const other = Math.max(0, total - succeeded - failed)
+
+                const rawSuccessH = total > 0 ? Math.round((succeeded / maxDayTotal) * BAR_MAX_HEIGHT_PX) : 0
+                const rawFailH = total > 0 ? Math.round((failed / maxDayTotal) * BAR_MAX_HEIGHT_PX) : 0
+                const rawOtherH = total > 0 ? Math.round((other / maxDayTotal) * BAR_MAX_HEIGHT_PX) : 0
+
+                const successH = succeeded > 0 ? Math.max(4, rawSuccessH) : 0
+                const failH = failed > 0 ? Math.max(4, rawFailH) : 0
+                const otherH = other > 0 ? Math.max(4, rawOtherH) : 0
+
+                const dateLabel = formatMonthDay(day.date)
+                const summaryTitle = `${day.date}：总计 ${total}（成功 ${succeeded} / 失败 ${failed}${
+                  other > 0 ? ` / 其他 ${other}` : ''
+                }）`
+
+                return (
+                  <div
+                    key={day.date}
+                    title={summaryTitle}
+                    className="group flex flex-col items-center gap-2"
+                  >
+                    <span className="font-mono text-caption tabular-nums text-muted-foreground group-hover:text-foreground">
+                      {total}
+                    </span>
+                    <div className="flex h-32 w-full max-w-11 flex-col justify-end rounded-control bg-canvas p-1">
+                      {total === 0 ? (
+                        <span aria-hidden="true" className="block h-0.5 w-full rounded-xs bg-border" />
+                      ) : (
+                        <div className="flex w-full flex-col overflow-hidden rounded-xs">
+                          {otherH > 0 ? (
+                            <span
+                              aria-hidden="true"
+                              className="block w-full bg-tonal"
+                              style={{ height: `${otherH}px` }}
+                            />
+                          ) : null}
+                          {failH > 0 ? (
+                            <span
+                              aria-hidden="true"
+                              className="block w-full bg-chart-negative"
+                              style={{ height: `${failH}px` }}
+                            />
+                          ) : null}
+                          {successH > 0 ? (
+                            <span
+                              aria-hidden="true"
+                              className="block w-full bg-chart-positive"
+                              style={{ height: `${successH}px` }}
+                            />
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                    <span className="font-mono text-caption tabular-nums text-muted-foreground">
+                      {dateLabel}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         )}
-      </dd>
-    </div>
+      </CardBody>
+    </Card>
   )
 }
 
-/** 最近任务一行：ID 缩写 / 类型 / 模型 / 状态 / 创建时间。 */
 function RecentJobRow({ job }: { job: AdminJobDto }) {
   return (
-    <TableRow>
-      <TableCell mono title={job.id}>
-        {truncateJobId(job.id)}
+    <TableRow hover>
+      <TableCell mono tabular title={job.id}>
+        {truncateId(job.id)}
       </TableCell>
-      <TableCell>{jobMediaKindLabel(job.mediaKind)}</TableCell>
-      <TableCell>{job.modelName || '—'}</TableCell>
       <TableCell>
-        <Badge tone={jobStatusTone(job.status)}>{jobStatusLabel(job.status)}</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-foreground">{job.modelName || '—'}</span>
+          <Badge tone="neutral">{mediaKindLabel(job.mediaKind)}</Badge>
+        </div>
       </TableCell>
-      <TableCell align="right" mono tone="muted">
+      <TableCell>
+        <Badge tone={jobStatusTone(job.status)} dot>
+          {jobStatusLabel(job.status)}
+        </Badge>
+      </TableCell>
+      <TableCell mono tabular tone="muted">
+        {formatDurationMs(job.durationMs)}
+      </TableCell>
+      <TableCell align="right" mono tabular tone="muted">
         <time dateTime={job.createdAt}>{formatDateTime(job.createdAt)}</time>
       </TableCell>
     </TableRow>
   )
 }
 
-/**
- * 后台概览（画板 07）。
- *
- * 三块数据各自独立查询：仪表盘聚合 + 默认模型 + 最近任务；任一块失败只降级该块，
- * 不拖垮整页。图表柱高在 `admin-query.ts` 里算成像素，这里只负责呈现，
- * 因此 `role="img"` 的 aria-label 与视觉结论来自同一份汇总。
- */
+const QUICK_LINKS = [
+  {
+    href: APP_ROUTES.adminUsers,
+    label: '用户管理',
+    description: '检索注册账户、启停状态与清理违规用户',
+    icon: UsersIcon,
+  },
+  {
+    href: APP_ROUTES.adminModels,
+    label: '模型管理',
+    description: '维护图像、视频与语言模型参数及并发配额',
+    icon: CpuIcon,
+  },
+  {
+    href: APP_ROUTES.adminPlugins,
+    label: '插件管理',
+    description: '校验、上传并启停第三方生成供应商插件包',
+    icon: PuzzlePieceIcon,
+  },
+  {
+    href: APP_ROUTES.adminSettings,
+    label: '系统设置',
+    description: '站点公开域名、SMTP 邮件、对象存储与运行时限制',
+    icon: GearSixIcon,
+  },
+] as const
+
 export function AdminDashboardView() {
   const dashboardQuery = useAdminDashboard()
-  const defaultsQuery = useAdminMediaModelDefaults()
-  const modelsQuery = useModels()
-  const jobsQuery = useAdminRecentJobs()
+  const recentJobsQuery = useAdminJobs({ limit: RECENT_JOBS_LIMIT })
 
   const dashboard = dashboardQuery.data
-  const days = normalizeDashboardDays(dashboard)
-  const chartDays = buildChartDays(days)
-  const summary = summarizeDashboard(dashboard, days)
-  const chartLabel = buildChartLabel(days, summary)
-  const updatedAt = formatUpdatedTime(dashboardQuery.dataUpdatedAt)
+  const days = dashboard?.days ?? []
+  const recentJobs = recentJobsQuery.data?.items ?? []
+  const isRefreshing = dashboardQuery.isFetching || recentJobsQuery.isFetching
 
-  const defaults = summarizeDefaultModels(
-    defaultsQuery.data,
-    Array.isArray(modelsQuery.data) ? modelsQuery.data : [],
-  )
-  const defaultsLoading = defaultsQuery.isPending || modelsQuery.isPending
-  const jobs = jobsQuery.data?.items ?? []
-  const statsLoading = dashboardQuery.isPending
+  function handleRefresh() {
+    void dashboardQuery.refetch()
+    void recentJobsQuery.refetch()
+  }
 
   return (
-    <div className="flex flex-col gap-7">
+    <div className="flex flex-col gap-6">
       <PageHeader
-        title="系统概览"
-        description="监控实例用户规模、任务执行状态与默认模型配置。"
+        title="概览"
+        description="查看站点运行指标、近 7 天任务趋势与默认媒体模型配置。"
         actions={
-          <Badge tone="neutral" className="font-mono">
-            更新于 {updatedAt}
-          </Badge>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleRefresh}
+            loading={isRefreshing}
+            leadingIcon={<ArrowClockwiseIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
+          >
+            刷新数据
+          </Button>
         }
       />
 
       {dashboardQuery.isError ? (
         <Alert
           tone="danger"
-          title="概览数据加载失败"
+          title="概览指标加载失败"
           action={
             <Button variant="secondary" size="sm" onClick={() => void dashboardQuery.refetch()}>
               重试
             </Button>
           }
         >
-          {dashboardQuery.error instanceof Error ? dashboardQuery.error.message : '网络或服务端错误。'}
+          {dashboardQuery.error instanceof Error ? dashboardQuery.error.message : '网络或服务端错误，请稍后重试。'}
         </Alert>
       ) : null}
 
-      <section aria-label="核心指标" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          label="用户总数"
+      {/* 4 KPI Cards */}
+      <section aria-label="核心运行指标" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard
+          label="总用户数"
           value={formatCount(dashboard?.totalUsers ?? null)}
-          icon={<Users size={20} weight="duotone" />}
+          icon={<UsersIcon weight="duotone" aria-hidden="true" className={iconSize.md} />}
           tone="accent"
-          loading={statsLoading}
-        />
-        <MetricCard
-          label="累计生成任务"
-          value={formatCount(dashboard?.totalJobs ?? null)}
-          icon={<Images size={20} weight="duotone" />}
-          tone="info"
-          loading={statsLoading}
-        />
-        <MetricCard
-          label="近 7 天任务"
-          value={formatCount(summary.total)}
-          icon={<ChartBar size={20} weight="duotone" />}
-          tone="neutral"
+          loading={dashboardQuery.isPending}
           hint={
-            summary.failed > 0 ? (
-              <a href={RECENT_JOBS_ANCHOR} className="text-danger hover:underline">
-                失败 <span className="font-mono">{summary.failed}</span>
-              </a>
+            <Link href={APP_ROUTES.adminUsers} className="text-muted-foreground transition-colors hover:text-foreground">
+              管理用户 →
+            </Link>
+          }
+        />
+        <KpiCard
+          label="累计任务数"
+          value={formatCount(dashboard?.totalJobs ?? null)}
+          icon={<ImagesIcon weight="duotone" aria-hidden="true" className={iconSize.md} />}
+          tone="info"
+          loading={dashboardQuery.isPending}
+          hint={
+            <Link href={APP_ROUTES.adminJobs} className="text-muted-foreground transition-colors hover:text-foreground">
+              任务审计 →
+            </Link>
+          }
+        />
+        <KpiCard
+          label="近 7 天成功率"
+          value={formatSuccessRate(dashboard?.successRate7d)}
+          icon={<PulseIcon weight="duotone" aria-hidden="true" className={iconSize.md} />}
+          tone="success"
+          loading={dashboardQuery.isPending}
+        />
+        <KpiCard
+          label="近 7 天失败任务"
+          value={formatCount(dashboard?.failedJobs7d ?? null)}
+          icon={<WarningCircleIcon weight="duotone" aria-hidden="true" className={iconSize.md} />}
+          tone={(dashboard?.failedJobs7d ?? 0) > 0 ? 'danger' : 'neutral'}
+          loading={dashboardQuery.isPending}
+          hint={
+            (dashboard?.failedJobs7d ?? 0) > 0 ? (
+              <Link href={APP_ROUTES.adminJobs} className="text-danger hover:underline">
+                排查失败
+              </Link>
             ) : (
-              <span>无失败</span>
+              <span>运行正常</span>
             )
           }
-          loading={statsLoading}
-        />
-        <MetricCard
-          label="近 7 天成功率"
-          value={summary.successRateLabel}
-          icon={<Pulse size={20} weight="duotone" />}
-          tone="success"
-          loading={statsLoading}
         />
       </section>
 
-      <section
-        aria-label="实例运行状况"
-        className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]"
-      >
-        <figure className="flex flex-col gap-4 rounded-card border border-border bg-surface px-6 py-5 text-foreground shadow-soft">
-          <figcaption className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
-            <span className="flex flex-wrap items-baseline gap-4">
-              <span className="text-compact font-medium">近 7 天生成趋势</span>
-              <span className="text-ui text-muted-foreground">
-                成功率 <span className="font-mono text-foreground">{summary.successRateLabel}</span>
-              </span>
-              {summary.failed > 0 ? (
-                <a href={RECENT_JOBS_ANCHOR} className="text-ui text-danger hover:underline">
-                  失败 <span className="font-mono">{summary.failed}</span> 个，查看最近任务
-                </a>
-              ) : (
-                <span className="text-ui text-muted-foreground">
-                  失败 <span className="font-mono">{summary.failed}</span> 个
-                </span>
-              )}
-            </span>
-            <span className="flex items-center gap-4 text-xs text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                <span aria-hidden="true" className="size-2.5 rounded-sm bg-chart-positive" />
-                成功
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span aria-hidden="true" className="size-2.5 rounded-sm bg-chart-negative" />
-                失败
-              </span>
-            </span>
-          </figcaption>
+      {/* 7-Day Stacked Bar Chart */}
+      <SevenDayStackedChart
+        days={days}
+        loading={dashboardQuery.isPending}
+        error={dashboardQuery.isError && !dashboard}
+      />
 
-          {statsLoading ? (
-            <Skeleton className="h-[150px] w-full" />
-          ) : dashboardQuery.isError && !dashboard ? (
-            <p className="text-sm text-muted-foreground">近 7 天数据暂不可用，可在上方重试。</p>
-          ) : days.length === 0 ? (
-            <p className="text-sm text-muted-foreground">近 7 天暂无生成任务数据。</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <div className="flex min-w-[280px] flex-col gap-2">
-                <div
-                  role="img"
-                  aria-label={chartLabel}
-                  className="grid grid-cols-7 items-end gap-1 border-b border-border sm:gap-4"
-                >
-                  {chartDays.map((day) => (
-                    <div key={day.date} className="flex h-[150px] flex-col items-center justify-end gap-1">
-                      <span className="text-caption">
-                        <span className="font-mono text-muted-foreground">{day.total}</span>
-                      </span>
-                      <span className="flex w-full max-w-10 flex-col overflow-hidden rounded-t-[var(--space-1)]">
-                        {day.failHeight > 0 ? (
-                          <span
-                            aria-hidden="true"
-                            className="block w-full bg-chart-negative"
-                            style={{ height: day.failHeight }}
-                          />
-                        ) : null}
-                        {day.successHeight > 0 ? (
-                          <span
-                            aria-hidden="true"
-                            className="block w-full bg-chart-positive"
-                            style={{ height: day.successHeight }}
-                          />
-                        ) : null}
-                      </span>
-                    </div>
-                  ))}
+      {/* Default Media Models Election Card */}
+      <AdminMediaModelDefaultsCard />
+
+      {/* Recent Jobs Preview Card */}
+      <Card className="border border-border">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'inline-flex shrink-0 items-center justify-center rounded-control bg-tonal text-foreground',
+                  controlSquare.md,
+                )}
+              >
+                <ListChecksIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+              </span>
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2">
+                  <CardTitle level={2}>最近生成任务</CardTitle>
+                  <Badge tone="neutral">最新 {RECENT_JOBS_LIMIT} 条</Badge>
                 </div>
-                <div className="grid grid-cols-7 gap-1 sm:gap-4" aria-hidden="true">
-                  {chartDays.map((day) => (
-                    <span
-                      key={day.date}
-                      className="text-center font-mono text-xs text-muted-foreground"
-                    >
-                      <span className="sm:hidden">{day.shortLabel}</span>
-                      <span className="hidden sm:inline">{day.label}</span>
-                    </span>
-                  ))}
-                </div>
+                <CardDescription>实时展示近期提交的生成任务状态与耗时。</CardDescription>
               </div>
             </div>
-          )}
-        </figure>
 
-        <section
-          aria-labelledby="admin-default-models"
-          className="flex flex-col justify-between gap-5 rounded-card border border-border bg-surface px-6 py-5 text-foreground shadow-soft"
-        >
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
+            <Button
+              variant="outline"
+              size="sm"
+              asChild
+              trailingIcon={<ArrowRightIcon weight="bold" aria-hidden="true" className={iconSize.xs} />}
+            >
+              <Link href={APP_ROUTES.adminJobs}>查看全部任务</Link>
+            </Button>
+          </div>
+        </CardHeader>
+
+        <CardBody className="pt-0">
+          <Table
+            caption="最近 6 条生成任务"
+            columns={RECENT_JOBS_COLUMNS}
+            cardClassName="border border-border shadow-none"
+            className="[&>table]:min-w-[640px]"
+          >
+            <TableHeader>
+              <TableHeadCell>任务 ID</TableHeadCell>
+              <TableHeadCell>模型 & 媒体类型</TableHeadCell>
+              <TableHeadCell>状态</TableHeadCell>
+              <TableHeadCell>耗时</TableHeadCell>
+              <TableHeadCell align="right">创建时间</TableHeadCell>
+            </TableHeader>
+            <TableBody busy={recentJobsQuery.isFetching}>
+              {recentJobsQuery.isPending ? (
+                Array.from({ length: RECENT_JOBS_LIMIT }, (_, index) => (
+                  <TableSkeletonRow
+                    key={index}
+                    cells={[
+                      <Skeleton key="id" className="h-4 w-20" />,
+                      <Skeleton key="model" className="h-4 w-36" />,
+                      <Skeleton key="status" className="h-5 w-16" />,
+                      <Skeleton key="duration" className="h-4 w-14" />,
+                      <Skeleton key="created" className="ml-auto h-4 w-28" />,
+                    ]}
+                  />
+                ))
+              ) : recentJobsQuery.isError ? (
+                <TableStateRow>
+                  <div className="flex flex-col items-center gap-2 py-8">
+                    <p className="text-sm text-muted-foreground">最近任务加载失败。</p>
+                    <Button variant="secondary" size="sm" onClick={() => void recentJobsQuery.refetch()}>
+                      重试
+                    </Button>
+                  </div>
+                </TableStateRow>
+              ) : recentJobs.length === 0 ? (
+                <TableStateRow>
+                  <EmptyState
+                    density="compact"
+                    title="暂无生成任务"
+                    description="用户开始创作后，最新的生成任务会在此处列出。"
+                  />
+                </TableStateRow>
+              ) : (
+                recentJobs.map((job) => <RecentJobRow key={job.id} job={job} />)
+              )}
+            </TableBody>
+          </Table>
+        </CardBody>
+      </Card>
+
+      {/* Quick Navigation Links */}
+      <section aria-label="快捷入口" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {QUICK_LINKS.map((item) => {
+          const Icon = item.icon
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="group flex flex-col justify-between gap-3 rounded-card border border-border bg-surface p-5 shadow-soft transition-colors hover:border-border-strong hover:bg-surface-hover"
+            >
+              <div className="flex items-center justify-between gap-3">
                 <span
                   aria-hidden="true"
-                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent"
+                  className={cn(
+                    'inline-flex shrink-0 items-center justify-center rounded-control bg-tonal text-foreground transition-colors group-hover:bg-accent-soft group-hover:text-accent',
+                    controlSquare.md,
+                  )}
                 >
-                  <Cpu size={18} weight="duotone" />
+                  <Icon weight="duotone" aria-hidden="true" className={iconSize.md} />
                 </span>
-                <h2 id="admin-default-models" className="text-compact font-medium">
-                  默认模型与队列
-                </h2>
-              </div>
-              <Badge tone={defaults.complete ? 'success' : 'warning'} dot>
-                {defaults.complete ? '就绪' : '待配置'}
-              </Badge>
-            </div>
-
-            {defaultsLoading ? (
-              <div className="flex flex-col gap-3">
-                <Skeleton className="h-5 w-44" />
-                <Skeleton className="h-5 w-40" />
-              </div>
-            ) : defaultsQuery.isError || modelsQuery.isError ? (
-              <p className="text-sm text-muted-foreground">暂时无法读取默认模型配置。</p>
-            ) : (
-              <dl className="flex flex-col gap-3 rounded-control bg-canvas p-3.5">
-                <DefaultModelItem label="图像模型" entry={defaults.image} />
-                <DefaultModelItem label="视频模型" entry={defaults.video} />
-              </dl>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-            <Button variant="secondary" size="sm" asChild>
-              <Link href={APP_ROUTES.adminPromptTemplates}>提示词与助手配置</Link>
-            </Button>
-            <Button variant="ghost" size="sm" asChild>
-              <a href={RECENT_JOBS_ANCHOR}>查看最近任务</a>
-            </Button>
-          </div>
-        </section>
-      </section>
-
-      <section aria-labelledby="admin-recent-jobs" className="flex flex-col gap-3">
-        <SectionHeader
-          id="admin-recent-jobs"
-          className="scroll-mt-20"
-          title="最近任务"
-          actions={
-            <>
-              <Badge tone="neutral">最近 10 条</Badge>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void jobsQuery.refetch()}
-                loading={jobsQuery.isFetching}
-                icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
-              >
-                刷新
-              </Button>
-            </>
-          }
-        />
-
-        <Table caption={RECENT_JOBS_CAPTION} columns={RECENT_JOBS_COLUMNS} className="[&>table]:min-w-[720px]">
-          <TableHeader>
-            <TableHeadCell>任务 ID</TableHeadCell>
-            <TableHeadCell>类型</TableHeadCell>
-            <TableHeadCell>模型</TableHeadCell>
-            <TableHeadCell>状态</TableHeadCell>
-            <TableHeadCell align="right">创建时间</TableHeadCell>
-          </TableHeader>
-          <TableBody busy={jobsQuery.isFetching}>
-            {jobsQuery.isPending ? (
-              Array.from({ length: 5 }, (_, index) => (
-                <TableSkeletonRow
-                  key={index}
-                  cells={[
-                    <Skeleton key="id" className="h-4 w-20" />,
-                    <Skeleton key="kind" className="h-4 w-10" />,
-                    <Skeleton key="model" className="h-4 w-32" />,
-                    <Skeleton key="status" className="h-5 w-16" />,
-                    <Skeleton key="time" className="ml-auto h-4 w-28" />,
-                  ]}
+                <ArrowRightIcon
+                  weight="bold"
+                  aria-hidden="true"
+                  className={cn(iconSize.sm, 'text-muted-foreground transition-colors group-hover:text-foreground')}
                 />
-              ))
-            ) : jobsQuery.isError ? (
-              <TableStateRow>
-                <div className="flex flex-col items-center gap-2 py-8">
-                  <p className="text-sm text-muted-foreground">最近任务读取失败。</p>
-                  <Button variant="secondary" size="sm" onClick={() => void jobsQuery.refetch()}>
-                    重试
-                  </Button>
-                </div>
-              </TableStateRow>
-            ) : jobs.length === 0 ? (
-              <TableStateRow>
-                <EmptyState
-                  density="compact"
-                  title="还没有生成任务"
-                  description="用户开始创作后，最近 10 条任务会出现在这里。"
-                />
-              </TableStateRow>
-            ) : (
-              jobs.map((job) => <RecentJobRow key={job.id} job={job} />)
-            )}
-          </TableBody>
-        </Table>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-compact font-medium text-foreground">{item.label}</span>
+                <span className="text-xs text-muted-foreground">{item.description}</span>
+              </div>
+            </Link>
+          )
+        })}
       </section>
     </div>
   )

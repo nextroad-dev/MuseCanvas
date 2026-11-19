@@ -3,15 +3,20 @@
 import { useEffect, useState } from 'react'
 import { FileArrowUpIcon as FileUp } from '@phosphor-icons/react'
 import type { ImportPromptTemplateSetInput } from '@musecanvas/contracts'
-import { Alert } from '@/shared/components/ui/alert'
-import { Badge } from '@/shared/components/ui/badge'
-import { Button } from '@/shared/components/ui/button'
-import { Dialog } from '@/shared/components/ui/dialog'
-import { Field, FieldGroup } from '@/shared/components/ui/field'
-import { Input } from '@/shared/components/ui/input'
-import { Switch } from '@/shared/components/ui/switch'
-import { Textarea } from '@/shared/components/ui/textarea'
-import { iconSize } from '@/shared/components/ui/size'
+import {
+  Alert,
+  Badge,
+  Button,
+  Dialog,
+  Field,
+  FieldGroup,
+  Input,
+  Switch,
+  Textarea,
+  controlMinHeight,
+  iconSize,
+} from '@/shared/components/ui'
+import { cn } from '@/shared/lib/cn'
 import {
   PROMPT_MAX_ENTRIES,
   parsePromptImportPayload,
@@ -106,7 +111,12 @@ export function AdminPromptImportDialog({ open, busy, onClose, onSubmit }: Admin
             label="从文件导入"
             hint={`选择 .json 文件（导出文件可直接回导），最多 ${PROMPT_MAX_ENTRIES} 条、2MB。`}
           >
-            <label className="flex min-h-[var(--control-lg)] cursor-pointer items-center gap-2 rounded-control border border-dashed border-border-control bg-tonal px-3 text-sm text-foreground transition-colors hover:bg-tonal-hover">
+            <label
+              className={cn(
+                'flex cursor-pointer items-center gap-2 rounded-control border border-dashed border-border-control bg-tonal px-3 text-sm text-foreground transition-colors hover:bg-tonal-hover',
+                controlMinHeight.lg,
+              )}
+            >
               <FileUp weight="bold" aria-hidden="true" className={iconSize.sm} />
               <span className="truncate">{fileName || '选择 JSON 文件'}</span>
               <input
@@ -142,7 +152,7 @@ export function AdminPromptImportDialog({ open, busy, onClose, onSubmit }: Admin
         </FieldGroup>
 
         {parsed ? (
-          <div className="flex flex-col gap-3 rounded-control bg-tonal p-4">
+          <div className="flex flex-col gap-3 rounded-control border border-border/70 bg-tonal p-4">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone="success" dot>
                 解析成功

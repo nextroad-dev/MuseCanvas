@@ -4,12 +4,15 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { PlusIcon } from '@phosphor-icons/react'
 import type { PromptTemplateEntryDto } from '@musecanvas/contracts'
-import { Button } from '@/shared/components/ui/button'
-import { Dialog } from '@/shared/components/ui/dialog'
-import { Field, FieldGroup } from '@/shared/components/ui/field'
-import { Input } from '@/shared/components/ui/input'
-import { Textarea } from '@/shared/components/ui/textarea'
-import { iconSize } from '@/shared/components/ui/size'
+import {
+  Button,
+  Dialog,
+  Field,
+  FieldGroup,
+  Input,
+  Textarea,
+  iconSize,
+} from '@/shared/components/ui'
 import {
   PROMPT_MAX_DESCRIPTION_LENGTH,
   PROMPT_MAX_NAME_LENGTH,
@@ -171,7 +174,7 @@ export function AdminPromptEntryDialog({ open, mode, entry, busy, onClose, onSub
                   type="button"
                   onClick={() => insertVariable(name)}
                   disabled={busy}
-                  className="inline-flex items-center gap-1 rounded-pill border border-border px-2.5 py-1 font-mono text-xs text-foreground transition-colors hover:bg-tonal-hover disabled:pointer-events-none disabled:opacity-45"
+                  className="inline-flex items-center gap-1 rounded-pill border border-border bg-surface px-2.5 py-1 font-mono text-xs text-foreground transition-colors hover:bg-surface-hover disabled:pointer-events-none disabled:opacity-45"
                 >
                   <PlusIcon weight="bold" aria-hidden="true" className={iconSize.xs} />
                   {`{{${name}}}`}

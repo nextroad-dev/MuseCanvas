@@ -1,8 +1,7 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { Dialog } from '@/shared/components/ui/dialog'
-import { Button } from '@/shared/components/ui/button'
+import { Button, Dialog } from '@/shared/components/ui'
 
 export interface AdminSettingsConfirmDialogProps {
   open: boolean

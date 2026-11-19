@@ -1,23 +1,35 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { TrashIcon as Trash } from '@phosphor-icons/react'
+import { EnvelopeSimpleIcon, PaperPlaneTiltIcon, TrashIcon as Trash } from '@phosphor-icons/react'
 import type { SmtpSettingsDto, SmtpSettingsInput, SmtpTlsMode } from '@musecanvas/contracts'
-import { Alert } from '@/shared/components/ui/alert'
-import { Badge } from '@/shared/components/ui/badge'
-import { Button } from '@/shared/components/ui/button'
-import { Card, CardBody, CardDescription, CardFooter, CardHeader, CardTitle } from '@/shared/components/ui/card'
-import { Field, FieldGroup } from '@/shared/components/ui/field'
-import { Input } from '@/shared/components/ui/input'
-import { Select } from '@/shared/components/ui/select'
-import { useToast } from '@/shared/components/ui/toast'
-import { iconSize } from '@/shared/components/ui/size'
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Field,
+  FieldGroup,
+  Input,
+  Select,
+  controlSquare,
+  iconSize,
+  useToast,
+} from '@/shared/components/ui'
+import {
+  useTestAdminSmtpSettings,
+  useUpdateAdminSmtpSettings,
+} from '@/shared/hooks/useAdmin'
+import { cn } from '@/shared/lib/cn'
 import { formatDateTime } from '@/shared/lib/format'
 import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
 import { SMTP_TLS_OPTIONS, validateSmtpForm } from '@/features/admin/lib/admin-settings-forms'
 import type { SmtpFormValues } from '@/features/admin/lib/admin-settings-forms'
-import { clientApi } from '@/shared/services/client-api'
 import { AdminSettingsConfirmDialog } from './admin-settings-confirm-dialog'
 
 const STATUS_LABEL: Record<SmtpSettingsDto['status'], { label: string; tone: 'neutral' | 'info' | 'success' | 'danger' }> = {
@@ -70,37 +82,11 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
     setErrors({})
   }, [settings])
 
-  const saveMutation = useMutation({
-    mutationFn: (input: SmtpSettingsInput) => clientApi.setup.updateSmtp(input),
-    onSuccess: (saved) => {
-      onSaved(saved)
-      setValues((current) => ({ ...current, password: '' }))
-      toast.success('SMTP 设置已保存')
-    },
-    onError: (error) => toast.error('保存 SMTP 设置失败', adminErrorMessage(error)),
-  })
+  const saveMutation = useUpdateAdminSmtpSettings()
+  const testMutation = useTestAdminSmtpSettings()
+  const clearMutation = useUpdateAdminSmtpSettings()
 
-  const testMutation = useMutation({
-    mutationFn: (input: SmtpSettingsInput) => clientApi.setup.testSmtp(input),
-    onSuccess: (result) => {
-      onSaved(result.settings)
-      setValues((current) => ({ ...current, password: '' }))
-      toast.success('SMTP 连接验证成功', '验证通过后设置已自动保存。')
-    },
-    onError: (error) => toast.error('SMTP 连接测试失败', adminErrorMessage(error)),
-  })
-
-  const clearMutation = useMutation({
-    mutationFn: () => clientApi.setup.updateSmtp({ password: '' }),
-    onSuccess: (saved) => {
-      onSaved(saved)
-      setConfirmClear(false)
-      toast.success('已清空保存的 SMTP 密码')
-    },
-    onError: (error) => toast.error('清空 SMTP 密码失败', adminErrorMessage(error)),
-  })
-
-  const busy = saveMutation.isPending || testMutation.isPending
+  const busy = saveMutation.isPending || testMutation.isPending || clearMutation.isPending
 
   function patchValues(patch: Partial<SmtpFormValues>) {
     setValues((current) => ({ ...current, ...patch }))
@@ -114,7 +100,17 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
 
   function handleSave() {
     if (!validate()) return
-    saveMutation.mutate(buildSmtpInput(values, values.password.trim() === '' ? undefined : values.password))
+    saveMutation.mutate(
+      buildSmtpInput(values, values.password.trim() === '' ? undefined : values.password),
+      {
+        onSuccess: (saved) => {
+          onSaved(saved)
+          setValues((current) => ({ ...current, password: '' }))
+          toast.success('SMTP 设置已保存')
+        },
+        onError: (error) => toast.error('保存 SMTP 设置失败', adminErrorMessage(error)),
+      },
+    )
   }
 
   function handleTest() {
@@ -123,25 +119,62 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
       setErrors({ host: '测试连接前必须填写服务器地址。', port: '测试连接前必须填写端口。' })
       return
     }
-    testMutation.mutate(buildSmtpInput(values, values.password.trim() === '' ? undefined : values.password))
+    testMutation.mutate(
+      buildSmtpInput(values, values.password.trim() === '' ? undefined : values.password),
+      {
+        onSuccess: (result) => {
+          onSaved(result.settings)
+          setValues((current) => ({ ...current, password: '' }))
+          toast.success('SMTP 连接验证成功', '验证通过后设置已自动保存。')
+        },
+        onError: (error) => toast.error('SMTP 连接测试失败', adminErrorMessage(error)),
+      },
+    )
+  }
+
+  function handleClearPassword() {
+    clearMutation.mutate(
+      { password: '' },
+      {
+        onSuccess: (saved) => {
+          onSaved(saved)
+          setConfirmClear(false)
+          toast.success('已清空保存的 SMTP 密码')
+        },
+        onError: (error) => toast.error('清空 SMTP 密码失败', adminErrorMessage(error)),
+      },
+    )
   }
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <Card aria-labelledby="admin-smtp-title">
         <CardHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle id="admin-smtp-title" level={2}>
-              SMTP 邮件服务
-            </CardTitle>
-            <Badge tone={status.tone} dot>
-              {status.label}
-            </Badge>
-            <Badge tone={settings.hasSecret ? 'success' : 'neutral'}>
-              {settings.hasSecret ? '密码已保存' : '未保存密码'}
-            </Badge>
+          <div className="flex flex-wrap items-center gap-3">
+            <span
+              aria-hidden="true"
+              className={cn(
+                'inline-flex shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent',
+                controlSquare.md,
+              )}
+            >
+              <EnvelopeSimpleIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <CardTitle id="admin-smtp-title" level={2}>
+                  SMTP 邮件服务
+                </CardTitle>
+                <Badge tone={status.tone} dot>
+                  {status.label}
+                </Badge>
+                <Badge tone={settings.hasSecret ? 'success' : 'neutral'}>
+                  {settings.hasSecret ? '密码已保存' : '未保存密码'}
+                </Badge>
+              </div>
+              <CardDescription>用于发送登录验证码与通知邮件。测试连接会真实连接外部服务，成功后才保存设置。</CardDescription>
+            </div>
           </div>
-          <CardDescription>用于发送登录验证码与通知邮件。测试连接会真实连接外部服务，成功后才保存设置。</CardDescription>
         </CardHeader>
         <CardBody>
           <FieldGroup>
@@ -233,11 +266,11 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
             </div>
 
             {settings.secretFingerprint ? (
-              <p className="font-mono text-xs text-muted-foreground">
+              <p className="font-mono text-xs tabular-nums text-muted-foreground">
                 密码指纹：{settings.secretFingerprint} · 更新于 {formatDateTime(settings.updatedAt)} · #{settings.revision}
               </p>
             ) : (
-              <p className="font-mono text-xs text-muted-foreground">
+              <p className="font-mono text-xs tabular-nums text-muted-foreground">
                 更新于 {formatDateTime(settings.updatedAt)} · #{settings.revision}
               </p>
             )}
@@ -250,7 +283,13 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
           </FieldGroup>
         </CardBody>
         <CardFooter>
-          <Button variant="secondary" onClick={handleTest} loading={testMutation.isPending} disabled={busy && !testMutation.isPending}>
+          <Button
+            variant="secondary"
+            onClick={handleTest}
+            loading={testMutation.isPending}
+            disabled={busy && !testMutation.isPending}
+            leadingIcon={<PaperPlaneTiltIcon weight="bold" aria-hidden="true" className={iconSize.sm} />}
+          >
             测试连接
           </Button>
           <Button onClick={handleSave} loading={saveMutation.isPending} disabled={busy && !saveMutation.isPending}>
@@ -259,7 +298,7 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
         </CardFooter>
       </Card>
 
-      <Card className="border border-danger-border bg-danger-soft">
+      <Card className="border-danger-border bg-danger-soft">
         <CardHeader>
           <CardTitle level={2}>危险操作</CardTitle>
           <CardDescription>以下操作会立即改变实例行为，且无法撤销。</CardDescription>
@@ -272,8 +311,8 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
           <Button
             variant="danger-ghost"
             onClick={() => setConfirmClear(true)}
-            disabled={!settings.hasSecret}
-            icon={<Trash weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            disabled={!settings.hasSecret || busy}
+            leadingIcon={<Trash weight="bold" aria-hidden="true" className={iconSize.sm} />}
           >
             清空密码
           </Button>
@@ -286,7 +325,7 @@ export function AdminSettingsSmtp({ settings, onSaved }: AdminSettingsSmtpProps)
         title="清空 SMTP 密码？"
         confirmLabel="清空密码"
         busy={clearMutation.isPending}
-        onConfirm={() => clearMutation.mutate()}
+        onConfirm={handleClearPassword}
       >
         <p>清空后保存的密码将被移除，SMTP 状态回到「已保存未验证」。如需继续发信，请重新填写密码并测试连接。</p>
         <p className="text-muted-foreground">该操作不可撤销。</p>

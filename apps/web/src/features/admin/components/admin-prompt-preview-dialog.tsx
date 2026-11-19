@@ -1,21 +1,22 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
 import type { PromptTemplateEntryDto, RenderPromptTemplateResult } from '@musecanvas/contracts'
-import { Alert } from '@/shared/components/ui/alert'
-import { Badge } from '@/shared/components/ui/badge'
-import { Button } from '@/shared/components/ui/button'
-import { Dialog } from '@/shared/components/ui/dialog'
-import { Field } from '@/shared/components/ui/field'
-import { Input } from '@/shared/components/ui/input'
+import {
+  Alert,
+  Badge,
+  Button,
+  Dialog,
+  Field,
+  Input,
+} from '@/shared/components/ui'
+import { usePreviewPromptTemplate } from '@/shared/hooks/useAdmin'
 import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
 import {
   defaultPreviewValues,
   extractTemplateVariables,
   unknownTemplateVariables,
 } from '@/features/admin/lib/admin-prompt-templates'
-import { clientApi } from '@/shared/services/client-api'
 
 export interface AdminPromptPreviewDialogProps {
   open: boolean
@@ -29,21 +30,26 @@ export function AdminPromptPreviewDialog({ open, entry, onClose }: AdminPromptPr
   const [result, setResult] = useState<RenderPromptTemplateResult | null>(null)
   const [error, setError] = useState('')
 
-  const mutation = useMutation({
-    mutationFn: (input: { instruction: string; values: Record<string, string> }) =>
-      clientApi.admin.previewPromptTemplate(input),
-    onSuccess: (data) => {
-      setResult(data)
-      setError('')
-    },
-    onError: (previewError) => {
-      setResult(null)
-      setError(adminErrorMessage(previewError, '渲染预览失败。'))
-    },
-  })
+  const mutation = usePreviewPromptTemplate()
 
   const variables = entry ? extractTemplateVariables(entry.instruction) : []
   const unknown = entry ? unknownTemplateVariables(entry.instruction) : []
+
+  function triggerPreview(instruction: string, previewValues: Record<string, string>) {
+    mutation.mutate(
+      { instruction, values: previewValues },
+      {
+        onSuccess: (data) => {
+          setResult(data)
+          setError('')
+        },
+        onError: (previewError) => {
+          setResult(null)
+          setError(adminErrorMessage(previewError, '渲染预览失败。'))
+        },
+      },
+    )
+  }
 
   useEffect(() => {
     if (!open || !entry) return
@@ -51,14 +57,14 @@ export function AdminPromptPreviewDialog({ open, entry, onClose }: AdminPromptPr
     setValues(initial)
     setResult(null)
     setError('')
-    mutation.mutate({ instruction: entry.instruction, values: initial })
+    triggerPreview(entry.instruction, initial)
     // 只在打开或切换条目时重新渲染，编辑变量时由「重新渲染」按钮触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, entry?.id])
 
   function rerender() {
     if (!entry) return
-    mutation.mutate({ instruction: entry.instruction, values })
+    triggerPreview(entry.instruction, values)
   }
 
   return (

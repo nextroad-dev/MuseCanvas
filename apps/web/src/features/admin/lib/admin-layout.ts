@@ -6,7 +6,13 @@ import { APP_ROUTES } from '@/shared/lib/app-routes'
 /** 侧栏图标槽的键：具体图标组件由 `admin-shell.tsx` 映射，纯模块不 import Phosphor。 */
 export type AdminNavIconKey =
   | 'overview'
+  | 'users'
+  | 'invitations'
+  | 'models'
+  | 'providers'
+  | 'plugins'
   | 'prompt'
+  | 'jobs'
   | 'oauth'
   | 'settings'
 
@@ -17,13 +23,13 @@ export interface AdminNavItem {
 }
 
 export interface AdminNavGroup {
-  /** `null` = 该组不显示标题（概览独占首组，画板 07）。 */
+  /** `null` = 该组不显示标题（概览独占首组）。 */
   title: string | null
   items: AdminNavItem[]
 }
 
 /**
- * 侧栏分组顺序：概览 / 生成资源 / 系统设置。
+ * 侧栏分组顺序：概览 / 用户与访问 / 生成资源 / 监控与系统（共 10 个后台路由）。
  * 新增后台页时只改这里，导航、面包屑与当前项高亮会一起生效。
  */
 export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
@@ -32,13 +38,26 @@ export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
     items: [{ label: '概览', href: APP_ROUTES.admin, icon: 'overview' }],
   },
   {
-    title: '生成资源',
-    items: [{ label: '提示词模板', href: APP_ROUTES.adminPromptTemplates, icon: 'prompt' }],
+    title: '用户与访问',
+    items: [
+      { label: '用户管理', href: APP_ROUTES.adminUsers, icon: 'users' },
+      { label: '邀请码', href: APP_ROUTES.adminInvitations, icon: 'invitations' },
+    ],
   },
   {
-    title: '系统设置',
+    title: '生成资源',
     items: [
-      { label: 'OAuth', href: APP_ROUTES.adminOAuth, icon: 'oauth' },
+      { label: '模型配置', href: APP_ROUTES.adminModels, icon: 'models' },
+      { label: '供应商凭据', href: APP_ROUTES.adminProviders, icon: 'providers' },
+      { label: '插件管理', href: APP_ROUTES.adminPlugins, icon: 'plugins' },
+      { label: '提示词模板', href: APP_ROUTES.adminPromptTemplates, icon: 'prompt' },
+    ],
+  },
+  {
+    title: '监控与系统',
+    items: [
+      { label: '任务日志', href: APP_ROUTES.adminJobs, icon: 'jobs' },
+      { label: 'OAuth 登录', href: APP_ROUTES.adminOAuth, icon: 'oauth' },
       { label: '系统配置', href: APP_ROUTES.adminSettings, icon: 'settings' },
     ],
   },

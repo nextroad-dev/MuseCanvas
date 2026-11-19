@@ -1,18 +1,20 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwiseIcon as RefreshCw, ShieldCheckIcon as ShieldCheck } from '@phosphor-icons/react'
-import { Alert } from '@/shared/components/ui/alert'
-import { Badge } from '@/shared/components/ui/badge'
-import { Button } from '@/shared/components/ui/button'
-import { Card } from '@/shared/components/ui/card'
-import { EmptyState } from '@/shared/components/ui/empty-state'
-import { PageHeader } from '@/shared/components/ui/page-header'
-import { Skeleton } from '@/shared/components/ui/skeleton'
-import { iconSize } from '@/shared/components/ui/size'
-import { queryKeys } from '@/shared/hooks/query-keys'
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  PageHeader,
+  Skeleton,
+  controlSquare,
+  iconSize,
+} from '@/shared/components/ui'
+import { useAdminOAuthProviders } from '@/shared/hooks/useAdmin'
+import { cn } from '@/shared/lib/cn'
 import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
-import { clientApi } from '@/shared/services/client-api'
 import { AdminOAuthProviderCard } from './admin-oauth-provider-card'
 
 /**
@@ -22,14 +24,9 @@ import { AdminOAuthProviderCard } from './admin-oauth-provider-card'
  * 回调地址由站点地址推导，站点地址未设置时给出前置换算提示。
  */
 export function AdminOAuthView() {
-  const providersQuery = useQuery({
-    queryKey: queryKeys.admin.oauthProviders,
-    queryFn: () => clientApi.admin.listOAuthProviders(),
-    staleTime: 30_000,
-  })
+  const providersQuery = useAdminOAuthProviders()
 
   const providers = providersQuery.data ?? []
-
   const enabledCount = providers.filter((provider) => provider.enabled).length
 
   return (
@@ -38,16 +35,19 @@ export function AdminOAuthView() {
         title="OAuth 登录"
         description="管理 GitHub / Google 第三方登录的凭据与启停。密钥只写不回显；后台保存后立即接管环境变量中的同名凭据。"
         meta={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span
               aria-hidden="true"
-              className="inline-flex size-6 items-center justify-center rounded-control bg-accent-soft text-accent"
+              className={cn(
+                'inline-flex items-center justify-center rounded-control bg-accent-soft text-accent',
+                controlSquare.xs,
+              )}
             >
-              <ShieldCheck size={14} weight="duotone" />
+              <ShieldCheck weight="duotone" aria-hidden="true" className={iconSize.sm} />
             </span>
             <span className="text-caption font-medium text-muted-foreground">身份认证</span>
             {providers.length > 0 ? (
-              <Badge tone={enabledCount > 0 ? 'success' : 'neutral'}>
+              <Badge tone={enabledCount > 0 ? 'success' : 'neutral'} dot={enabledCount > 0}>
                 已启用 {enabledCount}/{providers.length}
               </Badge>
             ) : null}
@@ -59,7 +59,7 @@ export function AdminOAuthView() {
             size="sm"
             onClick={() => void providersQuery.refetch()}
             loading={providersQuery.isFetching}
-            icon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            leadingIcon={<RefreshCw weight="bold" aria-hidden="true" className={iconSize.sm} />}
           >
             刷新
           </Button>
@@ -72,12 +72,12 @@ export function AdminOAuthView() {
 
       {providersQuery.isLoading ? (
         <div className="grid min-w-0 gap-4 xl:grid-cols-2" role="status" aria-label="正在加载 OAuth 提供商">
-          <Card className="gap-4 border border-border">
+          <Card className="gap-4">
             <Skeleton className="h-6 w-36" />
             <Skeleton className="h-4 w-64" />
             <Skeleton className="h-24 w-full" />
           </Card>
-          <Card className="gap-4 border border-border">
+          <Card className="gap-4">
             <Skeleton className="h-6 w-36" />
             <Skeleton className="h-4 w-64" />
             <Skeleton className="h-24 w-full" />
@@ -86,7 +86,7 @@ export function AdminOAuthView() {
       ) : null}
 
       {providersQuery.isError && providersQuery.data === undefined ? (
-        <Card className="border border-border">
+        <Card>
           <EmptyState
             icon={RefreshCw}
             title="无法加载 OAuth 提供商"
@@ -98,7 +98,7 @@ export function AdminOAuthView() {
       ) : null}
 
       {providers.length === 0 && !providersQuery.isLoading && !providersQuery.isError ? (
-        <Card className="border border-border">
+        <Card>
           <EmptyState
             title="没有可配置的 OAuth 提供商"
             description="服务端应始终返回 GitHub 与 Google 两个提供商；若列表为空，请检查后端版本。"

@@ -12,7 +12,8 @@ import { Field, FieldGroup } from '@/shared/components/ui/field'
 import { Input } from '@/shared/components/ui/input'
 import { Select } from '@/shared/components/ui/select'
 import { useToast } from '@/shared/components/ui/toast'
-import { iconSize } from '@/shared/components/ui/size'
+import { controlSquare, iconSize } from '@/shared/components/ui/size'
+import { cn } from '@/shared/lib/cn'
 import { formatDateTime } from '@/shared/lib/format'
 import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
 import {
@@ -164,23 +165,36 @@ export function AdminSettingsStorage({ settings, onSaved }: AdminSettingsStorage
     <div className="flex min-w-0 flex-col gap-4">
       <Card aria-labelledby="admin-storage-title">
         <CardHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle id="admin-storage-title" level={2}>
-              对象存储
-            </CardTitle>
-            <Badge tone={status.tone} dot>
-              {status.label}
-            </Badge>
-            <Badge tone={values.driver === 's3' ? 'neutral' : 'info'}>
-              {values.driver === 's3' ? 'S3 兼容' : '本地磁盘'}
-            </Badge>
-            <Badge tone={settings.hasSecret ? 'success' : 'neutral'}>
-              {settings.hasSecret ? '密钥已保存' : '未保存密钥'}
-            </Badge>
+          <div className="flex flex-wrap items-center gap-3">
+            <span
+              aria-hidden="true"
+              className={cn(
+                'inline-flex shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent',
+                controlSquare.md,
+              )}
+            >
+              <HardDrives weight="duotone" aria-hidden="true" className={iconSize.md} />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <CardTitle id="admin-storage-title" level={2}>
+                  对象存储
+                </CardTitle>
+                <Badge tone={status.tone} dot>
+                  {status.label}
+                </Badge>
+                <Badge tone={values.driver === 's3' ? 'neutral' : 'info'}>
+                  {values.driver === 's3' ? 'S3 兼容' : '本地磁盘'}
+                </Badge>
+                <Badge tone={settings.hasSecret ? 'success' : 'neutral'}>
+                  {settings.hasSecret ? '密钥已保存' : '未保存密钥'}
+                </Badge>
+              </div>
+              <CardDescription>
+                S3 兼容存储（MinIO / OSS / COS / R2）或本地磁盘目录，用于持久化生成的图像与视频资产。测试连接会真实读写测试对象。
+              </CardDescription>
+            </div>
           </div>
-          <CardDescription>
-            S3 兼容存储（MinIO / OSS / COS / R2）或本地磁盘目录，用于持久化生成的图像与视频资产。测试连接会真实读写测试对象。
-          </CardDescription>
         </CardHeader>
         <CardBody>
           {settings.status === 'error' ? (
@@ -311,7 +325,7 @@ export function AdminSettingsStorage({ settings, onSaved }: AdminSettingsStorage
               </>
             )}
 
-            <p className="font-mono text-xs text-muted-foreground">
+            <p className="font-mono text-xs tabular-nums text-muted-foreground">
               {settings.secretFingerprint ? `密钥指纹：${settings.secretFingerprint} · ` : ''}
               更新于 {formatDateTime(settings.updatedAt)} · #{settings.revision}
             </p>
@@ -323,7 +337,7 @@ export function AdminSettingsStorage({ settings, onSaved }: AdminSettingsStorage
             onClick={handleTest}
             loading={testMutation.isPending}
             disabled={values.driver === 'local' || (busy && !testMutation.isPending)}
-            icon={<HardDrives weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            leadingIcon={<HardDrives weight="bold" aria-hidden="true" className={iconSize.sm} />}
           >
             测试连接
           </Button>
@@ -333,7 +347,7 @@ export function AdminSettingsStorage({ settings, onSaved }: AdminSettingsStorage
         </CardFooter>
       </Card>
 
-      <Card className="border border-danger-border bg-danger-soft">
+      <Card className="border-danger-border bg-danger-soft">
         <CardHeader>
           <CardTitle level={2}>危险操作</CardTitle>
           <CardDescription>以下操作会立即改变实例行为，且无法撤销。</CardDescription>
@@ -347,7 +361,7 @@ export function AdminSettingsStorage({ settings, onSaved }: AdminSettingsStorage
             variant="danger-ghost"
             onClick={() => setConfirmClear(true)}
             disabled={!settings.hasSecret || busy}
-            icon={<Trash weight="bold" aria-hidden="true" className={iconSize.sm} />}
+            leadingIcon={<Trash weight="bold" aria-hidden="true" className={iconSize.sm} />}
           >
             清空密钥
           </Button>

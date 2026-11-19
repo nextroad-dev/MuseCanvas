@@ -1,17 +1,33 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CopyIcon as Copy, ArrowSquareOutIcon as ExternalLink } from '@phosphor-icons/react'
-import { Badge } from '@/shared/components/ui/badge'
-import { Button } from '@/shared/components/ui/button'
-import { Card, CardBody, CardDescription, CardFooter, CardHeader, CardTitle } from '@/shared/components/ui/card'
-import { Field, FieldGroup } from '@/shared/components/ui/field'
-import { Input } from '@/shared/components/ui/input'
-import { Switch } from '@/shared/components/ui/switch'
-import { useToast } from '@/shared/components/ui/toast'
-import { iconSize } from '@/shared/components/ui/size'
+import { useQueryClient } from '@tanstack/react-query'
+import {
+  ArrowSquareOutIcon as ExternalLink,
+  CopyIcon as Copy,
+  KeyIcon,
+} from '@phosphor-icons/react'
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Field,
+  FieldGroup,
+  Input,
+  Switch,
+  controlMinHeight,
+  controlSquare,
+  iconSize,
+  useToast,
+} from '@/shared/components/ui'
+import { useUpdateAdminOAuthProvider } from '@/shared/hooks/useAdmin'
 import { queryKeys } from '@/shared/hooks/query-keys'
+import { cn } from '@/shared/lib/cn'
 import { adminErrorMessage, copyToClipboard } from '@/features/admin/lib/admin-settings-api-error'
 import {
   OAUTH_PROVIDER_META,
@@ -21,12 +37,16 @@ import {
   shortClientId,
   validateOAuthForm,
 } from '@/features/admin/lib/admin-oauth-providers'
-import type { OAuthProviderInput } from '@/shared/types'
-import type { AdminOAuthProviderDto } from '@/shared/types'
-import { clientApi } from '@/shared/services/client-api'
+import type { AdminOAuthProviderDto, OAuthProviderInput } from '@/shared/types'
 
 export interface AdminOAuthProviderCardProps {
   provider: AdminOAuthProviderDto
+}
+
+const SOURCE_TONE: Record<AdminOAuthProviderDto['source'], 'success' | 'info' | 'warning'> = {
+  database: 'success',
+  environment: 'info',
+  none: 'warning',
 }
 
 /** 单张 OAuth 提供商卡：凭据表单 + 只读回调地址 + 启用开关。 */
@@ -56,25 +76,8 @@ export function AdminOAuthProviderCard({ provider }: AdminOAuthProviderCardProps
     )
   }
 
-  const saveMutation = useMutation({
-    mutationFn: (input: OAuthProviderInput) => clientApi.admin.updateOAuthProvider(provider.provider, input),
-    onSuccess: (updated) => {
-      updateCachedProvider(updated)
-      setClientSecret('')
-      setErrors({})
-      toast.success(`${label} 凭据已保存`)
-    },
-    onError: (error) => toast.error(`${label} 保存失败`, adminErrorMessage(error)),
-  })
-
-  const toggleMutation = useMutation({
-    mutationFn: (enabled: boolean) => clientApi.admin.updateOAuthProvider(provider.provider, { enabled }),
-    onSuccess: (updated) => {
-      updateCachedProvider(updated)
-      toast.success(updated.enabled ? `${label} 登录已启用` : `${label} 登录已停用`)
-    },
-    onError: (error) => toast.error('切换登录状态失败', adminErrorMessage(error)),
-  })
+  const saveMutation = useUpdateAdminOAuthProvider()
+  const toggleMutation = useUpdateAdminOAuthProvider()
 
   function handleSave() {
     const nextErrors = validateOAuthForm({ clientId, clientSecret })
@@ -90,7 +93,31 @@ export function AdminOAuthProviderCard({ provider }: AdminOAuthProviderCardProps
       toast.info('没有需要保存的更改')
       return
     }
-    saveMutation.mutate(input)
+    saveMutation.mutate(
+      { provider: provider.provider, input },
+      {
+        onSuccess: (updated) => {
+          updateCachedProvider(updated)
+          setClientSecret('')
+          setErrors({})
+          toast.success(`${label} 凭据已保存`)
+        },
+        onError: (error) => toast.error(`${label} 保存失败`, adminErrorMessage(error)),
+      },
+    )
+  }
+
+  function handleToggle(enabled: boolean) {
+    toggleMutation.mutate(
+      { provider: provider.provider, input: { enabled } },
+      {
+        onSuccess: (updated) => {
+          updateCachedProvider(updated)
+          toast.success(updated.enabled ? `${label} 登录已启用` : `${label} 登录已停用`)
+        },
+        onError: (error) => toast.error('切换登录状态失败', adminErrorMessage(error)),
+      },
+    )
   }
 
   async function handleCopyCallback() {
@@ -105,20 +132,34 @@ export function AdminOAuthProviderCard({ provider }: AdminOAuthProviderCardProps
   return (
     <Card className="min-w-0 justify-between" aria-labelledby={`oauth-${provider.provider}-title`}>
       <CardHeader>
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle id={`oauth-${provider.provider}-title`} level={2}>
-            {label}
-          </CardTitle>
-          <Badge tone={provider.enabled ? 'success' : 'neutral'} dot>
-            {provider.enabled ? '已启用' : '未启用'}
-          </Badge>
-          <Badge tone={provider.source === 'none' ? 'warning' : 'neutral'}>{OAUTH_SOURCE_LABEL[provider.source]}</Badge>
-          <Badge tone={provider.hasClientSecret ? 'success' : 'neutral'}>
-            {provider.hasClientSecret ? '密钥已保存' : '无密钥'}
-          </Badge>
+        <div className="flex flex-wrap items-start gap-3">
+          <span
+            aria-hidden="true"
+            className={cn(
+              'inline-flex shrink-0 items-center justify-center rounded-control',
+              controlSquare.md,
+              provider.enabled ? 'bg-accent-soft text-accent' : 'bg-tonal text-foreground',
+            )}
+          >
+            <KeyIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle id={`oauth-${provider.provider}-title`} level={2}>
+                {label}
+              </CardTitle>
+              <Badge tone={provider.enabled ? 'success' : 'neutral'} dot>
+                {provider.enabled ? '已启用' : '未启用'}
+              </Badge>
+              <Badge tone={SOURCE_TONE[provider.source]}>{OAUTH_SOURCE_LABEL[provider.source]}</Badge>
+              <Badge tone={provider.hasClientSecret ? 'success' : 'neutral'}>
+                {provider.hasClientSecret ? '密钥已保存' : '无密钥'}
+              </Badge>
+            </div>
+            <CardDescription>{meta?.description}</CardDescription>
+            <p className="text-xs text-muted-foreground">{OAUTH_SOURCE_HINT[provider.source]}</p>
+          </div>
         </div>
-        <CardDescription>{meta?.description}</CardDescription>
-        <p className="text-xs text-muted-foreground">{OAUTH_SOURCE_HINT[provider.source]}</p>
       </CardHeader>
 
       <CardBody>
@@ -172,7 +213,7 @@ export function AdminOAuthProviderCard({ provider }: AdminOAuthProviderCardProps
                 variant="secondary"
                 size="md"
                 onClick={() => void handleCopyCallback()}
-                icon={<Copy weight="bold" aria-hidden="true" className={iconSize.sm} />}
+                leadingIcon={<Copy weight="bold" aria-hidden="true" className={iconSize.sm} />}
               >
                 复制
               </Button>
@@ -182,14 +223,14 @@ export function AdminOAuthProviderCard({ provider }: AdminOAuthProviderCardProps
       </CardBody>
 
       <CardFooter className="flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3 rounded-control bg-tonal px-3 py-2">
+        <div className="flex items-center gap-3 rounded-control border border-border/70 bg-tonal px-3 py-2">
           <span className="text-sm font-medium text-foreground">启用登录</span>
           {!configured ? <span className="text-xs text-muted-foreground">先保存凭据</span> : null}
           <Switch
             checked={provider.enabled}
             disabled={!configured || busy}
             aria-label={`${label} 登录`}
-            onCheckedChange={(enabled) => toggleMutation.mutate(enabled)}
+            onCheckedChange={handleToggle}
           />
         </div>
 
@@ -198,7 +239,10 @@ export function AdminOAuthProviderCard({ provider }: AdminOAuthProviderCardProps
             href={meta?.docsUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex min-h-[var(--control-md)] items-center gap-1.5 rounded-control px-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-control px-2.5 text-sm text-muted-foreground transition-colors hover:bg-tonal-hover hover:text-foreground',
+              controlMinHeight.md,
+            )}
           >
             创建凭据
             <ExternalLink weight="bold" aria-hidden="true" className={iconSize.sm} />

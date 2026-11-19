@@ -1,15 +1,25 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { ArrowCounterClockwiseIcon as Reset } from '@phosphor-icons/react'
+import { ArrowCounterClockwiseIcon as Reset, SlidersHorizontalIcon } from '@phosphor-icons/react'
 import type { RuntimeSettingsDto } from '@musecanvas/contracts'
-import { Button } from '@/shared/components/ui/button'
-import { Card, CardBody, CardDescription, CardFooter, CardHeader, CardTitle } from '@/shared/components/ui/card'
-import { Field, FieldGroup } from '@/shared/components/ui/field'
-import { Input } from '@/shared/components/ui/input'
-import { useToast } from '@/shared/components/ui/toast'
-import { iconSize } from '@/shared/components/ui/size'
+import {
+  Button,
+  Card,
+  CardBody,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Field,
+  FieldGroup,
+  Input,
+  controlSquare,
+  iconSize,
+  useToast,
+} from '@/shared/components/ui'
+import { useUpdateAdminRuntimeSettings } from '@/shared/hooks/useAdmin'
+import { cn } from '@/shared/lib/cn'
 import { formatDateTime } from '@/shared/lib/format'
 import { adminErrorMessage } from '@/features/admin/lib/admin-settings-api-error'
 import {
@@ -21,7 +31,6 @@ import {
   validateRuntimeForm,
 } from '@/features/admin/lib/admin-settings-forms'
 import type { RuntimeInputDraft } from '@/features/admin/lib/admin-settings-forms'
-import { clientApi } from '@/shared/services/client-api'
 
 const UNIT_LABEL: Record<string, string> = {
   seconds: '秒',
@@ -46,21 +55,20 @@ export function AdminSettingsRuntime({ settings, onSaved }: AdminSettingsRuntime
     setErrors({})
   }, [settings])
 
-  const saveMutation = useMutation({
-    mutationFn: (input: ReturnType<typeof runtimeDraftToInput>) => clientApi.setup.updateRuntime(input),
-    onSuccess: (saved) => {
-      onSaved(saved)
-      setErrors({})
-      toast.success('运行时限制已保存')
-    },
-    onError: (error) => toast.error('保存运行时限制失败', adminErrorMessage(error)),
-  })
+  const saveMutation = useUpdateAdminRuntimeSettings()
 
   function handleSave() {
     const nextErrors = validateRuntimeForm(draft)
     setErrors(nextErrors)
     if (Object.values(nextErrors).some(Boolean)) return
-    saveMutation.mutate(runtimeDraftToInput(draft))
+    saveMutation.mutate(runtimeDraftToInput(draft), {
+      onSuccess: (saved) => {
+        onSaved(saved)
+        setErrors({})
+        toast.success('运行时限制已保存')
+      },
+      onError: (error) => toast.error('保存运行时限制失败', adminErrorMessage(error)),
+    })
   }
 
   function handleReset() {
@@ -72,12 +80,25 @@ export function AdminSettingsRuntime({ settings, onSaved }: AdminSettingsRuntime
   return (
     <Card aria-labelledby="admin-runtime-title">
       <CardHeader>
-        <CardTitle id="admin-runtime-title" level={2}>
-          运行时限制
-        </CardTitle>
-        <CardDescription>
-          上传、生成任务与上游调用的护栏参数。留空无效；保存后立即生效于新请求，进行中的任务不受影响。
-        </CardDescription>
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            aria-hidden="true"
+            className={cn(
+              'inline-flex shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent',
+              controlSquare.md,
+            )}
+          >
+            <SlidersHorizontalIcon weight="duotone" aria-hidden="true" className={iconSize.md} />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <CardTitle id="admin-runtime-title" level={2}>
+              运行时限制
+            </CardTitle>
+            <CardDescription>
+              上传、生成任务与上游调用的护栏参数。留空无效；保存后立即生效于新请求，进行中的任务不受影响。
+            </CardDescription>
+          </div>
+        </div>
       </CardHeader>
       <CardBody>
         <FieldGroup>
@@ -99,7 +120,7 @@ export function AdminSettingsRuntime({ settings, onSaved }: AdminSettingsRuntime
               </Field>
             ))}
           </div>
-          <p className="font-mono text-xs text-muted-foreground">
+          <p className="font-mono text-xs tabular-nums text-muted-foreground">
             更新于 {formatDateTime(settings.updatedAt)} · #{settings.revision}
           </p>
         </FieldGroup>
@@ -109,7 +130,7 @@ export function AdminSettingsRuntime({ settings, onSaved }: AdminSettingsRuntime
           variant="ghost"
           onClick={handleReset}
           disabled={saveMutation.isPending}
-          icon={<Reset weight="bold" aria-hidden="true" className={iconSize.sm} />}
+          leadingIcon={<Reset weight="bold" aria-hidden="true" className={iconSize.sm} />}
         >
           恢复默认值
         </Button>

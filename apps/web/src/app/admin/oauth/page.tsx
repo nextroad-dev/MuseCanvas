@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: '管理 GitHub / Google 第三方登录凭据、回调地址与启停状态。',
 }
 
-/** 后台 OAuth 页（A1 壳提供守卫与页面框架，页面只渲染内容）。 */
+/** 后台 OAuth 页（AdminShell 提供守卫与页面框架，页面只渲染内容）。 */
 export default function AdminOAuthPage() {
   return <AdminOAuthView />
 }

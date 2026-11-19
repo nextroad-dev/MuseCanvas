@@ -100,7 +100,7 @@ test('agent rollout: missing or false deployment readiness dominates the allowli
   assert.equal(agentCoreAdmissionReady('rollout-actor'), true)
 })
 
-test('agent rollout: readiness, percent and allowlist never change namespace or legacy Canvas gates', t => {
+test('agent rollout: readiness, percent and allowlist never change namespace or retired Canvas gates', t => {
   flags(t, { AGENT_ADMISSION_ACTORS: 'rollout-actor' })
   for (const enabled of ['true', 'false', 'TRUE', '']) {
     process.env.AGENT_CORE_ENABLED = enabled
@@ -109,8 +109,8 @@ test('agent rollout: readiness, percent and allowlist never change namespace or 
       for (const percent of ['0', '100', 'invalid']) {
         process.env.AGENT_ADMISSION_PERCENT = percent
         assert.equal(agentCoreEnabled(), enabled === 'true')
-        for (const path of ['agent', 'agent/sessions', 'agent/unknown', 'agent/turns/bad!']) assert.equal(agentCorePathDisabled(path), enabled !== 'true')
-        for (const path of ['canvas-agent/status', 'canvases/canvas-id/agent/messages', 'agents', 'agentx']) assert.equal(agentCorePathDisabled(path), false)
+        for (const path of ['agent', 'agent/sessions', 'agent/unknown', 'agent/turns/bad!', 'images/edit/preparations']) assert.equal(agentCorePathDisabled(path), enabled !== 'true')
+        for (const path of ['canvas-agent/status', 'canvases/canvas-id/agent/messages', 'agents', 'agentx', 'images/edit', 'images/edit/preparations-extra']) assert.equal(agentCorePathDisabled(path), false)
       }
     }
   }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { db } from '@musecanvas/database'
-import { deleteJobWithAssets } from './handlers'
+import { deleteJobWithAssets } from './job-cleanup'
 
 test('job privacy deletion commits media terminal event with deletion, preserves running cancel intent, and replays without a new event', async t => {
   for (const initial of ['queued', 'retry_wait', 'running', 'failed', 'succeeded', 'canceled']) {

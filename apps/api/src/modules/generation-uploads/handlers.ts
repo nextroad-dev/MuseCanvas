@@ -254,6 +254,7 @@ export async function completeGenerationUpload(
     width: Number(finalRow.width || 0),
     height: Number(finalRow.height || 0),
     sizeBytes: Number(finalRow.size_bytes || 0),
+    checksum: String(finalRow.checksum || ''),
   })
 }
 

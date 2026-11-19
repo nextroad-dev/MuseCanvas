@@ -1,4 +1,3 @@
-import type { NextResponse } from 'next/server'
 import { RUNTIME_SETTINGS_DEFAULTS } from '@musecanvas/contracts'
 import { db, transaction } from '@musecanvas/database'
 import { limited } from '../../shared/redis'
@@ -10,7 +9,6 @@ import {
 } from '../../shared/services'
 import { GENERATION_UPLOAD_TTL_SECONDS } from '../generation-uploads'
 import { resolveRuntimeSettings } from '../settings/runtime'
-import { createGenerationJob, type CreateGenerationJobCommand } from '../generations/create-job'
 
 export { storeReadyInputImage, mirrorTableMissing, promoteKeyedInputRow, claimKeyedInputRow } from '@musecanvas/media-service/image-edit'
 export type { SqlClient, ImageEditUploadLimits, ReadyInputWrite } from '@musecanvas/media-service/image-edit'
@@ -18,7 +16,6 @@ import type { ImageEditUploadLimits, ImageEditStoragePorts } from '@musecanvas/m
 
 export interface ImageEditPorts extends ImageEditStoragePorts {
   limited: (key: string, max: number, seconds: number) => Promise<boolean>
-  createJob: (cmd: CreateGenerationJobCommand) => Promise<NextResponse>
 }
 
 /** Runtime settings first, canonical defaults last — the same resolution order the upload routes use. */
@@ -43,5 +40,4 @@ export const defaultImageEditPorts: ImageEditPorts = {
   putReservedMask: putReservedImageMask,
   deleteObject: objectKey => deleteS3Object(objectKey),
   uploadLimits: resolveImageEditUploadLimits,
-  createJob: cmd => createGenerationJob(cmd),
 }

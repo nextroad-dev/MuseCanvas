@@ -14,7 +14,8 @@ import { capabilitiesFromRow, defaultsFromRow } from '../shared/dto'
  * Re-validation on a manual retry.
  *
  * Retrying is a resubmit, so it is checked like one: a parameter set that would
- * not pass `POST /generations` must not re-enter the queue either.
+ * not pass the shared creation command (now reached only through Agent media
+ * tools) must not re-enter the queue either.
  *
  * The contract used is the one the job is *pinned* to, falling back to the
  * model's latest revision for rows created before revisions existed. That

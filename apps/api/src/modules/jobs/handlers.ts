@@ -1,4 +1,5 @@
 import { appendMediaJobCompleted, db, transaction } from '@musecanvas/database'
+import { isUuid } from '@musecanvas/contracts'
 import { fail, ok } from '../../shared/http'
 import { jobDto } from '../../shared/dto'
 import { limited } from '../../shared/redis'
@@ -7,7 +8,7 @@ import { loadJobInputs, loadSingleJobInputs, userJobSelect } from '../../shared/
 import { retryPreparation } from '../../generation/job-retry'
 import { validateRetryRequest, type RetryRejection } from '../../generation/retry-validation'
 import type { AuthedContext } from '../../router/types'
-import { deleteJobWithAssets } from '../generations/handlers'
+import { deleteJobWithAssets } from './job-cleanup'
 import { jobOutputSelect, jobOutputsSelect } from './queries'
 
 /** GET /api/jobs — the owning user's most recent fifty jobs. */
@@ -34,6 +35,7 @@ export async function listJobs(context: AuthedContext) {
 /** GET /api/jobs/:id */
 export async function getJob(context: AuthedContext) {
   const id = context.params.id
+  if (!isUuid(id)) return fail('INVALID_INPUT', '任务 ID 无效', 400)
   const result = await db().query(`${userJobSelect} WHERE j.id=$1 AND j.created_by=$2 AND j.deleted_at IS NULL`, [id, context.actor.id])
   if (!result.rows[0]) return fail('NOT_FOUND', '任务不存在', 404)
   const outputs = await db().query(jobOutputSelect, [id])
@@ -50,6 +52,7 @@ export async function getJob(context: AuthedContext) {
  */
 export async function cancelJob(context: AuthedContext) {
   const id = context.params.id
+  if (!isUuid(id)) return fail('INVALID_INPUT', '任务 ID 无效', 400)
   const { actor } = context
   if (await limited(`gen:cancel:${actor.id}`, 60, 60)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
   const outcome = await transaction(async client => {
@@ -92,6 +95,7 @@ type RetryOutcome =
 /** POST /api/jobs/:id/retry — requeues the same job row, never creates a new one. */
 export async function retryJob(context: AuthedContext) {
   const id = context.params.id
+  if (!isUuid(id)) return fail('INVALID_INPUT', '任务 ID 无效', 400)
   const { actor } = context
   if (await limited(`gen:retry:${actor.id}`, 30, 60)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
   // The transaction reports *why* it produced no row rather than writing to a
@@ -136,6 +140,8 @@ export async function retryJob(context: AuthedContext) {
 
 /** DELETE /api/jobs/:id */
 export async function deleteJob(context: AuthedContext) {
-  const deleted = await deleteJobWithAssets(context.actor.id, context.params.id)
+  const id = context.params.id
+  if (!isUuid(id)) return fail('INVALID_INPUT', '任务 ID 无效', 400)
+  const deleted = await deleteJobWithAssets(context.actor.id, id)
   return deleted ? ok({ deleted: true }) : fail('NOT_FOUND', '任务不存在', 404)
 }

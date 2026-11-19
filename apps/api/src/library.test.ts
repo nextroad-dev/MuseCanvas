@@ -2,13 +2,16 @@ import assert from 'node:assert/strict'
 import { mock, test } from 'node:test'
 import { db } from '@musecanvas/database'
 import type { AuthedContext } from './router/types'
-import { listLibrary } from './modules/library/handlers'
+import { deleteAsset, downloadAsset, listLibrary } from './modules/library/handlers'
 import { invalidateRuntimeSettings } from './modules/settings/runtime'
 import { decodeCursor } from './shared/pagination'
 
 const ACTOR_ID = '33333333-3333-4333-8333-333333333333'
 const CURSOR_ID = '44444444-4444-4444-8444-444444444444'
+const ASSET_ID = '55555555-5555-4555-8555-555555555555'
 const CURSOR_DATE = '2026-01-02T03:04:05.000Z'
+
+const assetContext = (id: string) => ({ actor: { id: ACTOR_ID, role: 'user' }, params: { id } }) as unknown as AuthedContext
 
 type QueryCall = { sql: string; values: unknown[] }
 
@@ -146,4 +149,39 @@ test('library nonempty pages preserve microseconds and tied rows through DTO sig
       else process.env[key] = value
     }
   }
+})
+
+test('library asset download and delete reject malformed ids with 400 INVALID_INPUT before querying', async () => {
+  const query = mock.method(db(), 'query', async () => { throw new Error('must not query for malformed UUID') })
+  try {
+    for (const id of ['not-a-uuid', 'zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz']) {
+      for (const handler of [downloadAsset, deleteAsset]) {
+        const response = await handler(assetContext(id))
+        assert.equal(response.status, 400)
+        assert.deepEqual(await response.json(), { success: false, error: { code: 'INVALID_INPUT', message: '资产 ID 无效' } })
+      }
+    }
+  } finally { query.mock.restore() }
+})
+
+test('library asset download and delete pass a canonical uuid to the owner-scoped queries', async () => {
+  const calls: QueryCall[] = []
+  const query = mock.method(db(), 'query', async (sql: string, values: unknown[] = []) => {
+    calls.push({ sql, values: [...values] })
+    // An already-deleted row answers ok without touching the job cascade, so the
+    // delete path stays independent of storage and generation queries here.
+    if (sql.startsWith('SELECT job_id,deleted_at FROM assets')) {
+      return { rows: [{ job_id: CURSOR_ID, deleted_at: new Date('2026-01-02T00:00:00Z') }] }
+    }
+    return { rows: [] }
+  })
+  try {
+    const download = await downloadAsset(assetContext(ASSET_ID))
+    assert.equal(download.status, 404)
+    assert.deepEqual((await download.json()).error, { code: 'NOT_FOUND', message: '资源不存在' })
+    const deleted = await deleteAsset(assetContext(ASSET_ID))
+    assert.equal(deleted.status, 200)
+    assert.deepEqual(await deleted.json(), { success: true, data: { deleted: true } })
+    assert.deepEqual(calls.map(call => call.values), [[ASSET_ID, ACTOR_ID], [ASSET_ID, ACTOR_ID]])
+  } finally { query.mock.restore() }
 })

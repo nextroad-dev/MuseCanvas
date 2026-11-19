@@ -24,5 +24,5 @@ export function agentCoreAdmissionReady(actorId: string): boolean {
   return actors.includes(actorId) || agentCoreRolloutBucket(actorId) < rolloutPercent()
 }
 
-/** Narrow namespace gate, including malformed/unregistered Core paths. Never matches legacy Canvas Agent. */
-export const agentCorePathDisabled = (path: string) => (path === 'agent' || path.startsWith('agent/')) && !agentCoreEnabled()
+/** Core namespace and its exact image-preparation entry; unrelated image APIs stay available. */
+export const agentCorePathDisabled = (path: string) => (path === 'agent' || path.startsWith('agent/') || path === 'images/edit/preparations') && !agentCoreEnabled()

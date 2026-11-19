@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { db, findProviderCredential, transaction } from '@musecanvas/database'
 import { createModelConfigRevision } from '@musecanvas/database'
 import type { JsonValue, ModelCapabilities } from '@musecanvas/contracts'
-import { enumOptionValues } from '@musecanvas/contracts'
+import { enumOptionValues, isUuid } from '@musecanvas/contracts'
 import { type Actor } from '../../auth/security'
 import { fail, ok } from '../../shared/http'
 import { capabilitiesFromRow, defaultsFromRow, legacyColumnsFromCapabilities, modelDto } from '../../shared/dto'
@@ -284,6 +284,9 @@ export async function upsertModel(
   input: Record<string, unknown>,
   id?: string,
 ) {
+  // POST creates without an id; the PATCH :id route must hand over a uuid or the
+  // parameterized query would surface pg's 22P02 cast error as a 500.
+  if (id && !isUuid(id)) return fail('INVALID_INPUT', '模型 ID 无效', 400)
   const existing = id
     ? (await db().query('SELECT * FROM model_configs WHERE id=$1 AND deleted_at IS NULL', [id]))
         .rows[0]
@@ -698,6 +701,7 @@ async function savePresetModel(
 }
 
 export async function deleteModel(actor: Actor, id: string) {
+  if (!isUuid(id)) return fail('INVALID_INPUT', '模型 ID 无效', 400)
   const outcome = await transaction(async (client) => {
     const current = (await client.query(
       'SELECT is_default, model_kind FROM model_configs WHERE id=$1 AND deleted_at IS NULL FOR UPDATE',

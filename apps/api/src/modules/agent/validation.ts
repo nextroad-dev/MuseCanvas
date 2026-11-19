@@ -1,4 +1,4 @@
-import type { AgentBudgetDTO, AgentDefinitionBudgetPolicy, CreateAgentMessageRequest, CreateAgentSessionRequest, ResolveAgentApprovalRequest } from '@musecanvas/contracts'
+import { AGENT_MESSAGE_MAX_ATTACHMENTS, type AgentMessageAttachment, type AgentBudgetDTO, type AgentDefinitionBudgetPolicy, type CreateAgentMessageRequest, type CreateAgentSessionRequest, type ResolveAgentApprovalRequest } from '@musecanvas/contracts'
 import { AgentCoreError, agentCoreDecimal } from '@musecanvas/database'
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -27,10 +27,28 @@ export function createSessionInput(value: unknown): CreateAgentSessionRequest {
     ...(v.defaultCanvasId === undefined ? {} : { defaultCanvasId: uuid(v.defaultCanvasId) }) }
 }
 export function messageInput(value: unknown): CreateAgentMessageRequest {
-  const v = object(value, ['clientMessageId', 'content'])
+  const v = object(value, ['clientMessageId', 'content', 'attachments'])
   const content = storageString(v.content, 32000)
   if (!content.trim()) throw new AgentCoreError('INVALID_INPUT')
-  return { clientMessageId: uuid(v.clientMessageId), content }
+  let attachments: AgentMessageAttachment[] | undefined
+  if (v.attachments !== undefined) {
+    if (!Array.isArray(v.attachments) || v.attachments.length > AGENT_MESSAGE_MAX_ATTACHMENTS) throw new AgentCoreError('INVALID_INPUT')
+    const seen = new Set<string>()
+    attachments = v.attachments.map(raw => {
+      const a = object(raw, ['kind', 'id', 'role', 'checksum', 'width', 'height', 'mimeType', 'preparationVersion', 'sourceChecksum'])
+      if ((a.kind !== 'upload' && a.kind !== 'asset') || (a.role !== 'reference_image' && a.role !== 'mask')
+        || !/^[0-9a-f]{64}$/i.test(String(a.checksum)) || !['image/png', 'image/jpeg'].includes(String(a.mimeType))) throw new AgentCoreError('INVALID_INPUT')
+      const id = uuid(a.id)
+      if (seen.has(`${a.kind}:${id}`)) throw new AgentCoreError('INVALID_INPUT')
+      seen.add(`${a.kind}:${id}`)
+      const width = integer(a.width, 1, 32768), height = integer(a.height, 1, 32768)
+      if (a.role === 'mask' && (a.kind !== 'upload' || a.preparationVersion !== 1 || !/^[0-9a-f]{64}$/i.test(String(a.sourceChecksum)))) throw new AgentCoreError('INVALID_INPUT')
+      if (a.role === 'reference_image' && (a.preparationVersion !== undefined || a.sourceChecksum !== undefined)) throw new AgentCoreError('INVALID_INPUT')
+      return { kind: a.kind as 'upload' | 'asset', id, role: a.role as 'reference_image' | 'mask', checksum: String(a.checksum).toLowerCase(), width, height, mimeType: a.mimeType as 'image/png' | 'image/jpeg',
+        ...(a.preparationVersion === 1 ? { preparationVersion: 1 as const, sourceChecksum: String(a.sourceChecksum).toLowerCase() } : {}) }
+    }).sort((a, b) => a.role.localeCompare(b.role) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id))
+  }
+  return { clientMessageId: uuid(v.clientMessageId), content, ...(attachments?.length ? { attachments } : {}) }
 }
 export function approvalInput(value: unknown): ResolveAgentApprovalRequest {
   const v = object(value, ['decision', 'expectedArgumentsHash'])

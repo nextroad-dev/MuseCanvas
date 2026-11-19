@@ -4,10 +4,12 @@ import { Socket } from 'node:net'
 import { db } from '@musecanvas/database'
 import { NextRequest } from 'next/server'
 import type { AuthedContext } from '../../router/types'
-import { cancelJob, getJob, listJobs } from './handlers'
+import { cancelJob, deleteJob, getJob, listJobs, retryJob } from './handlers'
 
 const actorId = '00000000-0000-4000-8000-000000000001'
-const context = (id = 'job-1'): AuthedContext => ({
+/** Path ids must be uuids now that handlers validate them before querying. */
+const jobId = '00000000-0000-4000-8000-000000000002'
+const context = (id = jobId): AuthedContext => ({
   actor: { id: actorId, email: 'test@example.invalid', role: 'user', status: 'active', createdAt: '' },
   params: { id }, path: 'jobs', request: new NextRequest('http://localhost/api/jobs'), json: async () => ({}),
 })
@@ -25,7 +27,7 @@ function harness(jobs: Row[], outputs: Row[] = [], inputs: Row[] = []) {
         assert.deepEqual(params, [actorId])
         return { rows: jobs, rowCount: jobs.length }
       }
-      assert.deepEqual(params, ['job-1', actorId])
+      assert.deepEqual(params, [jobId, actorId])
       return { rows: jobs.filter(row => row.id === params[0]), rowCount: 1 }
     }
     if (sql.includes('FROM generation_job_inputs gji')) {
@@ -107,14 +109,14 @@ test('listJobs returns an empty page without querying inputs or outputs', async 
 })
 
 test('getJob retains its single-job output query and response shape', async () => {
-  const h = harness([job('job-1')], [{ job_id: 'job-1', asset_id: 'image-1', signed_url: 'https://example.invalid/image-1' }])
+  const h = harness([job(jobId)], [{ job_id: jobId, asset_id: 'image-1', signed_url: 'https://example.invalid/image-1' }])
   try {
     const item = await data(await getJob(context()))
-    assert.equal(item.id, 'job-1')
+    assert.equal(item.id, jobId)
     assert.deepEqual(item.outputs.map((output: Row) => output.assetId), ['image-1'])
     const outputRead = h.calls.find(call => call.sql.includes('FROM generation_outputs go'))!
     assert.match(outputRead.sql, /go\.job_id=\$1/)
-    assert.deepEqual(outputRead.params, ['job-1'])
+    assert.deepEqual(outputRead.params, [jobId])
   } finally { h.restore() }
 })
 
@@ -142,6 +144,18 @@ test('getJob returns 404 before loading inputs or outputs for an unavailable job
   } finally { h.restore() }
 })
 
+test('malformed :id answers 400 INVALID_INPUT before any query across the four job handlers', async () => {
+  const h = harness([])
+  try {
+    for (const handler of [getJob, cancelJob, retryJob, deleteJob]) {
+      const response = await handler(context('not-a-uuid'))
+      assert.equal(response.status, 400)
+      assert.deepEqual(await response.json(), { success: false, error: { code: 'INVALID_INPUT', message: '任务 ID 无效' } })
+    }
+    assert.equal(h.calls.length, 0)
+  } finally { h.restore() }
+})
+
 
 test('queued/retry_wait cancel commits terminal media event atomically; Outbox failure rolls cancellation back', async t => {
   // Rate limiting remains real code, but every socket attempt is rejected in
@@ -157,7 +171,7 @@ test('queued/retry_wait cancel commits terminal media event atomically; Outbox f
       statements.push(sql)
       if (sql === 'BEGIN') staged = committed
       else if (sql === 'COMMIT') committed = staged
-      else if (sql.startsWith('SELECT id,status,attempt')) return { rows: [{ id: 'job-1', status: staged, attempt: 0 }] }
+      else if (sql.startsWith('SELECT id,status,attempt')) return { rows: [{ id: jobId, status: staged, attempt: 0 }] }
       else if (sql.startsWith('UPDATE generation_jobs')) staged = 'canceled'
       else if (sql.includes("SELECT 'media.job.completed'")) {
         assert.equal(staged, 'canceled')
@@ -167,7 +181,7 @@ test('queued/retry_wait cancel commits terminal media event atomically; Outbox f
     }
     const connect = t.mock.method(db(), 'connect', async () => ({ query, release() {} }))
     const reads = t.mock.method(db(), 'query', async (sql: string) => {
-      if (sql.includes('FROM generation_jobs j')) return { rows: [{ ...job('job-1'), status: committed }] }
+      if (sql.includes('FROM generation_jobs j')) return { rows: [{ ...job(jobId), status: committed }] }
       return { rows: [] }
     })
     await assert.rejects(cancelJob(context()), /OUTBOX_FAILED/)

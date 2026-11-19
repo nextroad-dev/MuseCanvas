@@ -1,9 +1,10 @@
 import { db } from '@musecanvas/database'
+import { isUuid } from '@musecanvas/contracts'
 import { decodeCursor, encodeCursor, boundedLimit } from '../../shared/pagination'
 import { fail, ok } from '../../shared/http'
 import { createAssetSigner, signedAssetUrl } from '../../shared/services'
 import type { AuthedContext } from '../../router/types'
-import { deleteJobWithAssets } from '../generations/handlers'
+import { deleteJobWithAssets } from '../jobs/job-cleanup'
 import { libraryAssetDto } from './dto'
 import { LIBRARY_FROM_CLAUSE, LIBRARY_SELECT_COLUMNS } from './queries'
 
@@ -11,6 +12,7 @@ import { LIBRARY_FROM_CLAUSE, LIBRARY_SELECT_COLUMNS } from './queries'
 export async function listLibrary(context: AuthedContext) {
   const { request, actor } = context
   const limit = boundedLimit(request)
+  if (limit === null) return fail('INVALID_INPUT', '分页参数无效', 400)
   const cursor = decodeCursor(request.nextUrl.searchParams.get('cursor'))
   const search = (request.nextUrl.searchParams.get('q') || '').trim().slice(0, 100)
   const kind = request.nextUrl.searchParams.get('kind')
@@ -57,9 +59,7 @@ export async function listLibrary(context: AuthedContext) {
 }
 
 export async function getLibraryAsset(context: AuthedContext) {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(context.params.id)) {
-    return fail('NOT_FOUND', '资源不存在', 404)
-  }
+  if (!isUuid(context.params.id)) return fail('INVALID_INPUT', '资产 ID 无效', 400)
   const result = await db().query(`${LIBRARY_SELECT_COLUMNS} ${LIBRARY_FROM_CLAUSE}
     WHERE a.id=$1 AND a.created_by=$2 AND a.deleted_at IS NULL AND j.deleted_at IS NULL LIMIT 1`,
   [context.params.id, context.actor.id])
@@ -70,6 +70,7 @@ export async function getLibraryAsset(context: AuthedContext) {
 
 /** GET /api/library/:id/download */
 export async function downloadAsset(context: AuthedContext) {
+  if (!isUuid(context.params.id)) return fail('INVALID_INPUT', '资产 ID 无效', 400)
   const result = await db().query('SELECT id,object_key,media_kind,mime_type,duration_seconds FROM assets WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL', [context.params.id, context.actor.id])
   if (!result.rows[0]) return fail('NOT_FOUND', '资源不存在', 404)
   const row = result.rows[0]
@@ -85,6 +86,7 @@ export async function downloadAsset(context: AuthedContext) {
  * deleted one so a double click is not an error.
  */
 export async function deleteAsset(context: AuthedContext) {
+  if (!isUuid(context.params.id)) return fail('INVALID_INPUT', '资产 ID 无效', 400)
   const owned = await db().query('SELECT job_id,deleted_at FROM assets WHERE id=$1 AND created_by=$2', [context.params.id, context.actor.id])
   if (!owned.rows[0]) return fail('NOT_FOUND', '图片不存在', 404)
   if (owned.rows[0].deleted_at) return ok({ deleted: true })

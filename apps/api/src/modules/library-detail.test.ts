@@ -30,7 +30,7 @@ test('library asset detail scopes lookup to actor and excludes deleted assets/jo
 })
 
 
-test('library malformed UUID reaches the real matched handler and returns generic 404 without querying', async () => {
+test('library malformed UUID reaches the real matched handler and answers 400 INVALID_INPUT without querying', async () => {
   const query = mock.method(db(), 'query', () => { throw new Error('must not query for malformed UUID') })
   try {
     for (const id of ['deadbeef', '----', ASSET_ID.replaceAll('-', '')]) {
@@ -43,8 +43,8 @@ test('library malformed UUID reaches the real matched handler and returns generi
       const response = await matched.route.handler({
         actor: { id: ACTOR_ID, role: 'user' }, path, params: matched.params,
       } as AuthedContext)
-      assert.equal(response.status, 404)
-      assert.deepEqual(await response.json(), { success: false, error: { code: 'NOT_FOUND', message: '资源不存在' } })
+      assert.equal(response.status, 400)
+      assert.deepEqual(await response.json(), { success: false, error: { code: 'INVALID_INPUT', message: '资产 ID 无效' } })
     }
     assert.equal(query.mock.callCount(), 0)
   } finally {

@@ -61,7 +61,7 @@ test('agent: pipeline disabled namespace returns 404 for bad Origin, unknown pat
   const query = t.mock.method(pool, 'query', () => { throw new Error('DB must not be queried') })
   const connect = t.mock.method(pool, 'connect', () => { throw new Error('DB must not connect') })
   for (const dispatch of [dispatchGet, dispatchPost, dispatchPatch, dispatchPut, dispatchDelete]) {
-    for (const path of ['agent', 'agent/unknown', 'agent/sessions', 'agent/turns/bad!']) {
+    for (const path of ['agent', 'agent/unknown', 'agent/sessions', 'agent/turns/bad!', 'images/edit/preparations']) {
       const r = request(path, {}, 'POST', { origin: 'https://evil.invalid', cookie: 'muse_session=disabled-feature' })
       assert.equal((await dispatch(r, path)).status, 404)
     }
@@ -72,12 +72,14 @@ test('agent: enabled pipeline preserves Origin and authentication guards', async
   flag(t, 'AGENT_CORE_ENABLED', 'true')
   assert.equal((await dispatchPost(request('agent/sessions', {}, 'POST', { origin: 'https://evil.invalid' }), 'agent/sessions')).status, 403)
   assert.equal((await dispatchGet(request('agent/sessions', null, 'GET'), 'agent/sessions')).status, 401)
+  assert.equal((await dispatchPost(request('images/edit/preparations', {}, 'POST', { origin: 'https://evil.invalid' }), 'images/edit/preparations')).status, 403)
+  assert.equal((await dispatchPost(request('images/edit/preparations', {}, 'POST'), 'images/edit/preparations')).status, 401)
 })
 test('agent: uppercase UUID routes reach HTTP handlers and normalize IDs, preserving literal paths and legacy routes', async t => {
   flag(t, 'AGENT_CORE_ENABLED', 'true')
   const upper = id.toUpperCase()
   for (const routes of [GET_ROUTES, POST_ROUTES]) {
-    for (const route of routes.filter(r => r.path.startsWith('agent/') && r.path.includes(':id'))) {
+    for (const route of routes.filter(r => r.path.startsWith('agent/') && r.path.includes(':id') && !r.path.includes(':artifactId'))) {
       const path = route.path.replace(':id', upper)
       const matched = matchRoute(routes, path)
       assert.equal(matched?.route.path, route.path)
@@ -196,7 +198,7 @@ test('agent: bounded body counts streamed bytes, checks JSON object at parser bo
   await assert.rejects(boundedBody(request(undefined, {}, 'POST', {}, abort.signal)), { code: 'INVALID_INPUT' })
 })
 const budget = { maxModelCalls: 2, maxToolCalls: 2, maxMediaJobs: 0, maxMediaOutputs: 0, maxInputTokens: '100', maxOutputTokens: '100', maxEstimatedCost: null, maxConcurrentMediaJobs: 0, timeoutMs: 30000 }
-const definition = { id, version: 1, instructions: 'Help the user.', tool_allowlist: ['canvas.read@v1'], model_policy: { modelConfigId: id, modelRevisionId: other }, budget_policy: budget }
+const definition = { id, version: 1, instructions: 'Help the user.', tool_allowlist: ['list_models@v1'], model_policy: { modelConfigId: id, modelRevisionId: other }, budget_policy: budget }
 const model = { id, language_protocol: 'openai_chat', plugin_id: 'openai-language', plugin_version: '1.0.0', plugin_source: 'builtin', vendor_model_id: 'gpt-test', max_output_tokens: 100,
   temperature: '0.5', reasoning_effort: null, latest_revision_id: other, revision_id: other, revision: 3, provider_id: 'openai', revision_plugin_id: 'openai-language', revision_plugin_version: '1.0.0', revision_vendor_model_id: 'gpt-test' }
 test('agent: definition uses explicit safe model revision and relative server budget; snapshots cannot copy provider URLs/credentials/private JSON', async () => {

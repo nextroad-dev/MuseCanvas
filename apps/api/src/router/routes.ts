@@ -7,6 +7,7 @@ import { handleSetupPost, setupConfig, setupStatus } from '../modules/setup/hand
 import { setupDatabaseStatus } from '../modules/setup/database'
 import { readiness } from '../modules/health/handlers'
 import { agentHandlers } from '../modules/agent/handlers'
+import { agentArtifactHandlers } from '../modules/agent/artifact-handlers'
 import { readSession, registrationMode, setRegistrationMode } from '../modules/session/handlers'
 import { listLinkedIdentities, startLink, unlinkIdentity } from '../modules/auth/account'
 import { logout, requestOtp, verifyOtp } from '../modules/auth/handlers'
@@ -14,12 +15,8 @@ import { listAdminModels, listPublicModels } from '../modules/models/queries'
 import { deleteModel, upsertModel } from '../modules/models/handlers'
 import { cancelJob, deleteJob, getJob, listJobs, retryJob } from '../modules/jobs/handlers'
 import { deleteAsset, downloadAsset, getLibraryAsset, listLibrary } from '../modules/library/handlers'
-import { createGeneration } from '../modules/generations/create'
-import { listCanvases, createCanvas, getCanvas, updateCanvas, deleteCanvas } from '../modules/canvases/handlers'
-import { postCanvasAgentMessages, getCanvasAgentHistory, getCanvasAgentTurn, postCanvasAgentConfirm, postCanvasAgentApply, getCanvasAgentStatus } from '../modules/canvases/agent'
-import { readCanvasAgentSettings, updateCanvasAgentSettings } from '../modules/admin/canvas-agent-settings'
 import { readMediaModelDefaults, updateMediaModelDefaults } from '../modules/admin/media-model-defaults'
-import { editImage } from '../modules/image-edit/handlers'
+import { prepareAgentImageEdit } from '../modules/image-edit/handlers'
 import { receiveMediaUpload, serveMediaObject } from '../modules/media'
 import {
   completeGenerationUpload,
@@ -108,6 +105,10 @@ export const GET_ROUTES: Route[] = [
   { path: 'agent/sessions/:id', access: 'public', handler: agentHandlers.snapshot },
   { path: 'agent/sessions/:id/items', access: 'public', handler: agentHandlers.items },
   { path: 'agent/sessions/:id/events', access: 'public', handler: agentHandlers.events },
+  { path: 'agent/sessions/:id/artifacts', access: 'public', handler: agentArtifactHandlers.list },
+  { path: 'agent/sessions/:id/artifacts/:artifactId', access: 'public', handler: agentArtifactHandlers.detail },
+  { path: 'agent/sessions/:id/artifacts/:artifactId/threads', access: 'public', handler: agentArtifactHandlers.threads },
+  { path: 'agent/sessions/:id/artifacts/:artifactId/threads/:threadId', access: 'public', handler: agentArtifactHandlers.thread },
   { path: 'agent/turns/:id', access: 'public', handler: agentHandlers.turn },
   // --- public -------------------------------------------------------------
   { path: 'health/ready', access: 'public', handler: () => readiness() },
@@ -129,11 +130,6 @@ export const GET_ROUTES: Route[] = [
   // The model catalog is behind the session gate: it was in the old handler too,
   // after the global gate and before any admin route.
   { path: 'models', access: 'actor', handler: () => listPublicModels() },
-  { path: 'canvases', access: 'actor', handler: context => listCanvases(context) },
-  { path: 'canvases/:id', access: 'actor', handler: context => getCanvas(context) },
-  { path: 'canvases/:id/agent/history', access: 'actor', handler: context => getCanvasAgentHistory(context) },
-  { path: 'canvases/:id/agent/turns/:turnId', access: 'actor', handler: context => getCanvasAgentTurn(context) },
-  { path: 'canvas-agent/status', access: 'actor', handler: context => getCanvasAgentStatus(context) },
   { path: 'jobs', access: 'actor', handler: context => listJobs(context) },
   { path: 'jobs/:id', access: 'actor', handler: context => getJob(context) },
   { path: 'library', access: 'actor', handler: context => listLibrary(context) },
@@ -158,7 +154,6 @@ export const GET_ROUTES: Route[] = [
   { path: 'admin/prompt-templates/export', access: 'admin', handler: context => exportPromptTemplates(context.request.nextUrl.searchParams.get('setId') || undefined) },
   { path: 'admin/prompt-templates/sets/:hexid', access: 'admin', handler: context => getPromptTemplateSetDetail(context.params.hexid) },
   { path: 'admin/prompt-optimization-settings', access: 'admin', handler: () => readPromptOptimizationSettings() },
-  { path: 'admin/canvas-agent-settings', access: 'admin', handler: () => readCanvasAgentSettings() },
   { path: 'admin/media-model-defaults', access: 'admin', handler: context => readMediaModelDefaults(context.actor) },
   { path: 'admin/jobs', access: 'admin', handler: context => listAdminJobs(context) },
   { path: 'admin/invitations', access: 'admin', handler: () => listInvitations() },
@@ -172,6 +167,8 @@ export const POST_ROUTES: Route[] = [
   { path: 'agent/turns/:id/cancel', access: 'public', handler: agentHandlers.cancel },
   { path: 'agent/turns/:id/steer', access: 'public', handler: agentHandlers.steer },
   { path: 'agent/approvals/:id/resolve', access: 'public', handler: agentHandlers.resolveApproval },
+  { path: 'agent/sessions/:id/artifacts/:artifactId/threads', access: 'public', handler: agentArtifactHandlers.createThread },
+  { path: 'agent/sessions/:id/artifacts/:artifactId/threads/:threadId/replies', access: 'public', handler: agentArtifactHandlers.reply },
   // The wizard never reaches the session gate.
   ...SETUP_POST_PATHS.map(setupRoute),
   // Plugin uploads are multipart, so they are dispatched before anything that
@@ -191,14 +188,10 @@ export const POST_ROUTES: Route[] = [
   // --- authenticated ------------------------------------------------------
   { path: 'generation-uploads', access: 'actor', handler: async context => createGenerationUpload(context.actor, await context.json()) },
   { path: 'generation-uploads/:id/complete', access: 'actor', handler: context => completeGenerationUpload(context.actor, context.params.id) },
-  { path: 'generations', access: 'actor', handler: context => createGeneration(context) },
-  { path: 'canvases', access: 'actor', handler: context => createCanvas(context) },
-  { path: 'canvases/:id/agent/messages', access: 'actor', handler: context => postCanvasAgentMessages(context) },
-  { path: 'canvases/:id/agent/confirm', access: 'actor', handler: context => postCanvasAgentConfirm(context) },
-  { path: 'canvases/:id/agent/apply', access: 'actor', handler: context => postCanvasAgentApply(context) },
   // Multipart like the plugin uploads above, and it never calls `context.json()`:
-  // the source image and the mask arrive as file parts.
-  { path: 'images/edit', access: 'actor', handler: context => editImage(context) },
+  // the source image and the mask arrive as file parts. This stages a mask for
+  // the Agent flow only; it never creates a generation.
+  { path: 'images/edit/preparations', access: 'actor', handler: context => prepareAgentImageEdit(context) },
   { path: 'jobs/:id/cancel', access: 'actor', handler: context => cancelJob(context) },
   { path: 'jobs/:id/retry', access: 'actor', handler: context => retryJob(context) },
 
@@ -214,8 +207,7 @@ export const POST_ROUTES: Route[] = [
 ]
 
 export const PATCH_ROUTES: Route[] = [
-  { path: 'canvases/:id', access: 'actor', handler: context => updateCanvas(context) },
-  { path: 'admin/canvas-agent-settings', access: 'admin', handler: async context => updateCanvasAgentSettings(context.actor, await context.json()) },
+  { path: 'agent/sessions/:id/artifacts/:artifactId/threads/:threadId', access: 'public', handler: agentArtifactHandlers.resolve },
   { path: 'admin/media-model-defaults', access: 'admin', handler: async context => updateMediaModelDefaults(context.actor, await context.json()) },
   { path: 'admin/registration', access: 'admin', handler: context => setRegistrationMode(context) },
   { path: 'admin/prompt-optimization-settings', access: 'admin', handler: async context => updatePromptOptimizationSettings(context.actor, await context.json()) },
@@ -232,7 +224,6 @@ export const PATCH_ROUTES: Route[] = [
 ]
 
 export const DELETE_ROUTES: Route[] = [
-  { path: 'canvases/:id', access: 'actor', handler: context => deleteCanvas(context) },
   { path: 'generation-uploads/:id', access: 'actor', handler: context => deleteGenerationUpload(context.actor, context.params.id) },
   { path: 'jobs/:id', access: 'actor', handler: context => deleteJob(context) },
   { path: 'library/:id', access: 'actor', handler: context => deleteAsset(context) },

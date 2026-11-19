@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { db, requestProviderCredentialTest } from '@musecanvas/database'
+import { isUuid } from '@musecanvas/contracts'
 import { fail, ok } from '../../../shared/http'
 
 /**
@@ -58,6 +59,7 @@ export async function testProviderCredential(
   id: string,
   options: { waitMs?: number } = {},
 ): Promise<NextResponse> {
+  if (!isUuid(id)) return fail('INVALID_INPUT', '凭据 ID 无效', 400)
   const opened = await requestProviderCredentialTest(db(), id, actor.id)
   if (!opened) return fail('NOT_FOUND', '供应商凭据不存在', 404)
   const deadline = Date.now() + (options.waitMs ?? CREDENTIAL_TEST_WAIT_MS)

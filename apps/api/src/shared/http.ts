@@ -18,15 +18,28 @@ export const fail = (
   { success: false, error: details ? { code, message, details } : { code, message } },
   { status },
 )
+/**
+ * Every endpoint shares one meaning for a body that is not a JSON object: a
+ * parse failure, `null`, an array or a primitive. It used to be swallowed into
+ * `{}` here, which let empty-object creation from garbage input; now it
+ * rejects and the router maps it to one uniform 400.
+ */
+export class MalformedBodyError extends Error {
+  constructor() { super('请求体格式无效') }
+}
+
 export async function body(request: NextRequest): Promise<Record<string, unknown>> {
+  let input: unknown
   try {
-    const input: unknown = await request.json()
-    // Preserve the malformed-JSON fallback so each endpoint keeps its existing
-    // validation response, but never expose null, arrays or primitives as objects.
-    return input !== null && typeof input === 'object' && !Array.isArray(input)
-      ? input as Record<string, unknown>
-      : {}
-  } catch { return {} }
+    input = await request.json()
+  } catch {
+    throw new MalformedBodyError()
+  }
+  // Only a real JSON object is a body (an empty one included); null, arrays and
+  // primitives are malformed for every endpoint, so they reject here instead of
+  // masquerading as `{}` and confusing per-endpoint validation.
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new MalformedBodyError()
+  return input as Record<string, unknown>
 }
 export const emailValid = (value: unknown): value is string => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 export function clientIpFromRequest(request: NextRequest): string {

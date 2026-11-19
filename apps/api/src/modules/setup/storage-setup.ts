@@ -1,7 +1,7 @@
 import type { StorageSettingsRow, StorageConnectionStatus, UpdateStorageSettingsInput, ResolvedLocalStorageConfig, StorageDriverKind } from '@musecanvas/database'
 import { clampSignedUrlTtlSeconds } from '@musecanvas/database'
 import type { StorageProbeResult } from '../../shared/storage'
-import type { StorageSecretAction, ValidStorageInput } from './validation'
+import { validateStorageServerEndpoint, type StorageSecretAction, type ValidStorageInput } from './validation'
 
 // Decision logic for the setup-flow storage save and test endpoints. Every database,
 // crypto and probe effect arrives through StorageSetupDeps, so the driver x action
@@ -150,7 +150,13 @@ async function prepare(
   }
   const resolved = resolveSecretForDriver(effectiveStorageDriver(valid, row), valid.secret, row, deps.decryptSecret)
   if (!resolved.ok) return failure(409, STORAGE_SECRET_REENTER_REQUIRED, STORAGE_SECRET_REENTER_MESSAGE)
-  return { ok: true, merged: mergeStorageSettings(valid, resolved.secret, row) }
+  const merged = mergeStorageSettings(valid, resolved.secret, row)
+  // With no dedicated server endpoint, the S3 client uses the browser endpoint for requests.
+  if (merged.driver === 's3' && !merged.endpoint?.trim() && merged.publicEndpoint?.trim()) {
+    const fallback = validateStorageServerEndpoint(merged.publicEndpoint)
+    if (typeof fallback !== 'string') return failure(400, fallback.code, fallback.message)
+  }
+  return { ok: true, merged }
 }
 
 /** Save only: persists without probing. Local saves persist 'configured'; S3 keeps its bucket rule. */

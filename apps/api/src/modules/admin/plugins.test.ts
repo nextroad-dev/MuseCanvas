@@ -399,7 +399,7 @@ test('uploads dispatch before the JSON-only body reader and never match the id r
 
   // Body-reading POST routes: `context.json()` is lazy, so being later in the
   // table is what keeps a multipart request from ever being parsed as JSON.
-  for (const later of ['auth/otp/request', 'generations', 'admin/models', 'admin/provider-credentials']) {
+  for (const later of ['auth/otp/request', 'generation-uploads', 'admin/models', 'admin/provider-credentials']) {
     assert.ok(upload < at(POST_ROUTES, later), `upload must be dispatched before ${later}`)
     assert.ok(validate < at(POST_ROUTES, later), `validate must be dispatched before ${later}`)
   }

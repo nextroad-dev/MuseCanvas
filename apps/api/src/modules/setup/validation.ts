@@ -153,7 +153,7 @@ export function validateSmtpInput(input: Record<string, unknown>): ValidSmtpInpu
   return { host, port, tlsMode, username, password, fromAddress, fromName }
 }
 
-function validHttpUrl(raw: string, field: string): string | InputError {
+function validHttpUrl(raw: string, field: string, serverEndpoint = false): string | InputError {
   if (raw.length > 500) return INVALID_INPUT(`${field}过长`)
   let url: URL
   try {
@@ -163,16 +163,14 @@ function validHttpUrl(raw: string, field: string): string | InputError {
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return INVALID_INPUT(`${field}必须使用 HTTP(S)`)
   if (url.username || url.password || url.search || url.hash) return INVALID_INPUT(`${field}不能包含认证信息或查询参数`)
-  // SSRF guard: the server fetches this endpoint, so a literal loopback /
-  // RFC1918 / link-local host would let the setup form reach the internal
-  // network. Reuses the single private-address predicate and override flag from
-  // `shared/model-helpers.ts` so "private" is defined in exactly one place; a
-  // DNS name (e.g. `minio`) still passes, only literal private addresses are
-  // refused.
-  if (isPrivateProviderHost(url.hostname) && process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL !== 'true') {
+  if (serverEndpoint && isPrivateProviderHost(url.hostname) && process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL !== 'true') {
     return INVALID_INPUT(`${field}不能指向内网或回环地址`)
   }
   return url.toString().replace(/\/+$/, '')
+}
+
+export function validateStorageServerEndpoint(raw: string): string | InputError {
+  return validHttpUrl(raw, '对象存储服务端点', true)
 }
 
 const STORAGE_FIELDS = new Set([
@@ -245,7 +243,7 @@ export function validateStorageInput(input: Record<string, unknown>): ValidStora
     } else if (typeof input.endpoint !== 'string') {
       return INVALID_INPUT('对象存储服务端点无效')
     } else {
-      const parsed = validHttpUrl(input.endpoint, '对象存储服务端点')
+      const parsed = validateStorageServerEndpoint(input.endpoint)
       if (typeof parsed !== 'string') return parsed
       endpoint = parsed
     }

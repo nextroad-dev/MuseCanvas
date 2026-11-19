@@ -1,6 +1,6 @@
 import { db } from '@musecanvas/database'
 import { adminJobDto } from '../../shared/dto'
-import { ok } from '../../shared/http'
+import { fail, ok } from '../../shared/http'
 import { decodeCursor, encodeCursor, boundedLimit } from '../../shared/pagination'
 import type { AuthedContext } from '../../router/types'
 
@@ -20,6 +20,7 @@ const UUID_TEXT = /^[0-9a-f-]{36}$/i
 export async function listJobs(context: AuthedContext) {
   const { request } = context
   const limit = boundedLimit(request)
+  if (limit === null) return fail('INVALID_INPUT', '分页参数无效', 400)
   const cursor = decodeCursor(request.nextUrl.searchParams.get('cursor'))
   const values: unknown[] = []
   const conditions = ['deleted_at IS NULL']

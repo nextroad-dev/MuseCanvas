@@ -9,6 +9,7 @@ import { sendMail } from '../../shared/services'
 import { limited } from '../../shared/redis'
 import { resolvePublicOrigin } from '../settings/runtime'
 import type { PublicContext } from '../../router/types'
+import { createRegisteredUser, lockRegistrationOnboarding } from './first-user'
 
 /** Independent budgets stop address rotation on one IP and IP rotation against
  * one mailbox. Keep the original pair budget for compatibility. */
@@ -65,13 +66,14 @@ export async function verifyOtp(context: PublicContext) {
   const email = input.email.trim().toLowerCase()
   if (await limited(`verify:${email}`, 10, 600)) return fail('RATE_LIMITED', '验证尝试过多，请稍后再试', 429)
   const result = await transaction(async client => {
+    const onboardingPending = await lockRegistrationOnboarding(client)
     const challengeResult = await client.query('SELECT * FROM otp_challenges WHERE lower(email)=$1 AND consumed_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE', [email])
     const challenge = challengeResult.rows[0]
     if (!challenge || challenge.attempts >= 5 || !verifyOtpHash(challenge.code_hash, email, input.code as string)) {
       if (challenge) await client.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=$1', [challenge.id])
       return null
     }
-    let userResult = await client.query('SELECT * FROM users WHERE lower(email)=$1 AND deleted_at IS NULL FOR UPDATE', [email])
+    const userResult = await client.query('SELECT * FROM users WHERE lower(email)=$1 AND deleted_at IS NULL FOR UPDATE', [email])
     let user = userResult.rows[0]
     if (!user) {
       const setting = await client.query('SELECT mode FROM registration_settings WHERE singleton=true FOR UPDATE')
@@ -80,18 +82,17 @@ export async function verifyOtp(context: PublicContext) {
         const invite = await client.query('UPDATE invitations SET consumed_at=now() WHERE code_hash=$1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>now() RETURNING id', [challenge.invitation_code_hash])
         if (!invite.rows[0]) return null
       }
-      userResult = await client.query('INSERT INTO users(email) VALUES($1) RETURNING *', [email])
-      user = userResult.rows[0]
+      user = await createRegisteredUser(client, email, onboardingPending)
     }
     if (user.status !== 'active') return null
     await client.query('UPDATE otp_challenges SET consumed_at=now() WHERE id=$1', [challenge.id])
     const token = randomToken()
     await client.query("INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 days')", [user.id, hashToken(token)])
     await writeAudit(client, user.id, 'auth.otp.login', 'user', user.id)
-    return { user, token }
+    return { user, token, setupRequired: onboardingPending && user.role === 'admin' }
   })
   if (!result) return fail('INVALID_OTP', '验证码无效或已过期', 401)
-  const response = ok({ user: userDto(result.user) })
+  const response = ok({ user: userDto(result.user), ...(result.setupRequired ? { setupRequired: true } : {}) })
   response.cookies.set('muse_session', result.token, { httpOnly: true, secure: shouldUseSecureCookie(await resolvePublicOrigin()), sameSite: 'lax', path: '/', maxAge: 30 * 86400 })
   return response
 }

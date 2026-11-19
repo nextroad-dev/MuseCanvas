@@ -13,11 +13,11 @@ const context: AuthedContext = {
   path: `admin/users/${ownerId}`, params: { id: ownerId }, json: async () => ({}),
 }
 
-test('account deletion emits one media event per actual bulk terminal transition, atomically rolls back failure, and ignores repeat deletion', async t => {
-  const jobs = [{ id: 'queued-job', status: 'queued' }, { id: 'retry-job', status: 'retry_wait' }, { id: 'running-job', status: 'running' }, { id: 'terminal-job', status: 'succeeded' }]
-  let committed = { deleted: false, jobs, events: [] as string[], cleanup: false, audit: false }
+test('account deletion requests cancellation without inventing provider completion, rolls back queue failure and rejects repeats', async t => {
+  const jobs = ['queued', 'retry_wait', 'running', 'succeeded'].map(status => ({ status, cancelRequested: false }))
+  let committed = { deleted: false, jobs, cleanup: false, audit: false }
   let staged = structuredClone(committed)
-  let failOnSecond = true
+  let failQueue = true
   const calls: string[] = []
   const query = async (sql: string, params: unknown[] = []) => {
     calls.push(sql)
@@ -29,35 +29,29 @@ test('account deletion emits one media event per actual bulk terminal transition
       staged.deleted = true
       return { rows: [{ id: ownerId }] }
     } else if (sql.startsWith('UPDATE generation_jobs SET')) {
-      assert.match(sql, /status IN\('queued','retry_wait','running'\) RETURNING id/)
+      assert.match(sql, /cancel_requested_at=COALESCE/)
+      assert.doesNotMatch(sql, /SET status=|completed_at=/)
       assert.deepEqual(params, [ownerId])
-      const changed = staged.jobs.filter(j => ['queued', 'retry_wait', 'running'].includes(j.status))
-      for (const j of changed) j.status = 'canceled'
-      return { rows: changed.map(j => ({ id: j.id })) }
-    } else if (sql.includes("SELECT 'media.job.completed'")) {
-      assert.doesNotMatch(sql, /deleted_at IS NULL/)
-      const job = staged.jobs.find(j => j.id === params[0])!
-      assert.equal(job.status, 'canceled')
-      if (failOnSecond && staged.events.length === 1) throw new Error('OUTBOX_FAILED')
-      staged.events.push(String(params[0]))
-    } else if (sql.startsWith('INSERT INTO deletion_jobs')) staged.cleanup = true
-    else if (sql.startsWith('INSERT INTO audit_logs')) staged.audit = true
+      for (const job of staged.jobs) if (['queued', 'retry_wait', 'running'].includes(job.status)) job.cancelRequested = true
+    } else if (sql.includes("'media.job.completed'")) assert.fail('only the actual terminal transition may emit media completion')
+    else if (sql.startsWith('INSERT INTO deletion_jobs')) {
+      if (failQueue) throw new Error('QUEUE_FAILED')
+      staged.cleanup = true
+    } else if (sql.startsWith('INSERT INTO audit_logs')) staged.audit = true
     return { rows: [] }
   }
   t.mock.method(db(), 'connect', async () => ({ query, release() {} }))
-  await assert.rejects(deleteUser(context), /OUTBOX_FAILED/)
+  await assert.rejects(deleteUser(context), /QUEUE_FAILED/)
   assert.equal(committed.deleted, false)
-  assert.deepEqual(committed.jobs.map(j => j.status), ['queued', 'retry_wait', 'running', 'succeeded'])
-  assert.deepEqual(committed.events, [])
+  assert.equal(committed.jobs.some(job => job.cancelRequested), false)
   assert.equal(calls.at(-1), 'ROLLBACK')
-  failOnSecond = false
+  failQueue = false
   assert.equal((await deleteUser(context)).status, 200)
   assert.equal(committed.deleted, true)
-  assert.deepEqual(committed.events, ['queued-job', 'retry-job', 'running-job'])
+  assert.deepEqual(committed.jobs.map(job => job.status), ['queued', 'retry_wait', 'running', 'succeeded'])
+  assert.deepEqual(committed.jobs.map(job => job.cancelRequested), [true, true, true, false])
   assert.equal(committed.cleanup, true)
   assert.equal(committed.audit, true)
-  assert.equal(committed.jobs.at(-1)!.status, 'succeeded')
   assert.equal(calls.at(-1), 'COMMIT')
   assert.equal((await deleteUser(context)).status, 404)
-  assert.equal(committed.events.length, 3)
 })

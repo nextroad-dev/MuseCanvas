@@ -15,6 +15,9 @@ const SEGMENT_PATTERNS: Record<string, string> = {
   id: '[0-9a-f-]+',
   // Recovery names both UUID identities; handlers apply the strict UUID boundary.
   turnId: '[0-9a-f-]+',
+  // Artifact handlers decode the segment once and validate its discriminated UUID.
+  artifactId: '[^/]+',
+  threadId: '[0-9a-fA-F-]+',
   // /^admin\/prompt-templates\/sets\/([0-9a-fA-F-]+)$/ and the plugin id routes
   hexid: '[0-9a-fA-F-]+',
   // /^auth\/oauth\/(github|google)\/start$/ — the OAUTH_PROVIDERS whitelist

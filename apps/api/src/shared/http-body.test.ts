@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { NextRequest } from 'next/server'
-import { body } from './http'
+import { body, MalformedBodyError } from './http'
 import { requestOtp, verifyOtp } from '../modules/auth/handlers'
 import type { PublicContext } from '../router/types'
 
@@ -10,23 +10,35 @@ const request = (raw: string) => new NextRequest('https://example.invalid/api/au
 })
 
 for (const raw of ['null', '[]', '[{"email":"user@example.com"}]', '"text"', '42', 'true', '{', '']) {
-  test(`body normalizes non-object or malformed JSON: ${JSON.stringify(raw)}`, async () => {
-    assert.deepEqual(await body(request(raw)), {})
+  test(`body rejects non-object or malformed JSON instead of returning {}: ${JSON.stringify(raw)}`, async () => {
+    await assert.rejects(body(request(raw)), MalformedBodyError)
   })
 
-  test(`OTP endpoints return structured 400 without I/O: ${JSON.stringify(raw)}`, async () => {
-    for (const [handler, code] of [[requestOtp, 'INVALID_INPUT'], [verifyOtp, 'INVALID_OTP']] as const) {
+  test(`OTP handlers surface the shared rejection before any I/O: ${JSON.stringify(raw)}`, async () => {
+    for (const handler of [requestOtp, verifyOtp]) {
       const req = request(raw)
       const context: PublicContext = { request: req, actor: undefined, path: '', params: {}, json: () => body(req) }
-      const response = await handler(context)
-      assert.equal(response.status, 400)
-      const payload = await response.json()
-      assert.equal(payload.success, false)
-      assert.equal(payload.error.code, code)
-      assert.equal(typeof payload.error.message, 'string')
+      await assert.rejects(handler(context), MalformedBodyError)
     }
   })
 }
+
+test('an empty JSON object still reaches the OTP handlers and fails validation without I/O', async () => {
+  // A request body is a one-shot stream, so each handler gets a fresh request.
+  const otpContext = () => {
+    const req = request('{}')
+    return { request: req, actor: undefined, path: '', params: {}, json: () => body(req) } as PublicContext
+  }
+  const requested = await requestOtp(otpContext())
+  assert.equal(requested.status, 400)
+  const requestPayload = await requested.json()
+  assert.equal(requestPayload.success, false)
+  assert.equal(requestPayload.error.code, 'INVALID_INPUT')
+  assert.equal(typeof requestPayload.error.message, 'string')
+  const verified = await verifyOtp(otpContext())
+  assert.equal(verified.status, 400)
+  assert.equal((await verified.json()).error.code, 'INVALID_OTP')
+})
 
 test('body preserves JSON objects and nested values', async () => {
   const input = { email: 'user@example.com', nested: { values: [null, 1] }, enabled: false }

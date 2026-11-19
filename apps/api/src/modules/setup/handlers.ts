@@ -58,6 +58,7 @@ import {
   runtimeSettingsDto,
 } from '../settings/runtime'
 import { SETUP_COOKIE, requireSetupAccess } from './access'
+import { lockPendingOnboarding } from '../auth/first-user'
 import { resolveClaimDelivery, formatClaimLogBlock } from './claim-delivery'
 import { resolveClaimRequired } from './claim-required'
 import { probeSetupDatabase, setupDatabaseTest } from './database'
@@ -694,6 +695,7 @@ export async function setupAdminVerify(request: NextRequest, input: Record<strin
   }
 
   const result = await transaction(async (client) => {
+    if (!await lockPendingOnboarding(client)) return null
     const adminCheck = await client.query("SELECT count(*)::int AS cnt FROM users WHERE role='admin' AND deleted_at IS NULL")
     if (adminCheck.rows[0].cnt > 0) return null
     const challengeResult = await client.query(

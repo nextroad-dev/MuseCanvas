@@ -81,10 +81,6 @@ export async function resolveCatalogPlugin(pluginId: string, pluginVersion: stri
   return manifest ? { source: 'installed', manifest } : null
 }
 
-export async function isCatalogPluginActive(pluginId: string, pluginVersion: string): Promise<boolean> {
-  return (await resolveCatalogPlugin(pluginId, pluginVersion)) !== null
-}
-
 /** Row jsonb is re-validated rather than trusted: a drifted manifest degrades to "unusable". */
 function asCatalogManifest(value: unknown): AnyProviderManifest | null {
   const parsed = parseRevisionJsonField(value)

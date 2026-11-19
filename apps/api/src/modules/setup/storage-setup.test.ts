@@ -95,6 +95,32 @@ function assertFailure(outcome: StorageSetupOutcome, status: number, code: strin
 
 // Driver x action matrix ------------------------------------------------------
 
+test('S3 accepts local browser endpoints when a separate server endpoint is configured', async () => {
+  for (const publicEndpoint of ['http://127.0.0.1:9000', 'http://192.168.1.10:9000', 'http://[::1]:9000']) {
+    const { deps, rec } = fakeDeps({ row: storedRow({ endpoint: 'http://minio:9000' }) })
+    const outcome = await runStorageTest(input({ publicEndpoint }), deps)
+    assert.equal(outcome.ok, true)
+    assert.equal(rec.persisted[0].endpoint, 'http://minio:9000')
+    assert.equal(rec.persisted[0].publicEndpoint, publicEndpoint)
+  }
+})
+
+test('S3 retains the private-address guard when the browser endpoint would be used by the server', async () => {
+  const previous = process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL
+  delete process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL
+  try {
+    const { deps, rec } = fakeDeps({ row: storedRow({ endpoint: null }) })
+    const valid = input({ publicEndpoint: 'http://127.0.0.1:9000' })
+    assertFailure(await runStorageTest(valid, deps), 400, 'INVALID_INPUT')
+    assertFailure(await runStorageSave(valid, deps), 400, 'INVALID_INPUT')
+    assert.equal(rec.s3ProbeSecrets.length, 0)
+    assert.equal(rec.persisted.length, 0)
+  } finally {
+    if (previous === undefined) delete process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL
+    else process.env.ALLOW_PRIVATE_PROVIDER_BASE_URL = previous
+  }
+})
+
 test('local test success persists driver local with status verified and keeps the S3 columns', async () => {
   const { deps, rec } = fakeDeps()
   const outcome = await runStorageTest(input({ driver: 'local', localRoot: 'D:\\musecanvas\\media' }), deps)

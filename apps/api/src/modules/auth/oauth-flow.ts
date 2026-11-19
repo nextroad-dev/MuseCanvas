@@ -7,6 +7,7 @@ import { writeAudit } from '../../shared/audit'
 import { userDto } from '../../shared/dto'
 import { limited, redisSet, redisGetDel } from '../../shared/redis'
 import { oauthSetting } from './oauth-settings'
+import { createRegisteredUser, lockRegistrationOnboarding } from './first-user'
 import { resolvePublicOrigin } from '../settings/runtime'
 import {
   authorizeUrlWithConfig,
@@ -213,12 +214,14 @@ async function loginWithIdentity(
       `${base}/login?oauth_challenge=${challengeId}&email=${encodeURIComponent(profile.email)}&provider=${provider}`,
     )
   }
-  const created = await transaction(async (client) => {
-    const user = await client.query('INSERT INTO users(email) VALUES($1) RETURNING id,role', [profile.email])
-    await client.query('INSERT INTO oauth_identities(user_id,provider,provider_subject,email_at_link,email_verified,display_name,avatar_url) VALUES($1,$2,$3,$4,$5,$6,$7)', [user.rows[0].id, provider, profile.providerSubject, profile.email, profile.emailVerified, profile.displayName || null, profile.avatarUrl || null])
-    return user.rows[0]
+  const { user: created, setupRequired } = await transaction(async (client) => {
+    const onboardingPending = await lockRegistrationOnboarding(client)
+    const user = await createRegisteredUser(client, profile.email, onboardingPending)
+    await client.query('INSERT INTO oauth_identities(user_id,provider,provider_subject,email_at_link,email_verified,display_name,avatar_url) VALUES($1,$2,$3,$4,$5,$6,$7)', [user.id, provider, profile.providerSubject, profile.email, profile.emailVerified, profile.displayName || null, profile.avatarUrl || null])
+    return { user, setupRequired: onboardingPending && user.role === 'admin' }
   })
-  const response = await issueSession(created.id, NextResponse.redirect(successUrl(created.role)))
+  const destination = setupRequired ? `${origin.replace(/\/$/, '')}/setup` : successUrl(created.role)
+  const response = await issueSession(created.id, NextResponse.redirect(destination))
   await auditBestEffort(created.id, 'auth.oauth.login', created.id, { provider, role: created.role })
   return response
 }
@@ -262,9 +265,10 @@ export async function completeOAuthInvitation(
   if (await limited(`oauth-invite:${ip}`, 10, 600)) return fail('RATE_LIMITED', '请求过于频繁，请稍后再试', 429)
   const challenge = await redisGetDel<OAuthChallengeRecord>(`oauth:challenge:${challengeId}`)
   if (!challenge) return fail('OAUTH_REGISTRATION_EXPIRED', '注册会话已过期，请重新登录', 410)
-  let result: { token: string; user: Record<string, unknown> } | null = null
+  let result: { token: string; user: Record<string, unknown>; setupRequired: boolean } | null = null
   try {
     result = await transaction(async (client) => {
+      const onboardingPending = await lockRegistrationOnboarding(client)
       const invite = await client.query('UPDATE invitations SET consumed_at=now() WHERE code_hash = ANY($1) AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>now() RETURNING id', [hashTokenCandidates(invitationCode)])
       if (!invite.rows[0]) return null
       const existing = await client.query('SELECT id,status FROM users WHERE lower(email)=$1 AND deleted_at IS NULL', [challenge.email])
@@ -274,8 +278,8 @@ export async function completeOAuthInvitation(
         if (existing.rows[0].status !== 'active') throw new InvitationFlowAbort(fail('ACCOUNT_UNAVAILABLE', '账户当前不可用', 403))
         userId = existing.rows[0].id
       } else {
-        const newUser = await client.query('INSERT INTO users(email) VALUES($1) RETURNING id', [challenge.email])
-        userId = newUser.rows[0].id
+        const newUser = await createRegisteredUser(client, challenge.email, onboardingPending)
+        userId = newUser.id
       }
       try {
         await client.query('INSERT INTO oauth_identities(user_id,provider,provider_subject,email_at_link,email_verified,display_name,avatar_url) VALUES($1,$2,$3,$4,true,$5,$6)', [userId, challenge.provider, challenge.providerSubject, challenge.email, challenge.displayName || null, challenge.avatarUrl || null])
@@ -287,14 +291,14 @@ export async function completeOAuthInvitation(
       await client.query("INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 days')", [userId, hashToken(token)])
       const userRow = await client.query('SELECT id,email,role,status,created_at FROM users WHERE id=$1', [userId])
       await writeAudit(client, userId, 'auth.oauth.login', 'user', userId, { via: 'invitation', provider: challenge.provider, role: userRow.rows[0].role })
-      return { token, user: userRow.rows[0] }
+      return { token, user: userRow.rows[0], setupRequired: onboardingPending && userRow.rows[0].role === 'admin' }
     })
   } catch (error) {
     if (error instanceof InvitationFlowAbort) return error.response
     throw error
   }
   if (!result) return fail('INVALID_INVITATION', '邀请码无效或已过期')
-  const response = ok({ user: userDto(result.user) })
+  const response = ok({ user: userDto(result.user), ...(result.setupRequired ? { setupRequired: true } : {}) })
   response.cookies.set('muse_session', result.token, { httpOnly: true, secure: shouldUseSecureCookie(await resolvePublicOrigin()), sameSite: 'lax', path: '/', maxAge: 30 * 86400 })
   return response
 }

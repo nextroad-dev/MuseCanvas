@@ -1,4 +1,4 @@
-import { appendMediaJobCompleted, db, transaction } from '@musecanvas/database'
+import { db, transaction } from '@musecanvas/database'
 import { writeAudit } from '../../shared/audit'
 import { userDto } from '../../shared/dto'
 import { fail, ok } from '../../shared/http'
@@ -22,6 +22,7 @@ const canonicalUserId = (id: string) =>
 export async function listUsers(context: AuthedContext) {
   const { request } = context
   const limit = boundedLimit(request)
+  if (limit === null) return fail('INVALID_INPUT', '分页参数无效', 400)
   const cursor = decodeCursor(request.nextUrl.searchParams.get('cursor'))
   const values: unknown[] = []
   const conditions = ['deleted_at IS NULL']
@@ -85,8 +86,8 @@ export async function deleteUser(context: AuthedContext) {
     const result = await client.query('UPDATE users SET deleted_at=now(),deletion_requested_at=now(),session_version=session_version+1,updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id', [id])
     if (!result.rows[0]) return false
     await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL', [id])
-    const canceledJobs = await client.query("UPDATE generation_jobs SET status='canceled',completed_at=now() WHERE created_by=$1 AND status IN('queued','retry_wait','running') RETURNING id", [id])
-    for (const job of canceledJobs.rows) await appendMediaJobCompleted(client, String(job.id))
+    // Provider/Agent maintenance owns terminal convergence and durable completion events.
+    await client.query("UPDATE generation_jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),updated_at=now() WHERE created_by=$1 AND status IN('queued','retry_wait','running')", [id])
     await client.query('INSERT INTO deletion_jobs(user_id) VALUES($1) ON CONFLICT DO NOTHING', [id])
     await client.query("UPDATE generation_input_images SET status='deleted',deleted_at=now() WHERE created_by=$1", [id])
     await writeAudit(client, actor.id, 'user.delete', 'user', id)

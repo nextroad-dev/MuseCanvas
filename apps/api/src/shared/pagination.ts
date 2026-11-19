@@ -21,8 +21,22 @@ export function decodeCursor(value: string | null): Cursor | null {
 export const encodeCursor = (row: { cursor_created_at: string; id: string }) =>
   Buffer.from(JSON.stringify({ createdAt: row.cursor_created_at, id: row.id })).toString('base64url')
 
-export const boundedLimit = (request: NextRequest) =>
-  Math.min(100, Math.max(1, Math.trunc(Number(request.nextUrl.searchParams.get('limit') || 50) || 50)))
+/**
+ * Shared `limit` parsing for the keyset-paginated list endpoints.
+ *
+ * Returns the default (50) when the parameter is absent, an integer in [1,100]
+ * when valid, and **null when invalid** — the caller answers 400
+ * `INVALID_INPUT`('分页参数无效'), matching the agent routes. The
+ * old silent clamp (Math.min/Math.max) hid malformed input instead of
+ * surfacing it, so one route 400'd on `limit=101` while another clamped it.
+ */
+export const boundedLimit = (request: NextRequest): number | null => {
+  const raw = request.nextUrl.searchParams.get('limit')
+  if (raw === null) return 50
+  if (!/^[1-9][0-9]{0,2}$/.test(raw)) return null
+  const limit = Number(raw)
+  return limit <= 100 ? limit : null
+}
 
 export const userJobSelect = `SELECT j.*,po.input_prompt,po.final_prompt,po.template_name_snapshot,po.status optimization_status,s.allow_user_read_final_prompt
   FROM generation_jobs j LEFT JOIN prompt_optimizations po ON po.id=j.prompt_optimization_id AND po.deleted_at IS NULL

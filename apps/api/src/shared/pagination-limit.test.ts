@@ -3,19 +3,28 @@ import test from 'node:test'
 import { NextRequest } from 'next/server'
 import { boundedLimit } from './pagination'
 
-test('boundedLimit always produces a finite integer while retaining defaults and bounds', () => {
-  const cases: Array<[string | null, number]> = [
-    [null, 50], ['', 50], ['0', 50], ['garbage', 50], ['NaN', 50],
-    ['1', 1], ['50', 50], ['100', 100], ['101', 100], ['-5', 1],
-    ['1.9', 1], ['50.9', 50], ['0.9', 1], ['-0.9', 1], ['99.99', 99],
-    ['Infinity', 100], ['-Infinity', 1], ['1e999', 100], ['-1e999', 1],
-  ]
-  for (const [raw, expected] of cases) {
-    const url = new URL('https://example.invalid/api/admin/users')
-    if (raw !== null) url.searchParams.set('limit', raw)
-    const actual = boundedLimit(new NextRequest(url))
-    assert.equal(actual, expected, `limit=${raw}`)
-    assert.ok(Number.isFinite(actual) && Number.isInteger(actual))
-    assert.ok(actual >= 1 && actual <= 100)
+const requestWith = (search: string) => new NextRequest(new URL(`https://example.invalid/api/admin/users${search}`))
+
+test('boundedLimit defaults to 50 when the parameter is absent', () => {
+  assert.equal(boundedLimit(requestWith('')), 50)
+  assert.equal(boundedLimit(requestWith('?cursor=x')), 50)
+})
+
+test('boundedLimit accepts integers within [1,100]', () => {
+  for (const [raw, expected] of [['1', 1], ['9', 9], ['50', 50], ['99', 99], ['100', 100]] as const) {
+    assert.equal(boundedLimit(requestWith(`?limit=${raw}`)), expected, `limit=${raw}`)
+  }
+})
+
+/**
+ * Aligned with the agent routes: anything that is not an integer
+ * in [1,100] is rejected (null → the caller answers 400), not silently
+ * clamped. The old Math.min/Math.max clamp turned `limit=101` into 100 and
+ * `limit=garbage` into 50, so two routes disagreed on the same input.
+ */
+test('boundedLimit rejects malformed, out-of-range and non-integer values', () => {
+  for (const raw of ['', '0', '-5', '101', '1.9', '50.9', '0.9', '-0.9', '99.99',
+    'garbage', 'NaN', 'Infinity', '-Infinity', '1e999', '1e2', '099', '1 0', '⑤']) {
+    assert.equal(boundedLimit(requestWith(`?limit=${encodeURIComponent(raw)}`)), null, `limit=${raw}`)
   }
 })

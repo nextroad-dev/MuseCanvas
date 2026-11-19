@@ -206,9 +206,9 @@ export async function createUploadPresignedPost(
 /**
  * Writes server-held bytes into the private bucket: an administrator-uploaded
  * plugin artifact (entry bundle, original zip package, icon), and the two inputs
- * of a masked edit (`POST /api/images/edit`) that arrive in its own request body
- * — the source image the browser posted and the alpha mask rasterised from the
- * selection.
+ * of a masked edit (`POST /api/images/edit/preparations`) that arrive in its own
+ * request body — the source image the browser posted and the alpha mask
+ * rasterised from the selection.
  *
  * Never presigned. The entry bundle is never handed to a client: only the worker
  * fetches and executes it. The admin-only package download and icon routes read

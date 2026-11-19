@@ -1,4 +1,5 @@
 import { db, findProviderCredential, transaction } from '@musecanvas/database'
+import { isUuid } from '@musecanvas/contracts'
 import { decodeCredential, urlHostOf } from '@musecanvas/providers'
 import { encryptProviderCredential, fingerprintApiKey } from '../../../auth/security'
 import { writeAudit } from '../../../shared/audit'
@@ -106,6 +107,7 @@ export function credentialRedirected(
 }
 
 export async function updateProviderCredential(actor: { id: string }, id: string, body: Record<string, unknown>) {
+  if (!isUuid(id)) return fail('INVALID_INPUT', '凭据 ID 无效', 400)
   const row = await findProviderCredential(db(), id)
   if (!row) return fail('NOT_FOUND', '供应商凭据不存在', 404)
   const parsed = parseCredentialInput(body)
@@ -189,6 +191,7 @@ export async function updateProviderCredential(actor: { id: string }, id: string
 }
 
 export async function deleteProviderCredential(actor: { id: string }, id: string) {
+  if (!isUuid(id)) return fail('INVALID_INPUT', '凭据 ID 无效', 400)
   const inUse = await db().query(
     'SELECT id FROM model_configs WHERE provider_credential_id=$1 AND deleted_at IS NULL LIMIT 1',
     [id],

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { NextRequest } from 'next/server'
+import { NextRequest } from 'next/server'
 
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import { DELETE_ROUTES, GET_ROUTES, PATCH_ROUTES, POST_ROUTES } from './routes'
@@ -30,6 +30,8 @@ const SAMPLE_UUID = '123e4567-e89b-12d3-a456-426614174000'
 /** A pattern is only comparable to a declared URL once its parameters are filled. */
 function concrete(path: string): string {
   return path
+    .replaceAll(':artifactId', SAMPLE_UUID)
+    .replaceAll(':threadId', SAMPLE_UUID)
     .replaceAll(':turnId', SAMPLE_UUID)
     .replaceAll(':hexid', SAMPLE_UUID)
     .replaceAll(':id', SAMPLE_UUID)
@@ -41,8 +43,8 @@ function concrete(path: string): string {
  * an oauth provider name, so one endpoint can have several legitimate concrete
  * spellings.
  */
-function declaredCandidates(value: (argument: string, second?: string) => string): string[] {
-  return [value(SAMPLE_UUID, SAMPLE_UUID), ...['github', 'google'].map(provider => value(provider, SAMPLE_UUID))]
+function declaredCandidates(value: (argument: string, second?: string, third?: string) => string): string[] {
+  return [value(SAMPLE_UUID, SAMPLE_UUID, SAMPLE_UUID), ...['github', 'google'].map(provider => value(provider, SAMPLE_UUID, SAMPLE_UUID))]
 }
 
 /** Every URL the registry declares, as its possible concrete paths. */
@@ -68,8 +70,19 @@ const ALL_ROUTES = ALL_TABLES.flatMap(([, routes]) => routes)
  * gap visible and falsifiable: the assertion below fails if a path is routed while
  * still listed here, so this cannot quietly accumulate. A new entry needs a reason,
  * not just an unfinished feature.
+ *
+ * Canvas entries are intentional: the feature is deprecated and its backend was
+ * removed (docs/canvas-deprecation.md); the contracts entries remain only as a
+ * transition shim for apps/web and must be deleted together with the frontend
+ * canvas touchpoints.
  */
-const DECLARED_WITHOUT_HANDLER: string[] = []
+const DECLARED_WITHOUT_HANDLER: string[] = [
+  // @deprecated canvas — backend removed 2026-11-18, shim pending frontend cleanup
+  '/api/canvases', '/api/canvases',
+  '/api/canvases/123e4567-e89b-12d3-a456-426614174000',
+  '/api/canvases/123e4567-e89b-12d3-a456-426614174000',
+  '/api/canvases/123e4567-e89b-12d3-a456-426614174000',
+]
 
 test('every endpoint declared in contracts has a handler', () => {
   const unrouted = declaredEndpoints()
@@ -86,7 +99,36 @@ test('Agent Core route IDs match valid uppercase UUIDs without changing params.i
   assert.equal(core.route.path, 'agent/sessions/:id')
   assert.deepEqual(core.params, { id: upper })
   assert.equal(matchPath('jobs/:id', `jobs/${upper}`), null)
-  assert.equal(matchPath('canvases/:id/agent/history', `canvases/${upper}/agent/history`), null)
+})
+
+test('retired Canvas and CanvasAgent routes and settings are absent while Agent Core remains', () => {
+  const retired = [
+    `canvases/${SAMPLE_UUID}/agent/messages`, `canvases/${SAMPLE_UUID}/agent/history`,
+    `canvases/${SAMPLE_UUID}/agent/turns/${SAMPLE_UUID}`, `canvases/${SAMPLE_UUID}/agent/confirm`,
+    `canvases/${SAMPLE_UUID}/agent/apply`, 'canvas-agent/status', 'admin/canvas-agent-settings',
+  ]
+  for (const [method, routes] of ALL_TABLES) {
+    for (const path of retired) assert.equal(matchRoute(routes, path), null, `${method} ${path}`)
+  }
+  assert.equal('canvasAgent' in API_ENDPOINTS, false)
+  assert.equal('agent' in API_ENDPOINTS.canvases, false)
+  assert.equal('canvasAgentSettings' in API_ENDPOINTS.admin, false)
+  assert.equal(matchRoute(GET_ROUTES, `canvases/${SAMPLE_UUID}`), null)
+  assert.equal(matchRoute(POST_ROUTES, 'canvases'), null)
+  assert.ok(matchRoute(GET_ROUTES, `agent/sessions/${SAMPLE_UUID}`))
+  assert.ok(matchRoute(POST_ROUTES, `agent/sessions/${SAMPLE_UUID}/messages`))
+  assert.ok(matchRoute(POST_ROUTES, 'images/edit/preparations'))
+})
+
+test('media generation entry points are Agent-only', () => {
+  // 2026-11-19: generation is an Agent capability; the direct REST creation
+  // routes are gone while the Agent staging route and job polling stay.
+  assert.equal(matchRoute(POST_ROUTES, 'generations'), null)
+  assert.equal(matchRoute(POST_ROUTES, 'images/edit'), null)
+  assert.ok(matchRoute(POST_ROUTES, 'images/edit/preparations'))
+  assert.ok(matchRoute(GET_ROUTES, 'jobs'))
+  assert.equal('generations' in API_ENDPOINTS, false)
+  assert.equal('edit' in API_ENDPOINTS.images, false)
 })
 
 test('the declared-but-unrouted list never goes stale', () => {
@@ -151,7 +193,7 @@ test('order-of-registration precedence is preserved from the inline handler', ()
   assert.ok(index(GET_ROUTES, 'registration') < index(GET_ROUTES, 'session'))
   assert.ok(index(GET_ROUTES, 'auth/oauth/providers') < index(GET_ROUTES, 'jobs'))
   assert.ok(index(POST_ROUTES, 'setup/complete') < index(POST_ROUTES, 'auth/otp/request'))
-  assert.ok(index(POST_ROUTES, 'auth/logout') < index(POST_ROUTES, 'generations'))
+  assert.ok(index(POST_ROUTES, 'auth/logout') < index(POST_ROUTES, 'jobs/:id/cancel'))
   // The alias and the bare form of the user status route must both resolve.
   assert.ok(index(PATCH_ROUTES, 'admin/users/:id/status') < index(PATCH_ROUTES, 'admin/users/:id'))
 })
@@ -266,11 +308,9 @@ test('setup database routes are public at the router and refused by the handler 
   )
 })
 
-test('turn recovery has a named turnId, is actor-only and real dispatch rejects anonymous before store access', async () => {
-  const path = API_ENDPOINTS.canvases.agent.turn(SAMPLE_UUID, SAMPLE_UUID).replace(/^\/api\//, '')
-  const matched = matchRoute(GET_ROUTES, path)!
-  assert.equal(matched.route.path, 'canvases/:id/agent/turns/:turnId'); assert.equal(matched.route.access, 'actor')
-  assert.deepEqual(matched.params, { id: SAMPLE_UUID, turnId: SAMPLE_UUID })
+test('retired canvas turn recovery uses the normal unknown-route authentication boundary', async () => {
+  const path = `canvases/${SAMPLE_UUID}/agent/turns/${SAMPLE_UUID}`
+  assert.equal(matchRoute(GET_ROUTES, path), null)
   assert.deepEqual(await statusAndCode(await dispatchGet(fakeRequest(), path)), [401, 'UNAUTHORIZED'])
   assert.deepEqual(await statusAndCode(await dispatchGet(fakeRequest(), `canvases/${SAMPLE_UUID}/agent/turns/deadbeef`)), [401, 'UNAUTHORIZED'])
   assert.equal(matchRoute(GET_ROUTES, `canvases/${SAMPLE_UUID}/agent/turns/not-a-uuid`), null)
@@ -292,4 +332,43 @@ test('media upload has no origin exemption: same-origin passes the CSRF check, c
   const [status, code] = await statusAndCode(await dispatchPost(fakeRequest({ origin: 'http://evil.test' }), 'media/upload'))
   assert.equal(status, 403)
   assert.equal(code, 'CSRF_REJECTED')
+})
+
+/**
+ * A real request with a stream body: the malformed-body semantics live in the
+ * shared `body()` and surface through `answer()`, which the stub `fakeRequest`
+ * (no body at all) cannot exercise.
+ */
+function jsonPost(raw: string, path: string): NextRequest {
+  return new NextRequest(`http://musecanvas.test/api/${path}`, {
+    method: 'POST',
+    // `host` is explicit because mutationOriginValid reads headers, and a Request
+    // only gains its Host header when it is actually sent — same as fakeRequest.
+    headers: { host: 'musecanvas.test', 'content-type': 'application/json', origin: 'http://musecanvas.test' },
+    body: raw,
+  })
+}
+
+test('a malformed or non-object JSON body is one uniform 400 at the router', async () => {
+  // Every spelling of "not an object" — including garbage bytes and an empty
+  // stream — answers the same INVALID_INPUT with the shared message, because the
+  // lazy `context.json()` throws inside the handler and `answer()` catches it.
+  for (const raw of ['{', '', 'null', '[]', '"text"', '42']) {
+    const response = await dispatchPost(jsonPost(raw, 'auth/otp/request'), 'auth/otp/request')
+    assert.equal(response.status, 400, `raw=${JSON.stringify(raw)}`)
+    const payload = await response.json() as { success: boolean; error: { code: string; message: string } }
+    assert.equal(payload.success, false)
+    assert.equal(payload.error.code, 'INVALID_INPUT', `raw=${JSON.stringify(raw)}`)
+    assert.equal(payload.error.message, '请求体格式无效', `raw=${JSON.stringify(raw)}`)
+  }
+})
+
+test('a valid JSON empty object still reaches the handler validation', async () => {
+  // `{}` is a real body: requestOtp validates it itself, so the message differs
+  // from the shared malformed-body one — proof the handler ran.
+  const response = await dispatchPost(jsonPost('{}', 'auth/otp/request'), 'auth/otp/request')
+  assert.equal(response.status, 400)
+  const payload = await response.json() as { error: { code: string; message: string } }
+  assert.equal(payload.error.code, 'INVALID_INPUT')
+  assert.equal(payload.error.message, '邮箱格式不正确')
 })

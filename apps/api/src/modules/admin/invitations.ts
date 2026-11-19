@@ -1,5 +1,6 @@
 import { decryptForPurpose, encryptForPurpose } from '@musecanvas/providers'
 import { db } from '@musecanvas/database'
+import { isUuid } from '@musecanvas/contracts'
 import { hashToken, randomToken } from '../../auth/security'
 import { writeAudit } from '../../shared/audit'
 import { fail, ok } from '../../shared/http'
@@ -43,6 +44,7 @@ export async function createInvitation(context: AuthedContext) {
 /** DELETE /api/admin/invitations/:id — revoke only an unconsumed, live code. */
 export async function revokeInvitation(context: AuthedContext) {
   const id = context.params.id
+  if (!isUuid(id)) return fail('INVALID_INPUT', '邀请 ID 无效', 400)
   const result = await db().query('UPDATE invitations SET revoked_at=now() WHERE id=$1 AND consumed_at IS NULL AND revoked_at IS NULL RETURNING id', [id])
   if (result.rows[0]) await writeAudit(db(), context.actor.id, 'invitation.revoke', 'invitation', id)
   return result.rows[0] ? ok({ revoked: true }) : fail('NOT_FOUND', '邀请码不存在', 404)

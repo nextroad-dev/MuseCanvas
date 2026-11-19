@@ -1,4 +1,4 @@
-import { body, fail, mutationOriginValid } from '../shared/http'
+import { body, fail, MalformedBodyError, mutationOriginValid } from '../shared/http'
 import type { NextRequest, NextResponse } from 'next/server'
 import { isResponse, requireActor } from './guard'
 import { matchRoute } from './match'
@@ -37,12 +37,21 @@ function makeContext(request: NextRequest, path: string, params: Record<string, 
 }
 
 async function answer(route: Route, context: Context): Promise<NextResponse> {
-  if (route.access === 'public') {
-    return route.handler({ ...context, actor: undefined })
+  try {
+    if (route.access === 'public') {
+      return await route.handler({ ...context, actor: undefined })
+    }
+    const actor = await requireActor(context.request, route.access === 'admin')
+    if (isResponse(actor)) return actor
+    return await route.handler({ ...context, actor })
+  } catch (error) {
+    // `context.json()` is lazy, so a malformed body throws inside the handler —
+    // this is the one choke point every endpoint's answer passes through. Only
+    // that shared rejection becomes the uniform 400; anything else keeps
+    // propagating exactly as before.
+    if (error instanceof MalformedBodyError) return fail('INVALID_INPUT', '请求体格式无效', 400)
+    throw error
   }
-  const actor = await requireActor(context.request, route.access === 'admin')
-  if (isResponse(actor)) return actor
-  return route.handler({ ...context, actor })
 }
 
 /** The gate the old handler applied before its trailing 404. */

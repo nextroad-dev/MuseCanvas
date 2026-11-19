@@ -3,12 +3,13 @@ import { AgentMediaRecoveryRepository, AgentRecoveryRepository, db, type AgentCo
 import { initializeObservability, shutdownObservability } from '@musecanvas/observability'
 import { redis, redisCommand } from './shared/infra'
 import { consume, trimGenerationStream } from './queue'
+import { trimAgentStreams, agentStreamRetentionMetrics, runStreamRetentionSweep } from './queue/stream-retention'
 import { processJob } from './jobs'
 import { cleanupMaintenance, scheduleMaintenance } from './maintenance'
 import { PLUGIN_BOOT_REFRESH_BUDGET_MS, refreshPlugins } from './plugins/loader'
 import { assertBuiltinPluginsAvailable } from './plugins/availability'
 import { runCredentialTests } from './credentials/probe'
-import { assertWorkerSchema, WorkerAgentIndexSchemaRequiredError, WorkerAgentMediaSchemaRequiredError, WorkerAgentSchemaRequiredError, WorkerSchemaRequiredError } from './shared/schema-preflight'
+import { assertWorkerSchema, WorkerCleanupSchemaRequiredError, WorkerAgentIndexSchemaRequiredError, WorkerAgentMediaSchemaRequiredError, WorkerAgentSchemaRequiredError, WorkerSchemaRequiredError } from './shared/schema-preflight'
 import { createWorkerHealth, startHealthServer } from './shared/health'
 import { createDrainingSweep } from './shared/draining-sweep'
 import { createProductionAgentComposition } from './agent-production'
@@ -55,7 +56,7 @@ export async function main(agentComposition?: AgentWorkerComposition) {
     outboxBacklog: () => recovery.outboxBacklog(),
   }
   const composition = agentComposition ?? createProductionAgentComposition()
-  const health = createWorkerHealth()
+  const health = createWorkerHealth(Date.now, agentStreamRetentionMetrics)
   const server = startHealthServer(health)
   const shutdown = new AbortController()
   const stop = () => { shutdown.abort(); server.close() }
@@ -122,9 +123,13 @@ export async function main(agentComposition?: AgentWorkerComposition) {
   timers.push(setInterval(async () => {
     if (trimming) return
     trimming = true
-    try { await trimGenerationStream() }
-    catch (error) { console.error('stream cleanup failed', { code: error instanceof Error ? error.name : 'ERROR' }) }
-    finally { trimming = false }
+    try {
+      await runStreamRetentionSweep({
+        generation: () => trimGenerationStream(),
+        agent: () => trimAgentStreams({ eval: (script, options) => redisCommand(redis.eval(script, options)) }),
+        onError: (kind, error) => console.error('stream cleanup failed', { kind, code: error instanceof Error ? error.name : 'ERROR' }),
+      })
+    } finally { trimming = false }
   }, 30_000))
   let unhealthySince = Date.now()
   timers.push(setInterval(() => {
@@ -166,7 +171,9 @@ export async function main(agentComposition?: AgentWorkerComposition) {
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) main().catch(async error => {
   console.error('worker fatal', error instanceof WorkerSchemaRequiredError
     ? { code: error.name, requiredMigration: '0042', missingColumns: error.missingColumns }
-    : error instanceof WorkerAgentMediaSchemaRequiredError
+    : error instanceof WorkerCleanupSchemaRequiredError
+      ? { code: error.name, requiredMigration: '0046', missingColumns: error.missingColumns }
+      : error instanceof WorkerAgentMediaSchemaRequiredError
       ? { code: error.name, requiredMigration: '0045', missingColumns: error.missingColumns }
       : error instanceof WorkerAgentIndexSchemaRequiredError
         ? { code: error.name, requiredMigration: '0044', missingIndexes: error.missingIndexes }

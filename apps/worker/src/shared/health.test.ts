@@ -20,3 +20,10 @@ test('worker readiness requires queue and scheduler progress and expires indepen
   health.queueProgress()
   assert.equal(health.ready(), true)
 })
+
+test('stream metrics can be scraped independently of worker readiness without exposing payloads', () => {
+  assert.equal(createWorkerHealth().metrics(), null)
+  const health = createWorkerHealth(() => 0, () => 'agent_stream_trim_deleted_total{kind="turn"} 3\n')
+  assert.equal(health.ready(), false)
+  assert.equal(health.metrics(), 'agent_stream_trim_deleted_total{kind="turn"} 3\n')
+})

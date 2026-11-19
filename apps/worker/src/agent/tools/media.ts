@@ -1,5 +1,5 @@
 import type { AgentDecimal, JsonObject, ToolExecutionResult, GenerationMode } from '@musecanvas/contracts'
-import { canvasAgentRequestDigest, assertAgentMediaApproval, linkAgentMediaJob, AgentMediaError } from '@musecanvas/database'
+import { canonicalJsonDigest, assertAgentMediaApproval, linkAgentMediaJob, AgentMediaError } from '@musecanvas/database'
 import {
   prepareGeneration, createGenerationInTransaction, normalizeGenerationInputs, lockManagedGenerationInputs,
   generationEffectBindingHash, MediaServiceError,
@@ -88,7 +88,7 @@ export async function executeApprovedAgentMediaProposal(name: 'generate_image' |
   // entire effect transaction. A failed return here could commit partial work.
   context.signal.throwIfAborted()
   const proposed = proposal(args)
-  const argumentsHash = canvasAgentRequestDigest(args)
+  const argumentsHash = canonicalJsonDigest(args)
   const guard = { argumentsHash, modelRevisionId: proposed.modelRevisionId, pricing: proposed.pricing }
   await ports.assertEffectAllowed(context, guard)
   const approval = await assertAgentMediaApproval(context.sql, context.scope, context.toolCallId, context.round.roundId, argumentsHash)

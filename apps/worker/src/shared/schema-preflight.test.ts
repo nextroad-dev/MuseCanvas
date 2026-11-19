@@ -11,6 +11,8 @@ import {
   WorkerAgentIndexSchemaRequiredError,
   WorkerAgentMediaSchemaRequiredError,
   REQUIRED_WORKER_OUTBOX_COLUMNS,
+  REQUIRED_CLEANUP_COLUMNS,
+  WorkerCleanupSchemaRequiredError,
   WorkerAgentSchemaRequiredError,
   WorkerSchemaRequiredError,
 } from './schema-preflight'
@@ -36,7 +38,7 @@ test('Worker schema preflight accepts complete schema, rejects missing relation 
   const query = t.mock.method(db(), 'query', async (sql: string) => ({ rows: String(sql).includes("to_regclass('agent_media_mask_preparations')")
     ? completePreparation() : String(sql).includes('missing_index') ? [] : completeOutbox() }))
   await assertWorkerSchema()
-  assert.equal(query.mock.callCount(), 4)
+  assert.equal(query.mock.callCount(), 5)
   assert.match(String(query.mock.calls[1].arguments[0]), /agent_turns/)
   query.mock.mockImplementation(async () => ({ rows: [] }))
   await assert.rejects(assertWorkerSchema(), WorkerSchemaRequiredError)
@@ -85,7 +87,7 @@ test('Worker schema preflight requires every 0044 recovery index', async t => {
         : [],
   }))
   await assertWorkerSchema()
-  assert.equal(present.mock.callCount(), 4)
+  assert.equal(present.mock.callCount(), 5)
   const indexSql = String(present.mock.calls[3].arguments[0])
   assert.match(indexSql, /pg_catalog\.pg_indexes/)
   for (const name of REQUIRED_AGENT_RECOVERY_INDEXES) assert.ok(indexSql.includes(`('${name}')`), `${name} missing from preflight query`)
@@ -106,14 +108,14 @@ test('Worker schema preflight requires every 0044 recovery index', async t => {
   assert.equal(absent.mock.callCount(), 4)
 })
 
-test('Worker schema preflight resolves when 0042, 0043, 0044 and 0045 checks are complete', async t => {
+test('Worker schema preflight resolves when 0042 through 0046 checks are complete', async t => {
   const query = t.mock.method(db(), 'query', async (sql: string) => ({
     rows: String(sql).includes("to_regclass('outbox_events')") ? completeOutbox()
       : String(sql).includes("to_regclass('agent_media_mask_preparations')") ? completePreparation()
         : [],
   }))
   await assertWorkerSchema()
-  assert.equal(query.mock.callCount(), 4)
+  assert.equal(query.mock.callCount(), 5)
 })
 
 test('Worker schema preflight rejects missing 0045 preparation columns before startup', async t => {
@@ -128,6 +130,18 @@ test('Worker schema preflight rejects missing 0045 preparation columns before st
   })
 })
 
+test('Worker schema preflight rejects missing 0046 cleanup claims before queues start', async t => {
+  t.mock.method(db(), 'query', async (sql: string) => ({ rows: sql.includes("to_regclass('outbox_events')") ? completeOutbox()
+    : sql.includes("to_regclass('agent_media_mask_preparations')") ? completePreparation()
+      : sql.includes('missing_cleanup_column') ? REQUIRED_CLEANUP_COLUMNS.map(([table, column]) => ({ missing_cleanup_column: `${table}.${column}` })) : [] }))
+  await assert.rejects(assertWorkerSchema(), error => {
+    assert.ok(error instanceof WorkerCleanupSchemaRequiredError)
+    assert.equal(error.name, 'WORKER_SCHEMA_0046_REQUIRED')
+    assert.equal(error.missingColumns.length, 8)
+    return true
+  })
+})
+
 test('Worker startup places schema gate before Redis, health and scheduling; no services started by this test', () => {
   const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8')
   const gate = source.indexOf('await assertWorkerSchema()')
@@ -137,6 +151,7 @@ test('Worker startup places schema gate before Redis, health and scheduling; no 
   assert.match(source, /requiredMigration: '0045', missingColumns: error.missingColumns/)
   assert.match(source, /requiredMigration: '0044', missingIndexes: error.missingIndexes/)
   assert.match(source, /requiredMigration: '0043', missingColumns: error.missingColumns/)
+  assert.match(source, /requiredMigration: '0046', missingColumns: error.missingColumns/)
   // Recovery must drain already admitted turns after the API feature flag is turned off.
   assert.ok(source.indexOf('void runCoordinator()') > gate)
   assert.ok(source.indexOf('setInterval(runCoordinator, agentRecoveryIntervalMs())') > gate)

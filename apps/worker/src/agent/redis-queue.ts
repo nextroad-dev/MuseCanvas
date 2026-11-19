@@ -1,9 +1,8 @@
 import { createBlockingRedis, consumer, redis, redisCommand, HEARTBEAT_TTL_MS, STALE_PENDING_IDLE_MS, CONSUMER_BLOCK_MS } from '../shared/infra'
-import { AGENT_STREAM, AGENT_MEDIA_EVENT_STREAM } from '../queue/outbox-routing'
+import { AGENT_STREAM, AGENT_MEDIA_EVENT_STREAM, AGENT_CONSUMER_GROUP, AGENT_MEDIA_CONSUMER_GROUP } from '../queue/outbox-routing'
+export { AGENT_CONSUMER_GROUP, AGENT_MEDIA_CONSUMER_GROUP } from '../queue/outbox-routing'
 import type { AgentConsumerQueue, AgentStreamMessage } from './consumer'
 
-export const AGENT_CONSUMER_GROUP = 'agent-runners-v1'
-export const AGENT_MEDIA_CONSUMER_GROUP = 'agent-media-v1'
 export function createAgentRedisQueue(kind: 'turn'|'media'): AgentConsumerQueue {
   // Each consumer owns its blocking connection; generation reads/heartbeats
   // and this consumer's Redis writes never wait behind its XREADGROUP.

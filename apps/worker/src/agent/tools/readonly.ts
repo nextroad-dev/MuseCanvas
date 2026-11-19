@@ -1,8 +1,8 @@
-import { isCanvasUuid, parseCanvasScene, type GenerationMode, type JsonObject, type JsonValue, type ToolExecutionResult } from '@musecanvas/contracts'
+import { isUuid, type GenerationMode, type JsonObject, type ToolExecutionResult } from '@musecanvas/contracts'
 import { adaptAgentToolContext, completedOutputBytes, MAX_TOOL_OUTPUT_BYTES, toolSchemaToJson, ToolRegistry, ToolValidationError, type InstalledTool, type ToolContext, type ToolSchema } from './registry'
 import type { AgentTool, AgentToolContext } from '../ports'
 
-export const READONLY_TOOL_ALLOWLIST = ['list_models@v1', 'search_assets@v1', 'get_asset@v1', 'get_canvas@v1'] as const
+export const READONLY_TOOL_ALLOWLIST = ['list_models@v1', 'search_assets@v1', 'get_asset@v1'] as const
 const MODES: GenerationMode[] = ['text_to_image', 'image_to_image', 'inpaint', 'text_to_video', 'image_to_video']
 const string = (maxLength: number): ToolSchema => ({ type: 'string', maxLength })
 const uuid: ToolSchema = { type: 'string', format: 'uuid', maxLength: 36 }
@@ -13,7 +13,6 @@ const schemas = {
   list_models: object({ mode: { type: 'string', maxLength: 20, enum: MODES }, limit: integer(100) }),
   search_assets: object({ query: string(100), mediaKind, limit: integer(50), cursor: string(256) }),
   get_asset: object({ assetId: uuid }, ['assetId']),
-  get_canvas: object({ canvasId: uuid, nodeIds: { type: 'array', items: uuid, minItems: 1, maxItems: 50 }, nodeLimit: integer(50), edgeLimit: integer(100) }),
 }
 
 interface AssetRow extends Record<string, unknown> {
@@ -37,7 +36,6 @@ interface ModelRow extends Record<string, unknown> {
   modes: unknown
   max_count: unknown
 }
-interface CanvasRow extends Record<string, unknown> { id: string; revision: number; scene: unknown }
 interface AssetCursor { createdAt: string; id: string }
 
 function invalidRow(): never { throw new Error('Invalid tool query row') }
@@ -45,7 +43,7 @@ function media(value: unknown): value is 'image' | 'video' { return value === 'i
 function nullableNumber(value: unknown): value is number | null { return value === null || typeof value === 'number' }
 function pgNumeric(value: unknown): value is string | number { return typeof value === 'string' || typeof value === 'number' }
 function assetRow(row: Record<string, unknown>): AssetRow {
-  if (!isCanvasUuid(row.id) || !media(row.media_kind) || typeof row.mime_type !== 'string'
+  if (!isUuid(row.id) || !media(row.media_kind) || typeof row.mime_type !== 'string'
     || !nullableNumber(row.width) || !nullableNumber(row.height)
     || (row.duration_seconds !== null && !pgNumeric(row.duration_seconds)) || (row.fps !== null && !pgNumeric(row.fps))
     || (row.has_audio !== null && typeof row.has_audio !== 'boolean') || !pgNumeric(row.size_bytes)
@@ -54,18 +52,10 @@ function assetRow(row: Record<string, unknown>): AssetRow {
     duration_seconds: row.duration_seconds, fps: row.fps, has_audio: row.has_audio, size_bytes: row.size_bytes, cursor_created_at: row.cursor_created_at }
 }
 function modelRow(row: Record<string, unknown>): ModelRow {
-  if (!isCanvasUuid(row.id) || typeof row.display_name !== 'string' || !media(row.model_kind)
-    || !isCanvasUuid(row.revision_id) || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 1) invalidRow()
+  if (!isUuid(row.id) || typeof row.display_name !== 'string' || !media(row.model_kind)
+    || !isUuid(row.revision_id) || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 1) invalidRow()
   return { id: row.id, display_name: row.display_name, model_kind: row.model_kind, revision_id: row.revision_id,
     revision: row.revision, modes: row.modes, max_count: row.max_count }
-}
-function canvasRow(row: Record<string, unknown>): CanvasRow {
-  if (!isCanvasUuid(row.id) || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 1 || !Object.hasOwn(row, 'scene')) invalidRow()
-  return { id: row.id, revision: row.revision, scene: row.scene }
-}
-function assetReferenceRow(row: Record<string, unknown>): { id: string; media_kind: string } {
-  if (!isCanvasUuid(row.id) || !media(row.media_kind)) invalidRow()
-  return { id: row.id, media_kind: row.media_kind }
 }
 
 function invalid(): never { throw new ToolValidationError('INVALID_ARGUMENTS') }
@@ -82,11 +72,11 @@ function decodeCursor(value: string): AssetCursor {
   try { parsed = JSON.parse(bytes.toString('utf8')) } catch { invalid() }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) invalid()
   const cursor = parsed as Record<string, unknown>
-  if (Object.keys(cursor).sort().join(',') !== 'createdAt,id' || !validTimestamp(cursor.createdAt) || !isCanvasUuid(cursor.id)) invalid()
+  if (Object.keys(cursor).sort().join(',') !== 'createdAt,id' || !validTimestamp(cursor.createdAt) || !isUuid(cursor.id)) invalid()
   return { createdAt: cursor.createdAt, id: cursor.id.toLowerCase() }
 }
 function encodeCursor(row: AssetRow): string {
-  if (!validTimestamp(row.cursor_created_at) || !isCanvasUuid(row.id)) throw new Error('Invalid asset cursor row')
+  if (!validTimestamp(row.cursor_created_at) || !isUuid(row.id)) throw new Error('Invalid asset cursor row')
   return Buffer.from(JSON.stringify({ createdAt: row.cursor_created_at, id: row.id })).toString('base64url')
 }
 function numeric(value: unknown): number | null {
@@ -94,13 +84,13 @@ function numeric(value: unknown): number | null {
   const number = Number(value)
   return Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER ? number : null
 }
-function identifier(value: unknown): string | null { return isCanvasUuid(value) ? value : null }
+function identifier(value: unknown): string | null { return isUuid(value) ? value : null }
 function label(value: string): string {
   // Catalog labels are untrusted display data, never routing/configuration.
   return Array.from(value.replace(/(?:https?:\/\/|s3:\/\/|data:)[^\s]*/gi, '[redacted]').replaceAll('\u0000', '')).slice(0, 120).join('')
 }
 function assetDto(row: AssetRow): JsonObject {
-  if (!isCanvasUuid(row.id) || !['image', 'video'].includes(row.media_kind) || !validTimestamp(row.cursor_created_at)) throw new Error('Invalid asset metadata')
+  if (!isUuid(row.id) || !['image', 'video'].includes(row.media_kind) || !validTimestamp(row.cursor_created_at)) throw new Error('Invalid asset metadata')
   const mimeTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif', 'video/mp4', 'video/webm', 'video/quicktime']
   return { id: row.id, mediaKind: row.media_kind, mimeType: mimeTypes.includes(row.mime_type) ? row.mime_type : 'application/octet-stream',
     width: numeric(row.width), height: numeric(row.height), durationSeconds: numeric(row.duration_seconds), fps: numeric(row.fps),
@@ -176,65 +166,22 @@ async function getAsset(context: ToolContext, args: JsonObject): Promise<ToolExe
   const row = (await context.query.query<AssetRow>(`SELECT ${assetColumns} ${readyAssets} AND a.id=$2::uuid LIMIT 1`, [context.ownerId, args.assetId], assetRow)).rows[0]
   return row ? completed({ asset: assetDto(row) }) : notFound()
 }
-async function getCanvas(context: ToolContext, args: JsonObject): Promise<ToolExecutionResult> {
-  const canvasId = args.canvasId ?? context.canvasId
-  if (!isCanvasUuid(canvasId)) invalid()
-  const row = (await context.query.query<CanvasRow>(`SELECT id,revision,scene FROM canvas_documents
-    WHERE id=$1 AND created_by=$2 AND deleted_at IS NULL LIMIT 1`, [canvasId, context.ownerId], canvasRow)).rows[0]
-  if (!row) return notFound()
-  const parsed = parseCanvasScene(row.scene)
-  if (!parsed.success || !isCanvasUuid(row.id) || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error('Invalid canvas metadata')
-  const scene = parsed.data
-  const selectedIds = args.nodeIds === undefined ? null : new Set((args.nodeIds as string[]).map(nodeId => nodeId.toLowerCase()))
-  const nodeLimit = (args.nodeLimit as number | undefined) ?? 50
-  const edgeLimit = (args.edgeLimit as number | undefined) ?? 100
-  const selected = scene.nodes.filter(node => !selectedIds || selectedIds.has(node.id)).slice(0, nodeLimit)
-  const assetIds = selected.flatMap(node => (node.type === 'image' || node.type === 'video') && node.data.assetId ? [node.data.assetId] : [])
-  const ready = new Map<string, string>()
-  if (assetIds.length) {
-    const assets = (await context.query.query<{ id: string; media_kind: string }>(`SELECT a.id,a.media_kind ${readyAssets} AND a.id=ANY($2::uuid[]) LIMIT 50`, [context.ownerId, assetIds], assetReferenceRow)).rows
-    for (const asset of assets) ready.set(asset.id, asset.media_kind)
-  }
-  // Stored scene JSON, prompts/notes, arbitrary parameters and URLs never cross
-  // this boundary. Media references are grants only after a fresh owner/ready check.
-  const nodes: JsonObject[] = selected.map(node => {
-    const dto: JsonObject = { id: node.id, type: node.type, position: { x: node.position.x, y: node.position.y } }
-    if (node.size) dto.size = { width: node.size.width, height: node.size.height }
-    if ((node.type === 'image' || node.type === 'video') && node.data.assetId && ready.get(node.data.assetId) === node.type) dto.assetId = node.data.assetId
-    return dto
-  })
-  const visibleIds = new Set(nodes.map(node => node.id))
-  const eligibleEdges = scene.edges.filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target))
-  const edges: JsonValue[] = eligibleEdges.slice(0, edgeLimit).map(edge => ({ id: edge.id, source: edge.source, target: edge.target }))
-  const result: JsonObject = { canvasId: row.id, revision: row.revision, nodeCount: scene.nodes.length, edgeCount: scene.edges.length,
-    nodes, edges, truncated: nodes.length < scene.nodes.length || edges.length < eligibleEdges.length }
-  while (completedOutputBytes(result) > MAX_TOOL_OUTPUT_BYTES) {
-    result.truncated = true
-    if (edges.length) edges.pop()
-    else if (nodes.length) nodes.pop()
-    else throw new ToolValidationError('RESULT_TOO_LARGE')
-  }
-  return completed(result)
-}
 
 export function readonlyTools<Context extends ToolContext = ToolContext>(): InstalledTool<Context>[] {
-  const handlers = { list_models: listModels, search_assets: searchAssets, get_asset: getAsset, get_canvas: getCanvas }
+  const handlers = { list_models: listModels, search_assets: searchAssets, get_asset: getAsset }
   return Object.entries(handlers).map(([name, execute]) => ({ name, schemaVersion: 1, parameters: structuredClone(schemas[name as keyof typeof schemas]),
     description: { list_models: 'List active media model revisions and declared modes. Cost is unknown when null.',
       search_assets: 'Search your ready assets by original prompt with bounded keyset pagination. Returns metadata and IDs only.',
-      get_asset: 'Read metadata for one of your ready assets. No URLs or storage locators are returned.',
-      get_canvas: 'Read bounded canvas structure and ready owned media references. Stored text and parameters are omitted.' }[name]!,
-    permissions: [name === 'list_models' ? 'models:read' : name === 'get_canvas' ? 'canvas:read' : 'assets:read'], execution: 'sync', execute }))
+      get_asset: 'Read metadata for one of your ready assets. No URLs or storage locators are returned.' }[name]!,
+    permissions: [name === 'list_models' ? 'models:read' : 'assets:read'], execution: 'sync', execute }))
 }
 export function createReadonlyToolRegistry<Context extends ToolContext = ToolContext>(options: { allowlist?: readonly string[]; mediaTools?: InstalledTool<Context>[] } = {}): ToolRegistry<Context> {
   return new ToolRegistry({ tools: readonlyTools<Context>(), allowlist: options.allowlist ?? READONLY_TOOL_ALLOWLIST, mediaTools: options.mediaTools })
 }
 
-/** Shared-port tools delegate to the same allowlisted, versioned implementation.
- * Shared contexts have no default canvas, so canvasId is explicit in this schema. */
+/** Shared-port tools delegate to the same allowlisted, versioned implementation. */
 export function createReadonlyAgentTools(options: { readonly allowlist?: readonly string[] } = {}): readonly AgentTool[] {
-  const tools = readonlyTools().map(tool => tool.name === 'get_canvas'
-    ? { ...tool, parameters: { ...tool.parameters, required: ['canvasId'] } } : tool)
+  const tools = readonlyTools()
   const registry = new ToolRegistry({ tools, allowlist: options.allowlist ?? READONLY_TOOL_ALLOWLIST })
   return Object.freeze(registry.listDefinitions().map(definition => Object.freeze({
     name: definition.name, schemaVersion: definition.schemaVersion, description: definition.description,

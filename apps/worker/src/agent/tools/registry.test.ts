@@ -15,7 +15,7 @@ const code = (expected: string) => (error: unknown) => error instanceof ToolVali
 
 test('registry advertises only installed allowed versions with reversible provider-safe names', () => {
   const registry = createReadonlyToolRegistry()
-  assert.deepEqual(registry.listDefinitions().map(tool => toolVersionKey(tool.name, tool.schemaVersion)), ['list_models@v1', 'search_assets@v1', 'get_asset@v1', 'get_canvas@v1'])
+  assert.deepEqual(registry.listDefinitions().map(tool => toolVersionKey(tool.name, tool.schemaVersion)), ['list_models@v1', 'search_assets@v1', 'get_asset@v1'])
   for (const tool of registry.listModelTools()) {
     assert.match(tool.name, /^[a-zA-Z0-9_-]{1,64}$/)
     const parsed = fromModelToolName(tool.name)
@@ -26,22 +26,22 @@ test('registry advertises only installed allowed versions with reversible provid
     messages: [{ role: 'user', content: 'hello' }], tools: registry.listModelTools() })
   assert.ok(Array.isArray(request.body.tools))
   const response = parseLanguageModelChatResponse('openai_chat', { choices: [{ message: { role: 'assistant', content: null,
-    tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_canvas__v1', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }, registry.listModelTools())
-  assert.deepEqual(registry.validateModelCall(response.toolCalls[0].name, response.toolCalls[0].arguments), { toolName: 'get_canvas', schemaVersion: 1, arguments: {} })
+    tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'list_models__v1', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }, registry.listModelTools())
+  assert.deepEqual(registry.validateModelCall(response.toolCalls[0].name, response.toolCalls[0].arguments), { toolName: 'list_models', schemaVersion: 1, arguments: {} })
 })
 
 test('allowlist, exact version and installed handlers are checked on every backend/model path', async () => {
   const registry = createReadonlyToolRegistry({ allowlist: ['get_asset@v1'] })
   assert.deepEqual(registry.listDefinitions().map(tool => tool.name), ['get_asset'])
-  assert.throws(() => registry.validate('get_canvas', 1, {}), code('TOOL_NOT_ALLOWED'))
+  assert.throws(() => registry.validate('search_assets', 1, {}), code('TOOL_NOT_ALLOWED'))
   assert.throws(() => registry.validate('get_asset', 2, { assetId: ownerId }), code('UNKNOWN_TOOL'))
   for (const name of ['get_asset', 'get_asset@v1', 'get_asset__v01', 'get_asset__v0', 'http__v1', 'get_asset__v9999999']) {
     assert.throws(() => registry.validateModelCall(name, { assetId: ownerId }), ToolValidationError)
   }
-  await assert.rejects(registry.dispatch(context, { toolName: 'get_canvas', schemaVersion: 1, arguments: {} }), code('TOOL_NOT_ALLOWED'))
+  await assert.rejects(registry.dispatch(context, { toolName: 'search_assets', schemaVersion: 1, arguments: {} }), code('TOOL_NOT_ALLOWED'))
   await assert.rejects(registry.dispatch(context, { toolName: 'get_asset', schemaVersion: 1, arguments: { assetId: ownerId, ownerId } }), code('INVALID_ARGUMENTS'))
   assert.throws(() => createReadonlyToolRegistry({ allowlist: ['generate_video@v1'] }), code('UNKNOWN_TOOL'))
-  assert.throws(() => createReadonlyToolRegistry({ allowlist: ['get_canvas@v1', 'get_canvas@v1'] }), code('INVALID_REGISTRATION'))
+  assert.throws(() => createReadonlyToolRegistry({ allowlist: ['get_asset@v1', 'get_asset@v1'] }), code('INVALID_REGISTRATION'))
 })
 
 test('separate media registration supports explicit versions and rejects arbitrary execution tools', async () => {
@@ -98,9 +98,8 @@ test('arguments enforce UUID, finite numbers, depth, closed nested objects and a
   for (const limit of [0, 51, 1.5, NaN, Infinity, -Infinity, '1', null]) assert.throws(() => registry.validate('search_assets', 1, { limit }), code('INVALID_ARGUMENTS'))
   for (const limit of [1, 50]) assert.equal(registry.validate('search_assets', 1, { limit }).arguments.limit, limit)
   assert.throws(() => registry.validate('search_assets', 1, { query: 'x'.repeat(101) }), code('INVALID_ARGUMENTS'))
-  assert.throws(() => registry.validate('get_canvas', 1, { nodeIds: Array(51).fill(ownerId) }), code('INVALID_ARGUMENTS'))
-  assert.throws(() => registry.validate('get_canvas', 1, { nodeIds: [] }), code('INVALID_ARGUMENTS'))
-  assert.throws(() => registry.validate('get_canvas', 1, { nodeIds: new Array(1) }), code('INVALID_ARGUMENTS'))
+  assert.throws(() => registry.validate('search_assets', 1, { cursor: Array(1) }), code('INVALID_ARGUMENTS'))
+  assert.throws(() => registry.validate('search_assets', 1, { cursor: 1 }), code('INVALID_ARGUMENTS'))
   let calls = 0
   const accessor = Object.defineProperty({}, 'assetId', { enumerable: true, get() { calls++; return ownerId } })
   assert.throws(() => registry.validate('get_asset', 1, accessor), code('INVALID_ARGUMENTS'))
@@ -160,17 +159,17 @@ function sharedMedia(): AgentTool {
 }
 
 test('createAgentToolRegistry conforms to shared ports and exposes versioned model helpers', () => {
-  const registry = createAgentToolRegistry({ tools: createReadonlyAgentTools(), allowlist: ['get_canvas@v1'] })
+  const registry = createAgentToolRegistry({ tools: createReadonlyAgentTools(), allowlist: ['get_asset@v1'] })
   const port: AgentToolRegistry = registry
-  assert.deepEqual(port.list().map(tool => tool.name), ['get_canvas'])
-  assert.equal(port.get('get_asset', 1), null)
-  assert.equal(port.get('get_canvas', 2), null)
-  assert.equal(port.get('get_canvas__v1', 1), null)
-  assert.deepEqual(port.get('get_canvas', 1)?.parameters.required, ['canvasId'])
-  assert.deepEqual(registry.listModelTools().map(tool => tool.name), ['get_canvas__v1'])
-  assert.deepEqual(registry.validateModelCall('get_canvas__v1', { canvasId: ownerId }), { toolName: 'get_canvas', schemaVersion: 1, arguments: { canvasId: ownerId } })
-  assert.throws(() => registry.validateModelCall('get_canvas__v1', {}), code('INVALID_ARGUMENTS'))
-  assert.throws(() => registry.validate('get_asset', 1, { assetId: ownerId }), code('TOOL_NOT_ALLOWED'))
+  assert.deepEqual(port.list().map(tool => tool.name), ['get_asset'])
+  assert.equal(port.get('list_models', 1), null)
+  assert.equal(port.get('get_asset', 2), null)
+  assert.equal(port.get('get_asset__v1', 1), null)
+  assert.deepEqual(port.get('get_asset', 1)?.parameters.required, ['assetId'])
+  assert.deepEqual(registry.listModelTools().map(tool => tool.name), ['get_asset__v1'])
+  assert.deepEqual(registry.validateModelCall('get_asset__v1', { assetId: ownerId }), { toolName: 'get_asset', schemaVersion: 1, arguments: { assetId: ownerId } })
+  assert.throws(() => registry.validateModelCall('get_asset__v1', {}), code('INVALID_ARGUMENTS'))
+  assert.throws(() => registry.validate('list_models', 1, {}), code('TOOL_NOT_ALLOWED'))
 })
 
 test('shared AgentTool execute cannot bypass installed schema or version allowlist', async () => {

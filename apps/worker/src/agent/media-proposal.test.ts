@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { AgentTurnDTO, JsonObject } from '@musecanvas/contracts'
-import { canvasAgentRequestDigest } from '@musecanvas/database'
+import { canonicalJsonDigest } from '@musecanvas/database'
 import { MediaServiceError } from '@musecanvas/media-service'
 import { AGENT_MEDIA_FREE_PRICING, isCanonicalMediaProposal, materializeAgentMediaProposal } from './media-proposal'
 import type { AgentSqlClient } from './ports'
@@ -195,7 +195,7 @@ test('canonical arguments are the frozen payload with typed parameters, sorted b
   })
   assert.equal(result.toolCallId, toolCallId)
   assert.equal(result.approvalId, approvalId)
-  assert.equal(result.argumentsHash, canvasAgentRequestDigest(result.arguments))
+  assert.equal(result.argumentsHash, canonicalJsonDigest(result.arguments))
   assert.deepEqual(AGENT_MEDIA_FREE_PRICING, { amount: '0', currency: 'USD', pricingRevision: 'free-v1' })
   assert.ok(isCanonicalMediaProposal(result.arguments))
 })

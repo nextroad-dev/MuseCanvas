@@ -32,6 +32,14 @@ export const REQUIRED_AGENT_COLUMNS = [
 
 export const REQUIRED_AGENT_COLUMN_KEYS = REQUIRED_AGENT_COLUMNS.map(([table, column]) => `${table}.${column}`)
 export const REQUIRED_AGENT_MEDIA_COLUMNS = ['upload_id', 'owner_id', 'source_checksum', 'mask_checksum', 'width', 'height', 'preparation_version', 'expires_at'] as const
+export const REQUIRED_CLEANUP_COLUMNS = ['deletion_jobs', 'asset_deletion_jobs'].flatMap(table =>
+  ['claim_token', 'lease_expires_at', 'next_attempt_at', 'blocked_at'].map(column => [table, column] as const))
+export class WorkerCleanupSchemaRequiredError extends Error {
+  constructor(readonly missingColumns: readonly string[]) {
+    super('Worker requires migration 0046: durable cleanup claim columns must exist before startup')
+    this.name = 'WORKER_SCHEMA_0046_REQUIRED'
+  }
+}
 
 /** Recovery indexes added by migration 0044; the coordinator scans require all four. */
 export const REQUIRED_AGENT_RECOVERY_INDEXES = [
@@ -121,4 +129,13 @@ export async function assertWorkerSchema(client: Pick<ReturnType<typeof db>, 'qu
     .map(row => row.missing_index)
     .filter((index): index is string => typeof index === 'string' && index.length > 0)
   if (missingIndexes.length > 0) throw new WorkerAgentIndexSchemaRequiredError(missingIndexes)
+
+  const values = REQUIRED_CLEANUP_COLUMNS.map(([table, column]) => `('${table}','${column}')`).join(', ')
+  const cleanup = await client.query<{ missing_cleanup_column: string }>(`SELECT expected.table_name || '.' || expected.column_name AS missing_cleanup_column
+    FROM (VALUES ${values}) AS expected(table_name,column_name)
+    WHERE NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid=pg_catalog.to_regclass(expected.table_name) AND a.attname=expected.column_name AND a.attnum>0 AND NOT a.attisdropped)
+    ORDER BY 1`)
+  const missingCleanup = cleanup.rows.map(row => row.missing_cleanup_column).filter((value): value is string => typeof value === 'string' && value.length > 0)
+  if (missingCleanup.length) throw new WorkerCleanupSchemaRequiredError(missingCleanup)
 }

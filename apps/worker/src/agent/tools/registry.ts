@@ -1,4 +1,4 @@
-import { isCanvasStorageString, isCanvasUuid, type JsonObject, type ToolExecutionResult } from '@musecanvas/contracts'
+import { isUuid, type JsonObject, type ToolExecutionResult } from '@musecanvas/contracts'
 import type { LanguageModelChatTool } from '@musecanvas/providers'
 import type { AgentSqlClient, AgentTool, AgentToolBudgetPolicy, AgentToolContext, AgentToolRegistry } from '../ports'
 
@@ -9,7 +9,11 @@ export const MAX_TOOL_OUTPUT_BYTES = 32_768
 const MAX_DEPTH = 12
 const MAX_VALUES = 4096
 const forbiddenKeys = new Set(['__proto__', 'prototype', 'constructor'])
-const builtinNames = new Set(['list_models', 'search_assets', 'get_asset', 'get_canvas'])
+/** PostgreSQL text/jsonb cannot represent NUL or unpaired UTF-16 surrogates. */
+function isSafeStorageString(value: string): boolean {
+  return !/\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)
+}
+const builtinNames = new Set(['list_models', 'search_assets', 'get_asset'])
 const mediaNames = new Set(['generate_image', 'generate_video', 'edit_image'])
 
 export interface ToolQuery {
@@ -31,7 +35,6 @@ function checkedToolQuery(sql: AgentSqlClient): ToolQuery {
 export interface ToolContext {
   /** Server-authenticated owner, never copied from model arguments. */
   ownerId: string
-  canvasId?: string | null
   query: ToolQuery
   signal?: AbortSignal
 }
@@ -87,7 +90,7 @@ function inspectJson(value: unknown, code: 'INVALID_SCHEMA' | 'INVALID_ARGUMENTS
   function visit(value: unknown, depth: number): void {
     if (++count > MAX_VALUES || depth > MAX_DEPTH) reject(code)
     if (value === null || typeof value === 'boolean') return
-    if (typeof value === 'string') { if (!isCanvasStorageString(value)) reject(code); return }
+    if (typeof value === 'string') { if (!isSafeStorageString(value)) reject(code); return }
     if (typeof value === 'number') { if (!Number.isFinite(value)) reject(code); return }
     if (Array.isArray(value)) {
       if (Object.getPrototypeOf(value) !== Array.prototype || value.length > MAX_VALUES
@@ -102,7 +105,7 @@ function inspectJson(value: unknown, code: 'INVALID_SCHEMA' | 'INVALID_ARGUMENTS
     }
     if (!plain(value)) reject(code)
     for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string' || !isCanvasStorageString(key) || forbiddenKeys.has(key)) reject(code)
+      if (typeof key !== 'string' || !isSafeStorageString(key) || forbiddenKeys.has(key)) reject(code)
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!
       if (!('value' in descriptor) || !descriptor.enumerable) reject(code)
       visit(descriptor.value, depth + 1)
@@ -169,7 +172,7 @@ function validateValue(value: unknown, schema: ToolSchema, code: 'INVALID_SCHEMA
     case 'string': {
       if (typeof value !== 'string') reject(code)
       const length = Array.from(value).length
-      if (length < (schema.minLength ?? 0) || length > schema.maxLength! || (schema.format === 'uuid' && !isCanvasUuid(value))) reject(code)
+      if (length < (schema.minLength ?? 0) || length > schema.maxLength! || (schema.format === 'uuid' && !isUuid(value))) reject(code)
       break
     }
     case 'integer':
@@ -277,7 +280,7 @@ export class ToolRegistry<Context extends ToolContext = ToolContext> {
   async dispatch(context: Context, call: ValidatedToolCall): Promise<ToolExecutionResult> {
     // Revalidate persisted/backend calls too; a structural TS type is not authorization.
     const validated = this.validate(call.toolName, call.schemaVersion, call.arguments)
-    if (!isCanvasUuid(context.ownerId) || (context.canvasId != null && !isCanvasUuid(context.canvasId))) reject('INVALID_ARGUMENTS')
+    if (!isUuid(context.ownerId)) reject('INVALID_ARGUMENTS')
     if (context.signal?.aborted) return { kind: 'failed', error: { code: 'TOOL_FAILED', message: 'Tool execution interrupted', retryable: false } }
     const tool = this.lookup(validated.toolName, validated.schemaVersion)
     try {

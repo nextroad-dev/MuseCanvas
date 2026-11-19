@@ -1,6 +1,6 @@
 import type { AgentBudgetDTO, AgentTurnDTO, GenerationMode, JsonObject, ParameterDescriptor } from '@musecanvas/contracts'
 import {
-  appendAgentMediaProposalToolCall, canvasAgentRequestDigest, createPendingAgentMediaApproval,
+  appendAgentMediaProposalToolCall, canonicalJsonDigest, createPendingAgentMediaApproval,
   type AgentCoreClient,
 } from '@musecanvas/database'
 import {
@@ -285,7 +285,7 @@ export async function materializeAgentMediaProposal(client: AgentSqlClient, cont
     inputs: frozen.inputs as unknown as JsonObject, inputBindings: inputBindings as unknown as JsonObject,
     pricing: { ...AGENT_MEDIA_FREE_PRICING },
   }
-  const argumentsHash = canvasAgentRequestDigest(argumentsObject)
+  const argumentsHash = canonicalJsonDigest(argumentsObject)
   // The canonical arguments ARE the approved effect: any drift in defaults,
   // prompt normalisation or managed checksums must fail before any write.
   if (argumentsHash !== generationEffectBindingHash(prepared, inputBindings, AGENT_MEDIA_FREE_PRICING, modelRevisionId)) invalid()

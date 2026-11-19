@@ -64,7 +64,7 @@ export interface AgentModelRoundRef {
   readonly inputRevision: AgentDecimal
 }
 
-export type AgentToolExecutionKind = 'sync' | 'media_async' | 'canvas_mutation'
+export type AgentToolExecutionKind = 'sync' | 'media_async'
 
 /**
  * Metadata seam for M5. `required` means the runner must not execute the tool
@@ -130,14 +130,6 @@ export interface AgentTool {
 export interface AgentToolRegistry {
   get(name: string, schemaVersion: number): AgentTool | null
   list(): readonly AgentTool[]
-}
-
-/** Owner-scoped read-only dependencies. Results become tool JSON, never raw rows. */
-export interface AgentReadOnlyToolPorts {
-  listModels(ownerId: string, input: { readonly mediaKind?: 'image' | 'video' }): Promise<JsonObject>
-  searchAssets(ownerId: string, input: { readonly query?: string; readonly cursor?: string; readonly limit: number }): Promise<JsonObject>
-  getAsset(ownerId: string, input: { readonly assetId: string }): Promise<JsonObject>
-  getCanvas(ownerId: string, input: { readonly canvasId: string }): Promise<JsonObject>
 }
 
 /** Safe, non-secret model execution snapshot taken from the turn config. */

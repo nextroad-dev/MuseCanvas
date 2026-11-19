@@ -63,7 +63,7 @@ function tool(input: {
     roundId: input.roundId,
     position: input.position,
     providerCallId: input.providerCallId,
-    toolName: input.name ?? 'get_canvas',
+    toolName: input.name ?? 'get_asset',
     toolSchemaVersion: 1,
     arguments: input.arguments ?? {},
     result: input.result === undefined ? { ok: true } : input.result,
@@ -96,17 +96,17 @@ function fixture(overrides: Partial<Fixture> = {}): Fixture {
       assistant(13, 'turn-2', 'final'),
     ],
     rounds: [
-      round('turn-1', 1, 'checking', [{ id: 'tool-a', name: 'get_canvas__v1', arguments: { canvas: 'one' } }]),
+      round('turn-1', 1, 'checking', [{ id: 'tool-a', name: 'get_asset__v1', arguments: { assetId: 'one' } }]),
       round('turn-1', 2, 'first done'),
       round('turn-2', 1, 'working', [
-        { id: 'tool-b', name: 'get_canvas__v1', arguments: { canvas: 'two' } },
+        { id: 'tool-b', name: 'get_asset__v1', arguments: { assetId: 'two' } },
         { id: 'tool-c', name: 'list_models__v1', arguments: { mode: 'text_to_image' } },
       ]),
       round('turn-2', 2, 'final'),
     ],
     toolCalls: [
-      tool({ id: 'tool-a', turnId: 'turn-1', roundId: 'turn-1-round-1', position: 0, providerCallId: 'tool-a', arguments: { canvas: 'one' }, result: { nodes: 1 } }),
-      tool({ id: 'tool-b', turnId: 'turn-2', roundId: 'turn-2-round-1', position: 0, providerCallId: 'tool-b', arguments: { canvas: 'two' }, result: { nodes: 2 } }),
+      tool({ id: 'tool-a', turnId: 'turn-1', roundId: 'turn-1-round-1', position: 0, providerCallId: 'tool-a', arguments: { assetId: 'one' }, result: { nodes: 1 } }),
+      tool({ id: 'tool-b', turnId: 'turn-2', roundId: 'turn-2-round-1', position: 0, providerCallId: 'tool-b', arguments: { assetId: 'two' }, result: { nodes: 2 } }),
       tool({ id: 'tool-c', turnId: 'turn-2', roundId: 'turn-2-round-1', position: 1, providerCallId: 'tool-c', name: 'list_models', arguments: { mode: 'text_to_image' }, result: { models: [] } }),
     ],
   }
@@ -155,7 +155,7 @@ test('agent context: steering inserted inside an assistant call/result pair is r
     assistant(6, 'turn-2', 'done'),
   ]
   input.currentTurnId = 'turn-2'
-  input.rounds = [round('turn-2', 1, 'call', [{ id: 'tool-a', name: 'get_canvas__v1', arguments: {} }]), round('turn-2', 2, 'done')]
+  input.rounds = [round('turn-2', 1, 'call', [{ id: 'tool-a', name: 'get_asset__v1', arguments: {} }]), round('turn-2', 2, 'done')]
   input.toolCalls = [tool({ id: 'tool-a', turnId: 'turn-2', roundId: 'turn-2-round-1', position: 0, providerCallId: 'tool-a' })]
   rejectsCode(() => assembleAgentContext(input), 'AGENT_CONTEXT_UNPAIRED')
 })
@@ -197,7 +197,7 @@ test('agent context: corrupt round, checkpoint and argument bindings are refused
 
   const callMismatch = fixture()
   callMismatch.rounds[2] = round('turn-2', 1, 'working', [
-    { id: 'tool-b', name: 'get_canvas__v1', arguments: { canvas: 'changed' } },
+    { id: 'tool-b', name: 'get_asset__v1', arguments: { assetId: 'changed' } },
     { id: 'tool-c', name: 'list_models__v1', arguments: { mode: 'text_to_image' } },
   ])
   rejectsCode(() => assembleAgentContext(callMismatch), 'AGENT_CONTEXT_CORRUPT')
@@ -286,7 +286,7 @@ test('agent context: visible content blocks preserve text/tool interleaving and 
   const input = fixture()
   input.rounds[2] = { ...input.rounds[2]!, checkpoint: {
     ...input.rounds[2]!.checkpoint!, contentBlocks: [
-      { type: 'tool_call', toolCall: { id: 'tool-b', name: 'get_canvas__v1', arguments: { canvas: 'two' } } },
+      { type: 'tool_call', toolCall: { id: 'tool-b', name: 'get_asset__v1', arguments: { assetId: 'two' } } },
       { type: 'text', text: 'working' },
       { type: 'tool_call', toolCall: { id: 'tool-c', name: 'list_models__v1', arguments: { mode: 'text_to_image' } } },
     ],
@@ -439,7 +439,7 @@ test('agent context review P1: factory loads queued-cancelled history and next T
 test('agent context review P2: legitimate writer marker fields are checked against tool rows', () => {
   const input = fixture()
   input.items[2] = { ...input.items[2]!, payload: {
-    providerCallId: 'tool-a', toolName: 'get_canvas', toolSchemaVersion: 1, arguments: { canvas: 'one' },
+    providerCallId: 'tool-a', toolName: 'get_asset', toolSchemaVersion: 1, arguments: { assetId: 'one' },
   } }
   input.items[3] = { ...input.items[3]!, payload: {
     content: JSON.stringify({ nodes: 1 }), status: 'completed', result: { nodes: 1 }, error: null,
@@ -578,4 +578,45 @@ test('agent context review F2: malformed internal proposal data is skipped witho
   assert.ok(assembleAgentContext(input).messages.length)
   input.items[3] = { ...input.items[3]!, payload: { result: { tampered: true } } }
   rejectsCode(() => assembleAgentContext(input), 'AGENT_CONTEXT_CORRUPT')
+})
+
+test('agent context: managed attachments are rendered as ids the model can name in edit_image', () => {
+  const sourceId = '20000000-0000-4000-8000-000000000001'
+  const maskId = '30000000-0000-4000-8000-000000000001'
+  const sourceChecksum = 'a'.repeat(64)
+  const input = fixture()
+  input.items[0] = item(1, 'turn-1', 'user_message', {
+    content: '把屋顶换成红色',
+    attachments: [
+      { kind: 'upload', id: maskId, role: 'mask', checksum: 'b'.repeat(64), width: 1200, height: 800,
+        mimeType: 'image/png', preparationVersion: 1, sourceChecksum },
+      { kind: 'asset', id: sourceId, role: 'reference_image', checksum: sourceChecksum, width: 1200, height: 800, mimeType: 'image/png' },
+    ],
+  })
+  const assembly = assembleAgentContext(input)
+  const first = assembly.messages[0]!
+  assert.equal(first.role, 'user')
+  const content = first.role === 'user' ? first.content : ''
+  assert.match(content, /^把屋顶换成红色\n\n\[attached managed inputs\]/)
+  assert.ok(content.includes(`- mask (image/png) uploadId=${maskId} 1200x800 sha256=bbbbbbbbbbbb prepared-for source sha256=aaaaaaaaaaaa`), content)
+  assert.ok(content.includes(`- reference_image (image/png) assetId=${sourceId} 1200x800 sha256=aaaaaaaaaaaa`), content)
+  assert.ok(content.includes('Use these ids as inputs[] for edit_image'), content)
+})
+
+test('agent context: an attachment payload outside the vocabulary is refused, not rendered', () => {
+  const input = fixture()
+  input.items[0] = item(1, 'turn-1', 'user_message', {
+    content: 'go',
+    attachments: [{ kind: 'upload', id: '30000000-0000-4000-8000-000000000001', role: 'reference_image',
+      checksum: 'a'.repeat(64), width: 100, height: 100, mimeType: 'image/png', objectKey: 's3://leak' }],
+  })
+  rejectsCode(() => assembleAgentContext(input), 'AGENT_CONTEXT_UNKNOWN')
+
+  const unboundMask = fixture()
+  unboundMask.items[0] = item(1, 'turn-1', 'user_message', {
+    content: 'go',
+    attachments: [{ kind: 'upload', id: '30000000-0000-4000-8000-000000000001', role: 'mask',
+      checksum: 'a'.repeat(64), width: 100, height: 100, mimeType: 'image/png' }],
+  })
+  rejectsCode(() => assembleAgentContext(unboundMask), 'AGENT_CONTEXT_UNKNOWN')
 })

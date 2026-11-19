@@ -1,8 +1,9 @@
 import type pg from 'pg'
 
 /** Runs inside the account-deletion transaction, before it is marked complete.
- * Scrub documents (including already soft-deleted ones) and delete Agent history
- * and immutable pending snapshots rather than UPDATE-ing their protected payloads.
+ * Scrub documents (including already soft-deleted ones) and delete historical
+ * CanvasAgent content after runtime retirement. Preserve this privacy cleanup
+ * while its legacy tables/data remain; it is not an active Agent runtime.
  * No network/storage calls belong in this short transaction.
  */
 export async function purgeCanvasContentForActor(client: Pick<pg.PoolClient, 'query'>, actorId: string): Promise<void> {

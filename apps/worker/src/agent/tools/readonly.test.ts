@@ -165,65 +165,12 @@ test('list_models uses UTF8 output bytes including the result envelope and marks
   assert.ok(Buffer.byteLength(JSON.stringify(output), 'utf8') > JSON.stringify(output).length)
 })
 
-function canvasScene() {
-  return { nodes: [
-    { id: id(10), type: 'note', position: { x: 1, y: 2 }, data: { text: 'credential https://signed.invalid/?token=secret' } },
-    { id: id(11), type: 'image', position: { x: 3, y: 4 }, size: { width: 100, height: 200 }, data: { assetId: id(1), prompt: 'private', parameters: { baseURL: 'https://private.invalid', credential: 'hidden' } } },
-    { id: id(12), type: 'video', position: { x: 5, y: 6 }, data: { assetId: id(2) } },
-    { id: id(13), type: 'image', position: { x: 7, y: 8 }, data: { assetId: id(3) } },
-  ], edges: [{ id: id(20), source: id(10), target: id(11) }, { id: id(21), source: id(11), target: id(12) }] }
-}
-function canvasStep(sql: string, values: unknown[]): Row[] {
-  assert.match(sql, /WHERE id=\$1 AND created_by=\$2 AND deleted_at IS NULL LIMIT 1/)
-  assert.deepEqual(values, [id(100), ownerId])
-  assert.doesNotMatch(sql, /SELECT \*/)
-  return [{ id: id(100), revision: 4, scene: canvasScene() }]
-}
-
-test('get_canvas bounds structure and checks owner/readiness for each exposed media reference', async () => {
-  const query = fakeQuery([canvasStep, (sql, values) => {
-    assertReadyPredicate(sql)
-    assert.match(sql, /a\.id=ANY\(\$2::uuid\[\]\) LIMIT 50/)
-    assert.deepEqual(values, [ownerId, [id(1), id(2), id(3)]])
-    // id(2) is foreign; id(3) exists but has the wrong media kind.
-    return [{ id: id(1), media_kind: 'image' }, { id: id(3), media_kind: 'video' }]
-  }])
-  const output = result(await invoke(ctx(query, { canvasId: id(100) }), 'get_canvas'))
-  const nodes = output.nodes as JsonObject[]
-  assert.equal(output.canvasId, id(100))
-  assert.equal(output.revision, 4)
-  assert.equal(output.nodeCount, 4)
-  assert.equal(output.edgeCount, 2)
-  assert.equal(output.truncated, false)
-  assert.equal(nodes[1].assetId, id(1))
-  assert.equal(nodes[2].assetId, undefined)
-  assert.equal(nodes[3].assetId, undefined)
-  assert.doesNotMatch(JSON.stringify(output), /secret|private|hidden|https:|credential|parameters|prompt|text|baseURL/)
-})
-
-test('get_canvas explicit selection and limits return only edges whose endpoints are visible', async () => {
-  const query = fakeQuery([canvasStep, () => [{ id: id(1), media_kind: 'image' }], canvasStep])
-  const output = result(await invoke(ctx(query), 'get_canvas', { canvasId: id(100), nodeIds: [id(10), id(11)], nodeLimit: 2, edgeLimit: 1 }))
-  assert.deepEqual((output.nodes as JsonObject[]).map(node => node.id), [id(10), id(11)])
-  assert.deepEqual(output.edges, [{ id: id(20), source: id(10), target: id(11) }])
-  assert.equal(output.truncated, true)
-  const one = result(await invoke(ctx(query), 'get_canvas', { canvasId: id(100), nodeLimit: 1 }))
-  assert.deepEqual(one.edges, [])
-  assert.equal((one.nodes as JsonObject[]).length, 1)
-})
-
-test('get_canvas has identical missing/foreign behavior and rejects missing default context', async () => {
-  const query = fakeQuery([(sql, values) => { assert.match(sql, /created_by=\$2/); assert.deepEqual(values, [id(100), ownerId]); return [] }])
-  assert.deepEqual(await invoke(ctx(query), 'get_canvas', { canvasId: id(100) }), { kind: 'failed', error: { code: 'TOOL_FAILED', message: 'Resource unavailable', retryable: false } })
-  await assert.rejects(invoke(ctx(query), 'get_canvas'), error => error instanceof ToolValidationError && error.code === 'INVALID_ARGUMENTS')
-})
-
 test('readonly definitions are fresh copies and importing/installing does not query or use transport', () => {
   const first = readonlyTools()
   first[0].parameters.properties!.injected = { type: 'boolean' }
   assert.equal(readonlyTools()[0].parameters.properties!.injected, undefined)
   const registry = createReadonlyToolRegistry()
-  assert.equal(registry.listModelTools().length, 4)
+  assert.equal(registry.listModelTools().length, 3)
 })
 
 function sharedContext(sql: AgentSqlClient): AgentToolContext {
@@ -273,13 +220,11 @@ test('shared SQL decoder fails closed for malformed rows rather than asserting a
   }
 })
 
-test('shared read-only wrappers delegate model, pagination and canvas queries through checked row decoding', async () => {
+test('shared read-only wrappers delegate model and pagination queries through checked row decoding', async () => {
   const tools = createReadonlyAgentTools()
   const sql = sharedSql([
     (_text, values) => { assert.deepEqual(values, [null, 51]); return [{ id: id(1), display_name: 'Model', model_kind: 'image', revision_id: id(2), revision: 1, modes: ['text_to_image'], max_count: 1 }] },
     (text, values) => { assertReadyPredicate(text); assert.deepEqual(values, [ownerId, 2, null, null, null, null]); return [asset(2), asset(1)] },
-    canvasStep,
-    (text, values) => { assertReadyPredicate(text); assert.deepEqual(values, [ownerId, [id(1), id(2), id(3)]]); return [{ id: id(1), media_kind: 'image' }] },
   ])
   const context = sharedContext(sql)
   const models = result(await tools.find(tool => tool.name === 'list_models')!.execute(context, {}))
@@ -287,31 +232,10 @@ test('shared read-only wrappers delegate model, pagination and canvas queries th
   const page = result(await tools.find(tool => tool.name === 'search_assets')!.execute(context, { limit: 1 }))
   assert.equal(page.hasMore, true)
   assert.deepEqual(JSON.parse(Buffer.from(page.nextCursor as string, 'base64url').toString()), { createdAt, id: id(2) })
-  const canvas = tools.find(tool => tool.name === 'get_canvas')!
-  assert.deepEqual(canvas.parameters.required, ['canvasId'])
-  await assert.rejects(canvas.execute(context, {}), error => error instanceof ToolValidationError && error.code === 'INVALID_ARGUMENTS')
-  const output = result(await canvas.execute(context, { canvasId: id(100) }))
-  assert.equal((output.nodes as JsonObject[])[1].assetId, id(1))
-  assert.equal((output.nodes as JsonObject[])[2].assetId, undefined)
 })
 
-test('shared model, canvas and media reference row decoders reject invalid database shapes', async () => {
+test('shared model row decoders reject invalid database shapes', async () => {
   const tools = createReadonlyAgentTools()
   const model = tools.find(tool => tool.name === 'list_models')!
   assert.equal((await model.execute(sharedContext(sharedSql([() => [{ id: id(1), display_name: {}, model_kind: 'image', revision_id: id(2), revision: 1 }]])), {})).kind, 'failed')
-  const canvas = tools.find(tool => tool.name === 'get_canvas')!
-  assert.equal((await canvas.execute(sharedContext(sharedSql([() => [{ id: id(100), revision: '1', scene: canvasScene() }]])), { canvasId: id(100) })).kind, 'failed')
-  assert.equal((await canvas.execute(sharedContext(sharedSql([canvasStep, () => [{ id: id(1), media_kind: 'file' }]])), { canvasId: id(100) })).kind, 'failed')
-})
-
-test('get_canvas uppercase UUID selection returns the same canonical nodes and edges', async () => {
-  const ready = () => [{ id: id(1), media_kind: 'image' }]
-  const query = fakeQuery([canvasStep, ready, canvasStep, ready])
-  const selection = [id(10), id(11)]
-  const lower = result(await invoke(ctx(query), 'get_canvas', { canvasId: id(100), nodeIds: selection }))
-  const upper = result(await invoke(ctx(query), 'get_canvas', { canvasId: id(100), nodeIds: selection.map(nodeId => nodeId.toUpperCase()) }))
-  assert.deepEqual((lower.nodes as JsonObject[]).map(node => node.id), selection)
-  assert.deepEqual(lower.edges, [{ id: id(20), source: id(10), target: id(11) }])
-  assert.deepEqual(upper, lower)
-  assert.equal(query.remaining(), 0)
 })

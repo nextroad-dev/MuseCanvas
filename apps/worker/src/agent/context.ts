@@ -6,6 +6,7 @@ import type {
   AgentTurnStatus,
   JsonObject,
 } from '@musecanvas/contracts'
+import { AGENT_MESSAGE_MAX_ATTACHMENTS } from '@musecanvas/contracts'
 import type { LanguageModelChatContentBlock, LanguageModelChatMessage, LanguageModelChatToolCall } from '@musecanvas/providers'
 import type { AgentContext, AgentContextDependencies, AgentContextPort, AgentContextRequest } from './ports'
 
@@ -405,8 +406,28 @@ function buildTurn(
   for (let index = 0; index < group.items.length; index++) {
     const entry = group.items[index]!
     if (entry.item.type === 'user_message') {
-      const content = contentBytes(entry.payload.content, 32_000)
+      let content = contentBytes(entry.payload.content, 32_000)
       if (!content.trim()) fail('AGENT_CONTEXT_CORRUPT')
+      if (entry.payload.attachments !== undefined) {
+        if (!Array.isArray(entry.payload.attachments) || entry.payload.attachments.length > AGENT_MESSAGE_MAX_ATTACHMENTS) fail('AGENT_CONTEXT_UNKNOWN')
+        const rendered = entry.payload.attachments.map(raw => {
+          const a = object(raw)
+          if (Object.keys(a).some(key => !['kind','id','role','checksum','width','height','mimeType','preparationVersion','sourceChecksum'].includes(key))
+            || !['upload','asset'].includes(String(a.kind)) || !['reference_image','mask'].includes(String(a.role))
+            || typeof a.id !== 'string' || !uuidPattern.test(a.id) || typeof a.checksum !== 'string' || !/^[0-9a-f]{64}$/i.test(a.checksum)
+            || !Number.isSafeInteger(a.width) || !Number.isSafeInteger(a.height) || !['image/png','image/jpeg'].includes(String(a.mimeType))
+            || (a.role === 'mask' && (a.kind !== 'upload' || a.preparationVersion !== 1 || typeof a.sourceChecksum !== 'string' || !/^[0-9a-f]{64}$/i.test(a.sourceChecksum)))) fail('AGENT_CONTEXT_UNKNOWN')
+          const identity = a.kind === 'asset' ? `assetId=${a.id}` : `uploadId=${a.id}`
+          const provenance = a.role === 'mask' ? ` prepared-for source sha256=${String(a.sourceChecksum).slice(0, 12)}` : ''
+          return `- ${a.role} (${String(a.mimeType)}) ${identity} ${a.width}x${a.height} sha256=${a.checksum.slice(0, 12)}${provenance}`
+        })
+        // The model can only name managed ids it has been shown; this block is the
+        // whole reason a user attachment can reach edit_image's inputs[].
+        if (rendered.length) {
+          content = `${content}\n\n[attached managed inputs]\n${rendered.join('\n')}\nUse these ids as inputs[] for edit_image. The mask is a prepared inpaint mask and must be passed as the mask input.`
+        }
+      }
+      content = contentBytes(content, 32_000)
       messages.push({ role: 'user', content })
       continue
     }

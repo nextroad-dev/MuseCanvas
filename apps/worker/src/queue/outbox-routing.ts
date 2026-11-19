@@ -1,6 +1,8 @@
 export const GENERATION_STREAM = 'muse:generation'
 export const AGENT_STREAM = 'muse:agent'
 export const AGENT_MEDIA_EVENT_STREAM = 'muse:agent-media-events'
+export const AGENT_CONSUMER_GROUP = 'agent-runners-v1'
+export const AGENT_MEDIA_CONSUMER_GROUP = 'agent-media-v1'
 export const OUTBOX_EVENT_TYPES = {
   generationRequested: 'generation.requested',
   generationCancelRequested: 'generation.cancel.requested',

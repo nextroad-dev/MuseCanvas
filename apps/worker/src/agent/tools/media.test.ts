@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { AgentToolContext, AgentSqlClient } from '../ports'
 import type { JsonObject, AgentDecimal } from '@musecanvas/contracts'
-import { canvasAgentRequestDigest } from '@musecanvas/database'
+import { canonicalJsonDigest } from '@musecanvas/database'
 import { AgentMediaApprovalRequiredError, createAgentMediaTools, executeApprovedAgentMediaProposal } from './media'
 import { createAgentToolRegistry } from './registry'
 import { createReadonlyAgentTools } from './readonly'
@@ -74,7 +74,7 @@ function fixture(options: { video?: boolean; edit?: boolean; denied?: boolean; g
   const tools = createAgentMediaTools({
     async assertEffectAllowed(ctx, binding) {
       assert.equal(ctx.sql, sql)
-      assert.equal(binding.argumentsHash, canvasAgentRequestDigest(args))
+      assert.equal(binding.argumentsHash, canonicalJsonDigest(args))
       assert.equal(binding.modelRevisionId, revisionId)
       if (options.gateDenied) throw new Error('ROUND_GATES_NOT_READY')
       gates++
@@ -90,7 +90,7 @@ test('media tools require injected enforcement and durable approved binding; no 
     const f = fixture(options)
     assert.ok(f.tools.every(t => t.approval === 'required'))
     await assert.rejects(f.tools[0].execute(f.context, { modelId, prompt: 'draw', parameters: {}, inputs: [] }))
-    await assert.rejects(executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canvasAgentRequestDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }))
+    await assert.rejects(executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canonicalJsonDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }))
     assert.equal(f.job, undefined)
     assert.equal(f.reserves.size, 0)
     assert.ok(!f.statements.some(s => /^(INSERT|UPDATE|reserve:)/.test(s)))
@@ -99,7 +99,7 @@ test('media tools require injected enforcement and durable approved binding; no 
 
 test('approved materialized image proposal reserves, creates and links through shared service on caller SQL', async () => {
   const f = fixture()
-  assert.deepEqual(await executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canvasAgentRequestDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), { kind: 'pending', jobIds: ['job'] })
+  assert.deepEqual(await executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canonicalJsonDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), { kind: 'pending', jobIds: ['job'] })
   assert.equal(f.reserves.size, 4)
   assert.equal(f.statements.filter(s => s.startsWith('INSERT INTO generation_jobs')).length, 1)
   assert.equal(f.statements.filter(s => s.includes('INSERT INTO agent_tool_job_links')).length, 1)
@@ -107,7 +107,7 @@ test('approved materialized image proposal reserves, creates and links through s
   assert.ok(!f.statements.some(s => /^(BEGIN|COMMIT|ROLLBACK)$|provider_runs/.test(s)))
   // Replay is on the same identity; budget keys and job/link remain unique.
   // The gate fixture counts submissions, so create never reaches a second INSERT.
-  assert.deepEqual(await executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canvasAgentRequestDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), { kind: 'pending', jobIds: ['job'] })
+  assert.deepEqual(await executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canonicalJsonDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), { kind: 'pending', jobIds: ['job'] })
   assert.equal(f.reserves.size, 4)
   assert.equal(f.statements.filter(s => s.startsWith('INSERT INTO generation_jobs')).length, 1)
 })
@@ -116,7 +116,7 @@ test('approved video and preprepared-mask-only edit proposals use shared media c
   for (const options of [{ video: true }, { edit: true }]) {
     const f = fixture(options)
     const tool = f.tools[options.video ? 1 : 2]
-    assert.deepEqual(await executeApprovedAgentMediaProposal(options.video ? 'generate_video' : 'edit_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canvasAgentRequestDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), { kind: 'pending', jobIds: ['job'] })
+    assert.deepEqual(await executeApprovedAgentMediaProposal(options.video ? 'generate_video' : 'edit_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canonicalJsonDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), { kind: 'pending', jobIds: ['job'] })
     assert.equal((f.job!.normalized_request as JsonObject).mode, options.video ? 'text_to_video' : 'inpaint')
     if (options.edit) assert.match(tool.description, /prepared mask/)
   }
@@ -130,14 +130,14 @@ test('revision drift, checksum drift, auto optimization and unmaterialized defau
   }
   const f = fixture()
   f.args.parameters = { count: 1 }
-  await assert.rejects(executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canvasAgentRequestDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), /APPROVAL_CONFLICT/)
+  await assert.rejects(executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canonicalJsonDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }), /APPROVAL_CONFLICT/)
   assert.equal(f.reserves.size, 0)
 })
 
 test('budget/link/abort failures escape for caller rollback rather than committing a failed ToolExecutionResult', async () => {
   for (const options of [{ reserveFailure: true }, { linkFailure: true }, { abortAtEnd: true }]) {
     const f = fixture(options)
-    await assert.rejects(executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canvasAgentRequestDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }))
+    await assert.rejects(executeApprovedAgentMediaProposal('generate_image', f.context, f.args, { assertEffectAllowed: async (_ctx, binding) => { assert.equal(binding.argumentsHash, canonicalJsonDigest(f.args)); if (f.options.gateDenied) throw new Error('ROUND_GATES_NOT_READY') }, runtimeLimits: async () => ({ maxInputs: 8, maxImageBytes: 10000, maxTotalBytes: 20000 }) }))
     assert.ok(!f.statements.includes('COMMIT'))
   }
 })
@@ -159,7 +159,7 @@ test('executed media tools stay inert on raw requests and delegate canonical pro
 
 test('composed registry accepts strict raw media requests while internal proposal metadata stays out of model schema', async () => {
   const f = fixture()
-  const allowlist = ['list_models@v1', 'search_assets@v1', 'get_asset@v1', 'get_canvas@v1', 'generate_image@v1', 'generate_video@v1', 'edit_image@v1']
+  const allowlist = ['list_models@v1', 'search_assets@v1', 'get_asset@v1', 'generate_image@v1', 'generate_video@v1', 'edit_image@v1']
   const registry = createAgentToolRegistry({ tools: [...createReadonlyAgentTools(), ...f.tools], allowlist })
   const raw = { modelId, prompt: 'draw', parameters: [{ name: 'size', value: '1024x1024' }, { name: 'count', value: '1' }], inputs: [] }
   const validated = registry.validateModelCall('generate_image__v1', raw)

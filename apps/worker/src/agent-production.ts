@@ -48,5 +48,8 @@ export function createProductionAgentComposition(pool: AgentDatabasePool = db())
     mediaEvents,
     media,
     additionalTools: createAgentMediaTools(mediaPorts),
+    // Raw media calls stay inert proposals; the approved executor enforces the
+    // durable approval binding itself (mediaPorts.assertEffectAllowed above).
+    executorApproval: { mode: 'propose-only' },
   })
 }

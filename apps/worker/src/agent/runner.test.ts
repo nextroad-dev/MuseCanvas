@@ -142,6 +142,21 @@ const approvalSeam=(rows:()=>FakeApproval[],executed:{approved:number}):AgentMed
   async materialize(){throw new Error('UNEXPECTED_MATERIALIZATION')},
   async executeApproved(){executed.approved++;throw new Error('UNEXPECTED_CANONICAL_EXECUTION')}})
 
+test('runner: a canonical-shaped call to a non-media registered tool never reaches the approved executor',async()=>{
+  let approvedCalls=0
+  const syncTool:AgentTool={name:'generate_image',schemaVersion:1,description:'Not a media tool',parameters:{type:'object'},permissions:['read:asset'],execution:'sync',approval:'never',budget:{maxMediaJobs:0,maxMediaOutputs:0,maxEstimatedCost:null},async execute(){throw new Error('SYNC_TOOL_EXECUTED')}}
+  const f=fixture({registry:{get:(name,version)=>name==='generate_image'&&version===1?syncTool:null,list:()=>[syncTool]},
+    media:{canMaterialize:(name,version)=>name==='generate_image'&&version===1,isCanonical:()=>true,
+      readApproval:async()=>({id:'approval-1',status:'approved',expired:false}),
+      async materialize(){throw new Error('UNEXPECTED_MATERIALIZATION')},
+      async executeApproved(){approvedCalls++;throw new Error('UNEXPECTED_CANONICAL_EXECUTION')}}})
+  f.state.tools.push(mediaToolRow('proposal','waiting_approval',mediaArgs))
+  await f.run()
+  assert.equal(approvedCalls,0)
+  assert.equal(f.state.tools[0]!.status,'failed')
+  assert.equal(f.state.tools[0]!.error?.code,'TOOL_FAILED')
+})
+
 test('runner: raw media call materializes a durable proposal and waits without any effect',async()=>{
   const materialized:string[]=[];let executeApproved=0
   const f=fixture({registry:{get:(name,version)=>name==='generate_image'&&version===1?mediaTool:null,list:()=>[mediaTool]},
@@ -165,7 +180,8 @@ test('runner: raw media call materializes a durable proposal and waits without a
 
 test('runner: only an approved proposal executes through the media seam and hands off as waiting_external',async()=>{
   let approvedCalls=0
-  const f=fixture({media:{canMaterialize:(name,version)=>name==='generate_image'&&version===1,isCanonical:()=>true,
+  const f=fixture({registry:{get:(name,version)=>name==='generate_image'&&version===1?mediaTool:null,list:()=>[mediaTool]},
+    media:{canMaterialize:(name,version)=>name==='generate_image'&&version===1,isCanonical:()=>true,
     readApproval:async()=>({id:'approval-1',status:'approved',expired:false}),
     async materialize(){throw new Error('UNEXPECTED_MATERIALIZATION')},
     async executeApproved(context,name,version,args){assert.equal(name,'generate_image');assert.equal(version,1);assert.equal(args.modelRevisionId,'media-revision');approvedCalls++;assert.ok(context.sql);return {kind:'pending',jobIds:['job']}}}})

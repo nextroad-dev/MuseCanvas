@@ -31,6 +31,7 @@ function fixture(extra: Partial<AgentCompositionDependencies> = {}) {
     contextTransaction: async () => { throw new Error('not used by fake runner') },
     modelQuery: async () => { throw new Error('not used by fake model') },
     mediaEvents: async () => 'retry',
+    executorApproval: { mode: 'propose-only' },
     modelFactory(deps) { models.push(deps); return { async complete() { throw new Error('not used') } } },
     runnerFactory(deps) { runners.push(deps); return { async runTurn() {} } },
     ...extra,
@@ -43,13 +44,13 @@ test('composition binds a fresh model scope and definition allowlist for each Tu
   const signal = new AbortController().signal
   const worker = f.composition.createRunner(signal)
   await worker.runTurn(wake(tids[0]!))
-  f.allow(['get_canvas@v1'])
+  f.allow(['list_models@v1'])
   await worker.runTurn(wake(tids[1]!))
   assert.equal(f.models.length, 2)
   assert.deepEqual(f.models.map(m => m.scope.turnId), tids)
   assert.ok(f.models.every(m => m.scope.ownerId === owner && m.control.request === signal))
   assert.notEqual(f.runners[0]!.model, f.runners[1]!.model)
-  assert.deepEqual(f.runners.map(r => r.registry.list().map(t => t.name)), [['get_asset'], ['get_canvas']])
+  assert.deepEqual(f.runners.map(r => r.registry.list().map(t => t.name)), [['get_asset'], ['list_models']])
   await assert.rejects(f.models[0]!.loadCredential({ modelConfigId: 'model', providerId: 'provider' }), /AGENT_UNSCOPED_CREDENTIAL_FORBIDDEN/)
 })
 

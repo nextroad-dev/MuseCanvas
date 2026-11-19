@@ -6,10 +6,11 @@ import type { AgentWorkerComposition } from './agent/boot'
 import { createAgentContext } from './agent/context'
 import { createAgentModel, type AgentModelQuery } from './agent/model'
 import { createAgentRunner, type AgentMediaProposalRunnerPort, type AgentRunnerDependencies } from './agent/runner'
-import { createAgentToolExecutor, type AgentToolExecutionGate } from './agent/tools/executor'
+import { createAgentToolExecutor } from './agent/tools/executor'
 import { createReadonlyAgentTools } from './agent/tools/readonly'
 import { createAgentToolRegistry } from './agent/tools/registry'
-import type { AgentMediaEventHandler, AgentTransaction, AgentTool } from './agent/ports'
+import type { JsonObject } from '@musecanvas/contracts'
+import type { AgentMediaEventHandler, AgentTransaction, AgentTool, AgentToolContext } from './agent/ports'
 
 export interface AgentCompositionDependencies {
   readonly transaction: AgentCoreTransaction
@@ -19,7 +20,14 @@ export interface AgentCompositionDependencies {
   readonly mediaEvents: AgentMediaEventHandler
   readonly media?: AgentMediaProposalRunnerPort
   readonly additionalTools?: readonly AgentTool[]
-  readonly assertEffectAllowed?: AgentToolExecutionGate['assertEffectAllowed']
+  /**
+   * Required: the executor must be told whether it is a proposal producer or an
+   * approval enforcer. Leaving this implicit made one optional callback decide
+   * whether every raw media call works or silently fails.
+   */
+  readonly executorApproval:
+    | { readonly mode: 'propose-only' }
+    | { readonly mode: 'enforce'; readonly assertEffectAllowed: (context: AgentToolContext, tool: AgentTool, args: JsonObject) => Promise<void> }
   /** Factories are injectable for composition tests; production uses real factories. */
   readonly runnerFactory?: typeof createAgentRunner
   readonly modelFactory?: typeof createAgentModel
@@ -61,13 +69,17 @@ export function createAgentRuntimeComposition(dependencies: AgentCompositionDepe
           if (typeof deadline !== 'string' || !Number.isFinite(Date.parse(deadline))) throw new Error('AGENT_CONFIG_UNAVAILABLE')
           const scope = { ownerId: row.owner_id, sessionId: wake.sessionId, turnId: wake.turnId }
           const registry = createAgentToolRegistry({ tools, allowlist })
-          const executor = createAgentToolExecutor(registry, {
-            validateArguments(tool, args) {
-              try { registry.validate(tool.name, tool.schemaVersion, args); return true }
-              catch { return false }
-            },
-            assertEffectAllowed: dependencies.assertEffectAllowed,
-          })
+          const validateArguments = (tool: AgentTool, args: JsonObject) => {
+            try { registry.validate(tool.name, tool.schemaVersion, args); return true }
+            catch { return false }
+          }
+          const executor = dependencies.executorApproval.mode === 'enforce'
+            ? createAgentToolExecutor(registry, {
+              mode: 'enforce',
+              validateArguments,
+              assertEffectAllowed: dependencies.executorApproval.assertEffectAllowed,
+            })
+            : createAgentToolExecutor(registry, { mode: 'propose-only', validateArguments })
           const model = (dependencies.modelFactory ?? createAgentModel)({
             query: dependencies.modelQuery, scope, control: { deadlineAt: deadline, request: signal },
             // The secure model factory never uses this weaker legacy seam.

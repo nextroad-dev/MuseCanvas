@@ -1,6 +1,6 @@
 import type { AgentBudgetDTO, AgentDecimal, AgentError, AgentToolCallStatus, AgentTurnDTO, JsonObject, JsonValue, ToolExecutionResult } from '@musecanvas/contracts'
 import {
-  canvasAgentRequestDigest, AgentExecutionBudgetError, AgentRuntimeError, agentRoundCheckpoint, expireAgentToolApproval,
+  canonicalJsonDigest, AgentExecutionBudgetError, AgentRuntimeError, agentRoundCheckpoint, expireAgentToolApproval,
   type AgentCoreClient, type AgentCoreTransaction, type AgentExecutionBudgetRepository,
   type AgentExecutionBudgetReservation, type AgentExecutionRepository, type AgentExecutionState, type AgentRoundRepository,
   type AgentTurnLease, type AgentTurnScope,
@@ -214,8 +214,15 @@ export function createAgentRunner(dependencies: AgentRunnerDependencies): AgentR
               const context: AgentToolContext = { scope, turn: state.turn, round: { roundId: tool.roundId, position: round.position, inputRevision: round.input_revision }, toolCallId: tool.id, sql: sql(client), budget, signal: abort.signal }
               // Canonical proposals are only ever written by the media materializer,
               // so they bypass the model-facing schema and run the approved executor.
-              const result = dependencies.media?.canMaterialize(tool.toolName, tool.toolSchemaVersion) && dependencies.media.isCanonical(tool.arguments)
-                ? await dependencies.media.executeApproved(context, tool.toolName, tool.toolSchemaVersion, tool.arguments)
+              // Registration is still mandatory: canMaterialize only knows names, and
+              // a sync tool must never inherit the approval-gated effect path.
+              const canonical = Boolean(dependencies.media?.canMaterialize(tool.toolName, tool.toolSchemaVersion) && dependencies.media.isCanonical(tool.arguments))
+              if (canonical) {
+                const definition = dependencies.registry.get(tool.toolName, tool.toolSchemaVersion)
+                if (!definition || definition.execution !== 'media_async' || definition.approval !== 'required') throw new Error('AGENT_MEDIA_TOOL_UNAVAILABLE')
+              }
+              const result = canonical
+                ? await dependencies.media!.executeApproved(context, tool.toolName, tool.toolSchemaVersion, tool.arguments)
                 : await dependencies.executor(context, tool.toolName, tool.toolSchemaVersion, tool.arguments)
               if (result.kind === 'failed') throw new AgentToolRejected(result.error)
               if (result.kind === 'pending') {
@@ -314,7 +321,7 @@ export function createAgentRunner(dependencies: AgentRunnerDependencies): AgentR
           const allowlist = new Set(Array.isArray(state.config.toolAllowlist) ? state.config.toolAllowlist.filter((entry): entry is string => typeof entry === 'string') : [])
           const tools: LanguageModelChatTool[] = dependencies.registry.list().filter(tool => allowlist.has(`${tool.name}@v${tool.schemaVersion}`)).map(tool => ({ name: offeredToolName(tool.name, tool.schemaVersion), description: tool.description, parameters: tool.parameters as Record<string, unknown> }))
           const offered = new Set(tools.map(tool => tool.name))
-          const requestDigest = canvasAgentRequestDigest({ instructions: context.system, messages: context.messages as unknown as JsonValue, tools: tools as unknown as JsonValue })
+          const requestDigest = canonicalJsonDigest({ instructions: context.system, messages: context.messages as unknown as JsonValue, tools: tools as unknown as JsonValue })
           const admitted = await dependencies.runtime.withTurnLease(fence, async client => {
             const value = await dependencies.rounds.beginModelRound(client, { scope, position: state.nextRoundPosition, requestDigest, inputRevision: fence.expectedInputRevision, modelReferenceId: config.modelRevisionId })
             const limit = budgetLimit(state.budget, state.turn.deadlineAt)
@@ -363,7 +370,7 @@ export function createAgentRunner(dependencies: AgentRunnerDependencies): AgentR
             await dependencies.rounds.completeModelRound(client, { scope, roundId: admitted.round.roundId, status: 'completed', usage: { ...usage } as JsonObject, checkpoint })
             const rows = await dependencies.rounds.recordToolCalls(client, { scope, roundId: admitted.round.roundId,
               calls: calls.map(({ call, tool }, index) => ({ providerCallId: call.id, toolName: tool.name, toolSchemaVersion: tool.version,
-                arguments: call.arguments as JsonObject, argumentsHash: canvasAgentRequestDigest(call.arguments as JsonValue), idempotencyKey: `round:${admitted.round.position}:${index}:${call.id}` })) })
+                arguments: call.arguments as JsonObject, argumentsHash: canonicalJsonDigest(call.arguments as JsonValue), idempotencyKey: `round:${admitted.round.position}:${index}:${call.id}` })) })
             await dependencies.execution.appendAssistantItem(client, { scope, content: result.text, toolCallIds: rows.map(row => row.toolCallId) })
             for (let index = 0; index < rows.length; index++) {
               await dependencies.execution.appendToolCallItem(client, { scope, toolCallId: rows[index]!.toolCallId,

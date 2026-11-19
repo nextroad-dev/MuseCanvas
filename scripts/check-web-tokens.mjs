@@ -117,7 +117,7 @@ function lineOf(source, index) {
  * printed but do not change the exit code, so files still being migrated do not
  * block CI. Flip an entry to `'fail'` once the codebase is clean for that rule.
  */
-const SEVERITY = { F: 'warn', G: 'warn' }
+const SEVERITY = { F: 'fail', G: 'fail' }
 
 const failures = []
 const warnings = []

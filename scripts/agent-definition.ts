@@ -14,7 +14,7 @@
  * credential:
  *
  *   pnpm --filter @musecanvas/database exec tsx ../../scripts/agent-definition.ts \
- *     --owner <user-uuid> --name 'Canvas assistant' --instructions @./instructions.md \
+ *     --owner <user-uuid> --name 'Creation assistant' --instructions @./instructions.md \
  *     --model-config <model-config-uuid>
  *   # review the printed definition and SQL, then re-run the same command with --apply
  *
@@ -24,7 +24,7 @@
  *   --instructions <value>          required; `@path` reads a UTF-8 file, anything else is inline
  *   --model-config <uuid>           required; language model config with a supported builtin protocol
  *   --tools <name@vN,...>           default list_models@v1,search_assets@v1,get_asset@v1,
- *                                   get_canvas@v1,generate_image@v1,generate_video@v1,edit_image@v1
+ *                                   generate_image@v1,generate_video@v1,edit_image@v1
  *   --max-model-calls <n>           default 12     (1..1000)
  *   --max-tool-calls <n>            default 24     (0..1000)
  *   --max-media-jobs <n>            default 8      (0..1000)
@@ -89,7 +89,7 @@ const MAX_INT64 = 9223372036854775807n
 const MAX_INSTRUCTIONS_BYTES = 16000
 const MAX_TOOLS = 32
 const DEFAULT_TOOLS = [
-  'list_models@v1', 'search_assets@v1', 'get_asset@v1', 'get_canvas@v1',
+  'list_models@v1', 'search_assets@v1', 'get_asset@v1',
   'generate_image@v1', 'generate_video@v1', 'edit_image@v1',
 ].join(',')
 

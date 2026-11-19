@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import test from 'node:test'
-import { AGENT_MEDIA_EVENT_STREAM, AGENT_STREAM, GENERATION_STREAM, OUTBOX_EVENT_TYPES, routeOutboxEvent } from '../../apps/worker/src/queue/outbox-routing'
+import { AGENT_MEDIA_EVENT_STREAM, AGENT_STREAM, AGENT_CONSUMER_GROUP, AGENT_MEDIA_CONSUMER_GROUP, GENERATION_STREAM, OUTBOX_EVENT_TYPES, routeOutboxEvent } from '../../apps/worker/src/queue/outbox-routing'
+import { TRIM_AGENT_STREAM_LUA } from '../../apps/worker/src/queue/stream-retention'
 
 const url = process.env.MUSECANVAS_AGENT_STREAMS_REDIS_URL
 
@@ -22,6 +23,7 @@ test('isolated Redis: Agent wake/media route contract, independent groups and re
   const namespace = `fixture:agent-streams:${randomUUID()}`
   const wakeKey = `${namespace}:wake`
   const mediaKey = `${namespace}:media-events`
+  const retentionKeys: string[] = []
   try {
     await client.connect()
     const sessionId = randomUUID()
@@ -95,9 +97,84 @@ test('isolated Redis: Agent wake/media route contract, independent groups and re
     assert.equal((await client.xRange(mediaKey, '-', '+')).length, 1)
     assert.equal((await client.xRange(mediaKey, '-', '+'))[0]!.message.jobId, jobId)
     assert.notEqual(wakeRoute.stream, mediaRoute.stream)
+
+    // Each guard must dominate a separate call; a small batch or the last-delivered
+    // cursor must not accidentally hide a missing pending/age/unread boundary.
+    for (const group of [AGENT_CONSUMER_GROUP, AGENT_MEDIA_CONSUMER_GROUP]) {
+      const make = async (name: string, ids: string[]) => {
+        const key = `${namespace}:retention:${group}:${name}`
+        retentionKeys.push(key)
+        for (const id of ids) await client.xAdd(key, id, { fixture: id })
+        await client.xGroupCreate(key, group, '0')
+        return key
+      }
+      const trim = (key: string, batch = 100) => client.eval(TRIM_AGENT_STREAM_LUA, { keys: [key], arguments: [group, '60', String(batch)] }) as Promise<unknown[]>
+      const remaining = async (key: string) => (await client.xRange(key, '-', '+')).map(row => row.id)
+
+      // Pending and last-delivered IDs differ by one beyond Lua double precision.
+      const pendingIds = ['1-9007199254740991', '1-9007199254740992', '1-9007199254740993', '2-0']
+      const pendingKey = await make('pending-precision', pendingIds)
+      await client.xReadGroup(group, 'fixture-a', { key: pendingKey, id: '>' }, { COUNT: 3 })
+      await client.xAck(pendingKey, group, [pendingIds[0]!, pendingIds[2]!])
+      assert.equal((await trim(pendingKey))[0], 1, 'pending boundary dominates a large batch and the later delivered cursor')
+      assert.deepEqual(await remaining(pendingKey), pendingIds.slice(1))
+      assert.equal((await client.xPending(pendingKey, group)).pending, 1)
+      const reclaimed = await client.xAutoClaim(pendingKey, group, 'fixture-b', 0, '0-0', { COUNT: 10 })
+      assert.deepEqual(reclaimed.messages.filter(Boolean).map(row => row!.id), [pendingIds[1]])
+      assert.equal(reclaimed.messages[0]?.message.fixture, pendingIds[1], 'pending payload remains reclaimable after trim')
+      await client.xAck(pendingKey, group, pendingIds[1]!)
+      assert.equal((await trim(pendingKey))[0], 1)
+      assert.deepEqual(await remaining(pendingKey), pendingIds.slice(2))
+
+      const unreadIds = ['10-0', '20-0', '30-0', '40-0']
+      const unreadKey = await make('unread', unreadIds)
+      await client.xReadGroup(group, 'fixture-a', { key: unreadKey, id: '>' }, { COUNT: 2 })
+      await client.xAck(unreadKey, group, unreadIds.slice(0, 2))
+      assert.equal((await trim(unreadKey))[0], 1, 'all old entries are ACKed or unread; delivered cursor alone must protect unread entries')
+      assert.deepEqual(await remaining(unreadKey), unreadIds.slice(1))
+      const unread = readMessages(await client.xReadGroup(group, 'fixture-a', { key: unreadKey, id: '>' }, { COUNT: 10 }))
+      assert.deepEqual(unread.map(row => row.id), unreadIds.slice(2))
+      await client.xAck(unreadKey, group, unreadIds.slice(2))
+
+      const time = await client.sendCommand(['TIME']) as string[]
+      const youngTime = Number(time[0]) * 1000
+      const youngIds = ['1-0', `${youngTime}-0`, `${youngTime}-1`]
+      const youngKey = await make('young', youngIds)
+      await client.xReadGroup(group, 'fixture-a', { key: youngKey, id: '>' }, { COUNT: 10 })
+      await client.xAck(youngKey, group, youngIds)
+      assert.equal((await trim(youngKey))[0], 1, 'age cutoff protects a young ACKed entry strictly before last-delivered-id')
+      assert.deepEqual(await remaining(youngKey), youngIds.slice(1))
+      assert.equal((await trim(youngKey))[0], 0)
+      assert.deepEqual(await remaining(youngKey), youngIds.slice(1))
+
+      const batchIds = ['1-0', '2-0', '3-0', '4-0', '5-0']
+      const batchKey = await make('batch', batchIds)
+      await client.xReadGroup(group, 'fixture-a', { key: batchKey, id: '>' }, { COUNT: 10 })
+      await client.xAck(batchKey, group, batchIds)
+      for (let i = 1; i < batchIds.length; i += 1) {
+        assert.equal((await trim(batchKey, 1))[0], 1, 'one eligible entry per bounded sweep')
+        assert.deepEqual(await remaining(batchKey), batchIds.slice(i))
+      }
+      assert.equal((await trim(batchKey, 1))[0], 0)
+      await client.xGroupCreate(batchKey, 'unknown-group', '0')
+      assert.equal((await trim(batchKey))[1], 'unexpected-group')
+      assert.deepEqual(await remaining(batchKey), batchIds.slice(-1))
+
+      const zeroKey = await make('zero-cursor', ['1-0'])
+      assert.equal((await trim(zeroKey))[1], 'no-eligible', 'never-delivered group must not issue XRANGE with exclusive 0-0')
+      assert.deepEqual(await remaining(zeroKey), ['1-0'])
+      const emptyKey = `${zeroKey}:missing`
+      assert.equal((await trim(emptyKey))[1], 'missing-key')
+      const noGroup = `${zeroKey}:no-group`
+      retentionKeys.push(noGroup)
+      await client.xAdd(noGroup, '1-0', { fixture: 'orphan' })
+      assert.equal((await trim(noGroup))[1], 'no-group')
+      await client.xGroupCreate(noGroup, 'wrong-group', '0')
+      assert.equal((await trim(noGroup))[1], 'unexpected-group')
+    }
   } finally {
     assert.match(namespace, /^fixture:agent-streams:[0-9a-f-]{36}$/)
-    try { if (client.isOpen) await client.del([wakeKey, mediaKey]) }
+    try { if (client.isOpen) await client.del([wakeKey, mediaKey, ...retentionKeys]) }
     finally { if (client.isOpen) client.destroy() }
   }
 })

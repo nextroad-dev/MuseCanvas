@@ -508,11 +508,11 @@ test('isolated PostgreSQL: migrations, leases, rollback, microseconds and index 
       assert.equal(lease.lease_owner, 'p4-fixture'); assert.equal(lease.fencing_token, '1'); assert.ok(lease.cancel_requested_at)
       await assert.rejects(core.steer(actor, running.turn.id, { clientMessageId: randomUUID(), content: 'cannot accept after cancel' }), { code: 'CONFLICT' })
 
-      const { canvasAgentRequestDigest } = await import('../../packages/database/src/repositories/canvas-agent')
+      const { canonicalJsonDigest } = await import('../../packages/database/src/canonical-json-digest')
       const approvalsSession = await core.createSession(actor, { clientRequestId: 'p4-approvals', agentDefinitionId: activeDefinition, definitionVersion: 1 })
       const awaiting = await core.message(actor, approvalsSession.id, { clientMessageId: randomUUID(), content: 'approval' })
       await pool.query("UPDATE agent_turns SET status='waiting_approval' WHERE id=$1", [awaiting.turn.id])
-      const hash = canvasAgentRequestDigest({})
+      const hash = canonicalJsonDigest({})
       const round = (await pool.query("INSERT INTO agent_model_rounds(session_id,turn_id,position,request_digest,input_revision,status,model_reference_id) VALUES($1,$2,1,$3,1,'recorded',$4) RETURNING id", [approvalsSession.id, awaiting.turn.id, hash, coreModelRevision])).rows[0].id
       const makeApproval = async (position: number, expired = false) => {
         const tool = (await pool.query("INSERT INTO agent_tool_calls(session_id,turn_id,round_id,position,provider_call_id,tool_name,tool_schema_version,arguments,arguments_hash,status,idempotency_key) VALUES($1,$2,$3,$4,$5,'fixture',1,'{}',$6,'waiting_approval',$5) RETURNING id", [approvalsSession.id, awaiting.turn.id, round, position, `p4-call-${position}`, hash])).rows[0].id

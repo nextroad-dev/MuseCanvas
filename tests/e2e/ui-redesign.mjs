@@ -41,7 +41,6 @@ const SESSION_COOKIE = 'ui-redesign-fixture'
 const FIXTURE_ORIGIN = `http://127.0.0.1:${API_PORT}`
 const WEB_ORIGIN = `http://localhost:${WEB_PORT}`
 const MEDIA_URL = `${FIXTURE_ORIGIN}/fixture.svg`
-const CANVAS_ID = '33333333-3333-4333-8333-333333333333'
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 const NOW = '2026-10-06T00:00:00.000Z'
 
@@ -151,44 +150,6 @@ const jobs = [
   },
 ]
 
-const canvases = [
-  { id: CANVAS_ID, title: '首个创作对话', revision: 3, coverAssetId: null, createdAt: NOW, updatedAt: NOW },
-  { id: '77777777-7777-4777-8777-777777777771', title: '第二个创作对话', revision: 1, coverAssetId: null, createdAt: NOW, updatedAt: NOW },
-]
-
-const longToolArgs = {
-  mode: 'image_to_image',
-  modelId: imageModel.id,
-  parameters: { size: '1024x1024', quality: 'high' },
-  inputs: [{ role: 'reference_image', position: 0, assetId: assets[1].id }],
-  notes: '这一段 JSON 故意足够长，用于验证工具调用参数在时间线中折叠而不是形成第二个滚动区域。'.repeat(3),
-}
-
-const historyMessages = []
-for (let i = 0; i < 6; i += 1) {
-  historyMessages.push({ id: `msg-user-${i}`, seq: i * 3 + 1, turnId: `turn-${i}`, role: 'user', content: `第 ${i + 1} 轮：请生成一张暖白工作室风格的合成画面。`, createdAt: NOW })
-  historyMessages.push({
-    id: `msg-assistant-${i}`,
-    seq: i * 3 + 2,
-    turnId: `turn-${i}`,
-    role: 'assistant',
-    content: `这是第 ${i + 1} 轮 Agent 回复，用于确认时间线在长历史下的滚动与排版表现。`,
-    toolCalls: [{ id: `call-${i}`, name: 'generate_image', arguments: longToolArgs }],
-    createdAt: NOW,
-  })
-  historyMessages.push({ id: `msg-tool-${i}`, seq: i * 3 + 3, turnId: `turn-${i}`, role: 'tool', content: JSON.stringify({ toolCallId: `call-${i}`, success: true, result: { items: [{ id: assets[i % 4].id, note: 'ok' }], note: '工具结果用于验证工具输出为纯文本并有自己的展开入口。' } }), createdAt: NOW })
-}
-
-const history = {
-  sessionId: 'session-fixture',
-  messages: historyMessages,
-  pendingJobs: [],
-  requireConfirmation: true,
-  autoContinuationCount: 0,
-  nextAfterSeq: null,
-  nextBeforeSeq: null,
-}
-
 const adminModels = [
   { ...imageModel, name: '合成图像模型', presetId: 'preset-image', baseUrl: 'https://api.example.invalid/v1', capabilitiesJson: '{}', defaultsJson: '{}' },
   { ...videoModel, name: '合成视频模型', presetId: 'preset-video', baseUrl: 'https://api.example.invalid/v1', capabilitiesJson: '{}', defaultsJson: '{}' },
@@ -268,28 +229,21 @@ function fixtureRespond(method, pathname, search, cookie) {
   }
   if (pathname === '/api/account/oauth') return { status: 200, body: { success: true, data: [] } }
   if (pathname === '/api/auth/oauth/providers') return { status: 200, body: { success: true, data: { providers: [{ provider: 'github', label: 'GitHub', enabled: true }, { provider: 'google', label: 'Google', enabled: false }] } } }
-  if (pathname === '/api/canvas-agent/status') {
-    return { status: 200, body: { success: true, data: { enabled: true, available: true, reason: 'ready', maxToolCallsPerTurn: 12, maxJobsPerTurn: 4, timeoutMs: 120000, maxAutoContinuations: 3 } } }
-  }
-  if (pathname === '/api/canvases') {
-    if (!authed) return { status: 401, body: { success: false, error: { code: 'UNAUTHORIZED', message: 'fixture anonymous' } } }
-    return { status: 200, body: { success: true, data: { items: canvases, nextCursor: null } } }
-  }
-  const canvasMatch = pathname.match(/^\/api\/canvases\/([0-9a-f-]+)$/i)
-  if (canvasMatch) {
-    const found = canvases.find((c) => c.id === canvasMatch[1])
-    return { status: 200, body: { success: true, data: { ...(found ?? canvases[0]), scene: { nodes: [], edges: [] } } } }
-  }
-  if (/^\/api\/canvases\/[0-9a-f-]+\/agent\/history$/i.test(pathname)) {
-    return { status: 200, body: { success: true, data: history } }
-  }
   if (pathname.startsWith('/api/setup/status')) return { status: 200, body: { success: true, data: setupStatus } }
   if (pathname === '/api/setup/config') return { status: 200, body: { success: true, data: setupConfig } }
   if (pathname === '/api/setup/site') return { status: 200, body: { success: true, data: setupConfig.site } }
   if (pathname === '/api/setup/smtp') return { status: 200, body: { success: true, data: setupConfig.smtp } }
   if (pathname === '/api/setup/storage') return { status: 200, body: { success: true, data: setupConfig.storage } }
   if (pathname === '/api/setup/runtime') return { status: 200, body: { success: true, data: setupConfig.runtime } }
-  if (pathname === '/api/admin/dashboard') return { status: 200, body: { success: true, data: { totalUsers: adminUsers.length, totalJobs: jobs.length, successRate7d: 97.5, failedJobs7d: 1 } } }
+  if (pathname === '/api/admin/dashboard') {
+    const days = Array.from({ length: 7 }, (_, idx) => ({
+      date: `2026-10-0${idx + 1}`,
+      total: 4,
+      succeeded: 3,
+      failed: 1,
+    }))
+    return { status: 200, body: { success: true, data: { totalUsers: adminUsers.length, totalJobs: jobs.length, successRate7d: 97.5, failedJobs7d: 1, days } } }
+  }
   if (pathname === '/api/admin/jobs') return { status: 200, body: { success: true, data: { items: adminJobs, total: adminJobs.length, hasMore: false } } }
   if (pathname === '/api/admin/users') return { status: 200, body: { success: true, data: { items: adminUsers, total: adminUsers.length, hasMore: false } } }
   if (pathname === '/api/admin/invitations') return { status: 200, body: { success: true, data: { items: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1', used: false, revoked: false, createdAt: NOW }] } } }
@@ -301,7 +255,6 @@ function fixtureRespond(method, pathname, search, cookie) {
   if (pathname === '/api/admin/oauth-providers') return { status: 200, body: { success: true, data: oauthProviders } }
   if (pathname === '/api/admin/prompt-templates') return { status: 200, body: { success: true, data: null } }
   if (pathname === '/api/admin/prompt-optimization-settings') return { status: 200, body: { success: true, data: { enabled: false, allowUserReadFinalPrompt: false, languageModelConfigId: null, timeoutMs: 60000, updatedAt: NOW } } }
-  if (pathname === '/api/admin/canvas-agent-settings') return { status: 200, body: { success: true, data: { enabled: true, languageModelConfigId: null, maxToolCallsPerTurn: 12, maxJobsPerTurn: 4, timeoutMs: 120000, maxAutoContinuations: 3 } } }
   // Unknown GETs never 404 here: callers must see the empty envelope, not an error.
   return { status: 200, body: { success: true, data: { ...emptyPage } } }
 }
@@ -380,7 +333,7 @@ async function setThemeScript(theme) {
   if (themeScriptId) await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: themeScriptId })
   const added = await send('Page.addScriptToEvaluateOnNewDocument', {
     // Runs before the app's own first-paint bootstrap reads localStorage.
-    source: `try{localStorage.setItem('muse-theme',${JSON.stringify(theme)})}catch(e){}`,
+    source: `try{localStorage.setItem('musecanvas-theme',${JSON.stringify(theme)})}catch(e){}`,
   })
   themeScriptId = added.identifier
 }
@@ -590,34 +543,36 @@ const MEASURE_SRC = `(${measurePage.toString()})()`
 // Matrix definitions
 // ---------------------------------------------------------------------------
 
-const FULL_ROUTES = ['/', '/terms', '/privacy', '/login', '/setup', '/generate', '/library', '/account', '/admin', '/admin/jobs', '/admin/language-models', '/admin/media-models', '/admin/oauth', '/admin/prompt-templates', '/admin/settings', '/admin/users']
+const FULL_ROUTES = ['/', '/terms', '/privacy', '/login', '/setup', '/generate', '/library', '/account', '/admin', '/admin/users', '/admin/invitations', '/admin/models', '/admin/providers', '/admin/plugins', '/admin/prompt-templates', '/admin/jobs', '/admin/oauth', '/admin/settings']
 const ANON_ROUTES = new Set(['/', '/terms', '/privacy', '/login', '/setup'])
 const ADMIN_ROUTES = new Set(FULL_ROUTES.filter((r) => r.startsWith('/admin')))
 const REPRESENTATIVE = ['/', '/generate', '/library', '/admin', '/admin/users', '/terms']
 const REP_SIZES = [[320, 568], [768, 900], [959, 900], [960, 900], [961, 900], [1279, 900], [1280, 900], [1920, 1080]]
 
-const routeHref = (route) => (route === '/generate' ? `/generate?canvas=${CANVAS_ID}` : route)
+const routeHref = (route) => route
 const slug = (route) => (route === '/' ? 'home' : route.slice(1).replace(/\//g, '-'))
 
 // Proof that the browser really rendered fixture data (not a client-API error/empty
 // state): each probe must appear in the page text. Without this the geometry checks
 // could pass on a broken data path.
 const ROUTE_PROBES = {
-  '/': '把灵感整理成',
+  '/': 'MuseCanvas',
   '/terms': '用户协议',
   '/privacy': '隐私政策',
   '/login': 'MuseCanvas',
-  '/setup': '只读检查',
+  '/setup': '系统初始化',
   '/library': '合成作品 1',
   '/account': 'ui-fixture@example.invalid',
-  '/generate': '首个创作对话',
-  '/admin': '合成图像模型',
+  '/generate': 'MuseCanvas',
+  '/admin': '概览',
   '/admin/jobs': '合成图像模型',
   '/admin/users': 'member-one@example.invalid',
-  '/admin/language-models': '合成语言模型',
-  '/admin/media-models': '合成图像模型',
+  '/admin/invitations': '邀请码',
+  '/admin/models': '合成图像模型',
+  '/admin/providers': '合成凭据 A',
+  '/admin/plugins': '插件管理',
   '/admin/oauth': 'GitHub',
-  '/admin/settings': '站点信息',
+  '/admin/settings': '系统配置',
   '/admin/prompt-templates': '提示词模板',
 }
 
@@ -848,7 +803,7 @@ try {
       if (probe && !measured.pageText.includes(probe)) fail('fixture-content', { probe, textHead: measured.pageText.slice(0, 160) })
 
       if (ADMIN_ROUTES.has(spec.route) && spec.width >= 960) {
-        if (measured.adminSidebarWidth === null || Math.abs(measured.adminSidebarWidth - 260) > 1) {
+        if (measured.adminSidebarWidth === null || Math.abs(measured.adminSidebarWidth - 256) > 1) {
           fail('admin-sidebar', { width: measured.adminSidebarWidth })
         }
       }

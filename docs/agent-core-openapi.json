@@ -35,12 +35,6 @@
           "200": {
             "$ref": "#/components/responses/SessionList"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "400": {
             "description": "Strict body, query or header validation failed",
             "content": {
@@ -71,6 +65,9 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -80,6 +77,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
@@ -104,15 +104,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -133,6 +124,12 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -142,6 +139,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). clientRequestId is owner-global. Same key/body replays the frozen response even when admission is closed or definition retired; different body is 409. New sessions require AGENT_CORE_ADMISSION_READY=true and validated active owner/system definition."
@@ -168,12 +168,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -194,6 +188,9 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -203,6 +200,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
@@ -232,15 +232,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -261,6 +252,12 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -270,6 +267,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). clientMessageId is scoped to the session and binds the session/content digest. Active Turn receives persistent steering; replay adds no revision/item/wake. New Turn requires admission-ready; existing active Turn steering does not. Cancel-requested active Turn rejects new input (409)."
@@ -299,15 +299,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -328,6 +319,12 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -337,6 +334,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
@@ -385,15 +385,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -414,6 +405,12 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -423,6 +420,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Cursor is canonical decimal <= int64 maximum. Last-Event-ID is sessionId:cursor and must equal query cursor if both supplied (409 otherwise); cross-session/invalid IDs are 400. Ahead cursor is 409 before streaming. Frames have id/event/data. ready does not advance cursor. Heartbeat every ~5s; PG polling ~500ms, no connection held during waits; closes normally after 25s. Reconnect with last delivered ID; retention/gap/backlog emits resync.required and closes: fetch consistent snapshot, paginate all items until hasMore=false up to lastItemSequence, then reconnect at snapshot eventCursor. Max 500 durable events/~1MB per connection; slow/aborted readers cannot cancel Turns."
@@ -446,12 +446,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -472,6 +466,9 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -481,6 +478,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution."
@@ -507,15 +507,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -536,6 +527,12 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -545,6 +542,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). Terminal or already cancel-requested replay is idempotent. Safe queued/waiting turns cancel locally only when all tool calls and approvals are terminal and all reservations are settled or released; unknown or retained dependencies preserve status/active turn/leases, recording cancellation and a durable wake for a future Runner. Running work likewise only records cancellation and a durable wake, preserving its lease."
@@ -571,15 +571,6 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          },
           "401": {
             "description": "Authentication required",
             "content": {
@@ -600,6 +591,12 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -609,6 +606,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400)."
@@ -635,6 +635,26 @@
           "400": {
             "$ref": "#/components/responses/Invalid"
           },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
@@ -655,8 +675,52 @@
             },
             "description": "Conflicting decision/hash/cancel state, or persisted approval expiry with visible data."
           },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). Decision records intent only; checks immutable arguments hash, expiry, current cancellation and model/pricing reservation binding. Identical final decision replays fixed decision_revision; opposite decision/hash is 409. Rejection never cancels entire Turn; acceptance never blindly queues it."
+      }
+    },
+    "/api/agent/sessions/{id}/artifacts": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "listAgentArtifacts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactCursor"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/NoLastEventId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ArtifactPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
           },
           "401": {
             "description": "Authentication required",
@@ -678,6 +742,9 @@
               }
             }
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "description": "Bounded request rate exceeded",
             "content": {
@@ -687,9 +754,454 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
-        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner; missing and cross-owner resources return the same 404. No Runner/tool/provider execution. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Body request ID is the sole authority; any Idempotency-Key header is rejected (400). Decision records intent only; checks immutable arguments hash, expiry, current cancellation and model/pricing reservation binding. Identical final decision replays fixed decision_revision; opposite decision/hash is 409. Rejection never cancels entire Turn; acceptance never blindly queues it."
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner using the muse_session cookie; missing and cross-owner resources return the same 404. Private annotations never append Agent items or events, enter model context, or start Runner/tool/provider execution. No admission-ready gate is required. Any Idempotency-Key or Last-Event-ID header is rejected (400). Shared per-owner read rate limit: 90 requests per 60 seconds. Only limit and cursor query keys are accepted, each at most once; query string max 1024 characters. limit is a canonical positive decimal integer from 1 to 100, default 50. cursor is an independent opaque base64url value of 1 to 512 characters, bound to this resource scope; malformed, noncanonical or cross-scope cursors return 400. Artifacts are deduplicated and ordered by source item sequence descending, then artifact ID descending. Text comes from assistant messages; media requires committed owner/tool/job/output proof."
+      }
+    },
+    "/api/agent/sessions/{id}/artifacts/{artifactId}": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "getAgentArtifact",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactId"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/NoLastEventId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Artifact"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner using the muse_session cookie; missing and cross-owner resources return the same 404. Private annotations never append Agent items or events, enter model context, or start Runner/tool/provider execution. No admission-ready gate is required. Any Idempotency-Key or Last-Event-ID header is rejected (400). Shared per-owner read rate limit: 90 requests per 60 seconds. No query parameters are accepted. Returns the immutable artifact with safe metadata only."
+      }
+    },
+    "/api/agent/sessions/{id}/artifacts/{artifactId}/threads": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "listAgentArtifactThreads",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactId"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactCursor"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/NoLastEventId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ArtifactThreadsPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner using the muse_session cookie; missing and cross-owner resources return the same 404. Private annotations never append Agent items or events, enter model context, or start Runner/tool/provider execution. No admission-ready gate is required. Any Idempotency-Key or Last-Event-ID header is rejected (400). Shared per-owner read rate limit: 90 requests per 60 seconds. Only limit and cursor query keys are accepted, each at most once; query string max 1024 characters. limit is a canonical positive decimal integer from 1 to 100, default 50. cursor is an independent opaque base64url value of 1 to 512 characters, bound to this resource scope; malformed, noncanonical or cross-scope cursors return 400. Threads are ordered by creation ordinal descending."
+      },
+      "post": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "createAgentArtifactThread",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactId"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/NoLastEventId"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/CreateArtifactThread"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/ArtifactThread"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The owner-scoped clientRequestId was already used with a different operation, scope or payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner using the muse_session cookie; missing and cross-owner resources return the same 404. Private annotations never append Agent items or events, enter model context, or start Runner/tool/provider execution. No admission-ready gate is required. Any Idempotency-Key or Last-Event-ID header is rejected (400). No query parameters are accepted. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Shared per-owner write rate limit: 30 requests per 60 seconds. Body clientRequestId UUID is the sole authority for idempotency and is scoped to the owner across create/reply operations; reuse with a different operation, scope or payload returns 409. Identical replay returns the current thread without appending another message. Creates a version-1 thread with an exact artifact-compatible anchor and its initial message. Message body max 8000 UTF-8 bytes; text anchor quote max 32000 UTF-8 bytes."
+      }
+    },
+    "/api/agent/sessions/{id}/artifacts/{artifactId}/threads/{threadId}": {
+      "get": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "getAgentArtifactThread",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactId"
+          },
+          {
+            "$ref": "#/components/parameters/ThreadId"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/NoLastEventId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ArtifactThread"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner using the muse_session cookie; missing and cross-owner resources return the same 404. Private annotations never append Agent items or events, enter model context, or start Runner/tool/provider execution. No admission-ready gate is required. Any Idempotency-Key or Last-Event-ID header is rejected (400). Shared per-owner read rate limit: 90 requests per 60 seconds. No query parameters are accepted. Returns the thread and at most 100 messages including the initial message."
+      },
+      "patch": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "resolveAgentArtifactThread",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactId"
+          },
+          {
+            "$ref": "#/components/parameters/ThreadId"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/NoLastEventId"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ResolveArtifactThread"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ArtifactThread"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner using the muse_session cookie; missing and cross-owner resources return the same 404. Private annotations never append Agent items or events, enter model context, or start Runner/tool/provider execution. No admission-ready gate is required. Any Idempotency-Key or Last-Event-ID header is rejected (400). No query parameters are accepted. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Shared per-owner write rate limit: 30 requests per 60 seconds. Sets resolved to true or false; supports resolving and reopening. Repeating the same state is idempotent, preserves the first resolvedAt while resolved and clears it on reopening. No clientRequestId is accepted."
+      }
+    },
+    "/api/agent/sessions/{id}/artifacts/{artifactId}/threads/{threadId}/replies": {
+      "post": {
+        "tags": [
+          "agent-core"
+        ],
+        "operationId": "replyAgentArtifactThread",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactId"
+          },
+          {
+            "$ref": "#/components/parameters/ThreadId"
+          },
+          {
+            "$ref": "#/components/parameters/NoIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/NoLastEventId"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/CreateArtifactReply"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/ArtifactThread"
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive actor or invalid mutation Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The clientRequestId conflicts with a previous request or the thread already has 100 messages including the initial message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bounded request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Feature-disabled namespace returns 404 before authentication, DB or rate Redis. Enabled requires an active authenticated owner using the muse_session cookie; missing and cross-owner resources return the same 404. Private annotations never append Agent items or events, enter model context, or start Runner/tool/provider execution. No admission-ready gate is required. Any Idempotency-Key or Last-Event-ID header is rejected (400). No query parameters are accepted. Same-origin validation required. JSON body max 40000 bytes and 5 second read deadline. Shared per-owner write rate limit: 30 requests per 60 seconds. Body clientRequestId UUID is the sole authority for idempotency and is scoped to the owner across create/reply operations; reuse with a different operation, scope or payload returns 409. Identical replay returns the current thread without appending another message. Appends a private reply with at most 8000 UTF-8 bytes. At most 100 messages including the initial message (99 replies); another new reply returns 409, but an identical replay at the cap still succeeds."
       }
     }
   },
@@ -742,6 +1254,37 @@
         "schema": {
           "type": "string"
         }
+      },
+      "ArtifactId": {
+        "name": "artifactId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactId"
+        }
+      },
+      "ThreadId": {
+        "name": "threadId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Uuid"
+        }
+      },
+      "ArtifactCursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactCursor"
+        }
+      },
+      "NoLastEventId": {
+        "name": "Last-Event-ID",
+        "in": "header",
+        "description": "Rejected on Artifact endpoints; event replay headers are not Artifact pagination cursors.",
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "requestBodies": {
@@ -782,6 +1325,36 @@
             "schema": {
               "type": "object",
               "additionalProperties": false
+            }
+          }
+        }
+      },
+      "CreateArtifactThread": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateArtifactThread"
+            }
+          }
+        }
+      },
+      "CreateArtifactReply": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateArtifactReply"
+            }
+          }
+        }
+      },
+      "ResolveArtifactThread": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ResolveArtifactThread"
             }
           }
         }
@@ -897,6 +1470,46 @@
             }
           }
         }
+      },
+      "Artifact": {
+        "description": "Owner-scoped Artifact response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactEnvelope"
+            }
+          }
+        }
+      },
+      "ArtifactPage": {
+        "description": "Owner-scoped ArtifactPage response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactPageEnvelope"
+            }
+          }
+        }
+      },
+      "ArtifactThread": {
+        "description": "Owner-scoped ArtifactThread response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactThreadEnvelope"
+            }
+          }
+        }
+      },
+      "ArtifactThreadsPage": {
+        "description": "Owner-scoped ArtifactThreadsPage response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactThreadsPageEnvelope"
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -931,9 +1544,6 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
-          },
-          "defaultCanvasId": {
-            "$ref": "#/components/schemas/Uuid"
           }
         }
       },
@@ -954,6 +1564,14 @@
             "maxLength": 32000,
             "x-maxUtf8Bytes": 32000,
             "description": "Nonblank PostgreSQL-compatible UTF-8 text. Maximum 32000 UTF-8 bytes (x-maxUtf8Bytes); a multibyte string may pass maxLength and still be rejected by runtime byte validation. No NUL or unpaired surrogate."
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 4,
+            "description": "Managed inputs already staged for this owner, e.g. a prepared inpaint mask plus its source. Order is canonicalised before the idempotency digest, so the same set in any order is the same request.",
+            "items": {
+              "$ref": "#/components/schemas/MessageAttachmentRef"
+            }
           }
         }
       },
@@ -1014,7 +1632,6 @@
           "ownerId",
           "agentDefinitionId",
           "definitionVersion",
-          "defaultCanvasId",
           "activeTurnId",
           "inputRevision",
           "nextItemSequence",
@@ -1035,16 +1652,6 @@
           },
           "definitionVersion": {
             "type": "integer"
-          },
-          "defaultCanvasId": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Uuid"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "activeTurnId": {
             "anyOf": [
@@ -2057,6 +2664,618 @@
         ],
         "discriminator": {
           "propertyName": "type"
+        }
+      },
+      "MessageAttachmentRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "id",
+          "role",
+          "checksum",
+          "width",
+          "height",
+          "mimeType"
+        ],
+        "description": "A managed input a turn may name. Ownership, checksum, dimensions and liveness are verified server-side at admission; a mask additionally requires a live 0045 preparation identity bound to the paired reference_image checksum. The client proves shape only.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "upload",
+              "asset"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "reference_image",
+              "mask"
+            ]
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32768
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32768
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ]
+          },
+          "preparationVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "sourceChecksum": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Required with preparationVersion for a mask; must equal the paired reference_image checksum."
+          }
+        }
+      },
+      "ArtifactId": {
+        "type": "string",
+        "minLength": 41,
+        "maxLength": 42,
+        "pattern": "^([Tt][Ee][Xx][Tt]|[Mm][Ee][Dd][Ii][Aa]):[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+        "description": "text:<source item UUID> or media:<asset UUID>. Path values accept either case and normalize to lowercase; URI-encode the complete segment once, including the colon."
+      },
+      "ArtifactCursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "description": "Opaque canonical base64url cursor. Artifact and thread pages use independent cursor kinds, bound to the session and, for threads, the artifact. Never substitute an item/event decimal cursor or a cursor from another scope."
+      },
+      "Artifact": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TextArtifact"
+          },
+          {
+            "$ref": "#/components/schemas/MediaArtifact"
+          }
+        ],
+        "description": "Immutable version-1 text or media artifact. Contains safe metadata only, never a storage URL or authorization to read media bytes."
+      },
+      "TextArtifact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessionId",
+          "turnId",
+          "sourceItemId",
+          "version",
+          "createdAt",
+          "id",
+          "kind",
+          "content"
+        ],
+        "properties": {
+          "sessionId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "turnId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "sourceItemId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^text:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "kind": {
+            "const": "text"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "MediaArtifact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessionId",
+          "turnId",
+          "sourceItemId",
+          "version",
+          "createdAt",
+          "id",
+          "kind",
+          "assetId",
+          "available",
+          "width",
+          "height",
+          "durationMs"
+        ],
+        "properties": {
+          "sessionId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "turnId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "sourceItemId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^media:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "video"
+            ]
+          },
+          "assetId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "available": {
+            "type": "boolean",
+            "description": "False when the backing media no longer has live availability; annotation snapshots retain safe metadata."
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ArtifactAnchor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "const": "whole"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "start",
+              "end",
+              "quote"
+            ],
+            "properties": {
+              "kind": {
+                "const": "text"
+              },
+              "start": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32000,
+                "x-maxUtf8Bytes": 32000,
+                "pattern": "^[^\u0000]+$",
+                "description": "Exact selected text, at most 32000 UTF-8 bytes; whitespace is allowed."
+              }
+            },
+            "description": "Text artifacts only. UTF-16 offsets: start inclusive, end exclusive, start < end <= content.length. quote must equal content.slice(start, end); neither offset may split a surrogate pair."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "x",
+              "y"
+            ],
+            "properties": {
+              "kind": {
+                "const": "image_point"
+              },
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "description": "Image artifacts only; coordinates are normalized to [0, 1]."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "properties": {
+              "kind": {
+                "const": "image_rect"
+              },
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1
+              }
+            },
+            "description": "Image artifacts only; coordinates and dimensions are normalized. width and height must be positive, x + width <= 1 and y + height <= 1."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "timeMs"
+            ],
+            "properties": {
+              "kind": {
+                "const": "video"
+              },
+              "timeMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "description": "Video artifacts only; durationMs must be non-null and timeMs <= durationMs."
+          }
+        ],
+        "description": "Strict anchor union checked against the immutable artifact. whole is valid for every kind; text, image and video anchors must match the artifact kind."
+      },
+      "ArtifactMessageBody": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8000,
+        "x-maxUtf8Bytes": 8000,
+        "pattern": "^(?=[sS]*S)[^\u0000]+$",
+        "description": "Nonblank PostgreSQL-compatible UTF-8 text, at most 8000 UTF-8 bytes. No NUL or unpaired surrogate. A multibyte string may pass maxLength and still be rejected by runtime byte validation."
+      },
+      "ArtifactThreadMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "body",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "body": {
+            "$ref": "#/components/schemas/ArtifactMessageBody"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ArtifactThread": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "artifactId",
+          "version",
+          "anchor",
+          "resolved",
+          "resolvedAt",
+          "messages",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "artifactId": {
+            "$ref": "#/components/schemas/ArtifactId"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/ArtifactAnchor"
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/ArtifactThreadMessage"
+            },
+            "description": "Initial message followed by replies in ordinal order. At most 100 messages including the initial message (99 replies)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "description": "Private owner-only annotation, separate from Agent items, events and model context. resolvedAt is null while unresolved."
+      },
+      "ArtifactPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ArtifactThreadsPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/ArtifactThread"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CreateArtifactThread": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientRequestId",
+          "version",
+          "anchor",
+          "body"
+        ],
+        "properties": {
+          "clientRequestId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/ArtifactAnchor"
+          },
+          "body": {
+            "$ref": "#/components/schemas/ArtifactMessageBody"
+          }
+        }
+      },
+      "CreateArtifactReply": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientRequestId",
+          "body"
+        ],
+        "properties": {
+          "clientRequestId": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "body": {
+            "$ref": "#/components/schemas/ArtifactMessageBody"
+          }
+        }
+      },
+      "ResolveArtifactThread": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resolved"
+        ],
+        "properties": {
+          "resolved": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ArtifactEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/Artifact"
+          }
+        }
+      },
+      "ArtifactPageEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ArtifactPage"
+          }
+        }
+      },
+      "ArtifactThreadEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ArtifactThread"
+          }
+        }
+      },
+      "ArtifactThreadsPageEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ArtifactThreadsPage"
+          }
         }
       }
     },

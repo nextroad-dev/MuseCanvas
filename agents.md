@@ -2,7 +2,7 @@
 
 本文档为在 MuseCanvas 项目中工作的 AI 智能体规范与协作准则。所有在本代码库中执行任务的 Agent 必须严格遵守 **Plan & Execute** 范式与 **多 Agent 协同（Multi-Agent Collaboration）** 流程。
 
-> ⚠️ **画布（Canvas）功能已决策废弃（2026-11-18）**：前端 `apps/web` 禁止新增画布相关代码，现有触点待统一移除；后端暂时保留冻结。凡涉及前端或 Agent 链路的改动，先阅读 `docs/canvas-deprecation.md`。
+> ⚠️ **画布（Canvas）功能已决策废弃（2026-11-18），后端代码已彻底删除**：前端 `apps/web` 禁止新增画布相关代码（`/api/canvases` 已返回 404），现有触点待统一移除；`packages/contracts` 仅保留 `@deprecated` 类型 shim。凡涉及前端或 Agent 链路的改动，先阅读 `docs/canvas-deprecation.md`。
 
 ---
 
@@ -72,7 +72,7 @@ MuseCanvas
 
 ### 3. 状态管理分工原则
 - **服务端状态 $\to$ TanStack Query 托管**：
-  - 用户会话、可用模型、任务列表、图库资产、积分余额与管理端数据全部由 TanStack Query 维护；
+  - 用户会话、可用模型、任务列表、图库资产与管理端数据全部由 TanStack Query 维护；
   - 数据变更后通过 `queryClient.invalidateQueries` 精确刷新，彻底消除原 Pinia 中 `generation` 与 `library` 的双向环形耦合。
 - **易失性客户端 UI 状态 $\to$ Zustand 管理**：
   - 仅用于管理页面表单、草稿提示词、生成参数、图库多选与列数切换等易失性 UI 状态；

@@ -26,8 +26,8 @@
 当前仓库已经具备一条可复用的媒体闭环：
 
 ```text
-API request
-  -> createGenerationJob()
+Agent tool execution (POST /generations is gone; media is Agent-only)
+  -> prepareGeneration() + createGenerationInTransaction()
   -> generation_jobs + generation_job_inputs + outbox_events
   -> Outbox dispatch lease
   -> Redis generation stream
@@ -40,7 +40,7 @@ API request
 
 证据：
 
-- `apps/api/src/modules/generations/create-job.ts:createGenerationJob`
+- `packages/media-service/src/commands/create-job.ts:prepareGeneration, createGenerationInTransaction`
 - `apps/worker/src/queue/index.ts:dispatchOutbox, consume`
 - `apps/worker/src/jobs/index.ts:processJob, persistJobSuccess, persistJobFailure`
 - `packages/database/src/repositories/provider-runs.ts:updateProviderRunState, acquireWorkerLease`
@@ -168,7 +168,7 @@ V1 的 Agent 工具只需创建标准 `generation_jobs`，不能直接调用 Pro
 - `client-api.ts` 为浏览器同源 API 层，`server-api.ts` 为 RSC 服务端层。
 - `useCanvasAgent`、`agent-stream`、`agent-timeline`、`agent-composer` 已形成 Canvas Agent Client 基础。
 - Canvas 和 Agent 主要 hook 使用 TanStack Query；易失性草稿/视口适合 Zustand。
-- `GenerateView` 当前直连 `clientApi.generations.create`，主要展示图像生成；视频和部分 Agent 入口仍有限制。
+- `GenerateView` 与直连 `clientApi.generations.create` 已于 2026-11-19 随生成 API 一并删除；生成只经 Agent 工具执行。
 - 当前工作区尚无正式 Canvas/Agent 页面入口，需增加工作台路由和 Client Island。
 - `AssetDto`、`GenerationJobDto` 等部分 DTO 仍定义在 `apps/web/src/shared/types`，跨端共享尚未完全收敛到 contracts。
 - 当前 library detail 的历史读取存在“最近 100 条资产 fallback”，不能作为长期 Canvas 引用依据。
@@ -415,7 +415,7 @@ interface MediaModelCapabilities {
 
 #### 共享媒体创建命令：新增 `packages/media-service`
 
-当前 `apps/api/src/modules/generations/create-job.ts:createGenerationJob` 返回 `NextResponse`，依赖 API 的 `Actor`、DTO signer、runtime settings 和 generation-upload helpers。`prepareImageEdit` 也返回 HTTP 错误，并通过 `defaultImageEditPorts` 绑定 API storage。两者都不能直接搬进 Worker。
+当前 `apps/api/src/modules/jobs/create-job.ts:createGenerationJob` 返回 `NextResponse`，依赖 API 的 `Actor`、DTO signer、runtime settings 和 generation-upload helpers。`prepareImageEdit` 也返回 HTTP 错误，并通过 `defaultImageEditPorts` 绑定 API storage。两者都不能直接搬进 Worker。
 
 V1 新增一个有实际跨 app 复用需求的服务端包；domain 继续只承载纯规则，暂不新增 `agent-runtime` 或 `agent-tools` package：
 
@@ -435,7 +435,7 @@ packages/media-service/
 
 包依赖 `contracts`、`domain`、`database`、`providers`（均 `workspace:*`）及直接使用的类型依赖；API 与 Worker 新增 `@musecanvas/media-service: workspace:*`。对象存储 driver 由应用注入，不在共享包创建 Next handler、API signer、Redis client 或长期服务。
 
-- API 原 `createGenerationJob` 保留签名作为 HTTP adapter：解析 body 后调用共享命令，将纯结果序列化为现有 `202` job DTO，将领域错误转成 `fail`。
+- API 原 `createGenerationJob` HTTP adapter 已随 2026-11-19 `POST /generations` 删除一并移除；共享命令只由 Worker `MediaToolExecutor` 与 Agent 图片暂存链路使用。
 - Worker `MediaToolExecutor` 调用相同命令，直接取得 `jobId`，不反序列化 HTTP Response。
 - `prepareImageEditCommand` 返回 typed data/error，API `prepareImageEdit` 暂保留兼容包装；Worker 注入自己的 storage/runtime ports。
 - `prepareGeneration` 可做事务外读取与纯规范化；`createGenerationInTransaction(client, command)` 必须在实际事务内重新校验模型快照与输入归属，并完成 job、inputs 和 outbox 写入。
@@ -819,14 +819,14 @@ POST /api/agent/approvals/:id/resolve
 
 ### 9.3 本阶段明确不删除
 
-- `createGenerationJob`：API 兼容 wrapper；手动生成、图片编辑、Agent 都复用 `packages/media-service` 的非 HTTP 创建命令，是媒体创建唯一真源。
+- `packages/media-service/src/commands/create-job.ts`：媒体创建唯一真源；API 兼容 wrapper 已随直连生成入口删除。
 - `apps/worker/src/jobs/index.ts` 的 ProviderRun 生命周期。
 - `apps/worker/src/jobs/lease.ts` 的 provider fencing。
 - `apps/worker/src/queue/index.ts` 的 generation Outbox/Redis consumer。
 - `prepareImageEdit` 和 `canvas-agent-preparations`：图片编辑的 source/mask 安全边界。
 - `Canvas` revision CAS 和 `applyCanvasAgentTurnScene`：新 Canvas tool 仍需同一并发语义。
 - `client-api.ts`、`server-api.ts` 双端隔离。
-- direct `/api/generations`、`/api/images/edit`：除非确认所有外部消费者和手动入口都迁移，V1 不强制 Agent-only。
+- direct `/api/generations`、`/api/images/edit`：2026-11-19 已删除；媒体生成是 Agent-only 能力，保留 `/api/images/edit/preparations` 作为 Agent 暂存入口。
 
 ## 10. 新依赖决策
 
@@ -946,7 +946,7 @@ maxConcurrentMediaJobs
 动作：
 
 - `generate_image`、`edit_image`、`generate_video` 接入 Registry。
-- 复用 `packages/media-service` 的非 HTTP 创建/编辑命令、generation inputs 和现有 Outbox；API 的 `createGenerationJob` 保持 HTTP adapter。
+- 复用 `packages/media-service` 的非 HTTP 创建/编辑命令、generation inputs 和现有 Outbox；API 的 `createGenerationJob` 已删除，Worker 直接调用共享命令。
 - 新增 `agent_tool_job_links`。
 - Media event consumer 处理 succeeded/failed/canceled/unknown。
 
@@ -1129,7 +1129,7 @@ M3 的 Provider 适配可与 M4 的纯 UI 时间线工作并行，但必须先�
 - Agent store/tools：`apps/api/src/modules/canvases/agent/store.ts`、`tools.ts`、`submit.ts`、`history.ts`
 - Agent persistence：`packages/database/src/repositories/canvas-agent.ts`、`canvas-agent-preparations.ts`
 - Agent schema：`packages/database/migrations/0031_canvas_agent.sql`、`0032_canvas_agent_generation_v2.sql`、`0033_canvas_agent_preparations.sql`
-- Media creation: `apps/api/src/modules/generations/create-job.ts`、`create.ts`、`apps/api/src/modules/image-edit/prepare.ts`
+- Media creation: `apps/api/src/modules/jobs/create-job.ts`、`apps/api/src/modules/image-edit/prepare.ts`
 - Media worker：`apps/worker/src/jobs/index.ts`、`lease.ts`、`lifecycle.ts`、`queue/index.ts`、`maintenance/index.ts`
 - Provider contract：`packages/providers/src/core/types.ts`、`language-model-chat.ts`
 - Canvas CAS：`packages/database/src/repositories/canvas-documents.ts`
@@ -1174,7 +1174,7 @@ flowchart TB
 
 | 现有位置/符号 | 目标及行为 | 移除条件 |
 |---|---|---|
-| `generations/create-job.ts:createGenerationJob` | API HTTP wrapper；主体提取至 `media-service` | wrapper 保留；只移除其重复的业务实现 |
+| `jobs/create-job.ts:createGenerationJob` | API HTTP wrapper；主体提取至 `media-service` | wrapper 保留；只移除其重复的业务实现 |
 | 同文件 `GenerationJobPorts`、`CreateGenerationJobCommand` | 拆为应用 DTO/serializer ports 与共享 `CreateMediaJobCommand` | 手动生成、编辑、Agent 回归通过 |
 | `generation-uploads/validation.ts:normalizeGenerationInputs,validateInputsAgainstSlots` | 纯语法/能力规则移 domain；API 暂 re-export | 调用方全部使用新导出，兼容 parser 不变 |
 | 同文件 `attachGenerationInputs,validateAndAttachGenerationUploads,validateAndAttachGenerationAssets` | media-service 的输入持久化模块 | owner、TTL、checksum、重复 attach 与 legacy mirror 测试保留 |

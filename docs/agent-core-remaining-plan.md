@@ -30,7 +30,17 @@ Runner 与 M5 共用 reservation/usage 表、quota 归因和 unknown 语义；�
 
 收尾轮已完成：终态 Turn 的遗留媒体结算扫描（`settleAbandonedMedia`）、协调器初轮错误处理与健康进度、0044 恢复索引预检、集成 fixture 迁移头断言修正、runbook 0045 更新、Console 媒体结果解析与缩略图/深链、操作者 `scripts/agent-definition.ts` CLI（默认 dry-run，应用不自动 seed）。
 
-剩余功能缺口：无数据库计价的 V1 使用共享零价常量 `free-v1`（迁移 0024 已移除计费）；若未来引入真实价格，需新增定价来源并把该常量替换为冻结的定价 revision，在此之前不得填写非零金额。可靠模型定价缺失时有限金额预算仍拒绝调用。媒体创建仍限于预准备 source+mask 的 inpaint；rectangle/brush/tool upload staging 与 artifact resolver 未实现。`agentPreparation:true` 的生产调用仍需由上传/编辑入口显式接入。两项 admission 开关继续默认关闭，不能把上述本地验收表述为真实环境验收完成。
+剩余功能缺口：无数据库计价的 V1 使用共享零价常量 `free-v1`（迁移 0024 已移除计费）；若未来引入真实价格，需新增定价来源并把该常量替换为冻结的定价 revision，在此之前不得填写非零金额。可靠模型定价缺失时有限金额预算仍拒绝调用。媒体创建仍限于预准备 source+mask 的 inpaint；矩形之外的 brush 选区、工具自行上传 staging 与 artifact resolver 未实现。两项 admission 开关继续默认关闭，不能把上述本地验收表述为真实环境验收完成。
+
+### 可信蒙版准备的生产入口（2026-11-18 接入）
+
+`agentPreparation:true` 此前没有生产调用方，`edit_image` 在真实环境必然在审批环节被拒。现已接通三段，且不新增表、不绕过审批：
+
+1. `POST /api/images/edit/preparations`（`apps/api/src/modules/image-edit/handlers.ts:prepareAgentImageEdit`）→ 复用 `prepareImageEditCommand({agentPreparation:true})` 只做 staging 与 0045 身份写入，**从不创建 `generation_jobs`**；`AGENT_CORE_ENABLED` 关闭时 404，0045 缺失时 503，独立限流桶 `agent:preparation:<actor>`，DTO 为 `AgentEditPreparationDTO`。
+2. 消息携带引用：`CreateAgentMessageRequest.attachments`（最多 4 条，mask 必须 `kind='upload'` + `preparationVersion=1` + `sourceChecksum`）。`AgentCoreRepository.message` 先把附件规范化排序后计入幂等 digest，**回执重放先于准入校验**（否则重试会因上传过期/已消费而变成 `INVALID_INPUT`）；仅在新建投递时做 owner/checksum/尺寸/准备身份的库内校验。
+3. 上下文注入：`apps/worker/src/agent/context.ts` 把 `user_message` 的 `attachments` 渲染成受控文本块（`[attached managed inputs]`），模型据此在 `edit_image` 的 `inputs[]` 里引用 `assetId`/`uploadId`；未知字段直接 `AGENT_CONTEXT_UNKNOWN`。
+
+Web 侧：Console 附件现在真实上传（`uploadReferenceFile`：预签名 → 上传 → `complete`），图库参考图可在预览弹窗里拖拽矩形选区并调用准备端点，准备身份随该附件一起提交；`toAgentMessageAttachments` 负责形状转换与过期拒绝，mock 模式不发上传、不发附件。生产可用性仍受第 5 节前置条件约束（迁移 0041–0045、`agent_definitions`、两个开关）。
 
 ## 1. 结论与冻结决策
 
@@ -87,7 +97,7 @@ Runner 与 M5 共用 reservation/usage 表、quota 归因和 unknown 语义；�
 ## 3. 非目标
 
 - 不实现 M5：cancel/steering/approval 执行与 resolver、rollout/admission 百分比、coordinator/recovery、旧入口灰度、回滚演练。
-- 不退役旧 Canvas Agent、`canvas_agent_*` 表或旧 `runAgent`。
+- 原计划不退役旧 Canvas Agent。后续用户已明确要求移除：旧运行时和公开入口在当前工作区退役，`canvas_agent_*` 历史迁移、数据及账户内容清理保留；详见 `audits/backend-refactor-audit/canvas-agent-removal.md`。
 - 不修改 `0001`–`0043`，不创建虚构 `0044`；仅增加已批准的 `0045`，并集成用户已完成的真实 M5。
 - 不新增第三方依赖；只允许必要的 workspace 依赖（见 §7.1）。
 - 不启动 API/Worker/PostgreSQL/Redis，不调用 Provider，不部署，不提交/推送。

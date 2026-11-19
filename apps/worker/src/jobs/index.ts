@@ -970,14 +970,18 @@ async function handleTerminalResult(run: ProviderRunEntity, job: Record<string, 
 export async function pollProviderRun(runId: string): Promise<boolean> {
   const handled = await withProviderLease(runId, async leased => {
     let run: ProviderRunEntity = leased
-    const jobRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1 AND deleted_at IS NULL', [run.jobId])
+    // A soft-deleted job is still the owner of a remote provider task. Filtering
+    // it out here would answer JOB_NOT_FOUND before the cancel branch and leave
+    // a billable task running at the provider after the user deleted the job.
+    const jobRes = await db().query('SELECT * FROM generation_jobs WHERE id=$1', [run.jobId])
     const job = jobRes.rows[0] as Record<string, unknown> | undefined
     if (!job) {
       await updateProviderRunState(db(), { runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'failed', error: { code: 'JOB_NOT_FOUND', message: 'JOB_NOT_FOUND' }, releaseCapacity: true, completed: true })
       return true
     }
     if (!isNonTerminalRunState(run.operationState)) return true
-    if (job.status === 'canceled' || isCancelRequested(job)) {
+    // Deletion is a cancellation intent, exactly like cancel_requested_at.
+    if (job.deleted_at || job.status === 'canceled' || isCancelRequested(job)) {
       await requestRemoteCancel(run, job)
       return true
     }
@@ -1084,7 +1088,18 @@ async function reconcileRemoteCancel(run: ProviderRunEntity, job: Record<string,
         : plugin.poll?.(run.remoteId, opaque, config, context)
     },
     pending: async result => {
-      if (!run.remoteId && unknownSubmissionExpired(run, snapshot?.config.timeoutMs || 300_000)) {
+      // The job (or its credential/model) may have been deleted after the run
+      // started. Without a snapshot the provider call cannot be attempted again,
+      // so record an explicit unconfirmed cancel instead of re-arming forever.
+      if (!snapshot) {
+        await updateProviderRunState(db(), {
+          runId: run.id, expectedStateRevision: run.stateRevision, operationState: 'failed',
+          error: { code: 'CANCEL_UNCONFIRMED', message: 'CANCEL_UNCONFIRMED', retryable: false },
+          releaseCapacity: true, completed: true,
+        })
+        return
+      }
+      if (!run.remoteId && unknownSubmissionExpired(run, snapshot.config.timeoutMs || 300_000)) {
         await failRunTerminal(run, job, 'PROVIDER_TIMEOUT', { detail: 'SUBMISSION_UNKNOWN_DEADLINE_EXCEEDED' }, 'generation_failed')
         return
       }
@@ -1102,6 +1117,30 @@ async function reconcileRemoteCancel(run: ProviderRunEntity, job: Record<string,
       ? cancelJobWithRun(run, job, 'succeeded')
       : handleTerminalResult(run, job, snapshot!.revision, snapshot!.config, result, String(job.prompt || '')),
   })
+}
+
+/**
+ * Capacity wait requeue. The caller owns the transaction: the transition and its
+ * delivery must commit or roll back together. `attempt` is decremented because a
+ * claim increments it before capacity is known, and queueing must not spend the
+ * pre-run retry budget.
+ */
+export async function requeueCapacityWait(client: Pick<pg.PoolClient, 'query'>, jobId: string, retryCycle: string): Promise<boolean> {
+  const requeued = await client.query(
+    `UPDATE generation_jobs SET status='queued',attempt=GREATEST(attempt-1,0),updated_at=now()
+     WHERE id=$1 AND status='running' AND started_at=$2::timestamptz
+     RETURNING updated_at::text AS requeue_cycle`,
+    [jobId, retryCycle],
+  )
+  const cycle = (requeued.rows[0] as { requeue_cycle: string } | undefined)?.requeue_cycle
+  // A cancelled or re-owned job needs no delivery from this attempt.
+  if (!cycle) return false
+  await client.query(
+    `INSERT INTO outbox_events(event_type,aggregate_id,payload,dedupe_key)
+     VALUES('generation.retry',$1,$2::jsonb,$3) ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+    [jobId, JSON.stringify({ jobId }), `generation.retry:capacity:${jobId}:${cycle}`],
+  )
+  return true
 }
 
 export async function processJob(jobId: string, runId?: string): Promise<boolean> {
@@ -1191,8 +1230,11 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         })
         return true
       }
-      await db().query("UPDATE generation_jobs SET status='queued',updated_at=now() WHERE id=$1 AND status='running'", [jobRow.id]).catch(() => {})
-      await db().query("INSERT INTO outbox_events(event_type,aggregate_id,payload) VALUES('generation.retry',$1,$2)", [jobRow.id, { jobId: jobRow.id }]).catch(() => {})
+      // Waiting for capacity is not a provider attempt: requeue and delivery
+      // commit together (a swallowed outbox failure would strand the job in
+      // queued with no reaper), and the claim's attempt increment is undone so
+      // queueing can never consume the pre-run retry budget.
+      await transaction(client => requeueCapacityWait(client, String(jobRow.id), String(claimed.retry_cycle)))
       return true
     }
     providerRunStarted = true

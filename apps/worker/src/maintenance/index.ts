@@ -2,18 +2,21 @@ import { appendMediaJobCompleted, db, transaction } from '@musecanvas/database'
 import { dispatchOutbox } from '../queue'
 import { deleteStorageObject as deleteSharedStorageObject } from '../shared/storage'
 import { resolveUploadSignTtlSeconds } from '../shared/runtime'
-import { purgeCanvasContentForActor } from './canvas-cleanup'
+import { cleanupClaimedJobs } from './claimed-cleanup'
 
 const DUE_POLL_LIMIT = 50
 const CANCEL_SCAN_LIMIT = 50
+const STUCK_JOB_LIMIT = 20
+/** Longer than any plausible claim -> capacity -> submit window; a run created in that window protects the job. */
+export const STUCK_JOB_MIN_AGE_MS = 5 * 60_000
 
 /**
  * Best-effort single-object delete through the shared storage driver.
  * Storage misconfiguration surfaces as STORAGE_NOT_CONFIGURED and is left
  * for the next sweep; object deletes never fail the maintenance tick itself.
  */
-async function deleteStorageObject(objectKey: string): Promise<void> {
-  await deleteSharedStorageObject(objectKey, AbortSignal.timeout(10_000))
+async function deleteStorageObject(objectKey: string, signal?: AbortSignal): Promise<void> {
+  await deleteSharedStorageObject(objectKey, signal ?? AbortSignal.timeout(10_000))
 }
 
 async function recoverExpiredLeases() {
@@ -43,6 +46,52 @@ async function dispatchDueProviderRuns() {
       [row.job_id, { jobId: row.job_id, runId: row.id }, dedupeKey],
     )
   }
+}
+
+/**
+ * A worker that dies between claiming a job (status='running', attempt+1) and
+ * creating its provider run leaves no leased row for any other sweeper: the
+ * stream delivery is never ACKed and every redelivery throws
+ * PRE_RUN_OWNERSHIP_UNAVAILABLE. Requeue such jobs once they are older than any
+ * plausible claim->submit window. The guarded UPDATE re-checks the same
+ * preconditions, so a job that created a run (or got cancelled) is never touched.
+ */
+export async function recoverStuckJobs(): Promise<number> {
+  const candidates = await db().query(
+    `SELECT j.id FROM generation_jobs j
+     WHERE j.status='running' AND j.deleted_at IS NULL AND j.cancel_requested_at IS NULL
+       AND j.started_at IS NOT NULL
+       AND j.started_at < now() - ($1::int * interval '1 millisecond')
+       AND NOT EXISTS (SELECT 1 FROM provider_runs r WHERE r.job_id=j.id)
+     ORDER BY j.started_at
+     LIMIT ${STUCK_JOB_LIMIT}`,
+    [STUCK_JOB_MIN_AGE_MS],
+  )
+  let recovered = 0
+  for (const row of candidates.rows) {
+    const changed = await transaction(async client => {
+      const updated = await client.query(
+        `UPDATE generation_jobs SET status='retry_wait',phase='queued_retry',updated_at=now()
+         WHERE id=$1 AND status='running' AND deleted_at IS NULL AND cancel_requested_at IS NULL
+           AND started_at IS NOT NULL AND started_at < now() - ($2::int * interval '1 millisecond')
+           AND NOT EXISTS (SELECT 1 FROM provider_runs WHERE job_id=$1)
+         RETURNING attempt,started_at::text AS retry_cycle`,
+        [row.id, STUCK_JOB_MIN_AGE_MS],
+      )
+      const claimed = updated.rows[0] as { attempt: number; retry_cycle: string } | undefined
+      if (!claimed) return false
+      // Same delivery contract as a pre-run failure: transition and its next
+      // delivery commit together, keyed by the claim identity that produced it.
+      await client.query(
+        `INSERT INTO outbox_events(event_type,aggregate_id,payload,dedupe_key)
+         VALUES('generation.retry',$1,$2::jsonb,$3) ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+        [row.id, JSON.stringify({ jobId: row.id }), `generation.retry:stuck:${row.id}:${claimed.retry_cycle}:${claimed.attempt}`],
+      )
+      return true
+    })
+    if (changed) recovered++
+  }
+  return recovered
 }
 
 async function handleCancellations() {
@@ -86,72 +135,19 @@ async function handleCancellations() {
 export async function scheduleMaintenance() {
   await dispatchOutbox()
   await recoverExpiredLeases()
+  await recoverStuckJobs()
   await dispatchDueProviderRuns()
   await handleCancellations()
 }
 
 /** Cleanup has a separate cadence and a bounded storage budget. It never gates dispatch. */
-export async function cleanupMaintenance(options: { deleteObject?: (key: string) => Promise<void>; now?: () => number; budgetMs?: number } = {}) {
+export async function cleanupMaintenance(options: { deleteObject?: (key: string, signal?: AbortSignal) => Promise<void>; now?: () => number; budgetMs?: number } = {}) {
   const now = options.now ?? Date.now
   const deleteObject = options.deleteObject ?? deleteStorageObject
   const deadline = now() + (options.budgetMs ?? 15_000)
   const exhausted = () => now() >= deadline
-  const deletions = await db().query('SELECT id,user_id FROM deletion_jobs WHERE completed_at IS NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED')
-  for (const deletion of deletions.rows) {
-    if (exhausted()) return
-    try {
-      const assets = await db().query('SELECT id,object_key,thumbnail_object_key,poster_object_key FROM assets WHERE created_by=$1 AND deleted_at IS NULL ORDER BY id LIMIT 50', [deletion.user_id])
-      for (const asset of assets.rows) {
-        if (exhausted()) return
-        for (const key of new Set([asset.object_key, asset.thumbnail_object_key, asset.poster_object_key].filter(Boolean))) {
-          await deleteObject(String(key))
-        }
-        await db().query('UPDATE assets SET deleted_at=COALESCE(deleted_at,now()),prompt=NULL WHERE id=$1 AND created_by=$2', [asset.id, deletion.user_id])
-      }
-      const inputImages = await db().query('SELECT id,object_key FROM generation_input_images WHERE created_by=$1 AND object_deleted_at IS NULL ORDER BY id LIMIT 50', [deletion.user_id])
-      for (const img of inputImages.rows) {
-        if (exhausted()) return
-        await deleteObject(img.object_key)
-        await db().query("UPDATE generation_input_images SET object_deleted_at=now(),status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE id=$1 AND created_by=$2", [img.id, deletion.user_id])
-      }
-      const mediaUploads = await db().query('SELECT id,object_key FROM media_uploads WHERE created_by=$1 AND object_deleted_at IS NULL ORDER BY id LIMIT 50', [deletion.user_id])
-      for (const upload of mediaUploads.rows) {
-        if (exhausted()) return
-        await deleteObject(upload.object_key)
-        await db().query("UPDATE media_uploads SET object_deleted_at=now(),status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE id=$1 AND created_by=$2", [upload.id, deletion.user_id])
-      }
-      // Confirm an empty sweep before marking the account complete. Each object
-      // marker above survives a restart, so large accounts make bounded progress.
-      if (assets.rows.length || inputImages.rows.length || mediaUploads.rows.length) continue
-      const pendingObjects = await db().query(
-        'SELECT 1 FROM asset_deletion_jobs d JOIN assets a ON a.id=d.asset_id WHERE a.created_by=$1 AND d.completed_at IS NULL LIMIT 1',
-        [deletion.user_id],
-      )
-      if (pendingObjects.rows.length) continue
-      await transaction(async client => {
-        await purgeCanvasContentForActor(client, String(deletion.user_id))
-        await client.query('UPDATE assets SET deleted_at=COALESCE(deleted_at,now()),prompt=NULL WHERE created_by=$1', [deletion.user_id])
-        await client.query('UPDATE generation_jobs SET deleted_at=COALESCE(deleted_at,now()),prompt=NULL WHERE created_by=$1', [deletion.user_id])
-        await client.query("UPDATE prompt_optimizations SET deleted_at=COALESCE(deleted_at,now()),input_prompt='',final_prompt=NULL,template_instruction_snapshot=NULL WHERE created_by=$1", [deletion.user_id])
-        await client.query("UPDATE generation_input_images SET status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE created_by=$1", [deletion.user_id])
-        await client.query("UPDATE media_uploads SET status='deleted',deleted_at=COALESCE(deleted_at,now()),updated_at=now() WHERE created_by=$1", [deletion.user_id])
-        await client.query("UPDATE users SET email=concat('deleted-',id,'@invalid.local') WHERE id=$1", [deletion.user_id])
-        await client.query('UPDATE deletion_jobs SET completed_at=now(),last_error_code=NULL WHERE id=$1', [deletion.id])
-      })
-    } catch {
-      await db().query("UPDATE deletion_jobs SET attempts=attempts+1,last_error_code='CLEANUP_FAILED' WHERE id=$1", [deletion.id])
-    }
-  }
-  const assetDeletions = await db().query('SELECT id,object_key FROM asset_deletion_jobs WHERE completed_at IS NULL ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED')
-  for (const deletion of assetDeletions.rows) {
-    if (exhausted()) return
-    try {
-      await deleteObject(deletion.object_key)
-      await db().query('UPDATE asset_deletion_jobs SET completed_at=now(),last_error_code=NULL WHERE id=$1', [deletion.id])
-    } catch {
-      await db().query("UPDATE asset_deletion_jobs SET attempts=attempts+1,last_error_code='CLEANUP_FAILED' WHERE id=$1", [deletion.id])
-    }
-  }
+  await cleanupClaimedJobs({ now, deadline, deleteObject })
+  if (exhausted()) return
 
   // Clean up expired unattached input images (pending or ready past expires_at)
   const expiredInputs = await db().query(

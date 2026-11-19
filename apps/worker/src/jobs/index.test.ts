@@ -7,9 +7,9 @@ import { resolveMediaPlugin } from '../plugins/availability'
 import { classifySubmitError, isSynchronousPlugin, readInputBody, validateStoredInputImage } from './index'
 import { decideCapacityDenial, decideClaimedJob, decideJobClaim, decideSubmitResult } from './process-job-decisions'
 import { isNonTerminalRunState, shouldCreateNewRun } from '../provider-state'
-import { db } from '@musecanvas/database'
+import { db, transaction } from '@musecanvas/database'
 import type pg from 'pg'
-import { persistJobSuccess, persistJobFailure, persistPreRunFailure, pollProviderRun, processJob } from './index'
+import { persistJobSuccess, persistJobFailure, persistPreRunFailure, pollProviderRun, processJob, requeueCapacityWait } from './index'
 import { LifecyclePersistenceError, MAX_PRE_RUN_ATTEMPTS, reconcileCancellation, reconcileUnknownSubmission, unknownSubmissionExpired } from './lifecycle'
 import { ProviderLeaseLostError } from './lease'
 import { scheduleMaintenance } from '../maintenance'
@@ -31,9 +31,11 @@ function workerFixture(t: TestContext) {
   let run: Record<string, unknown> | undefined
   const controls = {
     failWaitingWrite: false,
+    capacityFull: false,
     preprocess: async (): Promise<void> => { /* Most tests use disabled preprocessing. */ },
     submit: async (): Promise<OperationResult> => ({ status: 'waiting', remoteId: 'remote' }),
     poll: async (): Promise<OperationResult> => ({ status: 'waiting', remoteId: 'remote' }),
+    cancel: async (): Promise<OperationResult> => ({ status: 'waiting', remoteId: 'remote' }),
   }
   const statements: string[] = []
   const query = async (sql: string, values: unknown[] = []) => {
@@ -48,7 +50,7 @@ function workerFixture(t: TestContext) {
     if (sql.includes('FROM model_config_revisions')) return rows([{ id: 'revision', model_id: 'model', provider_id: 'provider', plugin_id: 'seedance-video', plugin_version: '1.0.0', credential_id: 'credential', normalized_config: { timeoutMs: 300_000, maxBytes: 100_000 }, created_at: new Date() }])
     if (sql.includes('FROM provider_credentials')) return rows([{ id: 'credential', enabled: true, api_key_encrypted: credential }])
     if (sql.startsWith('SELECT id, concurrency_limit')) return rows([{ id: 'model', concurrency_limit: 1 }])
-    if (sql.includes('SELECT count(*)::int AS count')) return rows([{ count: 0 }])
+    if (sql.includes('SELECT count(*)::int AS count')) return rows([{ count: controls.capacityFull ? 1 : 0 }])
     if (sql.startsWith('SELECT * FROM provider_runs')) return rows(run ? [run] : [])
     if (sql.includes('INSERT INTO provider_runs')) {
       assert.equal(run, undefined, 'a claim must create at most one provider run')
@@ -79,6 +81,11 @@ function workerFixture(t: TestContext) {
       return rows([run])
     }
     if (sql.startsWith('UPDATE generation_jobs')) {
+      if (sql.includes('attempt=GREATEST')) {
+        job.status = 'queued'
+        job.attempt = Math.max(Number(job.attempt) - 1, 0)
+        return rows([{ id: 'job', requeue_cycle: '2026-10-25 00:00:01.000000+00' }])
+      }
       if (sql.includes('attempt=attempt+1')) { job.status = 'running'; job.attempt = Number(job.attempt) + 1 }
       else if (sql.includes("status='canceled'")) job.status = 'canceled'
       else if (sql.includes('status=$2')) job.status = values[1]
@@ -95,8 +102,11 @@ function workerFixture(t: TestContext) {
   const submit = t.mock.method(plugin, 'submit', () => controls.submit())
   assert.ok(plugin.poll, 'the fixture requires an asynchronous plugin')
   const poll = t.mock.method(plugin as typeof plugin & { poll: NonNullable<typeof plugin.poll> }, 'poll', () => controls.poll())
+  const cancel = plugin.cancel
+    ? t.mock.method(plugin as typeof plugin & { cancel: NonNullable<typeof plugin.cancel> }, 'cancel', () => controls.cancel())
+    : null
   t.mock.method(plugin, 'validateRequest', async () => { /* Request validity is unrelated to lifecycle races. */ })
-  return { job, controls, statements, submit, poll, run: () => run }
+  return { job, controls, statements, submit, poll, cancel, run: () => run }
 }
 
 test('a duplicate delivery cannot preprocess an actively owned running job without a provider run', async t => {
@@ -344,6 +354,76 @@ test('unknown reconciliation uses original timestamps, expires capacity, and nev
   assert.equal(unknownSubmissionExpired({ ...run, submittedAt: null }, 300_000), true)
   assert.equal(unknownSubmissionExpired({ submittedAt: null, createdAt: 'invalid' }, 300_000), true)
   await assert.rejects(reconcileUnknownSubmission(run, 300_000, { ...actions, expire: async () => { throw new Error('DB_FAILED') } }), /DB_FAILED/)
+})
+
+test('waiting for capacity requeues without creating a run or spending the retry budget', async t => {
+  const fixture = workerFixture(t)
+  fixture.controls.capacityFull = true
+
+  assert.equal(await processJob('job'), true)
+
+  assert.equal(fixture.job.status, 'queued')
+  assert.equal(fixture.job.attempt, 0, 'queueing is not a provider attempt')
+  assert.equal(fixture.run(), undefined, 'capacity denial must not create a provider run')
+  const delivery = fixture.statements.find(sql => sql.startsWith('INSERT INTO outbox_events'))
+  assert.ok(delivery)
+  assert.match(delivery, /dedupe_key/)
+  assert.match(delivery, /generation\.retry/)
+})
+
+test('capacity requeue rolls back the transition when its delivery write fails', async t => {
+  const committed = { status: 'running', attempt: 1, outbox: [] as string[] }
+  let staged = structuredClone(committed)
+  let fail = true
+  const client = {
+    release() { /* fake connection owns nothing */ },
+    async query(sql: string, values: unknown[] = []) {
+      if (sql === 'BEGIN') { staged = structuredClone(committed); return { rows: [], rowCount: 0 } }
+      if (sql === 'COMMIT') { Object.assign(committed, structuredClone(staged)); return { rows: [], rowCount: 0 } }
+      if (sql === 'ROLLBACK') { staged = structuredClone(committed); return { rows: [], rowCount: 0 } }
+      if (sql.startsWith("UPDATE generation_jobs SET status='queued'")) {
+        staged.status = 'queued'
+        staged.attempt = Math.max(staged.attempt - 1, 0)
+        return { rows: [{ id: 'job', requeue_cycle: 'cycle-1' }], rowCount: 1 }
+      }
+      if (sql.startsWith('INSERT INTO outbox_events')) {
+        if (fail) throw new Error('OUTBOX_UNAVAILABLE')
+        staged.outbox.push(String(values[2]))
+        return { rows: [], rowCount: 1 }
+      }
+      assert.fail(`Unexpected requeue SQL: ${sql}`)
+    },
+  }
+  t.mock.method(db(), 'connect', async () => client)
+
+  await assert.rejects(transaction(c => requeueCapacityWait(c, 'job', 'cycle')), /OUTBOX_UNAVAILABLE/)
+  assert.deepEqual(committed, { status: 'running', attempt: 1, outbox: [] })
+
+  fail = false
+  await transaction(c => requeueCapacityWait(c, 'job', 'cycle'))
+  assert.equal(committed.status, 'queued')
+  assert.equal(committed.attempt, 0)
+  assert.deepEqual(committed.outbox, ['generation.retry:capacity:job:cycle-1'])
+})
+
+test('a soft-deleted job cancels its remote run instead of failing it as JOB_NOT_FOUND', async t => {
+  const fixture = workerFixture(t)
+  assert.equal(await processJob('job'), true)
+  const submitted = fixture.run()
+  assert.ok(submitted)
+  assert.equal(submitted.operation_state, 'waiting')
+  assert.equal(submitted.remote_id, 'remote')
+  const cancel = fixture.cancel
+  assert.ok(cancel, 'the fixture plugin must expose cancel')
+
+  // Deleting the job mirrors the destructive API path: soft delete plus cancel intent.
+  fixture.job.deleted_at = new Date()
+  fixture.job.cancel_requested_at = new Date()
+
+  assert.equal(await processJob('job', 'run'), true)
+  assert.equal(cancel.mock.callCount(), 1, 'the remote task must be cancelled, not forgotten')
+  assert.equal(fixture.run()?.operation_state, 'canceling')
+  assert.equal(fixture.run()?.capacity_state, 'reserved', 'capacity stays reserved until the provider confirms')
 })
 
 test('cancellation pending/errors retain capacity; only confirmed terminal outcomes release', async () => {
@@ -731,6 +811,7 @@ test('post-preprocess cancel completion failure rejects delivery without failed 
     else if (sql === 'COMMIT') { committed = structuredClone(staged); inTransaction = false }
     else if (sql === 'ROLLBACK') { staged = structuredClone(committed); inTransaction = false }
     else if (sql.startsWith('SELECT * FROM provider_runs')) return { rows: [] }
+    else if (sql.startsWith('SELECT j.id FROM generation_jobs')) return { rows: [] }
     else if (sql.includes('WITH ready AS') || sql.startsWith('UPDATE provider_runs') || sql.includes('FROM provider_runs WHERE job_id=') || sql.includes('SELECT id, job_id, state_revision')) return { rows: [] }
     else if (sql.includes('SELECT id FROM generation_jobs') && sql.includes('cancel_requested_at')) return { rows: [{ id: 'job' }] }
     else if (sql.startsWith('SELECT status FROM generation_jobs')) return { rows: [{ status: staged.status }] }

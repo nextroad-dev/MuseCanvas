@@ -25,6 +25,7 @@ import {
   claimKeyedInputRow,
   promoteKeyedInputRow,
   storeReadyInputImage,
+  requireActiveInputOwner,
   type ReadyInputWrite,
 } from './input-rows'
 
@@ -123,6 +124,7 @@ export interface PreparedImageEdit {
 
 function stagingFailure(error: unknown, label: string): MediaServiceError {
   const message = error instanceof Error ? error.message : ''
+  if (message === 'INPUT_OWNER_INACTIVE') return fail('FORBIDDEN', '账户已停用或删除，不能准备新的输入', 403)
   if (message === 'INPUT_ROW_RECLAIMED') return fail('IDEMPOTENCY_CONFLICT', '该请求标识对应的临时输入已过期或被回收，请使用新的请求标识重新发起', 409)
   if (message === 'INPUT_ROW_CONFLICT') return fail('IDEMPOTENCY_CONFLICT', '该请求标识对应的临时输入与本次请求不一致，请使用新的请求标识重新发起', 409)
   if (message === 'PREPARED_MASK_IDENTITY_EXPIRED') return fail('IDEMPOTENCY_CONFLICT', '该请求标识对应的临时输入已过期或被回收，请使用新的请求标识重新发起', 409)
@@ -181,7 +183,7 @@ export type PrepareImageEditResult =
 
 /**
  * Validates, measures and stages artifacts for an image inpainting request.
- * Shared verbatim between direct POST /api/images/edit and Canvas Agent edit_image tool.
+ * Shared between the Agent edit tool and the Agent preparation route.
  */
 export async function prepareImageEditCommand(input: PrepareImageEditInput): Promise<PrepareImageEditResult> {
   const ports = input.ports
@@ -419,6 +421,7 @@ export async function prepareImageEditCommand(input: PrepareImageEditInput): Pro
   if (input.agentPreparation && !input.dryRun) {
     try {
       await ports.runTransaction(async client => {
+        await requireActiveInputOwner(client, ownerId)
         const ready = await client.query(`SELECT id FROM media_uploads WHERE id=$1 AND created_by=$2 AND status='ready'
           AND checksum=$3 AND width=$4 AND height=$5 AND mime_type='image/png' AND deleted_at IS NULL
           AND object_deleted_at IS NULL AND clock_timestamp()<expires_at FOR UPDATE`,

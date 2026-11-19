@@ -14,6 +14,12 @@ export interface ReadyInputWrite {
   expiresAt?: string
 }
 
+/** Serialize new staging with account deletion; callers keep this lock in a short transaction. */
+export async function requireActiveInputOwner(client: SqlClient, ownerId: string): Promise<void> {
+  const owner = await client.query("SELECT id FROM users WHERE id=$1 AND status='active' AND deleted_at IS NULL FOR NO KEY UPDATE", [ownerId])
+  if (!owner.rows.length) throw new Error('INPUT_OWNER_INACTIVE')
+}
+
 /**
  * Write the dual inspected input row. The manual path defaults to `ready` after
  * PUT. Reserved Agent masks use `pending` BEFORE immutable PUT so existing TTL
@@ -22,6 +28,7 @@ export interface ReadyInputWrite {
  * Requires both input tables from the current migrated schema.
  */
 export async function storeReadyInputImage(client: SqlClient, row: ReadyInputWrite, status: 'ready' | 'pending' = 'ready'): Promise<void> {
+  await requireActiveInputOwner(client, row.actorId)
   const statusSql = status === 'pending' ? "'pending'" : "'ready'"
   // Keyed edits derive the same upload id for the same artifact, so a retried
   // request must not fail on the row it already wrote — and must not overwrite
@@ -89,6 +96,7 @@ async function lockMediaRowForUpdate(client: SqlClient, uploadId: string): Promi
  * new request (a new idempotency key) instead.
  */
 export async function claimKeyedInputRow(client: SqlClient, row: ReadyInputWrite): Promise<void> {
+  await requireActiveInputOwner(client, row.actorId)
   const params = [row.uploadId, row.actorId, row.objectKey, row.mimeType, row.width, row.height, row.sizeBytes, row.checksum, row.ttlSeconds, row.expiresAt ?? null]
   await client.query(
     `INSERT INTO media_uploads(id, created_by, media_kind, status, object_key, mime_type, width, height, size_bytes, checksum, expires_at)
@@ -127,6 +135,7 @@ export async function claimKeyedInputRow(client: SqlClient, row: ReadyInputWrite
  * reclaimed row fails closed.
  */
 export async function promoteKeyedInputRow(client: SqlClient, row: ReadyInputWrite): Promise<void> {
+  await requireActiveInputOwner(client, row.actorId)
   const mirror = await lockMediaRowForUpdate(client, row.uploadId)
   const stored = await client.query(
     'SELECT created_by, object_key, mime_type, width, height, size_bytes, checksum, status, object_deleted_at FROM generation_input_images WHERE id=$1 FOR UPDATE',

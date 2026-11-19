@@ -21,7 +21,7 @@ const capabilities: ModelCapabilities = {
 }
 const bytes = await createEditMask({ imageWidth: 1024, imageHeight: 1024, selection: { x: 0, y: 0, width: 32, height: 32 } })
 
-function fixture(owned = true, expiredPreparation = false) {
+function fixture(owned = true, expiredPreparation = false, ownerActive = true) {
   const queries: Array<{ sql: string; params: unknown[] }> = []
   const puts: string[] = []
   let inTransaction = false
@@ -29,6 +29,7 @@ function fixture(owned = true, expiredPreparation = false) {
   let keyedRow: Record<string, unknown> | undefined
   const client: SqlClient = { query: async (sql, params = []) => {
     queries.push({ sql, params })
+    if (sql.startsWith('SELECT id FROM users')) return { rows: ownerActive ? [{ id: ownerId }] : [] }
     if (sql.includes('FROM model_configs')) return { rows: [{ id: modelId, model_kind: 'image', capabilities }] }
     if (sql.includes('FROM assets')) return { rows: owned ? [{ id: assetId, object_key: 'source.png', mime_type: 'image/png' }] : [] }
     if (sql.startsWith('SELECT id FROM media_uploads WHERE')) return { rows: [{ id: params[0] }] }
@@ -48,7 +49,7 @@ function fixture(owned = true, expiredPreparation = false) {
     deleteObject: async () => { assert.equal(inTransaction, false) },
     uploadLimits: async () => ({ maxImageBytes: 10_000_000, uploadTtlSeconds: 3600 }),
   }
-  return { ports, queries, puts }
+  return { ports, queries, puts, deactivateOwner: () => { ownerActive = false } }
 }
 const input = () => ({ ownerId, modelId, prompt: 'Replace the selection', assetId, selection: { x: 32, y: 32, width: 64, height: 64 }, stableUploadIds: createStableUploadIds('owner:key') })
 
@@ -114,10 +115,33 @@ test('all staging row primitives propagate SQL errors immediately for caller rol
     const client: SqlClient = { query: async sql => { statements.push(sql); throw failure } }
     await assert.rejects(write(client, row), error => error === failure)
     assert.equal(statements.length, 1)
-    assert.match(statements[0], /media_uploads/)
+    assert.match(statements[0], /FROM users.*FOR NO KEY UPDATE/)
   }
 })
 
+
+test('staging primitives lock and reject a deleted owner before any metadata writes', async () => {
+  const row: ReadyInputWrite = { uploadId: assetId, actorId: ownerId, objectKey: 'source.png', mimeType: 'image/png', width: 1024, height: 1024, sizeBytes: bytes.length, checksum: 'checksum', ttlSeconds: 3600 }
+  for (const write of [storeReadyInputImage, claimKeyedInputRow, promoteKeyedInputRow]) {
+    const statements: string[] = []
+    const client: SqlClient = { query: async (sql, params) => { statements.push(sql); assert.deepEqual(params, [ownerId]); return { rows: [] } } }
+    await assert.rejects(write(client, row), /INPUT_OWNER_INACTIVE/)
+    assert.equal(statements.length, 1)
+    assert.match(statements[0], /status='active' AND deleted_at IS NULL FOR NO KEY UPDATE/)
+  }
+})
+
+test('deletion between keyed object PUT and promotion prevents provenance while leaving the pending TTL row', async () => {
+  const f = fixture()
+  const put = f.ports.putObjectBytes
+  f.ports.putObjectBytes = async (...args) => { await put(...args); f.deactivateOwner() }
+  const result = await prepareImageEditCommand({ ...input(), ports: f.ports, agentPreparation: true })
+  assert.equal(result.success, false)
+  if (!result.success) assert.equal(result.error.status, 403)
+  assert.equal(f.puts.length, 1)
+  assert.ok(f.queries.some(call => call.sql.startsWith('INSERT INTO media_uploads')))
+  assert.ok(!f.queries.some(call => call.sql.startsWith('INSERT INTO agent_media_mask_preparations')))
+})
 
 test('keyed preparation refuses an expired immutable provenance while its upload is still live', async () => {
   const f = fixture(true, true)

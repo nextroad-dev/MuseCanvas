@@ -14,9 +14,11 @@ The command includes job, owner-scoped input attachment, prompt optimization sna
 
 `prepareImageEditCommand({ ownerId, ports, ...input })` is a separate, transaction-external preparation phase. Its typed result is `{ success: true, data } | { success: false, error: MediaServiceError }`. Model/source SQL or runtime infrastructure failures may reject. Inject the storage/runtime ports, and for Agent reserved masks inject the existing fenced `reservedMask.persist` operation. No default storage driver or callback into API generation logic is required. Stable IDs, checksums, dry runs, immutable reserved masks and tombstone/late-PUT cleanup retain their existing semantics.
 
+Staging row writes must run in short caller-owned transactions. They lock an active, non-deleted owner before taking media/input row locks; account deletion therefore fences later claim, promotion and provenance writes. Object reads/PUTs and compensation remain outside those transactions. A keyed PUT that loses its owner before promotion leaves its registered pending row for TTL cleanup rather than deleting an object another request may own. HTTP admission and the optional session/turn proof belong to the API boundary; preparation provenance remains owner/artifact-bound and does not grant final message or execution authorization.
+
 ## Schema compatibility
 
-The current migrated schema is required; no migrations run on import or command execution. In particular `0016_wave1_media_uploads.sql` defines `media_uploads`, upload/asset foreign keys and role/position linkage. The existing edit preparation system additionally uses the current `0033_canvas_agent_preparations.sql` application integration.
+The current migrated schema is required; no migrations run on import or command execution. In particular `0016_wave1_media_uploads.sql` defines `media_uploads`, upload/asset foreign keys and role/position linkage. Agent Core edit preparation additionally requires `0045_agent_media_preparations.sql`. The retired CanvasAgent tables from `0031`–`0033` remain in migration history for existing data and foreign-key compatibility; they are not an active command API.
 
 A missing generic upload **row** may fall back to an owner-scoped legacy `generation_input_images` row. Such a binding uses `input_image_id` with `upload_id = NULL`, avoiding a foreign key to a nonexistent generic row. Generic image uploads retain their generic/legacy dual linkage. Worker input loading recognizes both, without duplicating mirrored inputs.
 

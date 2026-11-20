@@ -313,8 +313,20 @@ test('isolated PostgreSQL: model revision credential swaps, snapshot rollback an
     await pool?.end()
     if (appPoolSeeded) await db().end().catch(() => { /* cleanup must not mask the original failure */ })
     try {
-      // The validated generated name is the only allowed destructive target.
-      if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`)
+      if (created) {
+        // Same pg-pool race as the other fixtures: end() resolves before the
+        // client sockets close, so wait for the server to see the disconnects
+        // and drop without FORCE instead of injecting a FATAL into a closing
+        // socket (Node 22 reports that as late asynchronous activity).
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          const active = (await admin.query<{ count: string }>(
+            "SELECT count(*)::text AS count FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()", [name])).rows[0]
+          if (active?.count === '0') break
+          await new Promise(resolve => setTimeout(resolve, 25))
+        }
+        // The validated generated name is the only allowed destructive target.
+        await admin.query(`DROP DATABASE "${name}"`)
+      }
     } finally {
       await admin.end()
       if (previousDb === undefined) delete process.env.DATABASE_URL

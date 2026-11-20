@@ -237,7 +237,21 @@ test('real isolated PG: shared media creation, edit idempotency and object recla
     // staged object reference, on failure paths too. The nested try guarantees
     // the admin connection is released even if the drop itself fails.
     await pool?.end()
-    try { if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`) }
-    finally { await admin.end() }
+    try {
+      if (created) {
+        // pg's Pool.end() resolves once clients leave the pool list, before
+        // their TCP sockets finish closing. DROP ... WITH (FORCE) at that moment
+        // sends a FATAL into a closing socket that Node 22 reports as
+        // asynchronous activity after the subtests ended. Wait for the server to
+        // observe every disconnect, then drop without FORCE.
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          const active = (await admin.query<{ count: string }>(
+            "SELECT count(*)::text AS count FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()", [name])).rows[0]
+          if (active?.count === '0') break
+          await new Promise(resolve => setTimeout(resolve, 25))
+        }
+        await admin.query(`DROP DATABASE "${name}"`)
+      }
+    } finally { await admin.end() }
   }
 })

@@ -7,6 +7,8 @@ import { SetupWizard } from '@/features/setup/components/setup-wizard'
 import { parseSetupStepId } from '@/features/setup/lib/setup-steps'
 import { Alert, buttonVariants } from '@/shared/components/ui'
 import { APP_ROUTES } from '@/shared/lib/app-routes'
+import { WORKSPACE_MODE } from '@/shared/lib/workspace-mode'
+import { MOCK_SETUP_COMPLETED_AT } from '@/shared/services/mock-identity'
 import { ApiError, getSetupStatus, serverApiFetch } from '@/shared/services/server-api'
 
 /**
@@ -52,6 +54,11 @@ function SetupUnavailable() {
 }
 
 export default async function SetupPage({ searchParams }: { searchParams: SetupSearchParams }) {
+  // 本地演示：初始化已完成，直接展示完成页，不触达真实 API。
+  if (WORKSPACE_MODE === 'mock') {
+    return <SetupCompleteView completedAt={MOCK_SETUP_COMPLETED_AT} />
+  }
+
   const params = await searchParams
   const initialStep = parseSetupStepId(firstValue(params.step))
 

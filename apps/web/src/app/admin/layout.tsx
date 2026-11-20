@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation'
 
 import { AdminShell } from '@/shared/components/shells'
 import { APP_ROUTES, loginHref } from '@/shared/lib/app-routes'
+import { WORKSPACE_MODE } from '@/shared/lib/workspace-mode'
+import { MOCK_SESSION_USER } from '@/shared/services/mock-identity'
 import { getSessionUser } from '@/shared/services/server-api'
 
 /**
@@ -17,7 +19,8 @@ import { getSessionUser } from '@/shared/services/server-api'
 export const dynamic = 'force-dynamic'
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
-  const user = await getSessionUser()
+  // 本地演示：后台使用 mock 管理员身份，避免真实会话依赖；live 模式仍走 RSC 守卫。
+  const user = WORKSPACE_MODE === 'mock' ? MOCK_SESSION_USER : await getSessionUser()
 
   if (!user) {
     redirect(loginHref(APP_ROUTES.admin))

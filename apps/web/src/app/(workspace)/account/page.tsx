@@ -4,6 +4,8 @@ import { redirect } from 'next/navigation'
 import { AccountView } from '@/features/account/components/account-view'
 import { AppShell } from '@/shared/components/shells'
 import { APP_ROUTES, loginHref } from '@/shared/lib/app-routes'
+import { WORKSPACE_MODE } from '@/shared/lib/workspace-mode'
+import { MOCK_ACCOUNT } from '@/shared/services/mock-identity'
 import { getAccount } from '@/shared/services/server-api'
 
 /**
@@ -30,14 +32,16 @@ function firstValue(value: string | string[] | undefined): string | null {
 }
 
 export default async function AccountPage({ searchParams }: { searchParams: AccountSearchParams }) {
-  const [account, params] = await Promise.all([getAccount(), searchParams])
+  const params = await searchParams
+  // 本地演示：使用 mock 账户身份；live 模式仍要求真实会话。
+  const account = WORKSPACE_MODE === 'mock' ? MOCK_ACCOUNT : await getAccount()
 
   if (!account) {
     redirect(loginHref(APP_ROUTES.account))
   }
 
   return (
-    <AppShell mode="live" user={account.user} headerTitle="账户设置">
+    <AppShell mode={WORKSPACE_MODE} user={account.user} headerTitle="账户设置">
       <AccountView
         initialAccount={account}
         callback={{ linked: firstValue(params.linked), error: firstValue(params.error) }}

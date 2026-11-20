@@ -5,6 +5,8 @@
 import { API_ENDPOINTS } from '@musecanvas/contracts'
 import type { ParameterErrorDetails } from '@musecanvas/contracts'
 
+const MOCK_WORKSPACE = process.env.NEXT_PUBLIC_WORKSPACE_MOCK === 'true' && process.env.NODE_ENV !== 'production'
+
 /** 可选 API 基址：仅用于把 web 指向独立后端；默认空 = 同源 `/api`。 */
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
 
@@ -100,6 +102,12 @@ function parseEnvelope<T>(status: number, text: string): T {
  * - 网络中断/中止分别映射为 `NETWORK_ERROR` / `ABORTED`，与后端错误码同域。
  */
 export async function apiFetch<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
+  // 本地演示：所有浏览器 API 请求在内存 fixture 中完成，绝不触网。
+  // 动态导入让非 mock 构建不加载后台 fixture，也不改变既有测试的模块图。
+  if (MOCK_WORKSPACE && path.startsWith('/api/')) {
+    const { mockApiFetch } = await import('./mock-admin-api')
+    return mockApiFetch<T>(path, init)
+  }
   const { method = 'GET', body, params, headers = {}, signal, cache, credentials = 'include' } = init
   const requestHeaders: Record<string, string> = { Accept: 'application/json', ...headers }
   let requestBody: BodyInit | undefined

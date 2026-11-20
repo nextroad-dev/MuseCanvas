@@ -135,7 +135,8 @@ export const authApi = {
     post<AuthSessionResult>(API_ENDPOINTS.auth.otpVerify, { email, code }),
   logout: () => post<{ loggedOut: boolean }>(API_ENDPOINTS.auth.logout),
   /** OAuth 登录/绑定的浏览器跳转地址（后端 302 到供应商）。 */
-  oauthStartUrl: (provider: OAuthProvider) => resolveApiUrl(API_ENDPOINTS.auth.oauthStart(provider)),
+  oauthStartUrl: (provider: OAuthProvider) =>
+    WORKSPACE_MODE === 'mock' ? '#' : resolveApiUrl(API_ENDPOINTS.auth.oauthStart(provider)),
   getOAuthProviders: async (): Promise<OAuthProviderInfo[]> => {
     const result = await get<{ providers: OAuthProviderInfo[] }>(API_ENDPOINTS.auth.oauthProviders)
     return result.providers
@@ -154,7 +155,8 @@ export const accountApi = {
     return { user: session.user, oauthIdentities }
   },
   getOAuthIdentities: () => get<OAuthIdentityDto[]>(API_ENDPOINTS.account.oauth),
-  oauthLinkUrl: (provider: OAuthProvider) => resolveApiUrl(API_ENDPOINTS.account.oauthLinkStart(provider)),
+  oauthLinkUrl: (provider: OAuthProvider) =>
+    WORKSPACE_MODE === 'mock' ? '#' : resolveApiUrl(API_ENDPOINTS.account.oauthLinkStart(provider)),
   unlinkOAuth: (provider: OAuthProvider) =>
     del<{ unlinked: boolean }>(API_ENDPOINTS.account.oauthUnlink(provider)),
 }
@@ -413,6 +415,10 @@ function pluginMultipart(path: string, field: 'package' | 'file', file: File, si
   return apiFetch<unknown>(path, { method: 'POST', body: form, signal })
 }
 
+/** 本地演示的插件图标与模板导出：直接返回 data URL，不触发任何网络请求。 */
+const MOCK_PLUGIN_ICON = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#E8F0E6"/><path d="M14 44V20h7l11 14 11-14h7v24h-6V30l-9 11h-6l-9-11v14z" fill="#2F5D3A"/></svg>')}`
+const MOCK_PROMPT_EXPORT = `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify({ name: '演示提示词集', version: 3, templates: [{ name: '写实摄影', instruction: '将用户描述扩展为写实摄影提示词。' }] }, null, 2))}`
+
 export const adminApi = {
   getDashboard: () => get<AdminDashboardDto>(API_ENDPOINTS.admin.dashboard),
 
@@ -478,8 +484,8 @@ export const adminApi = {
   deletePlugin: (id: string) =>
     del<AdminPluginDeleteResult>(API_ENDPOINTS.admin.plugin(id)),
   getPluginDocs: (id: string) => get<AdminPluginDocsDto>(API_ENDPOINTS.admin.pluginDocs(id)),
-  pluginIconUrl: (id: string) => resolveApiUrl(API_ENDPOINTS.admin.pluginIcon(id)),
-  pluginPackageUrl: (id: string) => resolveApiUrl(API_ENDPOINTS.admin.pluginPackage(id)),
+  pluginIconUrl: (id: string) => WORKSPACE_MODE === 'mock' ? MOCK_PLUGIN_ICON : resolveApiUrl(API_ENDPOINTS.admin.pluginIcon(id)),
+  pluginPackageUrl: (id: string) => WORKSPACE_MODE === 'mock' ? '#' : resolveApiUrl(API_ENDPOINTS.admin.pluginPackage(id)),
 
   // --- OAuth ------------------------------------------------------------
   listOAuthProviders: () => get<AdminOAuthProviderDto[]>(API_ENDPOINTS.admin.oauthProviders),
@@ -509,7 +515,7 @@ export const adminApi = {
     post<RenderPromptTemplateResult>(API_ENDPOINTS.admin.promptTemplatesPreview, input),
   /** 导出为原始 JSON 文本（服务端返回 attachment；导出按钮应直接下载）。 */
   promptTemplatesExportUrl: (setId?: string) =>
-    resolveApiUrl(API_ENDPOINTS.admin.promptTemplatesExport, setId ? { setId } : undefined),
+    WORKSPACE_MODE === 'mock' ? MOCK_PROMPT_EXPORT : resolveApiUrl(API_ENDPOINTS.admin.promptTemplatesExport, setId ? { setId } : undefined),
 
   // --- 设置 -------------------------------------------------------------
   getPromptOptimizationSettings: () =>

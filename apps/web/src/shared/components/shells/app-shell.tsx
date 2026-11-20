@@ -103,6 +103,11 @@ export interface AppShellProps {
    * - `false`（默认）：用于 `/library` 与 `/account`，带 56px 粘性顶栏 + `--container-workspace` 居中容器。
    */
   fullBleed?: boolean
+  /**
+   * 为 true 时不渲染外壳的全局侧栏与移动抽屉，由子视图提供唯一侧栏
+   * （Agent 控制台在 `/generate` 自带会话侧栏）。避免同屏出现两套导航。
+   */
+  hideSidebar?: boolean
   className?: string
   mainClassName?: string
   children: ReactNode
@@ -125,6 +130,7 @@ export function AppShell({
   headerSlot,
   headerTitle,
   fullBleed = false,
+  hideSidebar = false,
   className,
   mainClassName,
   children,
@@ -459,21 +465,23 @@ export function AppShell({
           跳到工作区内容
         </a>
 
-        {/* 桌面可折叠侧栏（>=960px） */}
-        <aside
-          aria-label="工作区侧栏"
-          className={cn(
-            'hidden shrink-0 flex-col border-r border-border bg-surface md:flex',
-            'transition-[width] duration-[var(--motion-spring-gentle)] ease-spring-gentle',
-            fullBleed ? 'h-full overflow-hidden' : 'sticky top-0 h-dvh overflow-hidden',
-            collapsed ? 'w-[var(--layout-sidebar-collapsed)]' : 'w-[var(--layout-sidebar)]',
-          )}
-        >
-          {renderSidebarBody(false)}
-        </aside>
+        {/* 桌面可折叠侧栏（>=960px）；hideSidebar 时由子视图提供唯一侧栏。 */}
+        {hideSidebar ? null : (
+          <aside
+            aria-label="工作区侧栏"
+            className={cn(
+              'hidden shrink-0 flex-col border-r border-border bg-surface md:flex',
+              'transition-[width] duration-[var(--motion-spring-gentle)] ease-spring-gentle',
+              fullBleed ? 'h-full overflow-hidden' : 'sticky top-0 h-dvh overflow-hidden',
+              collapsed ? 'w-[var(--layout-sidebar-collapsed)]' : 'w-[var(--layout-sidebar)]',
+            )}
+          >
+            {renderSidebarBody(false)}
+          </aside>
+        )}
 
         {/* 移动端左滑抽屉（<960px） */}
-        {mounted && portalTarget
+        {!hideSidebar && mounted && portalTarget
           ? createPortal(
               <div
                 {...overlayProps}
@@ -509,16 +517,18 @@ export function AppShell({
           {fullBleed ? (
             <header className="flex h-[var(--layout-header)] shrink-0 items-center justify-between gap-3 border-b border-border bg-surface/90 px-3 backdrop-blur-md md:hidden">
               <div className="flex min-w-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={openMobile}
-                  aria-expanded={mobileOpen}
-                  aria-controls={MOBILE_DRAWER_ID}
-                  aria-label="打开导航菜单"
-                  className={cn(ghostIconButtonVariants({ size: 'md' }), touchTargetSquare)}
-                >
-                  <ListIcon weight="bold" aria-hidden="true" className={iconSize.md} />
-                </button>
+                {hideSidebar ? null : (
+                  <button
+                    type="button"
+                    onClick={openMobile}
+                    aria-expanded={mobileOpen}
+                    aria-controls={MOBILE_DRAWER_ID}
+                    aria-label="打开导航菜单"
+                    className={cn(ghostIconButtonVariants({ size: 'md' }), touchTargetSquare)}
+                  >
+                    <ListIcon weight="bold" aria-hidden="true" className={iconSize.md} />
+                  </button>
+                )}
                 <span className="truncate text-sm font-medium text-foreground">{resolvedTitle}</span>
               </div>
               {headerSlot ? <div className="flex shrink-0 items-center gap-2">{headerSlot}</div> : null}
@@ -526,16 +536,18 @@ export function AppShell({
           ) : (
             <header className="sticky top-0 z-sticky flex h-[var(--layout-header)] shrink-0 items-center justify-between gap-4 border-b border-border bg-surface/90 px-4 backdrop-blur-md sm:px-6 md:px-8">
               <div className="flex min-w-0 items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={openMobile}
-                  aria-expanded={mobileOpen}
-                  aria-controls={MOBILE_DRAWER_ID}
-                  aria-label="打开导航菜单"
-                  className={cn(ghostIconButtonVariants({ size: 'md' }), touchTargetSquare, 'md:hidden')}
-                >
-                  <ListIcon weight="bold" aria-hidden="true" className={iconSize.md} />
-                </button>
+                {hideSidebar ? null : (
+                  <button
+                    type="button"
+                    onClick={openMobile}
+                    aria-expanded={mobileOpen}
+                    aria-controls={MOBILE_DRAWER_ID}
+                    aria-label="打开导航菜单"
+                    className={cn(ghostIconButtonVariants({ size: 'md' }), touchTargetSquare, 'md:hidden')}
+                  >
+                    <ListIcon weight="bold" aria-hidden="true" className={iconSize.md} />
+                  </button>
+                )}
                 <h1 className="truncate text-compact font-semibold tracking-tight text-foreground">
                   {resolvedTitle}
                 </h1>

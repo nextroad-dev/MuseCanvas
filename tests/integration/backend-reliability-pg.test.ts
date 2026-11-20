@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { readdirSync } from 'node:fs'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import test from 'node:test'
-import { runMigrations } from '../../packages/database/src/migrations/runner'
+import { runMigrations, type MigrateOptions } from '../../packages/database/src/migrations/runner'
+import { loadMigrations } from '../../packages/database/src/migrations/loader'
 import { acquireWorkerLease, releaseWorkerLease, renewWorkerLease, updateProviderRunState } from '../../packages/database/src/repositories/provider-runs'
 import { pruneOutbox } from '../../scripts/prune-outbox'
 
@@ -17,25 +19,33 @@ test('isolated PostgreSQL: migrations, leases, rollback, microseconds and index 
   assert.equal(target.hostname, '127.0.0.1')
   assert.equal(target.username, 'fixture')
   assert.equal(target.pathname, '/postgres')
-  const { Pool } = require('pg') as typeof import('pg')
-  const admin = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 5000 })
+  type Pool = MigrateOptions['pool']
+  const { Pool } = require('pg') as { Pool: new (config: { connectionString: string; max: number; connectionTimeoutMillis: number; statement_timeout?: number }) => Pool }
+  const admin = new Pool({ connectionString: url!, max: 1, connectionTimeoutMillis: 5000 })
   const name = `optimization_${randomUUID().replaceAll('-', '')}`
   assert.match(name, /^optimization_[a-f0-9]{32}$/)
-  await admin.query(`CREATE DATABASE "${name}"`)
-  target.pathname = `/${name}`
+  // Capture inherited environment before any overwrite so the finally below can
+  // restore the caller's variables even when bootstrap fails midway.
   const previousDb = process.env.DATABASE_URL
   const previousRedis = process.env.REDIS_URL
-  process.env.DATABASE_URL = target.toString()
-  process.env.REDIS_URL = 'redis://127.0.0.1:1/15'
-  // Override inherited connection configuration before Worker clients exist.
-  const { dispatchOutbox } = await import('../../apps/worker/src/queue/index')
-  const { assertWorkerSchema, WorkerSchemaRequiredError } = await import('../../apps/worker/src/shared/schema-preflight')
-  const { redis } = await import('../../apps/worker/src/shared/infra')
-  const pool = new Pool({ connectionString: target.toString(), max: 6, connectionTimeoutMillis: 5000, statement_timeout: 60_000 })
-  const report: Record<string, unknown> = { engine: 'PostgreSQL 17', fixture: true }
+  let businessPool: Pool | undefined, created = false
   try {
+    await admin.query(`CREATE DATABASE "${name}"`)
+    created = true
+    target.pathname = `/${name}`
+    process.env.DATABASE_URL = target.toString()
+    process.env.REDIS_URL = 'redis://127.0.0.1:1/15'
+    // Override inherited connection configuration before Worker clients exist.
+    const { dispatchOutbox } = await import('../../apps/worker/src/queue/index')
+    const { assertWorkerSchema, WorkerSchemaRequiredError } = await import('../../apps/worker/src/shared/schema-preflight')
+    const { redis } = await import('../../apps/worker/src/shared/infra')
+    const pool = new Pool({ connectionString: target.toString(), max: 6, connectionTimeoutMillis: 5000, statement_timeout: 60_000 })
+    businessPool = pool
+    const report: Record<string, unknown> = { engine: 'PostgreSQL 17', fixture: true }
     const migration = await runMigrations({ pool })
-    assert.equal(migration.latest, '0044')
+    const newest = loadMigrations().at(-1)
+    assert.ok(newest, 'the static migration loader must discover at least one migration file')
+    assert.equal(migration.latest, newest.version)
     await assertWorkerSchema(pool)
     assert.deepEqual((await runMigrations({ pool })).applied, [])
     const owners = (await pool.query("INSERT INTO users(email) SELECT 'fixture-'||g||'@example.invalid' FROM generate_series(1,100) g RETURNING id")).rows.map(row => String(row.id))
@@ -542,28 +552,34 @@ test('isolated PostgreSQL: migrations, leases, rollback, microseconds and index 
       assert.equal((await pool.query("SELECT count(*)::int n FROM generation_jobs WHERE idempotency_key LIKE 'p4-%'")).rows[0].n, 0)
     })
 
-    await t.test('all new schema changes have executable reverse SQL', async () => {
-      const agentMigrations = ['0041_agent_core.sql', '0042_agent_ledgers_outbox_quarantine.sql', '0043_agent_control_plane.sql', '0044_agent_recovery_indexes.sql']
-      for (let pass = 0; pass < 2; pass++) {
-        for (const filename of [...agentMigrations].reverse()) await pool.query(await readFile(new URL(`../../packages/database/rollback/${filename}`, import.meta.url), 'utf8'))
+    await t.test('every migration paired with a reverse script rolls back and replays forward', async () => {
+      const rollbackDir = new URL('../../packages/database/rollback/', import.meta.url)
+      const rollbackFiles = new Set(readdirSync(rollbackDir))
+      const reversible = loadMigrations().filter(migration => rollbackFiles.has(migration.filename))
+      assert.ok(reversible.length > 0, 'the rollback directory must pair at least one migration')
+      // Strictly descending: FK children (0047 artifact tables) revert before the
+      // relations they reference (0041 agent core), and so on down to 0035.
+      for (const migration of [...reversible].reverse()) {
+        await pool.query(await readFile(new URL(migration.filename, rollbackDir), 'utf8'))
       }
       assert.equal((await pool.query("SELECT to_regclass('agent_sessions') relation")).rows[0].relation, null)
-      await assert.rejects(assertWorkerSchema(pool), WorkerSchemaRequiredError)
-      const migrations = ['0035_outbox_dispatch_leases.sql', '0036_assets_owner_pagination_index.sql', '0037_outbox_pending_dispatch_index.sql', '0038_remove_redundant_revision_index.sql', '0039_remove_redundant_run_index.sql']
-      for (const filename of [...migrations].reverse()) await pool.query(await readFile(new URL(`../../packages/database/rollback/${filename}`, import.meta.url), 'utf8'))
       const columns = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='outbox_events' AND column_name IN ('dispatch_token','dispatch_lease_expires_at')")
       assert.equal(columns.rows.length, 0)
-      for (const filename of migrations) await pool.query(await readFile(new URL(`../../packages/database/migrations/${filename}`, import.meta.url), 'utf8'))
-      assert.ok((await pool.query("SELECT indisvalid FROM pg_index WHERE indexrelid='assets_owner_active_created_idx'::regclass")).rows[0].indisvalid)
-      for (const filename of agentMigrations) await pool.query(await readFile(new URL(`../../packages/database/migrations/${filename}`, import.meta.url), 'utf8'))
+      await assert.rejects(assertWorkerSchema(pool), WorkerSchemaRequiredError)
+      // Forward replay of exactly what was reverted; the loader's normalized SQL
+      // is the same text the migration runner executes.
+      for (const migration of reversible) await pool.query(migration.sql)
       assert.ok((await pool.query("SELECT to_regclass('agent_sessions') relation")).rows[0].relation)
+      assert.ok((await pool.query("SELECT indisvalid FROM pg_index WHERE indexrelid='assets_owner_active_created_idx'::regclass")).rows[0].indisvalid)
       await assertWorkerSchema(pool)
     })
   } finally {
+    // Any bootstrap step may fail: the finally must still end the business pool,
+    // drop the owned database, close the admin connection and restore env.
+    await businessPool?.end()
     try {
-      await pool.end()
       // The validated generated name is the only allowed destructive target.
-      await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`)
+      if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`)
     } finally {
       await admin.end()
       if (previousDb === undefined) delete process.env.DATABASE_URL

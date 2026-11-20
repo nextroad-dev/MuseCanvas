@@ -217,15 +217,19 @@ test('isolated PostgreSQL: Agent recovery persistence sweeps', { skip: !url, tim
       assert.equal(externalBudget.settled_at, null)
 
       const stored = await events(scope)
-      assert.deepEqual(stored.map(event => event.event_type), ['tool.updated', 'turn.updated'])
-      assert.deepEqual(stored.map(event => event.cursor), ['1', '2'])
-      assert.deepEqual(stored.map(event => event.entity_revision), ['2', '2'])
-      assert.equal(stored[0]!.payload.tool.id, local.toolId)
-      assert.equal(stored[0]!.payload.tool.status, 'failed')
-      assert.equal(stored[0]!.payload.tool.revision, '2')
-      assert.equal(stored[1]!.payload.turn.status, 'failed')
-      assert.equal(stored[1]!.payload.turn.revision, '2')
-      assert.equal(session.next_event_cursor, '3')
+      assert.deepEqual(stored.map(event => event.event_type), ['item.created', 'tool.updated', 'approval.required', 'turn.updated'])
+      assert.deepEqual(stored.map(event => event.cursor), ['1', '2', '3', '4'])
+      assert.deepEqual(stored.map(event => event.entity_revision), ['2', '2', '2', '2'])
+      assert.equal(stored[0]!.payload.item.type, 'tool_result')
+      assert.equal(stored[0]!.payload.item.toolCallId, local.toolId)
+      assert.equal(stored[1]!.payload.tool.id, local.toolId)
+      assert.equal(stored[1]!.payload.tool.status, 'failed')
+      assert.equal(stored[1]!.payload.tool.revision, '2')
+      assert.equal(stored[2]!.payload.approval.id, approvalId)
+      assert.equal(stored[2]!.payload.approval.status, 'expired')
+      assert.equal(stored[3]!.payload.turn.status, 'failed')
+      assert.equal(stored[3]!.payload.turn.revision, '2')
+      assert.equal(session.next_event_cursor, '5')
       assert.equal(stored.at(-1)!.cursor, String(Number(session.next_event_cursor) - 1))
     })
 
@@ -259,26 +263,29 @@ test('isolated PostgreSQL: Agent recovery persistence sweeps', { skip: !url, tim
       assert.equal(session.active_turn_id, scope.turnId)
 
       const stored = await events(scope)
-      assert.deepEqual(stored.map(event => event.event_type), ['tool.updated', 'turn.updated', 'turn.updated'])
+      assert.deepEqual(stored.map(event => event.event_type), ['item.created', 'tool.updated', 'approval.required', 'turn.updated', 'turn.updated'])
       assert.equal(stored.at(-1)!.payload.turn.status, 'queued')
       assert.equal(stored.at(-1)!.payload.turn.revision, '3')
-      assert.equal(session.next_event_cursor, '4')
+      assert.equal(session.next_event_cursor, '6')
 
       const firstWakes = await wakes(scope.turnId)
       assert.equal(firstWakes.length, 1)
       assert.equal(firstWakes[0]!.event_type, 'agent.turn.wake')
-      assert.equal(firstWakes[0]!.dedupe_key, `agent-recovery:approval:${scope.turnId}:${turn.revision}`)
+      assert.equal(firstWakes[0]!.dedupe_key, `agent:${scope.turnId}:${turn.revision}`)
 
       const again = await recovery.expireApprovals(10)
       assert.deepEqual(again, { kind: 'approval', processed: 0, remaining: false })
       assert.equal((await wakes(scope.turnId)).length, 1)
-      assert.equal((await events(scope)).length, 3)
+      assert.equal((await events(scope)).length, 5)
     })
 
     await t.test('finalizeCancellations cancels local work but leaves external media untouched', async () => {
       const scope = await makeTurn({ status: 'waiting_tools', deadline: 'future', cancelRequested: true, active: true })
       const local = await makeTool(scope, { status: 'executing', roundPosition: 1, toolName: 'cancel_local' })
       const external = await makeTool(scope, { status: 'waiting_external', roundPosition: 2, toolName: 'cancel_external' })
+      const stray = await makeTool(scope, { status: 'waiting_external', roundPosition: 3, toolName: 'cancel_stray' })
+      const job = await makeJob('running')
+      await makeLink(scope, external.toolId, job.jobId, 0)
       const localReservation = await reserve(scope, local.toolId, 'tool_calls', 1)
       const externalReservation = await reserve(scope, external.toolId, 'media_jobs', 1)
 
@@ -296,9 +303,14 @@ test('isolated PostgreSQL: Agent recovery persistence sweeps', { skip: !url, tim
 
       const localTool = await one<{ status: string; error: Row | null }>('SELECT status,error FROM agent_tool_calls WHERE id=$1', [local.toolId])
       assert.equal(localTool.status, 'cancelled')
-      assert.equal(localTool.error, null)
-      const externalTool = await one<{ status: string }>('SELECT status FROM agent_tool_calls WHERE id=$1', [external.toolId])
+      assert.deepEqual(localTool.error, { code: 'TOOL_FAILED', message: 'Agent tool cancelled', retryable: false })
+      const externalTool = await one<{ status: string; error: Row | null }>('SELECT status,error FROM agent_tool_calls WHERE id=$1', [external.toolId])
       assert.equal(externalTool.status, 'waiting_external')
+      assert.equal(externalTool.error, null)
+      // The unlinked waiting_external mirror cannot outlive the cancelled turn.
+      const strayTool = await one<{ status: string; error: Row }>('SELECT status,error FROM agent_tool_calls WHERE id=$1', [stray.toolId])
+      assert.equal(strayTool.status, 'failed')
+      assert.deepEqual(strayTool.error, { code: 'TOOL_FAILED', message: 'Media outcome was not observed before the turn ended', retryable: false })
 
       assert.equal((await one<{ status: string }>('SELECT status FROM agent_budget_reservations WHERE id=$1', [localReservation])).status, 'released')
       assert.equal((await one<{ status: string }>('SELECT status FROM agent_budget_reservations WHERE id=$1', [externalReservation])).status, 'reserved')
@@ -332,7 +344,7 @@ test('isolated PostgreSQL: Agent recovery persistence sweeps', { skip: !url, tim
       assert.equal(emitted[0]!.dedupe_key, `agent-recovery:lease:${scope.turnId}:${turn.fencing_token}`)
     })
 
-    await t.test('reconcileMediaJobs settles succeeded jobs, quota usage and resumes the turn once', async () => {
+    await t.test('reconcileMediaJobs settles succeeded jobs and quota usage; an unknown cost estimate leaves the turn waiting', async () => {
       const scope = await makeTurn({ status: 'waiting_tools', deadline: 'future', active: true })
       const tool = await makeTool(scope, { status: 'waiting_external', roundPosition: 1, toolName: 'media_success' })
       const second = await makeJob('succeeded'), first = await makeJob('succeeded')
@@ -369,36 +381,90 @@ test('isolated PostgreSQL: Agent recovery persistence sweeps', { skip: !url, tim
 
       const usage = await many<{ quota: string; amount: string; usage_kind: string }>(
         "SELECT details->>'quota' AS quota,amount::text,usage_kind FROM agent_usage_entries WHERE turn_id=$1", [scope.turnId])
-      assert.equal(usage.length, 2)
+      assert.equal(usage.length, 3)
       assert.deepEqual(Object.fromEntries(usage.map(entry => [entry.quota, Number(entry.amount)])), {
-        media_jobs: 2, media_outputs: 2,
+        media_jobs: 2, media_outputs: 2, estimated_cost: 1.25,
       })
-      assert.ok(usage.every(entry => entry.usage_kind === 'actual'))
+      assert.deepEqual(Object.fromEntries(usage.map(entry => [entry.quota, entry.usage_kind])), {
+        media_jobs: 'actual', media_outputs: 'actual', estimated_cost: 'unknown',
+      })
 
       const turn = await one<{ status: string; revision: string; terminal_at: unknown }>(
         'SELECT status,revision::text,terminal_at FROM agent_turns WHERE id=$1', [scope.turnId])
-      assert.equal(turn.status, 'queued')
-      assert.equal(turn.revision, '3')
+      assert.equal(turn.status, 'waiting_tools')
+      assert.equal(turn.revision, '2')
       assert.equal(turn.terminal_at, null)
       const session = await sessionState(scope)
       assert.equal(session.active_turn_id, scope.turnId)
       assert.equal(session.next_event_cursor, '3')
 
       const stored = await events(scope)
-      assert.deepEqual(stored.map(event => event.event_type), ['tool.updated', 'turn.updated'])
-      assert.equal(stored[0]!.payload.tool.status, 'completed')
-      assert.equal(stored[1]!.payload.turn.status, 'queued')
+      assert.deepEqual(stored.map(event => event.event_type), ['item.created', 'tool.updated'])
+      assert.equal(stored[0]!.payload.item.type, 'tool_result')
+      assert.equal(stored[0]!.payload.item.toolCallId, tool.toolId)
+      assert.equal(stored[1]!.payload.tool.status, 'completed')
+      assert.equal(stored.at(-1)!.cursor, String(Number(session.next_event_cursor) - 1))
+
+      // The unknown cost estimate is an unsettled reservation, so the requeue
+      // gate (no reserved/unknown budget) leaves the turn waiting without a wake.
+      const emitted = await wakes(scope.turnId)
+      assert.equal(emitted.length, 0)
+
+      const again = await mediaRecovery.reconcileMediaJobs(10)
+      assert.deepEqual(again, { kind: 'media', processed: 0, remaining: false })
+      assert.equal((await wakes(scope.turnId)).length, 0)
+      assert.equal((await events(scope)).length, 2)
+    })
+
+    await t.test('reconcileMediaJobs resumes the turn once when every reservation settles (known zero price)', async () => {
+      const scope = await makeTurn({ status: 'waiting_tools', deadline: 'future', active: true })
+      const tool = await makeTool(scope, { status: 'waiting_external', roundPosition: 1, toolName: 'media_zero_cost' })
+      const job = await makeJob('succeeded')
+      assert.ok(job.assetId)
+      await makeLink(scope, tool.toolId, job.jobId, 0)
+      const jobsReservation = await reserve(scope, tool.toolId, 'media_jobs', 1)
+      const outputsReservation = await reserve(scope, tool.toolId, 'media_outputs', 1)
+      await reserve(scope, tool.toolId, 'concurrent_media_jobs', 1)
+      const costReservation = await reserve(scope, tool.toolId, 'estimated_cost', 0, 'fixture-pricing-1')
+
+      const outcome = await mediaRecovery.reconcileMediaJobs(10)
+      assert.deepEqual(outcome, { kind: 'media', processed: 1, remaining: false })
+
+      const budgets = new Map((await many<{ id: string; status: string }>(
+        'SELECT id,status FROM agent_budget_reservations WHERE turn_id=$1', [scope.turnId])).map(row => [row.id, row]))
+      assert.equal(budgets.get(jobsReservation)!.status, 'settled')
+      assert.equal(budgets.get(outputsReservation)!.status, 'settled')
+      assert.equal(budgets.get(costReservation)!.status, 'settled')
+
+      const usage = await many<{ quota: string; amount: string; usage_kind: string }>(
+        "SELECT details->>'quota' AS quota,amount::text,usage_kind FROM agent_usage_entries WHERE turn_id=$1", [scope.turnId])
+      assert.equal(usage.length, 3)
+      assert.deepEqual(Object.fromEntries(usage.map(entry => [entry.quota, Number(entry.amount)])), {
+        media_jobs: 1, media_outputs: 1, estimated_cost: 0,
+      })
+      assert.ok(usage.every(entry => entry.usage_kind === 'actual'))
+
+      const turn = await one<{ status: string; revision: string }>('SELECT status,revision::text FROM agent_turns WHERE id=$1', [scope.turnId])
+      assert.equal(turn.status, 'queued')
+      assert.equal(turn.revision, '3')
+      const session = await sessionState(scope)
+      assert.equal(session.active_turn_id, scope.turnId)
+      assert.equal(session.next_event_cursor, '4')
+
+      const stored = await events(scope)
+      assert.deepEqual(stored.map(event => event.event_type), ['item.created', 'tool.updated', 'turn.updated'])
+      assert.equal(stored.at(-1)!.payload.turn.status, 'queued')
       assert.equal(stored.at(-1)!.cursor, String(Number(session.next_event_cursor) - 1))
 
       const emitted = await wakes(scope.turnId)
       assert.equal(emitted.length, 1)
       assert.equal(emitted[0]!.event_type, 'agent.turn.wake')
-      assert.equal(emitted[0]!.dedupe_key, `agent-recovery:media:${scope.turnId}:${turn.revision}`)
+      assert.equal(emitted[0]!.dedupe_key, `agent:${scope.turnId}:${turn.revision}`)
 
       const again = await mediaRecovery.reconcileMediaJobs(10)
       assert.deepEqual(again, { kind: 'media', processed: 0, remaining: false })
       assert.equal((await wakes(scope.turnId)).length, 1)
-      assert.equal((await events(scope)).length, 2)
+      assert.equal((await events(scope)).length, 3)
     })
 
     await t.test('reconcileMediaJobs fails a tool on a terminal failed job without a result', async () => {

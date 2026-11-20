@@ -1,5 +1,9 @@
 -- Offline disaster recovery only: stop admission/consumers and preserve audit data first.
--- Apply 0042 rollback before this file; application feature rollback is preferred.
+-- Full reverse order: 0047 -> 0046 -> 0045 -> 0044 -> 0043 -> 0042 -> 0041.
+-- 0047 must revert first: agent_artifact_snapshots holds a composite FK to
+-- agent_sessions(id, owner_id) that blocks these DROP TABLE statements.
+-- 0044 is index-only. 0040 and 0035-0039 are independent of this chain and can
+-- be reverted in parallel once 0041-0043 are gone. Application feature rollback is preferred.
 DROP TABLE IF EXISTS agent_approvals;
 ALTER TABLE IF EXISTS agent_items DROP CONSTRAINT IF EXISTS agent_items_tool_call_session_fk;
 DROP TABLE IF EXISTS agent_tool_calls;

@@ -9,12 +9,14 @@ export const agentFixtures = {
   recovery: { env: 'MUSECANVAS_AGENT_RECOVERY_PG_URL', file: 'agent-recovery-pg.test.ts', title: 'isolated PostgreSQL: Agent recovery persistence sweeps' },
   media: { env: 'MUSECANVAS_AGENT_MEDIA_TERMINAL_PG_URL', file: 'agent-media-terminal-pg.test.ts', title: 'isolated PostgreSQL: Agent media terminal/dedupe/owner/outbox fault matrix' },
   cleanup: { env: 'MUSECANVAS_AGENT_CLEANUP_PG_URL', file: 'agent-cleanup-pg.test.ts', title: 'isolated PostgreSQL: cleanup claims, rollback and account convergence guards' },
+  mediaCommands: { env: 'MUSECANVAS_MEDIA_COMMANDS_PG_URL', file: 'media-commands-pg.test.ts', title: 'real isolated PG: shared media creation, edit idempotency and object reclamation' },
+  modelRetry: { env: 'MUSECANVAS_MODEL_RETRY_PG_URL', file: 'model-revision-retry-pg.test.ts', title: 'isolated PostgreSQL: model revision credential swaps, snapshot rollback and retry run numbering' },
   streams: { env: 'MUSECANVAS_AGENT_STREAMS_REDIS_URL', file: 'agent-streams-redis.test.ts', title: 'isolated Redis: Agent wake/media route contract, independent groups and replay semantics' },
 }
 
 export function requireFixtureUrl(suite, env = process.env) {
   const fixture = Object.hasOwn(agentFixtures, suite) ? agentFixtures[suite] : undefined
-  if (!fixture) throw new Error('Unknown fixture suite; use runtime, recovery, media, cleanup or streams')
+  if (!fixture) throw new Error('Unknown fixture suite; use runtime, recovery, media, cleanup, mediaCommands, modelRetry or streams')
   const value = env[fixture.env]
   if (!value?.trim()) throw new Error(`Required fixture variable missing: ${fixture.env}`)
   let url

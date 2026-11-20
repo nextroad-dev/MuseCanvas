@@ -61,6 +61,14 @@ jobs:
         env:
           MUSECANVAS_AGENT_CLEANUP_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
         run: node scripts/run-agent-fixture.mjs cleanup
+      - name: Shared media commands, edit idempotency and keyed claims
+        env:
+          MUSECANVAS_MEDIA_COMMANDS_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
+        run: node scripts/run-agent-fixture.mjs mediaCommands
+      - name: Model revision swaps, snapshot rollback and retry numbering
+        env:
+          MUSECANVAS_MODEL_RETRY_PG_URL: postgresql://fixture:fixture-only@127.0.0.1:5432/postgres
+        run: node scripts/run-agent-fixture.mjs modelRetry
       - name: Agent streams replay and protected retention
         env:
           MUSECANVAS_AGENT_STREAMS_REDIS_URL: redis://127.0.0.1:6379/15

@@ -515,9 +515,9 @@ export function AppShell({
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {fullBleed ? (
-            <header className="flex h-[var(--layout-header)] shrink-0 items-center justify-between gap-3 border-b border-border bg-surface/90 px-3 backdrop-blur-md md:hidden">
-              <div className="flex min-w-0 items-center gap-2">
-                {hideSidebar ? null : (
+            hideSidebar ? null : (
+              <header className="flex h-[var(--layout-header)] shrink-0 items-center justify-between gap-3 border-b border-border bg-surface/90 px-3 backdrop-blur-md md:hidden">
+                <div className="flex min-w-0 items-center gap-2">
                   <button
                     type="button"
                     onClick={openMobile}
@@ -528,11 +528,11 @@ export function AppShell({
                   >
                     <ListIcon weight="bold" aria-hidden="true" className={iconSize.md} />
                   </button>
-                )}
-                <span className="truncate text-sm font-medium text-foreground">{resolvedTitle}</span>
-              </div>
-              {headerSlot ? <div className="flex shrink-0 items-center gap-2">{headerSlot}</div> : null}
-            </header>
+                  <span className="truncate text-sm font-medium text-foreground">{resolvedTitle}</span>
+                </div>
+                {headerSlot ? <div className="flex shrink-0 items-center gap-2">{headerSlot}</div> : null}
+              </header>
+            )
           ) : (
             <header className="sticky top-0 z-sticky flex h-[var(--layout-header)] shrink-0 items-center justify-between gap-4 border-b border-border bg-surface/90 px-4 backdrop-blur-md sm:px-6 md:px-8">
               <div className="flex min-w-0 items-center gap-2.5">

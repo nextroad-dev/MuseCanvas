@@ -67,6 +67,8 @@ export interface SessionSidebarProps {
   onCloseMobile?: () => void
   onToggleSidebar?: () => void
   activeRoute?: 'generate' | 'library'
+  /** 嵌入全局侧栏时只渲染会话/产物，不重复品牌、导航与账户页脚。 */
+  embedded?: boolean
   children?: ReactNode
 }
 
@@ -114,6 +116,7 @@ export function SessionSidebar({
   onCloseMobile,
   onToggleSidebar,
   activeRoute,
+  embedded = false,
   children,
 }: SessionSidebarProps) {
   const router = useRouter()
@@ -157,33 +160,35 @@ export function SessionSidebar({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-canvas">
-      <div className="flex shrink-0 items-center justify-between gap-2 px-3.5 pt-3.5 pb-2.5">
-        <Link
-          href={APP_ROUTES.home}
-          aria-label="MuseCanvas 首页"
-          onClick={() => onCloseMobile?.()}
-          className="inline-flex min-w-0 items-center gap-2 rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus"
-        >
-          <BrandMark variant="mark" size={24} />
-          <span className="truncate text-ui font-semibold tracking-tight text-foreground">
-            MuseCanvas
-          </span>
-        </Link>
+    <div className={cn('flex h-full min-h-0 flex-col', embedded ? 'bg-transparent' : 'bg-canvas')}>
+      {embedded ? null : (
+        <div className="flex shrink-0 items-center justify-between gap-2 px-3.5 pt-3.5 pb-2.5">
+          <Link
+            href={APP_ROUTES.home}
+            aria-label="MuseCanvas 首页"
+            onClick={() => onCloseMobile?.()}
+            className="inline-flex min-w-0 items-center gap-2 rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus"
+          >
+            <BrandMark variant="mark" size={24} />
+            <span className="truncate text-ui font-semibold tracking-tight text-foreground">
+              MuseCanvas
+            </span>
+          </Link>
 
-        {onToggleSidebar ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="收起会话列表"
-            onClick={onToggleSidebar}
-            className="shrink-0 rounded-control"
-            icon={<SidebarSimpleIcon className={iconSize.md} aria-hidden="true" />}
-          />
-        ) : null}
-      </div>
+          {onToggleSidebar ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="收起会话列表"
+              onClick={onToggleSidebar}
+              className="shrink-0 rounded-control"
+              icon={<SidebarSimpleIcon className={iconSize.md} aria-hidden="true" />}
+            />
+          ) : null}
+        </div>
+      )}
 
-      <div className="shrink-0 space-y-2 border-b border-border/50 px-3 pb-3">
+      <div className={cn('shrink-0 space-y-2 border-b border-border/50 px-3 pb-3', embedded && 'px-0 pt-1 pb-2')}>
         {onCreateSession ? (
           <Button
             size="sm"
@@ -213,7 +218,7 @@ export function SessionSidebar({
           </Button>
         )}
 
-        <nav aria-label="工作区导航" className="grid grid-cols-2 gap-1 rounded-control bg-tonal/55 p-1">
+        {embedded ? null : (<nav aria-label="工作区导航" className="grid grid-cols-2 gap-1 rounded-control bg-tonal/55 p-1">
           <Link
             href={APP_ROUTES.generate}
             prefetch
@@ -259,10 +264,10 @@ export function SessionSidebar({
             />
             <span className="truncate">作品图库</span>
           </Link>
-        </nav>
+        </nav>)}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div className={cn('min-h-0 flex-1 overflow-y-auto px-3 py-3', embedded && 'px-0 py-0')}>
         {children != null ? (
           children
         ) : agentConsole ? (
@@ -632,7 +637,7 @@ export function SessionSidebar({
         ) : null}
       </div>
 
-      <div className="mt-auto shrink-0 space-y-2 border-t border-border/60 px-3 py-2.5">
+      {embedded ? null : (<div className="mt-auto shrink-0 space-y-2 border-t border-border/60 px-3 py-2.5">
         {shellState.logoutError ? (
           <div
             role="alert"
@@ -743,7 +748,7 @@ export function SessionSidebar({
             <ThemeToggle className="shrink-0" />
           </div>
         )}
-      </div>
+      </div>)}
 
       <Dialog
         open={confirmClearOpen}

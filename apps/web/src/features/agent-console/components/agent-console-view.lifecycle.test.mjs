@@ -91,6 +91,17 @@ function setup({
   const capturedUseAgentConsoleArgs = []
   const capturedCreateCalls = []
   let store
+  const drawer = {
+    mobileDrawerOpen: false,
+    openCount: 0,
+    closeCount: 0,
+    openMobileDrawer() {
+      drawer.openCount += 1
+    },
+    closeMobileDrawer() {
+      drawer.closeCount += 1
+    },
+  }
 
   const { useAgentConsoleStore } = loadModule('../stores/agent-console-store.ts', {
     zustand: {
@@ -239,6 +250,10 @@ function setup({
     '@/features/workspace/components/workspace-shell-context': {
       useWorkspaceShell: () => null,
     },
+    '@/shared/components/shells': {
+      useAppShellDrawer: () => drawer,
+    },
+    'react-dom': { createPortal: (node) => node },
     '@/shared/lib/app-routes': loadModule('../../../shared/lib/app-routes.ts', {}),
     '@/shared/lib/cn': { cn: (...values) => values.filter(Boolean).join(' ') },
     '@/shared/services/api': { isApiError: () => false },
@@ -261,6 +276,7 @@ function setup({
 
   return {
     store,
+    drawer,
     setHydrating(value) {
       hydrating = value
     },
@@ -372,20 +388,16 @@ test('hydrating state renders skeleton without activating session, and ready tre
   assert.equal(find(readyTree, (el) => el.props['aria-label'] === '正在加载工作区'), null)
   assert.equal(find(readyTree, (el) => el.type === 'header'), null)
 
-  const sidebar = find(readyTree, (el) => el.type === 'SessionSidebar')
   const timeline = find(readyTree, (el) => el.type === 'ExecutionTimeline')
   const composer = find(readyTree, (el) => el.type === 'AgentComposer')
   const inspector = find(readyTree, (el) => el.type === 'InspectorPanel')
-  assert.ok(sidebar)
+  // 会话列表注入全局 AppShell 侧栏，控制台自身不再渲染第二套侧栏。
+  assert.equal(find(readyTree, (el) => el.props['aria-label'] === 'Agent 会话侧栏'), null)
   assert.ok(timeline)
   assert.ok(composer)
   assert.equal(inspector, null)
 
-  assert.equal(typeof sidebar.props.onToggleSidebar, 'function')
-  assert.equal(typeof sidebar.props.onReuseImage, 'function')
-  assert.equal('canvases' in sidebar.props, false)
   assert.equal('onOpenCanvasInspector' in timeline.props, false)
-  assert.equal(app.store.getState().leftSidebarOpen, true)
   assert.equal(find(readyTree, (el) => el.type === 'Badge'), null)
 
   const consoleSection = find(readyTree, (el) => el.type === 'section')
@@ -543,54 +555,33 @@ test('actor switch resets transient console store state', () => {
   app.unmount()
 })
 
-test('1090px keeps left sidebar inline without overlay blur', () => {
+test('1090px keeps the console free of a second sidebar and uses the global shell drawer', () => {
   const app = setup({ viewportWidth: 1090 })
   try {
     const tree = app.render()
-    assert.equal(app.store.getState().leftSidebarOpen, true)
-
-    // With left sidebar open, backdrop must be hidden at md (>=960px) so it never blurs inline content.
-    const idleBackdrop = find(
-      tree,
-      (el) => el.type === 'div' && el.props['aria-hidden'] === 'true',
+    assert.equal(find(tree, (el) => el.props['aria-label'] === 'Agent 会话侧栏'), null)
+    assert.equal(
+      find(tree, (el) => el.type === 'div' && el.props['aria-hidden'] === 'true'),
+      null,
     )
-    assert.ok(idleBackdrop)
-    assert.ok(idleBackdrop.props.className.includes('md:hidden'))
-
-    // Session selection at 1090px keeps the inline left sidebar docked.
-    const sidebar = find(tree, (el) => el.type === 'SessionSidebar')
-    sidebar.props.onCloseMobile()
-    assert.equal(app.store.getState().leftSidebarOpen, true)
+    const openButton = find(tree, (el) => el.props['aria-label'] === '打开会话列表')
+    assert.ok(openButton)
+    openButton.props.onClick()
+    assert.equal(app.drawer.openCount, 1)
   } finally {
     app.unmount()
   }
 })
 
-test('mobile viewport (<960px) collapses left drawer on mount and closes via backdrop', () => {
+test('mobile viewport opens the AppShell session drawer from the console toolbar', () => {
   const app = setup({ viewportWidth: 375 })
   try {
-    app.render()
-    let tree = app.render()
-    assert.equal(app.store.getState().leftSidebarOpen, false)
-    assert.equal(
-      find(tree, (el) => el.type === 'div' && el.props['aria-hidden'] === 'true'),
-      null,
-    )
-
-    const leftToggle = find(
-      tree,
-      (el) => typeof el.props?.['aria-label'] === 'string' && el.props['aria-label'].includes('会话列表'),
-    )
-    leftToggle.props.onClick()
-    tree = app.render()
-    assert.equal(app.store.getState().leftSidebarOpen, true)
-
-    const backdrop = find(
-      tree,
-      (el) => el.type === 'div' && el.props['aria-hidden'] === 'true',
-    )
-    backdrop.props.onClick()
-    assert.equal(app.store.getState().leftSidebarOpen, false)
+    const tree = app.render()
+    assert.equal(find(tree, (el) => el.props['aria-label'] === 'Agent 会话侧栏'), null)
+    const openButton = find(tree, (el) => el.props['aria-label'] === '打开会话列表')
+    assert.ok(openButton)
+    openButton.props.onClick()
+    assert.equal(app.drawer.openCount, 1)
   } finally {
     app.unmount()
   }
@@ -600,20 +591,15 @@ test('onCreateSession creates and activates a new session directly without ID/ve
   const app = setup({ mode: 'mock' })
   try {
     const tree = app.render()
-    const sidebar = find(tree, (el) => el.type === 'SessionSidebar')
     const timeline = find(tree, (el) => el.type === 'ExecutionTimeline')
     const composer = find(tree, (el) => el.type === 'AgentComposer')
 
-    assert.equal('definitionDraft' in sidebar.props, false)
-    assert.equal('newSessionOpen' in sidebar.props, false)
-    assert.equal('onOpenNewSession' in sidebar.props, false)
     assert.equal('onOpenNewSession' in timeline.props, false)
     assert.equal('onOpenNewSession' in composer.props, false)
-    assert.equal(typeof sidebar.props.onCreateSession, 'function')
     assert.equal(typeof timeline.props.onCreateSession, 'function')
     assert.equal(typeof composer.props.onCreateSession, 'function')
 
-    sidebar.props.onCreateSession()
+    timeline.props.onCreateSession()
     await Promise.resolve()
     await Promise.resolve()
 
@@ -1084,7 +1070,8 @@ test('empty composer renders inspiration starters and clicking fills draftPrompt
       },
     })
     assert.equal(prevented, true)
-    assert.equal(app.store.getState().leftSidebarOpen, true)
+    // 桌面宽度下 Ctrl/Cmd+K 聚焦会话搜索，不打开抽屉。
+    assert.equal(app.drawer.openCount, 0)
   } finally {
     app.unmount()
   }

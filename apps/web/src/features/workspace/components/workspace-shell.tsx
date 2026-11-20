@@ -92,7 +92,7 @@ export function WorkspaceShell({ mode, user, fullBleed, children }: WorkspaceShe
         mode={mode}
         user={user}
         fullBleed={resolvedFullBleed}
-        hideSidebar={onGenerate}
+        hideHeader={onGenerate}
         headerTitle={headerTitle}
         sidebarSlot={onGenerate ? sidebarSlot : null}
         headerSlot={onGenerate ? headerSlot : null}

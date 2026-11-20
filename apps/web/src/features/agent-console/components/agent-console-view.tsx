@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import {
@@ -22,6 +23,7 @@ import {
   iconSize,
   type BadgeTone,
 } from '@/shared/components/ui'
+import { useAppShellDrawer } from '@/shared/components/shells'
 import { useAgentConsole } from '@/shared/hooks/useAgentConsole'
 import { useAnimatedPresence } from '@/shared/hooks/useAnimatedPresence'
 import { useModels } from '@/shared/hooks/useModels'
@@ -74,11 +76,6 @@ const STATUS_DOT_TONES: Record<BadgeTone, string> = {
   danger: 'bg-danger',
   info: 'bg-info',
   accent: 'bg-accent',
-}
-
-function isDesktopLeftInline(): boolean {
-  if (typeof window === 'undefined') return true
-  return window.matchMedia?.('(min-width: 960px)')?.matches ?? true
 }
 
 const INSPIRATION_STARTERS: ReadonlyArray<{ label: string; prompt: string }> = [
@@ -190,9 +187,21 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
   const reuseKind = parseReuseKindQuery(reuseQuery)
   const { toast } = useToast()
   const shellState = useWorkspaceShell()
+  const appDrawer = useAppShellDrawer()
+  // AppShell 的 sidebarSlot 挂载点：会话列表通过 portal 注入全局侧栏，
+  // 与 /library 共用同一套侧栏外壳，避免两套导航。
+  const [sidebarHost, setSidebarHost] = useState<HTMLDivElement | null>(null)
+  const setSidebarSlot = shellState?.setSidebarSlot
+  useEffect(() => {
+    if (!setSidebarSlot) return
+    setSidebarSlot(<div ref={setSidebarHost} />)
+    return () => {
+      setSidebarSlot(null)
+      setSidebarHost(null)
+    }
+  }, [setSidebarSlot])
 
   const activeSessionId = useAgentConsoleStore((state) => state.activeSessionId)
-  const leftSidebarOpen = useAgentConsoleStore((state) => state.leftSidebarOpen)
   const rightPanelOpen = useAgentConsoleStore((state) => state.rightPanelOpen)
   const draftPrompt = useAgentConsoleStore((state) => state.draftPrompt)
   const draftAttachments = useAgentConsoleStore((state) => state.draftAttachments)
@@ -202,8 +211,6 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
   const messageAttachments = useAgentConsoleStore((state) => state.messageAttachments)
 
   const setActiveSessionId = useAgentConsoleStore((state) => state.setActiveSessionId)
-  const toggleLeftSidebar = useAgentConsoleStore((state) => state.toggleLeftSidebar)
-  const setLeftSidebarOpen = useAgentConsoleStore((state) => state.setLeftSidebarOpen)
   const toggleRightPanel = useAgentConsoleStore((state) => state.toggleRightPanel)
   const setRightPanelOpen = useAgentConsoleStore((state) => state.setRightPanelOpen)
   const setDraftPrompt = useAgentConsoleStore((state) => state.setDraftPrompt)
@@ -295,42 +302,26 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
     }
   }, [reuseQuery, consumeReuseQuery, addDraftAttachment])
 
-  // 窄视口首屏折叠会以抽屉形态挂载的左侧栏（<960px 收起左栏）。
-  const viewportInitializedRef = useRef(false)
+  // 检查器（右侧栏）打开时支持 Esc 关闭；会话列表由全局侧栏承载。
   useEffect(() => {
-    if (!hydrated || viewportInitializedRef.current || typeof window === 'undefined') return
-    viewportInitializedRef.current = true
-    if (!isDesktopLeftInline()) {
-      setLeftSidebarOpen(false)
-    }
-  }, [hydrated, setLeftSidebarOpen])
-
-  // 抽屉形态侧栏或检查器打开时支持 Esc 关闭，且保留桌面内联面板。
-  useEffect(() => {
-    if (!hydrated || typeof window === 'undefined') return
-    if (!leftSidebarOpen && !rightPanelOpen) return
+    if (!hydrated || typeof window === 'undefined' || !rightPanelOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
-      if (leftSidebarOpen && !isDesktopLeftInline()) {
-        setLeftSidebarOpen(false)
-      }
-      if (rightPanelOpen) {
-        setRightPanelOpen(false)
-      }
+      setRightPanelOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [hydrated, leftSidebarOpen, rightPanelOpen, setLeftSidebarOpen, setRightPanelOpen])
+  }, [hydrated, rightPanelOpen, setRightPanelOpen])
 
-  // 全局快捷键 Ctrl/Cmd + K：展开左侧栏并聚焦会话搜索框（若无搜索框则聚焦会话列表）。
+  // 全局快捷键 Ctrl/Cmd + K：打开移动抽屉（窄视口）并聚焦会话搜索框。
   useEffect(() => {
     if (!hydrated || typeof window === 'undefined') return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return
       event.preventDefault()
-      if (!leftSidebarOpen) {
-        setLeftSidebarOpen(true)
+      if (typeof window.matchMedia === 'function' && !window.matchMedia('(min-width: 960px)').matches) {
+        appDrawer.openMobileDrawer()
       }
       const focusSearchOrList = () => {
         if (typeof document === 'undefined') return
@@ -340,9 +331,7 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
           return
         }
         document
-          .querySelector<HTMLElement>(
-            'aside[aria-label="Agent 会话侧栏"] [role="list"], aside[aria-label="Agent 会话侧栏"] ul',
-          )
+          .querySelector<HTMLElement>('[aria-label="工作区侧栏"] [role="list"], [aria-label="工作区侧栏"] ul')
           ?.focus()
       }
       if (typeof window.requestAnimationFrame === 'function') {
@@ -353,7 +342,7 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [hydrated, leftSidebarOpen, setLeftSidebarOpen])
+  }, [hydrated, appDrawer])
 
   // Mock 模式首次加载自动选中内置演示会话，展示完整交互时间线。
   useEffect(() => {
@@ -493,9 +482,7 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
     try {
       const created = await agentConsole.createSession(resolved)
       setActiveSessionId(created.id)
-      if (!isDesktopLeftInline()) {
-        setLeftSidebarOpen(false)
-      }
+      appDrawer.closeMobileDrawer()
       toast.success(
         '新对话已创建',
         '可以开始下达创作指令。',
@@ -511,7 +498,6 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
     }
   }
 
-  const leftPresence = useAnimatedPresence(leftSidebarOpen)
   const rightPresence = useAnimatedPresence(rightPanelOpen)
 
   if (!hydrated) {
@@ -533,10 +519,6 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
     ? formatConnectionState(agentConsole.connectionState)
     : activeTurnMeta
   const pendingApprovalCount = agentConsole.pendingApprovals.length
-
-  function handleToggleLeftSidebar() {
-    toggleLeftSidebar()
-  }
 
   async function handleDeleteSession(sessionId: string) {
     try {
@@ -624,56 +606,29 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-canvas"
     >
       <h1 className="sr-only">Agent 操作台</h1>
-      {/* 移动端抽屉遮罩（<960px 左栏展开/退场时显示） */}
-      {leftPresence.mounted ? (
-        <div
-          aria-hidden="true"
-          onClick={() => {
-            if (!isDesktopLeftInline()) setLeftSidebarOpen(false)
-          }}
-          className={cn(
-            'absolute inset-0 z-overlay bg-overlay/35 backdrop-blur-xs md:hidden',
-            leftPresence.closing ? 'pointer-events-none motion-fade-out' : 'motion-fade-in',
-          )}
-        />
-      ) : null}
-
-      {/* 左栏：会话列表与本对话产物胶片（>=960px 内联停靠，<960px 抽屉） */}
-      <aside
-        aria-label="Agent 会话侧栏"
-        onAnimationEnd={leftPresence.onAnimationEnd}
-        className={cn(
-          'absolute inset-y-0 left-0 z-overlay w-72 max-w-[85vw] border-r border-border/70 bg-surface/95 backdrop-blur-md shadow-drawer',
-          'md:static md:inset-y-auto md:z-auto md:h-full md:w-64 md:max-w-none md:shrink-0 md:bg-surface/60 md:backdrop-blur-none md:shadow-none lg:w-72',
-          leftPresence.closing
-            ? 'max-md:pointer-events-none max-md:motion-drawer-out-left'
-            : 'max-md:motion-drawer-in-left',
-          !leftPresence.mounted && 'max-md:hidden',
-          !leftSidebarOpen && 'md:hidden',
-        )}
-      >
-        <SessionSidebar
-          console={agentConsole}
-          sessions={visibleSessions}
-          activeSessionId={activeSessionId}
-          pinnedSessionIds={pinnedSessionIds}
-          sessionTitles={sessionTitles}
-          onSelectSession={(id) => setActiveSessionId(id)}
-          onCreateSession={() => void handleCreateSession()}
-          onDeleteSession={handleDeleteSession}
-          onClearSessions={handleClearSessions}
-          onTogglePinSession={togglePinSession}
-          onRenameSession={renameSession}
-          onReuseImage={handleReuseImage}
-          creatingSession={creatingSession || agentConsole.mutations.createSession.isPending}
-          onToggleSidebar={handleToggleLeftSidebar}
-          onCloseMobile={() => {
-            if (!isDesktopLeftInline()) {
-              setLeftSidebarOpen(false)
-            }
-          }}
-        />
-      </aside>
+      {/* 会话列表注入 AppShell 全局侧栏：/generate 与 /library 共用同一套侧栏。 */}
+      {sidebarHost
+        ? createPortal(
+            <SessionSidebar
+              embedded
+              console={agentConsole}
+              sessions={visibleSessions}
+              activeSessionId={activeSessionId}
+              pinnedSessionIds={pinnedSessionIds}
+              sessionTitles={sessionTitles}
+              onSelectSession={(id) => setActiveSessionId(id)}
+              onCreateSession={() => void handleCreateSession()}
+              onDeleteSession={handleDeleteSession}
+              onClearSessions={handleClearSessions}
+              onTogglePinSession={togglePinSession}
+              onRenameSession={renameSession}
+              onReuseImage={handleReuseImage}
+              creatingSession={creatingSession || agentConsole.mutations.createSession.isPending}
+              onCloseMobile={appDrawer.closeMobileDrawer}
+            />,
+            sidebarHost,
+          )
+        : null}
 
       {/* 主画布：无顶栏沉浸画布 + 悬浮角标控件 + 执行时间线 + 待审批控制栏 + 悬浮交互输入器 */}
       <section
@@ -684,19 +639,14 @@ export function AgentConsoleView({ mode, defaultAgentDefinition = null, initialS
         )}
       >
         <div className="pointer-events-none absolute inset-x-0 top-0 z-sticky flex flex-wrap items-start justify-between gap-2 bg-gradient-to-b from-canvas via-canvas/80 to-transparent pb-6 pt-3 px-3 sm:px-5 sm:pt-3.5">
-          <div
-            className={cn(
-              'pointer-events-auto flex items-center gap-0.5 rounded-pill border border-border/60 bg-surface/85 p-1 shadow-soft backdrop-blur-md',
-              leftSidebarOpen && 'md:hidden',
-            )}
-          >
+          <div className="pointer-events-auto flex items-center gap-0.5 rounded-pill border border-border/60 bg-surface/85 p-1 shadow-soft backdrop-blur-md">
             <Button
               size="icon"
               variant="ghost"
-              className="rounded-pill sm:size-8"
-              aria-label={leftSidebarOpen ? '收起会话列表' : '展开会话列表'}
-              aria-expanded={leftSidebarOpen}
-              onClick={handleToggleLeftSidebar}
+              className="rounded-pill sm:size-8 md:hidden"
+              aria-label="打开会话列表"
+              aria-expanded={appDrawer.mobileDrawerOpen}
+              onClick={appDrawer.openMobileDrawer}
               icon={<SidebarSimpleIcon className={iconSize.sm} aria-hidden="true" />}
             />
             <Button

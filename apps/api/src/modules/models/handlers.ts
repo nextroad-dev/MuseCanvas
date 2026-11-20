@@ -13,7 +13,7 @@ import { globalProviderRegistry, MAX_INPUT_IMAGES, pluginCredentialSpec, resolve
 import type { AnyProviderManifest } from '@musecanvas/providers'
 import type { MediaProviderPlugin } from '@musecanvas/providers'
 import { resolvePresetCapabilities, type ModelPreset } from '../../admin/model-presets'
-import { hasForbiddenManualModelFields, modelOverrideError, modelSavePath, presetRevisionOrRow } from './upsert-internal'
+import { hasForbiddenManualModelFields, modelOverrideError, modelSavePath } from './upsert-internal'
 
 // Plugin-first validation. New image configuration targets the hardened active
 // keys (openai-image@1.1.0, seedream-image@1.1.0); exact registered 1.0.0 keys
@@ -151,6 +151,41 @@ function snapshotDigest(parts: Record<string, unknown>): string {
   return createHash('sha256').update(stableStringify(parts)).digest('hex')
 }
 
+/**
+ * Everything a revision must pin for the Worker to execute the same call.
+ *
+ * `capabilities`/`defaults` describe the request shape, but the credential is
+ * the execution identity: reusing a revision after an admin swaps the provider
+ * account would send the new request with the old secret. Normalized execution
+ * settings belong here for the same reason, so adding one field can never reuse
+ * a revision that predates it.
+ */
+export type ModelRevisionSnapshotIdentity = {
+  modelId: string
+  providerId: string
+  pluginId: string
+  pluginVersion: string
+  credentialId: string | null
+  credentialSchemaVersion: number | null
+  normalizedConfig: Record<string, unknown>
+  capabilities: unknown
+  defaults: unknown
+}
+
+export function modelRevisionSnapshotDigest(identity: ModelRevisionSnapshotIdentity): string {
+  return snapshotDigest({
+    modelId: identity.modelId,
+    providerId: identity.providerId,
+    pluginId: identity.pluginId,
+    pluginVersion: identity.pluginVersion,
+    credentialId: identity.credentialId,
+    credentialSchemaVersion: identity.credentialSchemaVersion,
+    normalizedConfig: identity.normalizedConfig,
+    capabilities: identity.capabilities,
+    defaults: identity.defaults,
+  })
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) return value as Record<string, unknown>
   return null
@@ -231,6 +266,23 @@ function legacyColumnValues(
   }
 }
 
+/**
+ * The credential schema a revision pins. It is read from the persisted row, not
+ * assumed: credentials accept an explicit schema version, and the Agent runtime
+ * compares the pinned value with the credential's current one.
+ */
+async function credentialSchemaVersionFor(
+  client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  credentialId: string | null,
+): Promise<number> {
+  if (!credentialId) return 1
+  const res = await client.query(
+    'SELECT schema_version FROM provider_credentials WHERE id=$1 AND deleted_at IS NULL',
+    [credentialId],
+  )
+  return Number(res.rows[0]?.schema_version || 1)
+}
+
 async function snapshotRevisionForRow(
   client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
   row: Record<string, unknown>,
@@ -240,15 +292,44 @@ async function snapshotRevisionForRow(
   const providerId = (row.provider_id as string) || 'legacy'
   const pluginId = (row.plugin_id as string) || 'legacy-image'
   const pluginVersion = (row.plugin_version as string) || '1.0.0'
+  const credentialId = (row.provider_credential_id as string) || null
+  const credentialSchemaVersion = await credentialSchemaVersionFor(client, credentialId)
   const capabilities = (contract?.capabilities ?? capabilitiesFromRow(row)) as unknown as Record<string, unknown>
   const defaults = contract?.defaults ?? { ...(defaultsFromRow(row)), ...(asRecord(row.defaults) || {}) }
-  const digest = snapshotDigest({ modelId: row.id, providerId, pluginId, pluginVersion, capabilities, defaults })
+  const normalizedConfig = {
+    vendorModelId: row.vendor_model_id,
+    baseUrl: row.base_url,
+    concurrencyLimit: row.concurrency_limit,
+    watermark: row.watermark,
+    modelKind: row.model_kind,
+  }
+  const digest = modelRevisionSnapshotDigest({
+    modelId: row.id as string,
+    providerId,
+    pluginId,
+    pluginVersion,
+    credentialId,
+    credentialSchemaVersion,
+    normalizedConfig,
+    capabilities,
+    defaults,
+  })
   const existing = await client.query(
-    'SELECT id FROM model_config_revisions WHERE model_id=$1 AND snapshot_digest=$2 ORDER BY revision DESC LIMIT 1',
+    'SELECT id,revision FROM model_config_revisions WHERE model_id=$1 AND snapshot_digest=$2 ORDER BY revision DESC LIMIT 1',
     [row.id, digest],
   )
-  let revisionId = existing.rows[0]?.id as string | undefined
-  let revision = existing.rows[0] ? Number((await client.query('SELECT revision FROM model_config_revisions WHERE id=$1', [revisionId])).rows[0]?.revision || 1) : 1
+  const maxRevision = Number((await client.query(
+    'SELECT COALESCE(MAX(revision),0) AS max_revision FROM model_config_revisions WHERE model_id=$1',
+    [row.id],
+  )).rows[0]?.max_revision || 0)
+  // Only the newest revision may be reused. Reusing an older identical revision
+  // would move latest_revision_id backwards while getLatestModelConfigRevision —
+  // the Worker fallback for jobs without a pinned revision — still returns the
+  // highest revision, so the model row and the executed snapshot would disagree.
+  // Re-saving an older state appends a new revision instead of rewriting history.
+  const reusable = existing.rows[0] && Number(existing.rows[0].revision) === maxRevision
+  let revisionId = reusable ? existing.rows[0].id as string : undefined
+  let revision = reusable ? Number(existing.rows[0].revision || 1) : 1
   if (!revisionId) {
     const created = await createModelConfigRevision(client as never, {
       modelId: row.id as string,
@@ -257,16 +338,10 @@ async function snapshotRevisionForRow(
       pluginVersion,
       vendorModelId: (row.vendor_model_id as string) || null,
       baseUrl: (row.base_url as string) || null,
-      credentialId: (row.provider_credential_id as string) || null,
-      credentialSchemaVersion: 1,
+      credentialId,
+      credentialSchemaVersion,
       capabilities,
-      normalizedConfig: {
-        vendorModelId: row.vendor_model_id,
-        baseUrl: row.base_url,
-        concurrencyLimit: row.concurrency_limit,
-        watermark: row.watermark,
-        modelKind: row.model_kind,
-      },
+      normalizedConfig,
       defaults,
       snapshotDigest: digest,
       createdBy: actorId,
@@ -499,18 +574,50 @@ async function savePluginModel(
         )
         record = inserted.rows[0]
       }
-      const digest = snapshotDigest({ modelId: record.id, providerId, pluginId, pluginVersion, capabilities, defaults })
+      // Identity comes from the row the database actually persisted, never from
+      // the pre-write request: an omitted credential keeps the stored one, an
+      // explicit null is also "keep", and a concurrent writer may have changed
+      // it. Building the revision and its digest from `record` keeps the two
+      // sources in agreement.
+      const persistedCredentialId = (record.provider_credential_id as string) || null
+      const persistedProviderId = (record.provider_id as string) || providerId
+      const persistedPluginId = (record.plugin_id as string) || pluginId
+      const persistedPluginVersion = (record.plugin_version as string) || pluginVersion
+      const persistedVendorModelId = (record.vendor_model_id as string) || null
+      const persistedBaseUrl = (record.base_url as string) || null
+      const persistedConcurrencyLimit = Number(record.concurrency_limit ?? concurrencyLimit)
+      const persistedWatermark = Boolean(record.watermark)
+      const persistedModelKind = (record.model_kind as string) || mediaKind
+      const credentialSchemaVersion = await credentialSchemaVersionFor(client, persistedCredentialId)
+      const normalizedConfig = {
+        vendorModelId: persistedVendorModelId,
+        baseUrl: persistedBaseUrl,
+        concurrencyLimit: persistedConcurrencyLimit,
+        watermark: persistedWatermark,
+        modelKind: persistedModelKind,
+      }
+      const digest = modelRevisionSnapshotDigest({
+        modelId: record.id as string,
+        providerId: persistedProviderId,
+        pluginId: persistedPluginId,
+        pluginVersion: persistedPluginVersion,
+        credentialId: persistedCredentialId,
+        credentialSchemaVersion,
+        normalizedConfig,
+        capabilities,
+        defaults,
+      })
       const created = await createModelConfigRevision(client as never, {
         modelId: record.id as string,
-        providerId,
-        pluginId,
-        pluginVersion,
-        vendorModelId,
-        baseUrl: (baseUrl === undefined ? existing?.base_url : baseUrl) as string | null,
-        credentialId: (typeof effectiveCredId === 'string' && effectiveCredId ? effectiveCredId : null) as string | null,
-        credentialSchemaVersion: 1,
+        providerId: persistedProviderId,
+        pluginId: persistedPluginId,
+        pluginVersion: persistedPluginVersion,
+        vendorModelId: persistedVendorModelId,
+        baseUrl: persistedBaseUrl,
+        credentialId: persistedCredentialId,
+        credentialSchemaVersion,
         capabilities: capabilities as unknown as Record<string, unknown>,
-        normalizedConfig: { vendorModelId, concurrencyLimit, watermark, modelKind: mediaKind },
+        normalizedConfig,
         defaults,
         snapshotDigest: digest,
         createdBy: actor.id,
@@ -521,6 +628,13 @@ async function savePluginModel(
       return { ...record, capabilities, defaults, revision: created.revision, latest_revision_id: created.id }
     })
     return ok(modelDto(row))
+}
+
+/** Early exit inside the save transaction; thrown so the whole write rolls back. */
+class PresetSaveRejected extends Error {
+  constructor(readonly code: string, message: string, readonly status: number) {
+    super(message)
+  }
 }
 
 async function savePresetModel(
@@ -608,96 +722,104 @@ async function savePresetModel(
   // default, not a capability, so it stays the admin's choice and off otherwise.
   const presetWatermark = presetMediaKind !== null && input.watermark === true
 
-  let result
-  if (id && !targetPreset) {
-    result = await db().query(
-      `UPDATE model_configs SET concurrency_limit=$1,enabled=COALESCE($2,enabled),watermark=COALESCE($3,watermark),sort_order=$4,provider_credential_id=CASE WHEN $5::text IS NULL THEN provider_credential_id WHEN $5::text = '' THEN NULL ELSE $5::uuid END,reasoning_effort=CASE WHEN model_kind='language' THEN $6 ELSE NULL END,updated_at=now() WHERE id=$7 AND deleted_at IS NULL RETURNING *`,
-      [
-        concurrencyLimit,
-        typeof input.enabled === 'boolean' ? input.enabled : null,
-        typeof input.watermark === 'boolean' ? input.watermark : null,
-        sortOrder,
-        credId === undefined ? null : credId,
-        reasoningEffort ?? null,
-        id,
-      ],
-    )
-  } else if (id && targetPreset) {
-    result = await db().query(
-      `UPDATE model_configs SET preset_id=$1,display_name=$2,adapter=$3,vendor_model_id=$4,base_url=$5,sizes=$6,quality_options=$7,max_count=$8,concurrency_limit=$9,enabled=COALESCE($10,enabled),watermark=$11,sort_order=$12,provider_credential_id=CASE WHEN $13::text IS NULL THEN provider_credential_id WHEN $13::text = '' THEN NULL ELSE $13::uuid END,model_kind=$14,is_default=CASE WHEN model_kind<>$14 THEN false ELSE is_default END,language_protocol=$15,max_output_tokens=$16,temperature=$17,reasoning_effort=$18,max_input_images=$19,provider_id=$20,plugin_id=$21,plugin_version=$22,plugin_source=$24,updated_at=now() WHERE id=$23 AND deleted_at IS NULL RETURNING *`,
-      [
-        targetPreset.id,
-        targetPreset.displayName,
-        'adapter' in targetPreset ? targetPreset.adapter : existing?.adapter,
-        targetPreset.vendorModelId,
-        targetPreset.baseUrl,
-        presetColumns.sizes,
-        presetColumns.qualityOptions,
-        presetColumns.maxCount,
-        concurrencyLimit,
-        typeof input.enabled === 'boolean' ? input.enabled : null,
-        presetWatermark,
-        sortOrder,
-        credId === undefined ? null : credId,
-        targetPreset.modelKind,
-        targetPreset.modelKind === 'language' ? targetPreset.languageProtocol : null,
-        targetPreset.modelKind === 'language' ? targetPreset.maxOutputTokens : null,
-        targetPreset.modelKind === 'language' && targetPreset.temperature !== undefined
-          ? targetPreset.temperature
-          : null,
-        targetPreset.modelKind === 'language' ? reasoningEffort ?? null : null,
-        presetColumns.maxInputImages,
-        'providerId' in targetPreset ? targetPreset.providerId : existing?.provider_id || null,
-        'pluginId' in targetPreset ? targetPreset.pluginId : existing?.plugin_id || null,
-        'pluginVersion' in targetPreset ? targetPreset.pluginVersion : existing?.plugin_version || '1.0.0',
-        id,
-        presetPluginSource,
-      ],
-    )
-  } else if (targetPreset) {
-    result = await db().query(
-      'INSERT INTO model_configs(preset_id,display_name,adapter,vendor_model_id,base_url,sizes,quality_options,max_count,concurrency_limit,enabled,watermark,sort_order,created_by,provider_credential_id,model_kind,language_protocol,max_output_tokens,temperature,reasoning_effort,max_input_images,provider_id,plugin_id,plugin_version,plugin_source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *',
-      [
-        targetPreset.id,
-        targetPreset.displayName,
-        'adapter' in targetPreset ? targetPreset.adapter : null,
-        targetPreset.vendorModelId,
-        targetPreset.baseUrl,
-        presetColumns.sizes,
-        presetColumns.qualityOptions,
-        presetColumns.maxCount,
-        concurrencyLimit,
-        input.enabled === true,
-        presetWatermark,
-        sortOrder,
-        actor.id,
-        typeof credId === 'string' && credId ? credId : null,
-        targetPreset.modelKind,
-        targetPreset.modelKind === 'language' ? targetPreset.languageProtocol : null,
-        targetPreset.modelKind === 'language' ? targetPreset.maxOutputTokens : null,
-        targetPreset.modelKind === 'language' && targetPreset.temperature !== undefined
-          ? targetPreset.temperature
-          : null,
-        targetPreset.modelKind === 'language' ? reasoningEffort ?? null : null,
-        presetColumns.maxInputImages,
-        'providerId' in targetPreset ? targetPreset.providerId : null,
-        'pluginId' in targetPreset ? targetPreset.pluginId : null,
-        'pluginVersion' in targetPreset ? targetPreset.pluginVersion : '1.0.0',
-        presetPluginSource,
-      ],
-    )
-  } else {
-    return fail('INVALID_PRESET', '请选择模型预设')
+  // The row, its audit entry and its revision are one save. Writing them with
+  // separate pool queries left a committed model with no revision when the
+  // snapshot failed, which the caller could not detect; a rollback is the only
+  // honest outcome for a model whose execution identity was not pinned.
+  let saved: Record<string, unknown>
+  try {
+    saved = await transaction(async client => {
+      let result
+      if (id && !targetPreset) {
+        result = await client.query(
+          `UPDATE model_configs SET concurrency_limit=$1,enabled=COALESCE($2,enabled),watermark=COALESCE($3,watermark),sort_order=$4,provider_credential_id=CASE WHEN $5::text IS NULL THEN provider_credential_id WHEN $5::text = '' THEN NULL ELSE $5::uuid END,reasoning_effort=CASE WHEN model_kind='language' THEN $6 ELSE NULL END,updated_at=now() WHERE id=$7 AND deleted_at IS NULL RETURNING *`,
+          [
+            concurrencyLimit,
+            typeof input.enabled === 'boolean' ? input.enabled : null,
+            typeof input.watermark === 'boolean' ? input.watermark : null,
+            sortOrder,
+            credId === undefined ? null : credId,
+            reasoningEffort ?? null,
+            id,
+          ],
+        )
+      } else if (id && targetPreset) {
+        result = await client.query(
+          `UPDATE model_configs SET preset_id=$1,display_name=$2,adapter=$3,vendor_model_id=$4,base_url=$5,sizes=$6,quality_options=$7,max_count=$8,concurrency_limit=$9,enabled=COALESCE($10,enabled),watermark=$11,sort_order=$12,provider_credential_id=CASE WHEN $13::text IS NULL THEN provider_credential_id WHEN $13::text = '' THEN NULL ELSE $13::uuid END,model_kind=$14,is_default=CASE WHEN model_kind<>$14 THEN false ELSE is_default END,language_protocol=$15,max_output_tokens=$16,temperature=$17,reasoning_effort=$18,max_input_images=$19,provider_id=$20,plugin_id=$21,plugin_version=$22,plugin_source=$24,updated_at=now() WHERE id=$23 AND deleted_at IS NULL RETURNING *`,
+          [
+            targetPreset.id,
+            targetPreset.displayName,
+            'adapter' in targetPreset ? targetPreset.adapter : existing?.adapter,
+            targetPreset.vendorModelId,
+            targetPreset.baseUrl,
+            presetColumns.sizes,
+            presetColumns.qualityOptions,
+            presetColumns.maxCount,
+            concurrencyLimit,
+            typeof input.enabled === 'boolean' ? input.enabled : null,
+            presetWatermark,
+            sortOrder,
+            credId === undefined ? null : credId,
+            targetPreset.modelKind,
+            targetPreset.modelKind === 'language' ? targetPreset.languageProtocol : null,
+            targetPreset.modelKind === 'language' ? targetPreset.maxOutputTokens : null,
+            targetPreset.modelKind === 'language' && targetPreset.temperature !== undefined
+              ? targetPreset.temperature
+              : null,
+            targetPreset.modelKind === 'language' ? reasoningEffort ?? null : null,
+            presetColumns.maxInputImages,
+            'providerId' in targetPreset ? targetPreset.providerId : existing?.provider_id || null,
+            'pluginId' in targetPreset ? targetPreset.pluginId : existing?.plugin_id || null,
+            'pluginVersion' in targetPreset ? targetPreset.pluginVersion : existing?.plugin_version || '1.0.0',
+            id,
+            presetPluginSource,
+          ],
+        )
+      } else if (targetPreset) {
+        result = await client.query(
+          'INSERT INTO model_configs(preset_id,display_name,adapter,vendor_model_id,base_url,sizes,quality_options,max_count,concurrency_limit,enabled,watermark,sort_order,created_by,provider_credential_id,model_kind,language_protocol,max_output_tokens,temperature,reasoning_effort,max_input_images,provider_id,plugin_id,plugin_version,plugin_source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *',
+          [
+            targetPreset.id,
+            targetPreset.displayName,
+            'adapter' in targetPreset ? targetPreset.adapter : null,
+            targetPreset.vendorModelId,
+            targetPreset.baseUrl,
+            presetColumns.sizes,
+            presetColumns.qualityOptions,
+            presetColumns.maxCount,
+            concurrencyLimit,
+            input.enabled === true,
+            presetWatermark,
+            sortOrder,
+            actor.id,
+            typeof credId === 'string' && credId ? credId : null,
+            targetPreset.modelKind,
+            targetPreset.modelKind === 'language' ? targetPreset.languageProtocol : null,
+            targetPreset.modelKind === 'language' ? targetPreset.maxOutputTokens : null,
+            targetPreset.modelKind === 'language' && targetPreset.temperature !== undefined
+              ? targetPreset.temperature
+              : null,
+            targetPreset.modelKind === 'language' ? reasoningEffort ?? null : null,
+            presetColumns.maxInputImages,
+            'providerId' in targetPreset ? targetPreset.providerId : null,
+            'pluginId' in targetPreset ? targetPreset.pluginId : null,
+            'pluginVersion' in targetPreset ? targetPreset.pluginVersion : '1.0.0',
+            presetPluginSource,
+          ],
+        )
+      } else {
+        throw new PresetSaveRejected('INVALID_PRESET', '请选择模型预设', 400)
+      }
+      if (!result.rows[0]) throw new PresetSaveRejected('NOT_FOUND', '模型不存在', 404)
+      await client.query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5)', [actor.id, id ? 'model.update' : 'model.create', 'model', result.rows[0].id, {}])
+      return await snapshotRevisionForRow(client, result.rows[0], actor.id, revisionContract)
+    })
+  } catch (error) {
+    if (error instanceof PresetSaveRejected) return fail(error.code, error.message, error.status)
+    console.error('preset model revision snapshot failed', { code: error instanceof Error ? error.name : 'MODEL_REVISION_UNAVAILABLE' })
+    return fail('MODEL_REVISION_UNAVAILABLE', '模型版本快照创建失败，请重试', 500)
   }
-  if (!result.rows[0]) return fail('NOT_FOUND', '模型不存在', 404)
-  await db().query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5)', [actor.id, id ? 'model.update' : 'model.create', 'model', result.rows[0].id, {}])
-  const withRevision = await presetRevisionOrRow(result.rows[0], () => snapshotRevisionForRow(
-    db(),
-    result.rows[0],
-    actor.id,
-    revisionContract,
-  ))
-  return ok(modelDto(withRevision))
+  return ok(modelDto(saved))
 }
 
 export async function deleteModel(actor: Actor, id: string) {

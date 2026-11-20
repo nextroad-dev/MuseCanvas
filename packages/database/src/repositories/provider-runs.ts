@@ -122,6 +122,12 @@ export async function createProviderRun(
   client: pg.PoolClient | pg.Pool,
   input: CreateProviderRunInput,
 ): Promise<ProviderRunEntity> {
+  // `(job_id, attempt)` is unique across the job's whole life: attempt here is
+  // the submission sequence, not `generation_jobs.attempt` (that column is the
+  // per-cycle retry budget, which manual retry resets). A caller that reuses a
+  // job must number above every existing run; processJob does. This insert
+  // deliberately lets a reused number surface as a constraint violation instead
+  // of reusing an older run's row.
   const attempt = input.attempt ?? 1
   const capacityState = input.capacityState || (input.capacityReservationId ? 'reserved' : 'pending')
   const res = await client.query(

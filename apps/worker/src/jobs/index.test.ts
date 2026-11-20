@@ -21,14 +21,15 @@ function deferred<T>() {
 }
 
 /** Exercises real processJob/poll/lease code without provider HTTP or live SQL. */
-function workerFixture(t: TestContext) {
+function workerFixture(t: TestContext, options: { historicalRun?: Record<string, unknown> } = {}) {
   process.env.APP_MASTER_KEY ||= '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
   process.env.PROVIDER_CREDENTIALS_ENCRYPTION_KEY ||= 'test-worker-encryption-key'
   const credential = encryptApiKey('worker-lifecycle-test-placeholder')
   const cycle = '2026-10-25 00:00:00.123456+00'
   const job: Record<string, unknown> = { id: 'job', status: 'queued', attempt: 0, prompt: 'draw', count: 1,
     optimization_mode: 'disabled', model_id: 'model', model_revision_id: 'revision', retry_cycle: cycle, created_by: 'actor' }
-  let run: Record<string, unknown> | undefined
+  let run = options.historicalRun ? structuredClone(options.historicalRun) : undefined
+  let createdRun = false
   const controls = {
     failWaitingWrite: false,
     capacityFull: false,
@@ -53,7 +54,8 @@ function workerFixture(t: TestContext) {
     if (sql.includes('SELECT count(*)::int AS count')) return rows([{ count: controls.capacityFull ? 1 : 0 }])
     if (sql.startsWith('SELECT * FROM provider_runs')) return rows(run ? [run] : [])
     if (sql.includes('INSERT INTO provider_runs')) {
-      assert.equal(run, undefined, 'a claim must create at most one provider run')
+      assert.equal(createdRun, false, 'a claim must create at most one provider run')
+      createdRun = true
       run = { id: 'run', job_id: job.id, attempt: values[1], provider_id: values[2], plugin_id: values[3], plugin_version: values[4],
         client_token: values[5], remote_id: null, operation_state: 'submitting', state_revision: 1, capacity_state: 'reserved',
         submitted_at: new Date(), created_at: new Date(), updated_at: new Date() }
@@ -369,6 +371,28 @@ test('waiting for capacity requeues without creating a run or spending the retry
   assert.ok(delivery)
   assert.match(delivery, /dedupe_key/)
   assert.match(delivery, /generation\.retry/)
+})
+
+test('manual retry numbers a provider run above the previous cycle without spending the new budget', async t => {
+  // The reported collision: cycle 1 already owns (job, attempt 1); retryJob
+  // resets generation_jobs.attempt to 0, so the new cycle's first submission
+  // must not reuse 1 even though its budget starts there.
+  const fixture = workerFixture(t, {
+    historicalRun: {
+      id: 'old-run', job_id: 'job', attempt: 1, provider_id: 'provider', plugin_id: 'seedance-video',
+      plugin_version: '1.0.0', client_token: 'old-token', remote_id: 'old-remote', operation_state: 'failed',
+      state_revision: 1, capacity_state: 'released', worker_lease_token: null, worker_lease_expires_at: null,
+      submitted_at: new Date('2026-10-01T00:00:00Z'), created_at: new Date('2026-10-01T00:00:00Z'),
+      updated_at: new Date('2026-10-01T00:00:00Z'),
+    },
+  })
+  fixture.job.attempt = 0
+  assert.equal(await processJob('job'), true)
+  const created = fixture.run()
+  assert.ok(created)
+  assert.equal(created.attempt, 2, 'the submission sequence continues above the previous cycle')
+  assert.equal(fixture.job.attempt, 1, 'the retry budget still starts from the cycle’s first attempt')
+  assert.equal(fixture.submit.mock.callCount(), 1)
 })
 
 test('capacity requeue rolls back the transition when its delivery write fails', async t => {

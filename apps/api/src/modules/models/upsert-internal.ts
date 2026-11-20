@@ -25,11 +25,3 @@ export function hasForbiddenManualModelFields(input: Record<string, unknown>): b
 export function modelSavePath(input: Record<string, unknown>): 'plugin' | 'preset' {
   return typeof input.pluginId === 'string' && input.pluginId.trim() ? 'plugin' : 'preset'
 }
-
-export async function presetRevisionOrRow<T>(row: T, snapshot: () => Promise<T>): Promise<T> {
-  try {
-    return await snapshot()
-  } catch {
-    return row
-  }
-}

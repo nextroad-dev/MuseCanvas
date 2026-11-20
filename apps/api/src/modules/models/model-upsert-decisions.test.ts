@@ -4,7 +4,6 @@ import {
   hasForbiddenManualModelFields,
   modelOverrideError,
   modelSavePath,
-  presetRevisionOrRow,
 } from './upsert-internal'
 
 test('model override gate rejects capabilities before defaults and accepts empty overrides', () => {
@@ -25,16 +24,4 @@ test('preset path rejects fields that may only come from a preset', () => {
   assert.equal(hasForbiddenManualModelFields({ pluginId: 'plugin' }), true)
   assert.equal(hasForbiddenManualModelFields({ concurrencyLimit: 3, enabled: true }), false)
   assert.equal(hasForbiddenManualModelFields({ displayName: undefined }), false)
-})
-
-test('preset revision snapshot failure returns the pre-revision row', async () => {
-  const row = { id: 'model-1', latest_revision_id: null }
-  const result = await presetRevisionOrRow(row, async () => { throw new Error('revision unavailable') })
-  assert.equal(result, row)
-})
-
-test('successful preset revision returns the snapshotted row', async () => {
-  const row = { id: 'model-1' }
-  const snapshotted = { id: 'model-1', latest_revision_id: 'revision-1' }
-  assert.equal(await presetRevisionOrRow(row, async () => snapshotted), snapshotted)
 })

@@ -1208,10 +1208,20 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       try { await pollProviderRun(existingRun.id) } catch (error) { throw new LifecyclePersistenceError(error) }
       return true
     }
-    const attempt = Number((current || claimed).attempt || 1)
+    // generation_jobs.attempt is the retry budget of *this* cycle: manual retry
+    // resets it to 0, pre-run failures decrement it, and the sync-submit plan
+    // compares it against MAX_SYNC_SUBMIT_ATTEMPTS. provider_runs is
+    // UNIQUE(job_id, attempt) across every cycle, so reusing that number makes
+    // the retry's first submission collide with the previous cycle's run.
+    // Submission numbering therefore continues above every run the job already
+    // has, while the budget keeps counting from the cycle's own attempt.
+    const cycleAttempt = Number((current || claimed).attempt || 1)
+    const runAttempt = existingRun && Number.isSafeInteger(existingRun.attempt)
+      ? Math.max(cycleAttempt, existingRun.attempt + 1)
+      : cycleAttempt
     const { revision, config } = await resolveSnapshot((current || claimed) as Record<string, unknown>)
     const jobRow = (current || claimed) as Record<string, unknown>
-    const clientToken = `${String(jobRow.id)}:${String(claimed.retry_cycle)}:a${attempt}:${String(revision.id).slice(0, 8)}`
+    const clientToken = `${String(jobRow.id)}:${String(claimed.retry_cycle)}:a${cycleAttempt}:${String(revision.id).slice(0, 8)}`
     const idempotent = await transaction(async client => {
       return acquireModelCapacity(client, {
         modelId: String(jobRow.model_id),
@@ -1219,7 +1229,7 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         pluginId: revision.pluginId,
         clientToken,
         jobId: String(jobRow.id),
-        attempt,
+        attempt: runAttempt,
       })
     })
     if (!idempotent.acquired) {
@@ -1269,11 +1279,11 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
         }
         const classified = classifySubmitError(error, revision.pluginId)
         if (isSynchronousPlugin(plugin)) {
-          if (!planSyncSubmitRetry(attempt, classified.code, classified.diagnostic).retry) {
+          if (!planSyncSubmitRetry(cycleAttempt, classified.code, classified.diagnostic).retry) {
             await failRunTerminal(run, jobRow, classified.code, classified.diagnostic, 'generation_failed')
             return true
           }
-          await retrySyncSubmit(run, jobRow, attempt, classified.code, classified.diagnostic)
+          await retrySyncSubmit(run, jobRow, cycleAttempt, classified.code, classified.diagnostic)
           return true
         }
         if (classified.retryable) {
@@ -1288,8 +1298,8 @@ export async function processJob(jobId: string, runId?: string): Promise<boolean
       if (result.status === 'failed' && isSynchronousPlugin(plugin) && isSyncRetryableResultError(result)) {
         const retryError = (result.error || null) as unknown as Record<string, unknown> | null
         const retryCode = result.error?.code || 'PROVIDER_TEMPORARY_ERROR'
-        if (planSyncSubmitRetry(attempt, retryCode, retryError).retry) {
-          await retrySyncSubmit(run, jobRow, attempt, retryCode, retryError)
+        if (planSyncSubmitRetry(cycleAttempt, retryCode, retryError).retry) {
+          await retrySyncSubmit(run, jobRow, cycleAttempt, retryCode, retryError)
           return true
         }
       }
